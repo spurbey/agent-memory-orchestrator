@@ -47,6 +47,20 @@ Canonical docs:
 
 ## Quickstart
 
+### One-command install (npx style)
+
+After publishing the npm wrapper package, users can install with:
+
+```bash
+npx agent-memory-orchestrator-cli install
+```
+
+Then run:
+
+```bash
+amo-mcp
+```
+
 ### 1) Create environment
 
 ```bash
@@ -97,6 +111,26 @@ python -m agent_memory_orchestrator.mcp_server
 ```
 
 Both agents then operate on the same local memory and orchestration state.
+
+## Publish the npm installer wrapper
+
+The npm installer package is at:
+
+- `npm/agent-memory-orchestrator-cli`
+
+Publish flow:
+
+```bash
+cd npm/agent-memory-orchestrator-cli
+npm login
+npm publish --access public
+```
+
+Dry-run pack check:
+
+```bash
+npm pack --dry-run
+```
 
 ## Public repo checklist
 

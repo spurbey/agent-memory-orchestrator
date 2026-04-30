@@ -1,0 +1,39 @@
+{
+  "name": "agent-memory-orchestrator-cli",
+  "version": "0.1.1",
+  "description": "npx installer wrapper for Agent Memory Orchestrator",
+  "license": "MIT",
+  "type": "commonjs",
+  "bin": {
+    "agent-memory-orchestrator-cli": "bin/cli.js",
+    "agent-memory-orchestrator": "bin/cli.js",
+    "amo-installer": "bin/cli.js"
+  },
+  "files": [
+    "bin/cli.js",
+    "README.md"
+  ],
+  "keywords": [
+    "agent",
+    "memory",
+    "mcp",
+    "claude",
+    "codex",
+    "installer"
+  ],
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "scripts": {
+    "check": "node bin/cli.js --help"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/spurbey/agent-memory-orchestrator.git",
+    "directory": "npm/agent-memory-orchestrator-cli"
+  },
+  "bugs": {
+    "url": "https://github.com/spurbey/agent-memory-orchestrator/issues"
+  },
+  "homepage": "https://github.com/spurbey/agent-memory-orchestrator#readme"
+}
