@@ -23,6 +23,8 @@ dist/
 exports/
 .tmp/
 pytest-cache-files-*/
+_logs/
+_update-notifier-last-checked
 *.db
 *.sqlite
 *.sqlite3
