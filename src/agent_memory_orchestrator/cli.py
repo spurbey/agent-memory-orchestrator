@@ -1,0 +1,147 @@
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+from pathlib import Path
+
+from .config import Settings
+from .memory_service import MemoryService
+from .orchestrator import OrchestratorService
+
+
+def _print(payload: object) -> None:
+    print(json.dumps(payload, indent=2))
+
+
+def _build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Agent Memory Orchestrator CLI")
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    sub.add_parser("init-db", help="Initialize local database schema")
+
+    ingest = sub.add_parser("ingest-transcript", help="Ingest JSONL transcript")
+    ingest.add_argument("--agent", required=True, choices=["claude", "codex", "user", "system"])
+    ingest.add_argument("--file", required=True, type=Path)
+    ingest.add_argument("--session-id", required=True)
+    ingest.add_argument("--session-title")
+
+    search = sub.add_parser("search", help="Search memories")
+    search.add_argument("--query", required=True)
+    search.add_argument("--session-id")
+    search.add_argument("--limit", type=int, default=10)
+
+    timeline = sub.add_parser("timeline", help="View session timeline")
+    timeline.add_argument("--session-id", required=True)
+    timeline.add_argument("--limit", type=int, default=50)
+
+    export_cmd = sub.add_parser("export", help="Export snapshot to JSONL")
+    export_cmd.add_argument("--out", required=True, type=Path)
+    export_cmd.add_argument("--session-id")
+
+    import_cmd = sub.add_parser("import", help="Import snapshot JSONL")
+    import_cmd.add_argument("--file", required=True, type=Path)
+
+    orch_start = sub.add_parser("orchestrate-start", help="Start orchestrator session")
+    orch_start.add_argument("--session-id", required=True)
+    orch_start.add_argument("--title")
+
+    orch_submit = sub.add_parser("orchestrate-submit", help="Submit orchestrator round")
+    orch_submit.add_argument("--session-id", required=True)
+    orch_submit.add_argument("--agent", required=True, choices=["claude", "codex"])
+    orch_submit.add_argument("--summary", required=True)
+    orch_submit.add_argument("--confidence", required=True, type=float)
+    orch_submit.add_argument("--artifact-uri", default="")
+    orch_submit.add_argument("--blocking-issue", action="append", default=[])
+
+    orch_status = sub.add_parser("orchestrate-status", help="Get orchestrator status")
+    orch_status.add_argument("--session-id", required=True)
+
+    orch_decide = sub.add_parser("orchestrate-decision", help="Apply user decision")
+    orch_decide.add_argument("--session-id", required=True)
+    orch_decide.add_argument("--decision", required=True, choices=["approved", "rejected"])
+    orch_decide.add_argument("--notes", default="")
+    orch_decide.add_argument("--decided-by", default="user")
+
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = _build_parser()
+    args = parser.parse_args(argv)
+    settings = Settings.load()
+
+    try:
+        if args.command == "init-db":
+            svc = MemoryService(settings)
+            try:
+                svc.init_db()
+            finally:
+                svc.close()
+            _print({"ok": True, "db_path": str(settings.db_path)})
+            return 0
+
+        if args.command in {"ingest-transcript", "search", "timeline", "export", "import"}:
+            svc = MemoryService(settings)
+            try:
+                svc.init_db()
+                if args.command == "ingest-transcript":
+                    result = svc.ingest_transcript(
+                        agent=args.agent,
+                        file_path=args.file,
+                        session_id=args.session_id,
+                        session_title=args.session_title,
+                    )
+                    _print({"ok": True, **result})
+                elif args.command == "search":
+                    results = svc.search_memories(args.query, session_id=args.session_id, limit=args.limit)
+                    _print({"ok": True, "count": len(results), "results": results})
+                elif args.command == "timeline":
+                    events = svc.timeline(args.session_id, limit=args.limit)
+                    _print({"ok": True, "count": len(events), "events": events})
+                elif args.command == "export":
+                    rows = svc.export_snapshot(args.out, session_id=args.session_id)
+                    _print({"ok": True, "rows": rows, "out": str(args.out.resolve())})
+                elif args.command == "import":
+                    rows = svc.import_snapshot(args.file)
+                    _print({"ok": True, "rows": rows, "source": str(args.file.resolve())})
+            finally:
+                svc.close()
+            return 0
+
+        orch = OrchestratorService(settings)
+        try:
+            if args.command == "orchestrate-start":
+                payload = orch.start(session_id=args.session_id, title=args.title)
+            elif args.command == "orchestrate-submit":
+                payload = orch.submit(
+                    session_id=args.session_id,
+                    agent=args.agent,
+                    summary=args.summary,
+                    confidence=args.confidence,
+                    artifact_uri=args.artifact_uri,
+                    blocking_issues=args.blocking_issue,
+                )
+            elif args.command == "orchestrate-status":
+                payload = orch.status(session_id=args.session_id)
+            elif args.command == "orchestrate-decision":
+                payload = orch.user_decision(
+                    session_id=args.session_id,
+                    decision=args.decision,
+                    notes=args.notes,
+                    decided_by=args.decided_by,
+                )
+            else:
+                parser.error(f"unknown command: {args.command}")
+                return 2
+            _print({"ok": True, "result": payload})
+        finally:
+            orch.close()
+        return 0
+    except Exception as exc:  # pragma: no cover
+        print(json.dumps({"ok": False, "error": str(exc)}), file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
