@@ -1421,9 +1421,19 @@ class MemoryService:
             ).fetchone()
             if row is None:
                 continue
+            entities = json.loads(row["entities_json"])
+            tags = json.loads(row["tags_json"])
             rerank_score = lexical_rerank_score(query, f"{row['summary']} {row['subject']} {row['object']}")
-            historical_penalty = 0.0 if include_historical or row["status"] == "active" else -0.2
-            final_score = (0.7 * rerank_score) + (0.3 * float(fused_item["rrf_score"])) + historical_penalty
+            policy = _ranking_policy(
+                query=query,
+                row=row,
+                entities=entities,
+                tags=tags,
+                rrf_score=float(fused_item["rrf_score"]),
+                rerank_score=rerank_score,
+                include_historical=include_historical,
+            )
+            final_score = policy["final_score"]
             if final_score <= 0.01:
                 continue
             item = {
@@ -1437,8 +1447,8 @@ class MemoryService:
                 "predicate": row["predicate"],
                 "object": row["object"],
                 "topic_key": row["topic_key"],
-                "entities": json.loads(row["entities_json"]),
-                "tags": json.loads(row["tags_json"]),
+                "entities": entities,
+                "tags": tags,
                 "confidence": row["confidence"],
                 "importance": row["importance"],
                 "status": row["status"],
@@ -1448,6 +1458,7 @@ class MemoryService:
                 "rerank_score": round(rerank_score, 6),
                 "source_ranks": fused_item["sources"],
                 "raw_scores": fused_item["raw_scores"],
+                "ranking_policy": {key: value for key, value in policy.items() if key != "final_score"},
             }
             materialized.append(item)
 
@@ -1471,7 +1482,13 @@ class MemoryService:
                     item["rrf_score"],
                     item["rerank_score"],
                     item["score"],
-                    _json({"source_ranks": item["source_ranks"], "raw_scores": item["raw_scores"]}),
+                    _json(
+                        {
+                            "source_ranks": item["source_ranks"],
+                            "raw_scores": item["raw_scores"],
+                            "ranking_policy": item["ranking_policy"],
+                        }
+                    ),
                     _utc_now(),
                 ),
             )
@@ -1575,6 +1592,186 @@ def _jaccard(a: list[str], b: list[str]) -> float:
     if not left and not right:
         return 0.0
     return len(left & right) / len(left | right)
+
+
+def _ranking_policy(
+    *,
+    query: str,
+    row: sqlite3.Row,
+    entities: list[str],
+    tags: list[str],
+    rrf_score: float,
+    rerank_score: float,
+    include_historical: bool,
+) -> dict[str, object]:
+    query_terms = _ranking_terms(query)
+    entity_terms = _ranking_terms(" ".join([row["subject"], row["topic_key"], *entities]))
+    tag_terms = _ranking_terms(" ".join(tags))
+    body_terms = _ranking_terms(f"{row['summary']} {row['object']}")
+    candidate_terms = entity_terms | tag_terms | body_terms
+    matched_terms = sorted(query_terms & candidate_terms)
+
+    confidence = _clamp(float(row["confidence"] or 0.0), 0.0, 1.0)
+    importance = _clamp(float(row["importance"] or 0.0), 0.0, 1.0)
+    memory_type = str(row["memory_type"] or "").lower()
+
+    base_rerank = 0.50 * rerank_score
+    base_rrf = 0.20 * rrf_score
+    exact_boost = _exact_match_boost(query_terms, entity_terms, tag_terms, body_terms)
+    has_query_evidence = rerank_score > 0.0 or exact_boost > 0.0
+    confidence_boost = 0.16 * confidence if has_query_evidence else 0.0
+    importance_boost = 0.06 * importance if has_query_evidence else 0.0
+    type_boost = _memory_type_boost(query_terms, memory_type) if has_query_evidence else 0.0
+    noise_penalty = _noise_penalty(row, confidence)
+    historical_penalty = 0.0 if include_historical or row["status"] == "active" else -0.20
+
+    final_score = (
+        base_rerank
+        + base_rrf
+        + confidence_boost
+        + importance_boost
+        + type_boost
+        + exact_boost
+        + historical_penalty
+        - noise_penalty
+    )
+    return {
+        "final_score": round(final_score, 6),
+        "base_rerank": round(base_rerank, 6),
+        "base_rrf": round(base_rrf, 6),
+        "confidence_boost": round(confidence_boost, 6),
+        "importance_boost": round(importance_boost, 6),
+        "type_boost": round(type_boost, 6),
+        "exact_boost": round(exact_boost, 6),
+        "noise_penalty": round(noise_penalty, 6),
+        "historical_penalty": round(historical_penalty, 6),
+        "matched_terms": matched_terms[:12],
+    }
+
+
+_RANKING_STOPWORDS = {
+    "about",
+    "agent",
+    "after",
+    "before",
+    "does",
+    "from",
+    "have",
+    "into",
+    "memory",
+    "that",
+    "their",
+    "there",
+    "this",
+    "what",
+    "when",
+    "where",
+    "which",
+    "with",
+    "would",
+}
+
+
+_DECISION_TERMS = {
+    "agree",
+    "agreed",
+    "approve",
+    "approved",
+    "choose",
+    "chosen",
+    "decide",
+    "decided",
+    "decision",
+    "final",
+    "finalize",
+    "finalized",
+    "settled",
+}
+
+
+_CAUSAL_TERMS = {"cause", "caused", "reason", "rationale", "why"}
+
+
+_HOOK_TERMS = {
+    "codex_hooks",
+    "hook",
+    "hooks",
+    "permissionrequest",
+    "posttooluse",
+    "pretooluse",
+    "sessionstart",
+    "stop",
+    "userpromptsubmit",
+}
+
+
+def _ranking_terms(text: str) -> set[str]:
+    terms: set[str] = set()
+    for raw in re.findall(r"[a-z0-9_./\\-]+", str(text).lower()):
+        for term in re.findall(r"[a-z0-9_]+", raw):
+            if len(term) < 3 or term in _RANKING_STOPWORDS:
+                continue
+            terms.add(term)
+            if term.endswith("s") and len(term) > 4:
+                terms.add(term[:-1])
+            if term.endswith("ing") and len(term) > 6:
+                terms.add(term[:-3])
+    return terms
+
+
+def _memory_type_boost(query_terms: set[str], memory_type: str) -> float:
+    asks_decision = bool(query_terms & _DECISION_TERMS)
+    asks_causal = bool(query_terms & _CAUSAL_TERMS)
+    if asks_decision:
+        if memory_type == "decision":
+            return 0.14
+        if memory_type in {"fix", "summary", "validation"}:
+            return 0.10
+        if memory_type in {"blocker", "bug"}:
+            return 0.04
+        if memory_type == "observation":
+            return -0.08
+    if asks_causal:
+        if memory_type in {"decision", "fix", "bug"}:
+            return 0.08
+        if memory_type == "observation":
+            return -0.03
+    return 0.0
+
+
+def _exact_match_boost(
+    query_terms: set[str],
+    entity_terms: set[str],
+    tag_terms: set[str],
+    body_terms: set[str],
+) -> float:
+    entity_boost = min(0.09, 0.035 * len(query_terms & entity_terms))
+    tag_boost = min(0.04, 0.010 * len(query_terms & tag_terms))
+    body_boost = min(0.04, 0.010 * len(query_terms & body_terms))
+    hook_boost = 0.0
+    if query_terms & {"hook", "hooks"} and (entity_terms | tag_terms | body_terms) & _HOOK_TERMS:
+        hook_boost = 0.08
+    return entity_boost + tag_boost + body_boost + hook_boost
+
+
+def _noise_penalty(row: sqlite3.Row, confidence: float) -> float:
+    summary = str(row["summary"] or "").lower()
+    subject = str(row["subject"] or "").lower()
+    memory_type = str(row["memory_type"] or "").lower()
+    penalty = 0.0
+    if memory_type == "observation" and confidence <= 0.45:
+        penalty += 0.06
+    if subject in {"change", "changes", "command", "context", "output", "session"}:
+        penalty += 0.04
+    if any(marker in summary for marker in ("context from my ide setup", "open tabs:", "active file:")):
+        penalty += 0.12
+    if any(marker in summary for marker in ("command completed:", "powershell.exe", "rg \\\"^# cell")):
+        penalty += 0.10
+    return min(0.30, penalty)
+
+
+def _clamp(value: float, lower: float, upper: float) -> float:
+    return max(lower, min(upper, value))
 
 
 def _preview(text: str, max_len: int) -> str:
