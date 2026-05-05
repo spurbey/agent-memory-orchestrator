@@ -75,6 +75,69 @@ def test_ingest_and_search(tmp_path) -> None:
     svc.close()
 
 
+def test_decision_query_prefers_specific_high_confidence_hook_memory(tmp_path) -> None:
+    settings = make_settings(tmp_path)
+    svc = MemoryService(settings)
+    svc.init_db()
+    svc.create_session("s1", "Session 1")
+    generic_event = svc.add_event(
+        "s1",
+        "codex",
+        "response",
+        "This changes the product from local coding memory into a broader agent coordination platform.",
+    )
+    hook_event = svc.add_event(
+        "s1",
+        "codex",
+        "response",
+        "Codex hooks are enabled with codex_hooks and use SessionStart and UserPromptSubmit.",
+    )
+    svc.add_memory_unit(
+        session_id="s1",
+        source_event_id=generic_event.id,
+        source_chunk_id=None,
+        memory_type="observation",
+        subject="changes",
+        predicate="observes",
+        object_text="local coding memory becomes broader agent coordination",
+        summary=(
+            "Observation: This changes the product from local coding memory into a broader "
+            "agent coordination platform."
+        ),
+        topic_key="changes",
+        entities=[],
+        tags=["agent", "memory", "coordination"],
+        confidence=0.4,
+        importance=0.45,
+    )
+    hook = svc.add_memory_unit(
+        session_id="s1",
+        source_event_id=hook_event.id,
+        source_chunk_id=None,
+        memory_type="fix",
+        subject="/.codex/config.toml",
+        predicate="fixes",
+        object_text="Codex hooks use codex_hooks, SessionStart, UserPromptSubmit, PostToolUse, Stop.",
+        summary=(
+            "Fix [/.codex/config.toml, SessionStart, UserPromptSubmit]: Codex hooks are "
+            "enabled with codex_hooks. Events: SessionStart, UserPromptSubmit, PostToolUse, Stop."
+        ),
+        topic_key="codex_config_toml",
+        entities=["/.codex/config.toml", "SessionStart", "UserPromptSubmit", "PostToolUse", "Stop"],
+        tags=["codex", "hooks", "docs"],
+        confidence=0.9,
+        importance=0.8,
+    )
+
+    hits = svc.search_memories("what did we decide about agent memory hooks", session_id="s1", limit=5)
+    assert hits[0]["memory_id"] == hook.id
+    assert hits[0]["ranking_policy"]["type_boost"] > 0
+    assert hits[0]["ranking_policy"]["exact_boost"] > 0
+    assert hits[0]["ranking_policy"]["confidence_boost"] > hits[1]["ranking_policy"]["confidence_boost"]
+
+    svc.close()
+
+
 def test_export_snapshot_with_session_filter(tmp_path) -> None:
     settings = make_settings(tmp_path)
     svc = MemoryService(settings)
