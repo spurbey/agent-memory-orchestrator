@@ -1,7 +1,7 @@
 # Final Design v1
 
-Status: Approved baseline  
-Date: 2026-04-30  
+Status: Phase 1 implementation baseline  
+Date: 2026-05-05  
 Owner: Agent Memory Orchestrator contributors
 
 ## 1) Objective
@@ -19,8 +19,9 @@ Model inference remains with providers (Anthropic/OpenAI). Memory and orchestrat
 In scope:
 
 - Local ingestion of Claude/Codex session artifacts.
+- Local ingestion of Claude/Codex hook payloads.
 - Structured memory extraction and storage.
-- Hybrid retrieval (lexical + vector).
+- Hybrid retrieval (BM25/FTS + vector + KG + RRF + rerank fallback).
 - Local MCP server for memory and orchestration tools.
 - Two-agent review workflow with explicit user approval/rejection.
 
@@ -52,7 +53,7 @@ Core modules:
 - Creates vector representation.
 
 3. `memory_store`
-- Persists sessions, events, memories, vectors, and retrieval metadata.
+- Persists sessions, events, chunks, memory units, vectors, KG relations, summaries, and retrieval metadata.
 - Default backend: SQLite (single-node local).
 - Future backend options: Postgres/pgvector.
 
@@ -71,7 +72,10 @@ Core modules:
 7. `approval_gateway`
 - Captures user final decision and closes session state.
 
-8. `omnara_adapter` (optional)
+8. `local_dashboard`
+- Read-only localhost UI for observing sessions, events, extracted memories, retrieval runs, and returned candidates.
+
+9. `omnara_adapter` (optional)
 - Bridges external orchestration visibility/control.
 - Never becomes source of truth for authoritative state.
 
@@ -81,7 +85,13 @@ Primary entities:
 
 - `sessions`: logical task thread.
 - `events`: normalized raw interaction units.
-- `memories`: extracted durable facts/decisions.
+- `chunks`: typed evidence segments derived from raw events.
+- `memory_units`: extracted durable facts/decisions/fixes/bugs/observations.
+- `entities`: files, symbols, topics, agents, sessions, and memory anchors.
+- `kg_edges`: typed relationships and version links.
+- `session_summaries`: deterministic session-level summaries.
+- `pipeline_runs`, `extraction_runs`, `retrieval_runs`, `retrieval_candidates`, `consolidation_decisions`: replayable observability.
+- `memories`: compatibility mirror for legacy CLI/export surfaces.
 - `memory_vectors`: semantic vectors for memories.
 - `orchestration_rounds`: each Claude/Codex review turn.
 - `orchestration_decisions`: user final approval/rejection.
@@ -110,11 +120,12 @@ Primary entities:
 
 1. Ingest event.
 2. Normalize + validate schema.
-3. Extract memory candidate(s).
-4. Embed memory text.
-5. Persist memory + vector.
-6. Update retrieval index metadata.
-7. Emit audit log record.
+3. Chunk by content semantics.
+4. Extract memory candidate(s) with rule confidence.
+5. Embed memory text.
+6. Persist memory unit + vector + KG evidence links.
+7. Update FTS/vector/KG index metadata.
+8. Emit observability rows for pipeline, extraction, retrieval, and consolidation.
 
 Autonomous export:
 
@@ -194,6 +205,7 @@ Admin/health:
 
 Single-device topology:
 
+- `amo-daemon` local process serving API and dashboard on `127.0.0.1`.
 - `amo-mcp` process (stdio or local port).
 - SQLite DB in `.data/`.
 - Optional local vector service (Qdrant/Chroma) behind interface.
@@ -231,4 +243,3 @@ All must pass:
 3. Orchestration loop blocks finalization on Codex blockers.
 4. User can approve/reject and decision is persisted.
 5. Memory search returns relevant cross-session context with provenance.
-
