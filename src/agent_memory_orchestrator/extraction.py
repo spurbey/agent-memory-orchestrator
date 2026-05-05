@@ -12,6 +12,7 @@ CONFIDENCE_BY_SIGNAL = {
     "tool_error": 0.80,
     "file_change": 0.70,
     "assistant_plan": 0.60,
+    "reference": 0.55,
     "vague": 0.40,
 }
 
@@ -102,7 +103,16 @@ def extract_memory_candidates(
 
 def classify_memory_type(text: str, content_type: str, event_type: str, agent: str) -> tuple[str, str]:
     lowered = text.lower()
-    if agent == "user" and any(w in lowered for w in ("approved", "decided", "final decision", "go with")):
+    if _is_reference_tool_text(lowered, content_type, event_type):
+        return "reference", "reference"
+    if agent == "user":
+        if _looks_like_user_question(lowered) and "final decision" not in lowered:
+            return "none", "vague"
+        if _has_explicit_user_decision(lowered):
+            return "decision", "explicit_user_decision"
+    if any(marker in lowered for marker in ("context from my ide setup", "open tabs:", "active file:")):
+        return "none", "vague"
+    if agent == "user" and _has_explicit_user_decision(lowered):
         return "decision", "explicit_user_decision"
     if event_type in {"decision", "approval"}:
         return "decision", "explicit_user_decision"
@@ -131,6 +141,38 @@ def _looks_like_assistant_plan(lowered: str) -> bool:
     return bool(
         re.search(r"\b(the plan is|plan:|implementation plan|we will|i will|i'm going to|i am going to)\b", lowered)
     )
+
+
+def _has_explicit_user_decision(lowered: str) -> bool:
+    return bool(
+        "final decision" in lowered
+        or re.search(r"\b(i|we)\s+(decided|choose|chose|approved|will use|will go with)\b", lowered)
+        or re.search(r"\b(go with|use this|remember|must|make sure)\b", lowered)
+    )
+
+
+def _looks_like_user_question(lowered: str) -> bool:
+    compact = lowered.strip()
+    if "?" in compact:
+        return True
+    return bool(
+        re.match(
+            r"^(what|why|how|when|where|which|who|can|could|should|would|is|are|do|does|did|haven't|have|has)\b",
+            compact,
+        )
+    )
+
+
+def _is_reference_tool_text(lowered: str, content_type: str, event_type: str) -> bool:
+    if event_type not in {"tool_result", "tool_output", "post_tool_use"}:
+        return False
+    if "call_id" in lowered and "invocation" in lowered and "result" in lowered:
+        return True
+    if content_type == "json" and any(marker in lowered for marker in ("fetch_openai_doc", "search_query", "documentation")):
+        return True
+    if any(marker in lowered for marker in ("# hooks", "official docs", "developers.openai.com", "documentation")):
+        return True
+    return False
 
 
 def extract_entities(text: str, metadata: dict[str, Any] | None = None) -> list[str]:
@@ -187,6 +229,7 @@ def _predicate_for(memory_type: str) -> str:
         "validation": "validates",
         "bug": "reports",
         "file_change": "changes",
+        "reference": "references",
         "observation": "observes",
     }.get(memory_type, "observes")
 
@@ -213,6 +256,7 @@ def _importance(memory_type: str, confidence: float, content_len: int) -> float:
         "validation": 0.7,
         "bug": 0.75,
         "file_change": 0.65,
+        "reference": 0.55,
         "observation": 0.45,
     }.get(memory_type, 0.4)
     length_bonus = min(0.1, content_len / 4000)

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass, field
 from typing import Any
@@ -63,6 +64,13 @@ _USER_MEMORY_TERMS = (
     "we will",
     "yes do",
 )
+_USER_FORCE_MEMORY_TERMS = ("final decision", "remember", "must", "make sure")
+_REFERENCE_TOOL_NAMES = {
+    "fetch_openai_doc",
+    "openaiDeveloperDocs.fetch_openai_doc",
+    "web.run",
+    "search_query",
+}
 
 
 def clean_event_text(
@@ -83,6 +91,15 @@ def clean_event_text(
         "promote_to_memory": True,
         "suppression_reason": "",
     }
+
+    cleaned, structured_tool_meta = _normalize_structured_tool_text(
+        cleaned,
+        event_type=event_type,
+        metadata=meta,
+    )
+    if structured_tool_meta:
+        meta.update(structured_tool_meta)
+        cleaning.update({key: value for key, value in structured_tool_meta.items() if not key.startswith("tool_")})
 
     cleaned, ide_meta = _strip_ide_context(cleaned)
     if ide_meta:
@@ -127,11 +144,17 @@ def should_promote_to_memory(
     if normalized_agent == "user" or normalized_event in {"prompt", "user_prompt_submit"}:
         if _is_diagnostic_paste(lowered):
             return False, "diagnostic_paste"
+        if _looks_like_user_question(lowered) and not any(term in lowered for term in _USER_FORCE_MEMORY_TERMS):
+            return False, "user_question_not_durable"
         if any(term in lowered for term in _USER_MEMORY_TERMS):
             return True, ""
         return False, "user_prompt_not_durable"
     if normalized_event in {"tool_result", "tool_output", "post_tool_use"}:
         tool_name = str(meta.get("tool_name") or meta.get("tool") or "").lower()
+        if meta.get("amo_structured_tool_result") and not clean:
+            return False, "empty_structured_tool_result"
+        if meta.get("amo_structured_tool_result") and tool_name in {name.lower() for name in _REFERENCE_TOOL_NAMES}:
+            return True, ""
         if _is_diagnostic_tool_output(lowered):
             return False, "diagnostic_tool_output"
         if tool_name in {"read", "ls", "grep", "rg"} and not _has_tool_signal(lowered):
@@ -143,6 +166,73 @@ def should_promote_to_memory(
     if _is_raw_ide_context_only(lowered):
         return False, "ide_context_only"
     return True, ""
+
+
+def _normalize_structured_tool_text(
+    text: str,
+    *,
+    event_type: str,
+    metadata: dict[str, Any],
+) -> tuple[str, dict[str, Any]]:
+    normalized_event = event_type.lower()
+    if normalized_event not in {"tool_result", "tool_output", "post_tool_use"}:
+        return text, {}
+    stripped = text.strip()
+    if not stripped or stripped[0] not in "{[":
+        return text, {}
+    try:
+        payload = json.loads(stripped)
+    except Exception:
+        return text, {}
+    if not isinstance(payload, dict):
+        return text, {}
+
+    tool_name = _structured_tool_name(payload) or str(metadata.get("tool_name") or "")
+    result_text = _structured_tool_result_text(payload)
+    normalized = result_text.strip() or ""
+    return normalized, {
+        "structured_tool_result": True,
+        "structured_tool_name": tool_name,
+        "tool_name": tool_name,
+        "amo_structured_tool_result": True,
+    }
+
+
+def _structured_tool_name(payload: dict[str, Any]) -> str:
+    invocation = payload.get("invocation") if isinstance(payload.get("invocation"), dict) else {}
+    tool = invocation.get("tool") or payload.get("tool_name") or payload.get("type") or ""
+    server = invocation.get("server") or ""
+    if server and tool:
+        return str(tool)
+    return str(tool or server or "")
+
+
+def _structured_tool_result_text(payload: dict[str, Any]) -> str:
+    result = payload.get("result")
+    extracted = _extract_text_from_nested(result)
+    if extracted:
+        return extracted
+    return ""
+
+
+def _extract_text_from_nested(value: Any) -> str:
+    if isinstance(value, str):
+        return value
+    if isinstance(value, list):
+        parts = [_extract_text_from_nested(item) for item in value]
+        return "\n".join(part for part in parts if part.strip())
+    if isinstance(value, dict):
+        preferred: list[str] = []
+        for key in ("text", "content", "message", "output", "stdout", "stderr"):
+            if key in value:
+                preferred.append(_extract_text_from_nested(value[key]))
+        if preferred:
+            return "\n".join(part for part in preferred if part.strip())
+        if "Ok" in value:
+            return _extract_text_from_nested(value["Ok"])
+        if "Err" in value:
+            return _extract_text_from_nested(value["Err"])
+    return ""
 
 
 def _strip_ide_context(text: str) -> tuple[str, dict[str, Any]]:
@@ -190,6 +280,18 @@ def _is_diagnostic_paste(lowered: str) -> bool:
         or "agent_memory_orchestrator.cli search" in lowered
         or ("\"ok\": true" in lowered and "\"results\"" in lowered)
         or ("ps c:\\" in lowered and "--query" in lowered)
+    )
+
+
+def _looks_like_user_question(lowered: str) -> bool:
+    compact = lowered.strip()
+    if "?" in compact:
+        return True
+    return bool(
+        re.match(
+            r"^(what|why|how|when|where|which|who|can|could|should|would|is|are|do|does|did|haven't|have|has)\b",
+            compact,
+        )
     )
 
 

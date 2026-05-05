@@ -26,6 +26,7 @@ When you run many parallel AI sessions, context gets fragmented and lost. This p
   - KG/entity traversal
   - RRF fusion + local reranking
   - agent-ready context-pack generation with provenance
+  - quality guards for IDE-context noise, raw tool JSON, and non-durable user questions
 - Local MCP server tools:
   - `memory_write`
   - `memory_search`
@@ -149,6 +150,8 @@ amo-cli search --query "why did retry logic change" --include-historical
 amo-cli context-pack --query "why did retry logic change" --format text
 ```
 
+The context pack is the safer form to inject into Claude/Codex. It excludes weak observations, superseded memories by default, IDE context noise, and raw tool-call JSON.
+
 Import recent Codex sessions as a local memory dataset:
 
 ```bash
@@ -237,6 +240,20 @@ Defaults target:
 
 The runtime tries locally available models only. If a model or FAISS is unavailable, AMO falls back to deterministic hash vectors, SQLite vector scan, and lexical reranking rather than making external API calls.
 
+## Retrieval Quality Evals
+
+Regression fixtures live under `tests/fixtures/`. They encode expected behavior such as:
+
+- Codex hook queries should include `codex_hooks`, `UserPromptSubmit`, `PostToolUse`, and `Stop`.
+- Context packs should prefer high-scoring durable memories instead of blindly sorting all decisions first.
+- Packed context must not include IDE setup blocks, open tabs, raw `call_id` payloads, or MCP invocation JSON.
+
+Run the eval-backed tests with:
+
+```bash
+pytest tests/test_memory_service.py::test_codex_hooks_retrieval_eval_fixture -q
+```
+
 ## Publish the npm installer wrapper
 
 The npm installer package is at:
@@ -271,6 +288,7 @@ npm pack --dry-run
   - defaults target `BAAI/bge-m3` and `BAAI/bge-reranker-base`
   - if unavailable, deterministic hash/lexical fallbacks keep tests and offline operation working
 - Harden local model packaging and first-run model preflight UX.
+- Expand retrieval eval fixtures from real sessions before enabling broader auto-injection.
 - Add Phase 2 Git-like Work Ledger for AI-produced code changes.
 - Add app connectors and the private agent hub after the personal memory engine is stable.
 - Add policy/rubric scoring for stronger auto-consensus.

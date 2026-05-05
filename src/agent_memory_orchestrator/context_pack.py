@@ -69,12 +69,17 @@ def _pack_sort_key(item: dict) -> tuple[float, float, float]:
     type_order = DURABLE_TYPE_ORDER.get(str(item.get("memory_type") or ""), 7)
     score = float(item.get("score") or 0.0)
     confidence = float(item.get("confidence") or 0.0)
-    return (float(type_order), -score, -confidence)
+    return (-score, float(type_order), -confidence)
 
 
 def _pre_budget_exclusion(item: dict, include_historical: bool) -> str:
     if item.get("status") != "active" and not include_historical:
         return "superseded"
+    summary = str(item.get("summary") or "").lower()
+    if any(marker in summary for marker in ("context from my ide setup", "open tabs:", "active file:")):
+        return "ide_context_noise"
+    if _looks_like_raw_tool_json(summary):
+        return "raw_tool_json_noise"
     memory_type = str(item.get("memory_type") or "")
     if memory_type == "observation":
         score = float(item.get("score") or 0.0)
@@ -84,6 +89,14 @@ def _pre_budget_exclusion(item: dict, include_historical: bool) -> str:
         if score < 0.45 or confidence < 0.5 or exact <= 0.0:
             return "observation_noise"
     return ""
+
+
+def _looks_like_raw_tool_json(summary: str) -> bool:
+    return (
+        '"call_id"' in summary
+        and '"invocation"' in summary
+        and ('"result"' in summary or '"duration"' in summary)
+    )
 
 
 def _included(item: dict, rendered: str, tokens: int) -> dict[str, Any]:

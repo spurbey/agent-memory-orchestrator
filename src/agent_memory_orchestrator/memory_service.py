@@ -1945,9 +1945,13 @@ def _noise_penalty(row: sqlite3.Row, confidence: float) -> float:
     if subject in {"change", "changes", "command", "context", "output", "session"}:
         penalty += 0.04
     if any(marker in summary for marker in ("context from my ide setup", "open tabs:", "active file:")):
-        penalty += 0.12
+        penalty += 0.18
+    if subject in {"untitled9.md", "temp_result.txt"} and memory_type in {"decision", "observation"}:
+        penalty += 0.08
     if any(marker in summary for marker in ("command completed:", "powershell.exe", "rg \\\"^# cell")):
         penalty += 0.10
+    if '"call_id"' in summary and '"invocation"' in summary and '"result"' in summary:
+        penalty += 0.18
     if memory_type == "observation" and any(marker in summary for marker in ("that result means", "this output means")):
         penalty += 0.08
     return min(0.30, penalty)
