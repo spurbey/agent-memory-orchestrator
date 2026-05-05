@@ -11,12 +11,15 @@ from uuid import uuid4
 from .chunker import chunk_text
 from .cleaning import clean_event_text
 from .config import Settings
+from .context_pack import build_context_pack_payload
 from .db import connect, init_schema
 from .embeddings import cosine_similarity, embed_text_with_model
 from .extraction import extract_memory_candidates, extract_tags, make_topic_key
 from .models import Chunk, Event, Memory, MemoryUnit
 from .privacy import redact_secrets
+from .rerankers import RerankCandidate, rerank_candidates
 from .retrieval import lexical_rerank_score, reciprocal_rank_fusion, understand_query
+from .vector_cache import VectorRow, build_faiss_cache, search_faiss_cache
 
 MAX_CODEX_IMPORT_CONTENT_CHARS = 12000
 
@@ -519,21 +522,33 @@ class MemoryService:
         prompt = str(payload.get("prompt") or payload.get("content") or "")
         if not prompt.strip():
             return ""
-        results = self.search_memories(prompt, session_id=None, limit=limit, include_historical=False)
-        if not results:
-            return ""
+        pack = self.build_context_pack(prompt, session_id=None, budget_tokens=self.settings.context_budget, limit=limit)
+        return pack["text"] if pack["items"] else ""
 
-        lines = [
-            "AMO local memory context retrieved for this prompt.",
-            "Use only if relevant; cite memory_id when using it.",
-        ]
-        for idx, item in enumerate(results, start=1):
-            lines.append(
-                f"{idx}. memory_id={item['memory_id']} type={item['memory_type']} "
-                f"status={item['status']} score={item['score']} session={item['session_id']}: "
-                f"{_preview(item['summary'], 420)}"
-            )
-        return "\n".join(lines)
+    def build_context_pack(
+        self,
+        query: str,
+        session_id: str | None = None,
+        budget_tokens: int | None = None,
+        limit: int = 12,
+        *,
+        include_historical: bool = False,
+    ) -> dict:
+        results = self.search_memories(
+            query,
+            session_id=session_id,
+            limit=max(limit, 1),
+            include_historical=include_historical,
+        )
+        retrieval_run_id = results[0].get("retrieval_run_id") if results else None
+        pack = build_context_pack_payload(
+            query=query,
+            results=results,
+            budget_tokens=budget_tokens or self.settings.context_budget,
+            retrieval_run_id=retrieval_run_id,
+            include_historical=include_historical,
+        )
+        return {"text": pack.text, **pack.payload}
 
     def codex_hook_response(self, payload: dict, default_agent: str = "codex") -> dict:
         event_name = str(payload.get("hook_event_name") or payload.get("event_type") or "")
@@ -749,7 +764,19 @@ class MemoryService:
                 1 if historical else 0,
                 "running",
                 ts,
-                _json({"pools": understood.pools, "entities": understood.entities}),
+                _json(
+                    {
+                        "pools": understood.pools,
+                        "entities": understood.entities,
+                        "reranker": {
+                            "backend": self.settings.reranker_backend,
+                            "model": self.settings.reranker_model,
+                            "top_k": self.settings.rerank_top_k,
+                            "max_chars": self.settings.rerank_max_chars,
+                        },
+                        "vector_backend": self.settings.vector_backend,
+                    }
+                ),
             ),
         )
         self.conn.commit()
@@ -1129,7 +1156,7 @@ class MemoryService:
             ],
         }
 
-    def rebuild_indexes(self) -> dict:
+    def rebuild_indexes(self, force_vectors: bool = False) -> dict:
         try:
             self.conn.execute("DELETE FROM memory_units_fts")
         except sqlite3.OperationalError:
@@ -1137,11 +1164,39 @@ class MemoryService:
         rows = self.conn.execute(
             "SELECT id, summary, subject, object, topic_key FROM memory_units ORDER BY created_at ASC"
         ).fetchall()
+        vectors_written = 0
         for row in rows:
             self._write_fts(row["id"], row["summary"], row["subject"], row["object"], row["topic_key"])
             vector_row = self.conn.execute("SELECT 1 FROM memory_vectors WHERE memory_id = ?", (row["id"],)).fetchone()
-            if vector_row is None:
+            if force_vectors or vector_row is None:
                 self._write_vector(row["id"], row["summary"])
+                vectors_written += 1
+
+        vector_rows = self.conn.execute(
+            "SELECT memory_id, dims, model, vector_json FROM memory_vectors ORDER BY memory_id"
+        ).fetchall()
+        model_counts: dict[str, int] = {}
+        dims_counts: dict[str, int] = {}
+        faiss_result = None
+        parsed_vectors: list[VectorRow] = []
+        for row in vector_rows:
+            model = str(row["model"])
+            dims = str(row["dims"])
+            model_counts[model] = model_counts.get(model, 0) + 1
+            dims_counts[dims] = dims_counts.get(dims, 0) + 1
+            parsed_vectors.append(VectorRow(row["memory_id"], json.loads(row["vector_json"]), model))
+        if self.settings.vector_backend in {"auto", "faiss"}:
+            faiss_result = build_faiss_cache(self.settings.db_path, parsed_vectors, self.settings.embedding_model)
+
+        metadata = {
+            "fts": True,
+            "vectors": True,
+            "force_vectors": force_vectors,
+            "vectors_written": vectors_written,
+            "models": model_counts,
+            "dims": dims_counts,
+            "faiss": _faiss_build_result_dict(faiss_result) if faiss_result else {"status": "disabled"},
+        }
         self.conn.execute(
             """
             INSERT INTO index_versions(id, index_type, model, backend, status, item_count, metadata_json, created_at)
@@ -1154,12 +1209,12 @@ class MemoryService:
                 self.settings.vector_backend,
                 "completed",
                 len(rows),
-                _json({"fts": True, "vectors": True}),
+                _json(metadata),
                 _utc_now(),
             ),
         )
         self.conn.commit()
-        return {"memory_units": len(rows)}
+        return {"memory_units": len(rows), **metadata}
 
     def _mirror_legacy_memory(
         self,
@@ -1370,6 +1425,12 @@ class MemoryService:
 
     def _vector_candidates(self, query: str, session_id: str | None, limit: int, include_historical: bool) -> list[tuple[str, float]]:
         query_vec, _ = embed_text_with_model(query, self.settings.embedding_dims, self.settings.embedding_model)
+        if self.settings.vector_backend in {"auto", "faiss"}:
+            faiss = search_faiss_cache(self.settings.db_path, query_vec, max(limit * 5, limit))
+            if faiss.status == "completed":
+                filtered = self._filter_vector_candidates(faiss.candidates, session_id, include_historical)
+                if filtered:
+                    return filtered[:limit]
         status_clause = "" if include_historical else "AND mu.status = 'active'"
         session_clause = "AND mu.session_id = ?" if session_id else ""
         rows = self.conn.execute(
@@ -1391,6 +1452,29 @@ class MemoryService:
             scored.append((row["id"], cosine_similarity(query_vec, vec)))
         scored.sort(key=lambda item: item[1], reverse=True)
         return scored[:limit]
+
+    def _filter_vector_candidates(
+        self,
+        candidates: list[tuple[str, float]],
+        session_id: str | None,
+        include_historical: bool,
+    ) -> list[tuple[str, float]]:
+        if not candidates:
+            return []
+        allowed: list[tuple[str, float]] = []
+        for memory_id, score in candidates:
+            row = self.conn.execute(
+                "SELECT session_id, status FROM memory_units WHERE id = ?",
+                (memory_id,),
+            ).fetchone()
+            if row is None:
+                continue
+            if session_id and row["session_id"] != session_id:
+                continue
+            if not include_historical and row["status"] != "active":
+                continue
+            allowed.append((memory_id, score))
+        return allowed
 
     def _kg_candidates(self, query: str, session_id: str | None, limit: int, include_historical: bool) -> list[tuple[str, float]]:
         terms = [term for term in re.findall(r"[a-z0-9_.\\/-]+", query.lower()) if len(term) >= 3][:8]
@@ -1433,7 +1517,10 @@ class MemoryService:
         include_historical: bool,
     ) -> list[dict]:
         materialized: list[dict] = []
-        for memory_id, fused_item in fused.items():
+        ranked_fused = sorted(fused.items(), key=lambda item: float(item[1]["rrf_score"]), reverse=True)
+        ranked_fused = ranked_fused[: max(self.settings.rerank_top_k, limit)]
+        candidates: list[tuple[str, dict, sqlite3.Row, list[str], list[str]]] = []
+        for memory_id, fused_item in ranked_fused:
             row = self.conn.execute(
                 """
                 SELECT mu.*, e.content AS source_content
@@ -1447,7 +1534,35 @@ class MemoryService:
                 continue
             entities = json.loads(row["entities_json"])
             tags = json.loads(row["tags_json"])
-            rerank_score = lexical_rerank_score(query, f"{row['summary']} {row['subject']} {row['object']}")
+            candidates.append((memory_id, fused_item, row, entities, tags))
+
+        rerank_inputs = [
+            RerankCandidate(
+                memory_id=memory_id,
+                text=f"{row['summary']} {row['subject']} {row['object']}",
+            )
+            for memory_id, _fused_item, row, _entities, _tags in candidates
+        ]
+        rerank = rerank_candidates(
+            query=query,
+            candidates=rerank_inputs,
+            backend=self.settings.reranker_backend,
+            model_name=self.settings.reranker_model,
+            max_chars=self.settings.rerank_max_chars,
+        )
+        self._update_retrieval_run_config(
+            run_id,
+            {
+                "actual_reranker": {
+                    "backend": rerank.backend,
+                    "model": rerank.model,
+                    "fallback_reason": rerank.fallback_reason,
+                }
+            },
+        )
+
+        for memory_id, fused_item, row, entities, tags in candidates:
+            rerank_score = rerank.scores.get(memory_id, 0.0)
             policy = _ranking_policy(
                 query=query,
                 row=row,
@@ -1477,9 +1592,13 @@ class MemoryService:
                 "importance": row["importance"],
                 "status": row["status"],
                 "created_at": row["created_at"],
+                "retrieval_run_id": run_id,
                 "score": round(final_score, 6),
                 "rrf_score": round(float(fused_item["rrf_score"]), 6),
                 "rerank_score": round(rerank_score, 6),
+                "reranker_backend": rerank.backend,
+                "reranker_model": rerank.model,
+                "reranker_fallback_reason": rerank.fallback_reason,
                 "source_ranks": fused_item["sources"],
                 "raw_scores": fused_item["raw_scores"],
                 "ranking_policy": {key: value for key, value in policy.items() if key != "final_score"},
@@ -1511,12 +1630,28 @@ class MemoryService:
                             "source_ranks": item["source_ranks"],
                             "raw_scores": item["raw_scores"],
                             "ranking_policy": item["ranking_policy"],
+                            "reranker": {
+                                "backend": item["reranker_backend"],
+                                "model": item["reranker_model"],
+                                "fallback_reason": item["reranker_fallback_reason"],
+                            },
                         }
                     ),
                     _utc_now(),
                 ),
             )
         return materialized[:limit]
+
+    def _update_retrieval_run_config(self, run_id: str, extra: dict) -> None:
+        row = self.conn.execute("SELECT config_json FROM retrieval_runs WHERE id = ?", (run_id,)).fetchone()
+        if row is None:
+            return
+        try:
+            config = json.loads(row["config_json"])
+        except Exception:
+            config = {}
+        config.update(extra)
+        self.conn.execute("UPDATE retrieval_runs SET config_json = ? WHERE id = ?", (_json(config), run_id))
 
     def _start_pipeline_run(self, run_type: str, session_id: str | None, source_event_id: str | None) -> str:
         run_id = _id("prun")
@@ -1590,6 +1725,19 @@ def _cleanup_reason_counts(chunks: list[Chunk]) -> dict[str, int]:
         if reason:
             counts[reason] = counts.get(reason, 0) + 1
     return counts
+
+
+def _faiss_build_result_dict(result) -> dict:
+    return {
+        "backend": result.backend,
+        "status": result.status,
+        "item_count": result.item_count,
+        "dims": result.dims,
+        "model": result.model,
+        "index_path": result.index_path,
+        "metadata_path": result.metadata_path,
+        "reason": result.reason,
+    }
 
 
 def _snake(value: str) -> str:

@@ -22,9 +22,10 @@ When you run many parallel AI sessions, context gets fragmented and lost. This p
   - pipeline/retrieval/consolidation traces
 - Hybrid retrieval:
   - SQLite FTS5 / BM25 lexical search
-  - local vector similarity search
+  - local vector similarity search, with optional FAISS cache
   - KG/entity traversal
-  - RRF fusion + local lexical rerank fallback
+  - RRF fusion + local reranking
+  - agent-ready context-pack generation with provenance
 - Local MCP server tools:
   - `memory_write`
   - `memory_search`
@@ -142,9 +143,10 @@ Inspect/rebuild:
 
 ```bash
 amo-cli metrics
-amo-cli rebuild-indexes
+amo-cli rebuild-indexes --force-vectors
 amo-cli session-summary --session-id feature-x
 amo-cli search --query "why did retry logic change" --include-historical
+amo-cli context-pack --query "why did retry logic change" --format text
 ```
 
 Import recent Codex sessions as a local memory dataset:
@@ -152,6 +154,12 @@ Import recent Codex sessions as a local memory dataset:
 ```bash
 set AMO_EMBEDDING_MODEL=hash-fallback
 amo-cli import-codex-sessions --root %USERPROFILE%\.codex\sessions --limit 5
+```
+
+Build a clean test DB from raw Codex sessions without polluting the default DB:
+
+```bash
+amo-cli rebuild-clean-db --out .data/clean-codex.db --codex-root %USERPROFILE%\.codex\sessions --limit 30 --force
 ```
 
 Enable Codex hot-path hooks in `~/.codex/config.toml`:
@@ -213,6 +221,22 @@ python -m agent_memory_orchestrator.mcp_server
 
 Both agents then operate on the same local memory and orchestration state.
 
+## Local model behavior
+
+Memory operations remain offline. Optional model packages can be installed with:
+
+```bash
+pip install -e ".[models]"
+```
+
+Defaults target:
+
+- Embeddings: `BAAI/bge-m3`
+- Reranker: `BAAI/bge-reranker-base`
+- Vector cache: FAISS when available
+
+The runtime tries locally available models only. If a model or FAISS is unavailable, AMO falls back to deterministic hash vectors, SQLite vector scan, and lexical reranking rather than making external API calls.
+
 ## Publish the npm installer wrapper
 
 The npm installer package is at:
@@ -246,7 +270,7 @@ npm pack --dry-run
   - `pip install -e ".[models]"`
   - defaults target `BAAI/bge-m3` and `BAAI/bge-reranker-base`
   - if unavailable, deterministic hash/lexical fallbacks keep tests and offline operation working
-- Add full FAISS-backed rebuildable index files behind the existing vector cache contract.
+- Harden local model packaging and first-run model preflight UX.
 - Add Phase 2 Git-like Work Ledger for AI-produced code changes.
 - Add app connectors and the private agent hub after the personal memory engine is stable.
 - Add policy/rubric scoring for stronger auto-consensus.

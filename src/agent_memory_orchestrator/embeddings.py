@@ -12,7 +12,9 @@ def _load_sentence_transformer(model_name: str):
     except Exception:
         return None
     try:
-        return SentenceTransformer(model_name)
+        return SentenceTransformer(model_name, local_files_only=True)
+    except TypeError:
+        return None
     except Exception:
         return None
 

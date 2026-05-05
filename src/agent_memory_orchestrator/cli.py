@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from dataclasses import replace
 from pathlib import Path
 
 from .config import Settings
@@ -34,6 +35,12 @@ def _build_parser() -> argparse.ArgumentParser:
     codex_import.add_argument("--root", type=Path, default=Path.home() / ".codex" / "sessions")
     codex_import.add_argument("--limit", type=int, default=30)
 
+    clean = sub.add_parser("rebuild-clean-db", help="Create a fresh DB from raw Codex sessions")
+    clean.add_argument("--out", required=True, type=Path)
+    clean.add_argument("--codex-root", type=Path, default=Path.home() / ".codex" / "sessions")
+    clean.add_argument("--limit", type=int, default=30)
+    clean.add_argument("--force", action="store_true")
+
     sub.add_parser("print-codex-hooks", help="Print a Codex hooks.json snippet for AMO hot-path capture/retrieval")
 
     search = sub.add_parser("search", help="Search memories")
@@ -41,6 +48,14 @@ def _build_parser() -> argparse.ArgumentParser:
     search.add_argument("--session-id")
     search.add_argument("--limit", type=int, default=10)
     search.add_argument("--include-historical", action="store_true")
+
+    context = sub.add_parser("context-pack", help="Build an agent-ready memory context pack")
+    context.add_argument("--query", required=True)
+    context.add_argument("--session-id")
+    context.add_argument("--budget", type=int, default=None)
+    context.add_argument("--limit", type=int, default=12)
+    context.add_argument("--include-historical", action="store_true")
+    context.add_argument("--format", choices=["json", "text"], default="json")
 
     timeline = sub.add_parser("timeline", help="View session timeline")
     timeline.add_argument("--session-id", required=True)
@@ -57,7 +72,8 @@ def _build_parser() -> argparse.ArgumentParser:
     summary.add_argument("--session-id", required=True)
 
     sub.add_parser("metrics", help="Inspect pipeline/retrieval row counts and latest retrieval")
-    sub.add_parser("rebuild-indexes", help="Rebuild FTS/vector index rows from canonical memory_units")
+    rebuild = sub.add_parser("rebuild-indexes", help="Rebuild FTS/vector index rows from canonical memory_units")
+    rebuild.add_argument("--force-vectors", action="store_true")
 
     orch_start = sub.add_parser("orchestrate-start", help="Start orchestrator session")
     orch_start.add_argument("--session-id", required=True)
@@ -102,7 +118,9 @@ def main(argv: list[str] | None = None) -> int:
             "ingest-transcript",
             "ingest-hook",
             "import-codex-sessions",
+            "rebuild-clean-db",
             "search",
+            "context-pack",
             "timeline",
             "export",
             "import",
@@ -111,6 +129,11 @@ def main(argv: list[str] | None = None) -> int:
             "rebuild-indexes",
             "print-codex-hooks",
         }:
+            if args.command == "rebuild-clean-db":
+                result = _rebuild_clean_db(settings, args.out, args.codex_root, args.limit, args.force)
+                _print({"ok": True, "result": result})
+                return 0
+
             svc = MemoryService(settings)
             try:
                 svc.init_db()
@@ -139,6 +162,18 @@ def main(argv: list[str] | None = None) -> int:
                         include_historical=args.include_historical,
                     )
                     _print({"ok": True, "count": len(results), "results": results})
+                elif args.command == "context-pack":
+                    pack = svc.build_context_pack(
+                        args.query,
+                        session_id=args.session_id,
+                        budget_tokens=args.budget,
+                        limit=args.limit,
+                        include_historical=args.include_historical,
+                    )
+                    if args.format == "text":
+                        print(pack["text"])
+                    else:
+                        _print({"ok": True, "result": pack})
                 elif args.command == "timeline":
                     events = svc.timeline(args.session_id, limit=args.limit)
                     _print({"ok": True, "count": len(events), "events": events})
@@ -154,7 +189,7 @@ def main(argv: list[str] | None = None) -> int:
                 elif args.command == "metrics":
                     _print({"ok": True, "result": svc.inspect_metrics()})
                 elif args.command == "rebuild-indexes":
-                    _print({"ok": True, "result": svc.rebuild_indexes()})
+                    _print({"ok": True, "result": svc.rebuild_indexes(force_vectors=args.force_vectors)})
             finally:
                 svc.close()
             return 0
@@ -250,6 +285,31 @@ def _codex_hooks_snippet() -> dict:
             ],
         },
     }
+
+
+def _rebuild_clean_db(settings: Settings, out_path: Path, codex_root: Path, limit: int, force: bool) -> dict:
+    target = out_path.resolve()
+    if target.exists() and not force:
+        raise FileExistsError(f"refusing to overwrite existing DB without --force: {target}")
+    if force:
+        for path in (target, target.with_name(target.name + "-wal"), target.with_name(target.name + "-shm")):
+            if path.exists():
+                path.unlink()
+    target.parent.mkdir(parents=True, exist_ok=True)
+    clean_settings = replace(settings, db_path=target)
+    svc = MemoryService(clean_settings)
+    try:
+        svc.init_db()
+        result = svc.import_codex_sessions(codex_root, limit=limit)
+        indexes = svc.rebuild_indexes(force_vectors=False)
+        return {
+            "out": str(target),
+            "codex_root": str(codex_root.resolve()),
+            "import": result,
+            "indexes": indexes,
+        }
+    finally:
+        svc.close()
 
 
 if __name__ == "__main__":

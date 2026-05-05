@@ -3,6 +3,9 @@ from __future__ import annotations
 import json
 from dataclasses import replace
 
+import pytest
+
+from agent_memory_orchestrator.cli import _rebuild_clean_db
 from agent_memory_orchestrator.config import Settings
 from agent_memory_orchestrator.memory_service import MemoryService
 
@@ -28,6 +31,10 @@ def make_settings(tmp_path) -> Settings:
         sensitivity_level="normal",
         consensus_threshold=0.7,
         max_review_rounds=5,
+        context_budget=2500,
+        reranker_backend="lexical",
+        rerank_top_k=50,
+        rerank_max_chars=1800,
     )
 
 
@@ -336,6 +343,8 @@ def test_dashboard_snapshot_and_retrieval_detail(tmp_path) -> None:
     svc.ingest_transcript(agent="codex", file_path=transcript, session_id="dash")
     hits = svc.search_memories("why retry jitter", session_id="dash", limit=5)
     assert hits
+    assert hits[0]["reranker_backend"] == "lexical"
+    assert hits[0]["reranker_model"] == "lexical_overlap_v1"
 
     snapshot = svc.dashboard_snapshot(limit=10)
     assert snapshot["metrics"]["counts"]["retrieval_runs"] == 1
@@ -346,7 +355,9 @@ def test_dashboard_snapshot_and_retrieval_detail(tmp_path) -> None:
 
     detail = svc.retrieval_run_detail(snapshot["retrieval_runs"][0]["id"])
     assert detail["run"]["query"] == "why retry jitter"
+    assert detail["run"]["config"]["actual_reranker"]["backend"] == "lexical"
     assert detail["candidates"][0]["memory_id"] == hits[0]["memory_id"]
+    assert detail["candidates"][0]["score_breakdown"]["reranker"]["backend"] == "lexical"
 
     svc.close()
 
@@ -433,10 +444,20 @@ def test_codex_user_prompt_hook_returns_additional_context_when_auto_safe(tmp_pa
         "response",
         "Implemented scraper/retry.py exponential backoff with jitter because fixed delay caused rate limits.",
     )
-    svc.add_memory(
-        "prior",
-        event.id,
-        "Decision [scraper/retry.py]: retry logic uses exponential backoff with jitter.",
+    svc.add_memory_unit(
+        session_id="prior",
+        source_event_id=event.id,
+        source_chunk_id=None,
+        memory_type="decision",
+        subject="scraper/retry.py",
+        predicate="decides",
+        object_text="retry logic uses exponential backoff with jitter",
+        summary="Decision [scraper/retry.py]: retry logic uses exponential backoff with jitter.",
+        topic_key="scraper_retry_py",
+        entities=["scraper/retry.py"],
+        tags=["retry", "logic", "jitter"],
+        confidence=0.9,
+        importance=0.8,
     )
 
     response = svc.codex_hook_response(
@@ -456,3 +477,148 @@ def test_codex_user_prompt_hook_returns_additional_context_when_auto_safe(tmp_pa
     assert "memory_id=" in output["additionalContext"]
     assert "retry logic" in output["additionalContext"]
     svc.close()
+
+
+def test_context_pack_prioritizes_durable_memory_and_tracks_exclusions(tmp_path) -> None:
+    settings = make_settings(tmp_path)
+    svc = MemoryService(settings)
+    svc.init_db()
+    svc.create_session("s1", "Session 1")
+    decision_event = svc.add_event(
+        "s1",
+        "codex",
+        "response",
+        "Decision: scraper retry logic uses exponential backoff with jitter.",
+    )
+    weak_event = svc.add_event(
+        "s1",
+        "codex",
+        "response",
+        "General observation that retry logic and jitter were discussed.",
+    )
+    decision = svc.add_memory_unit(
+        session_id="s1",
+        source_event_id=decision_event.id,
+        source_chunk_id=None,
+        memory_type="decision",
+        subject="scraper/retry.py",
+        predicate="decides",
+        object_text="retry logic uses exponential backoff with jitter",
+        summary="Decision [scraper/retry.py]: retry logic uses exponential backoff with jitter.",
+        topic_key="scraper_retry_py",
+        entities=["scraper/retry.py"],
+        tags=["retry", "jitter", "backoff"],
+        confidence=0.95,
+        importance=0.9,
+    )
+    weak = svc.add_memory_unit(
+        session_id="s1",
+        source_event_id=weak_event.id,
+        source_chunk_id=None,
+        memory_type="observation",
+        subject="retry logic",
+        predicate="observes",
+        object_text="retry logic and jitter were discussed",
+        summary="Observation: retry logic and jitter were discussed vaguely.",
+        topic_key="retry_logic",
+        entities=[],
+        tags=["retry", "logic", "jitter"],
+        confidence=0.4,
+        importance=0.4,
+    )
+
+    pack = svc.build_context_pack("why does retry logic use jitter", session_id="s1", budget_tokens=600, limit=10)
+    assert pack["text"].startswith("AMO local memory context")
+    assert pack["items"]
+    assert pack["items"][0]["memory_id"] == decision.id
+    assert pack["items"][0]["source_event_id"] == decision_event.id
+    assert "high confidence" in pack["items"][0]["include_reason"]
+    assert any(item["memory_id"] == weak.id and item["reason"] == "observation_noise" for item in pack["excluded"])
+    svc.close()
+
+
+def test_rebuild_indexes_force_vectors_records_metadata(tmp_path) -> None:
+    settings = make_settings(tmp_path)
+    svc = MemoryService(settings)
+    svc.init_db()
+    svc.create_session("s1", "Session 1")
+    event = svc.add_event("s1", "codex", "response", "Decision: retry logic uses jitter.")
+    svc.add_memory_unit(
+        session_id="s1",
+        source_event_id=event.id,
+        source_chunk_id=None,
+        memory_type="decision",
+        subject="retry.py",
+        predicate="decides",
+        object_text="retry logic uses jitter",
+        summary="Decision [retry.py]: retry logic uses jitter.",
+        topic_key="retry_py",
+        entities=["retry.py"],
+        tags=["retry", "jitter"],
+        confidence=0.95,
+    )
+
+    result = svc.rebuild_indexes(force_vectors=True)
+    assert result["memory_units"] == 1
+    assert result["vectors_written"] == 1
+    assert result["faiss"]["status"] == "disabled"
+
+    row = svc.conn.execute("SELECT metadata_json FROM index_versions ORDER BY created_at DESC LIMIT 1").fetchone()
+    metadata = json.loads(row["metadata_json"])
+    assert metadata["force_vectors"] is True
+    assert metadata["vectors_written"] == 1
+    svc.close()
+
+
+def test_rebuild_clean_db_refuses_overwrite_and_rebuilds_from_codex_rollout(tmp_path) -> None:
+    settings = make_settings(tmp_path)
+    out = tmp_path / "clean.db"
+    out.write_text("existing", encoding="utf-8")
+    root = tmp_path / "codex" / "sessions"
+    root.mkdir(parents=True)
+
+    with pytest.raises(FileExistsError):
+        _rebuild_clean_db(settings, out, root, limit=10, force=False)
+
+    rollout = root / "rollout-test.jsonl"
+    rollout.write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "timestamp": "2026-05-05T00:00:00Z",
+                        "type": "session_meta",
+                        "payload": {"id": "clean-session", "cwd": str(tmp_path), "source": "vscode"},
+                    }
+                ),
+                json.dumps(
+                    {
+                        "timestamp": "2026-05-05T00:00:01Z",
+                        "type": "event_msg",
+                        "payload": {
+                            "type": "agent_message",
+                            "message": (
+                                "Implemented .codex/config.toml hook retrieval with "
+                                "Codex UserPromptSubmit."
+                            ),
+                            "turn_id": "turn-1",
+                        },
+                    }
+                ),
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    result = _rebuild_clean_db(settings, out, root, limit=10, force=True)
+    assert result["out"] == str(out.resolve())
+    assert result["import"]["totals"]["files"] == 1
+    assert result["indexes"]["memory_units"] >= 1
+
+    clean_settings = replace(settings, db_path=out.resolve())
+    svc = MemoryService(clean_settings)
+    try:
+        hits = svc.search_memories("Codex hooks UserPromptSubmit", session_id="clean-session", limit=5)
+        assert hits
+    finally:
+        svc.close()

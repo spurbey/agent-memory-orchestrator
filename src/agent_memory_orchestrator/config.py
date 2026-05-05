@@ -32,6 +32,10 @@ class Settings:
     sensitivity_level: str
     consensus_threshold: float
     max_review_rounds: int
+    context_budget: int = 2500
+    reranker_backend: str = "auto"
+    rerank_top_k: int = 50
+    rerank_max_chars: int = 1800
 
     @classmethod
     def load(cls) -> "Settings":
@@ -54,6 +58,10 @@ class Settings:
         sensitivity_level = os.getenv("AMO_SENSITIVITY_LEVEL", "normal").strip().lower()
         consensus_threshold = float(os.getenv("AMO_CONSENSUS_THRESHOLD", "0.70"))
         max_review_rounds = int(os.getenv("AMO_MAX_REVIEW_ROUNDS", "5"))
+        context_budget = int(os.getenv("AMO_CONTEXT_BUDGET", "2500"))
+        reranker_backend = os.getenv("AMO_RERANKER_BACKEND", "auto").strip().lower()
+        rerank_top_k = int(os.getenv("AMO_RERANK_TOP_K", "50"))
+        rerank_max_chars = int(os.getenv("AMO_RERANK_MAX_CHARS", "1800"))
 
         if not db_path.is_absolute():
             db_path = (home / db_path).resolve()
@@ -75,6 +83,8 @@ class Settings:
             raise ValueError("AMO_EMBEDDING_DIMS must be a positive integer")
         if vector_backend not in {"auto", "faiss", "sqlite"}:
             raise ValueError("AMO_VECTOR_BACKEND must be one of: auto, faiss, sqlite")
+        if reranker_backend not in {"auto", "lexical", "cross-encoder"}:
+            raise ValueError("AMO_RERANKER_BACKEND must be one of: auto, lexical, cross-encoder")
         if approval_mode not in {"manual", "auto_safe"}:
             raise ValueError("AMO_APPROVAL_MODE must be one of: manual, auto_safe")
         if visibility_scope not in {"private", "project", "team", "public", "restricted"}:
@@ -85,6 +95,12 @@ class Settings:
             raise ValueError("AMO_CONSENSUS_THRESHOLD must be between 0.0 and 1.0")
         if max_review_rounds <= 0:
             raise ValueError("AMO_MAX_REVIEW_ROUNDS must be a positive integer")
+        if context_budget <= 0:
+            raise ValueError("AMO_CONTEXT_BUDGET must be a positive integer")
+        if rerank_top_k <= 0:
+            raise ValueError("AMO_RERANK_TOP_K must be a positive integer")
+        if rerank_max_chars <= 0:
+            raise ValueError("AMO_RERANK_MAX_CHARS must be a positive integer")
         if not (1 <= mcp_port <= 65535):
             raise ValueError("AMO_MCP_PORT must be a valid TCP port")
 
@@ -108,4 +124,8 @@ class Settings:
             sensitivity_level=sensitivity_level,
             consensus_threshold=consensus_threshold,
             max_review_rounds=max_review_rounds,
+            context_budget=context_budget,
+            reranker_backend=reranker_backend,
+            rerank_top_k=rerank_top_k,
+            rerank_max_chars=rerank_max_chars,
         )
