@@ -41,6 +41,10 @@ def create_server(settings: Settings) -> FastMCP:
             "sensitivity_level": settings.sensitivity_level,
             "consensus_threshold": settings.consensus_threshold,
             "max_review_rounds": settings.max_review_rounds,
+            "context_budget": settings.context_budget,
+            "reranker_backend": settings.reranker_backend,
+            "rerank_top_k": settings.rerank_top_k,
+            "rerank_max_chars": settings.rerank_max_chars,
         }
 
     @mcp.tool()
@@ -85,12 +89,28 @@ def create_server(settings: Settings) -> FastMCP:
         return {"count": len(results), "results": results}
 
     @mcp.tool()
+    def memory_context_pack(
+        query: str,
+        session_id: str = "",
+        budget: int = 2500,
+        limit: int = 12,
+        include_historical: bool = False,
+    ) -> dict:
+        return memory.build_context_pack(
+            query=query,
+            session_id=(session_id or None),
+            budget_tokens=budget,
+            limit=limit,
+            include_historical=include_historical,
+        )
+
+    @mcp.tool()
     def memory_metrics() -> dict:
         return memory.inspect_metrics()
 
     @mcp.tool()
-    def memory_rebuild_indexes() -> dict:
-        return memory.rebuild_indexes()
+    def memory_rebuild_indexes(force_vectors: bool = False) -> dict:
+        return memory.rebuild_indexes(force_vectors=force_vectors)
 
     @mcp.tool()
     def memory_timeline(session_id: str, limit: int = 50) -> dict:

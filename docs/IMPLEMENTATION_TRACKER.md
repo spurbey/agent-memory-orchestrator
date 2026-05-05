@@ -1,6 +1,6 @@
 # Implementation Tracker
 
-Last updated: 2026-05-05  
+Last updated: 2026-05-06  
 Baseline design: `docs/FINAL_DESIGN_V1.md`
 
 ## Phase Status
@@ -53,6 +53,10 @@ Tasks:
 - [x] Add memory-level consolidation/versioning baseline.
 - [x] Add metrics, replayable retrieval candidates, and index rebuild command.
 - [x] Add local daemon Web UI for sessions, events, memories, retrieval runs, and returned candidates.
+- [x] Add clean DB rebuild workflow for replaying Codex sessions into a disposable canonical store.
+- [x] Add agent-ready context-pack builder with budget control, provenance, exclusions, and durable-memory preference.
+- [x] Add optional local cross-encoder reranker interface with lexical fallback and retrieval trace metadata.
+- [x] Add optional FAISS vector cache build/search with SQLite vector scan fallback.
 - [x] Add unit/integration tests for Phase 1 pipeline and algorithms.
 
 Acceptance:
@@ -134,8 +138,8 @@ Acceptance:
 
 ## Current Risks
 
-- Optional BGE-M3/FAISS dependencies are not mandatory; fallback behavior is deterministic but less semantically accurate.
-- The reranker is currently a local lexical fallback unless optional model dependencies are installed and wired deeper.
+- Optional BGE-M3/FAISS/cross-encoder dependencies are not mandatory; fallback behavior is deterministic but less semantically accurate.
+- Optional model loaders are local-only. Models must already be available locally; AMO should not download model artifacts during memory operations.
 - Phase 2 Work Ledger is architecturally reserved but not implemented.
 
 ## Change Control

@@ -27,6 +27,10 @@ def make_settings(tmp_path) -> Settings:
         sensitivity_level="normal",
         consensus_threshold=0.7,
         max_review_rounds=5,
+        context_budget=2500,
+        reranker_backend="lexical",
+        rerank_top_k=50,
+        rerank_max_chars=1800,
     )
 
 
