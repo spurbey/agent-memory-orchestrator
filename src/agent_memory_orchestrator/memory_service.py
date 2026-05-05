@@ -1,15 +1,23 @@
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
 
+from .chunker import chunk_text
 from .config import Settings
 from .db import connect, init_schema
-from .embeddings import cosine_similarity, embed_text
-from .models import Event, Memory
+from .embeddings import cosine_similarity, embed_text_with_model
+from .extraction import extract_memory_candidates, extract_tags, make_topic_key
+from .models import Chunk, Event, Memory, MemoryUnit
+from .privacy import redact_secrets
+from .retrieval import lexical_rerank_score, reciprocal_rank_fusion, understand_query
+
+MAX_CODEX_IMPORT_CONTENT_CHARS = 12000
 
 
 def _utc_now() -> str:
@@ -18,6 +26,10 @@ def _utc_now() -> str:
 
 def _id(prefix: str) -> str:
     return f"{prefix}_{uuid4().hex}"
+
+
+def _json(data: object) -> str:
+    return json.dumps(data, ensure_ascii=False, sort_keys=True)
 
 
 class MemoryService:
@@ -35,13 +47,30 @@ class MemoryService:
         ts = _utc_now()
         self.conn.execute(
             """
-            INSERT INTO sessions(id, title, status, created_at, updated_at)
-            VALUES(?, ?, ?, ?, ?)
+            INSERT INTO sessions(
+              id, title, status, owner_user_id, workspace_id, project_id,
+              visibility_scope, created_at, updated_at
+            )
+            VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
               title=excluded.title,
+              owner_user_id=excluded.owner_user_id,
+              workspace_id=excluded.workspace_id,
+              project_id=excluded.project_id,
+              visibility_scope=excluded.visibility_scope,
               updated_at=excluded.updated_at
             """,
-            (session_id, title, status, ts, ts),
+            (
+                session_id,
+                title,
+                status,
+                self.settings.owner_user_id,
+                self.settings.workspace_id,
+                self.settings.project_id,
+                self.settings.visibility_scope,
+                ts,
+                ts,
+            ),
         )
         self.conn.commit()
 
@@ -58,29 +87,264 @@ class MemoryService:
         metadata: dict | None = None,
         created_at: str | None = None,
         event_id: str | None = None,
+        *,
+        source_app: str = "unknown",
+        process: bool = False,
     ) -> Event:
+        if not self.session_exists(session_id):
+            self.create_session(session_id, title=session_id)
+
         ts = created_at or _utc_now()
         eid = event_id or _id("evt")
         payload = metadata or {}
+        clean_content, redacted = redact_secrets(content)
         self.conn.execute(
             """
-            INSERT INTO events(id, session_id, agent, event_type, content, metadata_json, created_at)
-            VALUES(?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO events(
+              id, session_id, agent, event_type, content, metadata_json, source_app,
+              owner_user_id, workspace_id, project_id, visibility_scope,
+              sensitivity_level, redacted, created_at
+            )
+            VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (eid, session_id, agent, event_type, content, json.dumps(payload), ts),
+            (
+                eid,
+                session_id,
+                agent,
+                event_type,
+                clean_content,
+                _json(payload),
+                source_app,
+                self.settings.owner_user_id,
+                self.settings.workspace_id,
+                self.settings.project_id,
+                self.settings.visibility_scope,
+                self.settings.sensitivity_level,
+                1 if redacted else 0,
+                ts,
+            ),
         )
-        self.conn.execute(
-            "UPDATE sessions SET updated_at = ? WHERE id = ?",
-            (ts, session_id),
-        )
+        self.conn.execute("UPDATE sessions SET updated_at = ? WHERE id = ?", (ts, session_id))
         self.conn.commit()
-        return Event(
+        event = Event(
             id=eid,
             session_id=session_id,
             agent=agent,
             event_type=event_type,
-            content=content,
+            content=clean_content,
             metadata=payload,
+            created_at=ts,
+            source_app=source_app,
+            owner_user_id=self.settings.owner_user_id,
+            workspace_id=self.settings.workspace_id,
+            project_id=self.settings.project_id,
+            visibility_scope=self.settings.visibility_scope,
+            sensitivity_level=self.settings.sensitivity_level,
+            redacted=redacted,
+        )
+        if process:
+            self.process_event(event)
+        return event
+
+    def process_event(self, event: Event) -> dict[str, int]:
+        run_id = self._start_pipeline_run("ingest_event", event.session_id, event.id)
+        started = time.perf_counter()
+        chunks_count = 0
+        memory_count = 0
+        try:
+            chunks = self.create_chunks_for_event(event)
+            chunks_count = len(chunks)
+            for chunk in chunks:
+                memory_count += len(self.extract_memories_for_chunk(event, chunk, run_id))
+            if event.event_type.lower() in {"stop", "session_stop"}:
+                self.generate_session_summary(event.session_id)
+            self._finish_pipeline_run(
+                run_id,
+                "completed",
+                started,
+                {"chunks": chunks_count, "memory_units": memory_count},
+            )
+            return {"chunks": chunks_count, "memory_units": memory_count}
+        except Exception as exc:
+            self._finish_pipeline_run(run_id, "failed", started, {"chunks": chunks_count}, str(exc))
+            raise
+
+    def create_chunks_for_event(self, event: Event) -> list[Chunk]:
+        candidates = chunk_text(event.content, event.event_type, event.metadata)
+        chunks: list[Chunk] = []
+        ts = _utc_now()
+        for idx, candidate in enumerate(candidates):
+            cid = _id("chk")
+            self.conn.execute(
+                """
+                INSERT OR IGNORE INTO chunks(
+                  id, session_id, event_id, chunk_index, content_type, text,
+                  token_count, content_hash, metadata_json, created_at
+                )
+                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    cid,
+                    event.session_id,
+                    event.id,
+                    idx,
+                    candidate.content_type,
+                    candidate.text,
+                    candidate.token_count,
+                    candidate.content_hash,
+                    _json(candidate.metadata),
+                    ts,
+                ),
+            )
+            chunks.append(
+                Chunk(
+                    id=cid,
+                    session_id=event.session_id,
+                    event_id=event.id,
+                    chunk_index=idx,
+                    content_type=candidate.content_type,
+                    text=candidate.text,
+                    token_count=candidate.token_count,
+                    content_hash=candidate.content_hash,
+                    metadata=candidate.metadata,
+                    created_at=ts,
+                )
+            )
+        self.conn.commit()
+        return chunks
+
+    def extract_memories_for_chunk(self, event: Event, chunk: Chunk, pipeline_run_id: str | None = None) -> list[MemoryUnit]:
+        candidates = extract_memory_candidates(
+            chunk.text,
+            content_type=chunk.content_type,
+            event_type=event.event_type,
+            agent=event.agent,
+            metadata=chunk.metadata,
+        )
+        units: list[MemoryUnit] = []
+        confidence_debug: dict[str, float] = {}
+        for candidate in candidates:
+            unit = self.add_memory_unit(
+                session_id=event.session_id,
+                source_event_id=event.id,
+                source_chunk_id=chunk.id,
+                memory_type=candidate.memory_type,
+                subject=candidate.subject,
+                predicate=candidate.predicate,
+                object_text=candidate.object,
+                summary=candidate.summary,
+                topic_key=candidate.topic_key,
+                entities=candidate.entities,
+                tags=candidate.tags,
+                confidence=candidate.confidence,
+                importance=candidate.importance,
+            )
+            units.append(unit)
+            confidence_debug[unit.id] = candidate.confidence
+
+        self.conn.execute(
+            """
+            INSERT INTO extraction_runs(
+              id, pipeline_run_id, session_id, source_chunk_id, extractor,
+              memory_count, confidence_json, created_at
+            )
+            VALUES(?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                _id("xrun"),
+                pipeline_run_id,
+                event.session_id,
+                chunk.id,
+                "rule_v1",
+                len(units),
+                _json(confidence_debug),
+                _utc_now(),
+            ),
+        )
+        self.conn.commit()
+        return units
+
+    def add_memory_unit(
+        self,
+        *,
+        session_id: str,
+        source_event_id: str,
+        source_chunk_id: str | None,
+        memory_type: str,
+        subject: str,
+        predicate: str,
+        object_text: str,
+        summary: str,
+        topic_key: str,
+        entities: list[str] | None = None,
+        tags: list[str] | None = None,
+        confidence: float = 0.4,
+        importance: float = 0.5,
+        status: str = "active",
+        memory_id: str | None = None,
+    ) -> MemoryUnit:
+        ts = _utc_now()
+        mid = memory_id or _id("mem")
+        entity_list = entities or []
+        tag_list = tags or []
+        self.conn.execute(
+            """
+            INSERT INTO memory_units(
+              id, session_id, source_event_id, source_chunk_id, memory_type,
+              subject, predicate, object, summary, topic_key, entities_json,
+              tags_json, confidence, importance, status, owner_user_id,
+              workspace_id, project_id, visibility_scope, sensitivity_level,
+              created_at, updated_at
+            )
+            VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                mid,
+                session_id,
+                source_event_id,
+                source_chunk_id,
+                memory_type,
+                subject,
+                predicate,
+                object_text,
+                summary,
+                topic_key,
+                _json(entity_list),
+                _json(tag_list),
+                confidence,
+                importance,
+                status,
+                self.settings.owner_user_id,
+                self.settings.workspace_id,
+                self.settings.project_id,
+                self.settings.visibility_scope,
+                self.settings.sensitivity_level,
+                ts,
+                ts,
+            ),
+        )
+        self._mirror_legacy_memory(mid, session_id, source_event_id, summary, tag_list, importance, ts)
+        self._write_vector(mid, summary)
+        self._write_fts(mid, summary, subject, object_text, topic_key)
+        self._write_kg_for_memory(mid, source_chunk_id, subject, entity_list, memory_type, confidence)
+        self._consolidate_memory(mid, topic_key)
+        self.conn.commit()
+        return MemoryUnit(
+            id=mid,
+            session_id=session_id,
+            source_event_id=source_event_id,
+            source_chunk_id=source_chunk_id,
+            memory_type=memory_type,
+            subject=subject,
+            predicate=predicate,
+            object=object_text,
+            summary=summary,
+            topic_key=topic_key,
+            entities=entity_list,
+            tags=tag_list,
+            confidence=confidence,
+            importance=importance,
+            status=status,
             created_at=ts,
         )
 
@@ -95,91 +359,42 @@ class MemoryService:
         created_at: str | None = None,
         memory_id: str | None = None,
     ) -> Memory:
-        ts = created_at or _utc_now()
+        tag_list = tags or extract_tags(summary)
+        subject = tag_list[0] if tag_list else "session"
         mid = memory_id or _id("mem")
-        normalized_tags = tags or []
-        emb = vector if vector is not None else embed_text(summary, self.settings.embedding_dims)
-
-        self.conn.execute(
-            """
-            INSERT INTO memories(id, session_id, source_event_id, summary, tags_json, importance, created_at)
-            VALUES(?, ?, ?, ?, ?, ?, ?)
-            """,
-            (mid, session_id, source_event_id, summary, json.dumps(normalized_tags), importance, ts),
-        )
-        self.conn.execute(
-            """
-            INSERT INTO memory_vectors(memory_id, dims, vector_json, created_at)
-            VALUES(?, ?, ?, ?)
-            ON CONFLICT(memory_id) DO UPDATE SET
-              dims=excluded.dims,
-              vector_json=excluded.vector_json,
-              created_at=excluded.created_at
-            """,
-            (mid, self.settings.embedding_dims, json.dumps(emb), ts),
-        )
-        self.conn.execute(
-            "UPDATE sessions SET updated_at = ? WHERE id = ?",
-            (ts, session_id),
-        )
-        self.conn.commit()
-        return Memory(
-            id=mid,
+        unit = self.add_memory_unit(
             session_id=session_id,
             source_event_id=source_event_id,
+            source_chunk_id=None,
+            memory_type="observation",
+            subject=subject,
+            predicate="observes",
+            object_text=summary,
             summary=summary,
-            tags=normalized_tags,
+            topic_key=make_topic_key(subject, tag_list),
+            entities=[],
+            tags=tag_list,
+            confidence=0.4,
             importance=importance,
-            created_at=ts,
+            memory_id=mid,
         )
-
-    def _extract_tags(self, text: str, max_tags: int = 6) -> list[str]:
-        stop = {
-            "this",
-            "that",
-            "with",
-            "from",
-            "have",
-            "will",
-            "into",
-            "your",
-            "about",
-            "there",
-            "their",
-            "would",
-            "should",
-            "could",
-            "what",
-            "when",
-            "where",
-            "which",
-        }
-        words: list[str] = []
-        for raw in text.lower().split():
-            word = "".join(ch for ch in raw if ch.isalnum() or ch in {"-", "_"})
-            if len(word) < 4 or word in stop:
-                continue
-            words.append(word)
-        unique: list[str] = []
-        seen: set[str] = set()
-        for word in words:
-            if word not in seen:
-                seen.add(word)
-                unique.append(word)
-            if len(unique) >= max_tags:
-                break
-        return unique
-
-    def _should_extract_memory(self, event_type: str, content: str) -> bool:
-        if not content.strip():
-            return False
-        if event_type in {"decision", "summary", "response", "tool_result"}:
-            return True
-        return len(content.strip()) >= 80
-
-    def _memory_summary(self, content: str, max_len: int = 300) -> str:
-        clean = " ".join(content.split())
-        return clean if len(clean) <= max_len else clean[: max_len - 3] + "..."
+        if vector is not None:
+            ts = created_at or _utc_now()
+            self.conn.execute(
+                """
+                INSERT INTO memory_vectors(memory_id, dims, model, backend, vector_json, created_at)
+                VALUES(?, ?, ?, ?, ?, ?)
+                ON CONFLICT(memory_id) DO UPDATE SET
+                  dims=excluded.dims,
+                  model=excluded.model,
+                  backend=excluded.backend,
+                  vector_json=excluded.vector_json,
+                  created_at=excluded.created_at
+                """,
+                (unit.id, len(vector), "provided", "sqlite", _json(vector), ts),
+            )
+            self.conn.commit()
+        return Memory(unit.id, session_id, source_event_id, summary, tag_list, importance, unit.created_at)
 
     def ingest_transcript(
         self,
@@ -192,112 +407,358 @@ class MemoryService:
             self.create_session(session_id, title=session_title or session_id)
 
         events_count = 0
+        chunks_count = 0
         memories_count = 0
-
-        with file_path.open("r", encoding="utf-8") as f:
+        with file_path.open("r", encoding="utf-8-sig") as f:
             for line in f:
                 line = line.strip()
                 if not line:
                     continue
                 item = json.loads(line)
-                if not isinstance(item, dict):
+                normalized = self.normalize_event_payload(item, default_agent=agent, default_session_id=session_id)
+                if normalized is None:
                     continue
-
-                event_type = str(item.get("event_type") or item.get("type") or "message")
-                content = item.get("content") or item.get("message") or item.get("text") or ""
-                if not isinstance(content, str):
-                    content = json.dumps(content)
-                created_at = item.get("created_at") or item.get("timestamp")
-                metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
-
                 event = self.add_event(
-                    session_id=session_id,
-                    agent=agent,
-                    event_type=event_type,
-                    content=content,
-                    metadata=metadata,
-                    created_at=created_at,
+                    session_id=normalized["session_id"],
+                    agent=normalized["agent"],
+                    event_type=normalized["event_type"],
+                    content=normalized["content"],
+                    metadata=normalized["metadata"],
+                    created_at=normalized.get("created_at"),
+                    source_app=normalized["source_app"],
+                    process=False,
                 )
+                counts = self.process_event(event)
                 events_count += 1
+                chunks_count += counts["chunks"]
+                memories_count += counts["memory_units"]
 
-                if self._should_extract_memory(event.event_type, event.content):
-                    summary = self._memory_summary(event.content)
-                    tags = self._extract_tags(summary)
-                    importance = min(1.0, 0.3 + (len(summary) / 500.0))
-                    self.add_memory(
-                        session_id=session_id,
-                        source_event_id=event.id,
-                        summary=summary,
-                        tags=tags,
-                        importance=importance,
-                    )
-                    memories_count += 1
+        self.generate_session_summary(session_id)
+        return {"events": events_count, "chunks": chunks_count, "memories": memories_count, "memory_units": memories_count}
 
-        return {"events": events_count, "memories": memories_count}
-
-    def search_memories(self, query: str, session_id: str | None = None, limit: int = 10) -> list[dict]:
-        params: list[object] = [f"%{query}%", f"%{query}%"]
-        session_filter = ""
-        if session_id:
-            session_filter = "AND m.session_id = ?"
-            params.append(session_id)
-        params.append(max(limit * 5, limit))
-
-        rows = self.conn.execute(
-            f"""
-            SELECT
-              m.id,
-              m.session_id,
-              m.source_event_id,
-              m.summary,
-              m.tags_json,
-              m.importance,
-              m.created_at,
-              mv.vector_json,
-              e.content AS source_content
-            FROM memories m
-            JOIN events e ON e.id = m.source_event_id
-            LEFT JOIN memory_vectors mv ON mv.memory_id = m.id
-            WHERE (m.summary LIKE ? OR e.content LIKE ?)
-            {session_filter}
-            ORDER BY m.created_at DESC
-            LIMIT ?
-            """,
-            tuple(params),
-        ).fetchall()
-
-        query_vec = embed_text(query, self.settings.embedding_dims)
-        ranked: list[dict] = []
-        query_lower = query.lower()
-
-        for row in rows:
-            vector_json = row["vector_json"] or "[]"
-            memory_vec = json.loads(vector_json)
-            lexical_hits = row["summary"].lower().count(query_lower)
-            lexical_hits += row["source_content"].lower().count(query_lower)
-            lexical_score = min(1.0, lexical_hits / 3.0)
-            semantic_score = cosine_similarity(query_vec, memory_vec) if memory_vec else 0.0
-            score = (0.45 * lexical_score) + (0.55 * semantic_score)
-            ranked.append(
-                {
-                    "memory_id": row["id"],
-                    "session_id": row["session_id"],
-                    "source_event_id": row["source_event_id"],
-                    "summary": row["summary"],
-                    "tags": json.loads(row["tags_json"]),
-                    "importance": row["importance"],
-                    "created_at": row["created_at"],
-                    "score": round(score, 6),
-                }
+    def import_codex_sessions(self, root: Path, limit: int = 30) -> dict[str, object]:
+        files = sorted(root.rglob("*.jsonl"), key=lambda p: p.stat().st_mtime, reverse=True)
+        selected = files[:limit] if limit > 0 else files
+        imported: list[dict[str, object]] = []
+        totals = {"files": 0, "events": 0, "chunks": 0, "memory_units": 0}
+        for file_path in selected:
+            session_id, title = self._infer_codex_session(file_path)
+            result = self.ingest_transcript(
+                agent="codex",
+                file_path=file_path,
+                session_id=session_id,
+                session_title=title,
             )
+            totals["files"] += 1
+            totals["events"] += int(result["events"])
+            totals["chunks"] += int(result["chunks"])
+            totals["memory_units"] += int(result["memory_units"])
+            imported.append({"file": str(file_path), "session_id": session_id, **result})
+        return {"root": str(root), "totals": totals, "imported": imported}
 
-        ranked.sort(key=lambda item: item["score"], reverse=True)
-        return ranked[:limit]
+    def ingest_hook_payload(self, payload: dict, default_agent: str = "codex") -> dict[str, object]:
+        normalized = self.normalize_event_payload(payload, default_agent=default_agent)
+        if normalized is None:
+            return {"event_id": None, "session_id": payload.get("session_id") or "default", "skipped": True}
+        if not self.session_exists(normalized["session_id"]):
+            self.create_session(normalized["session_id"], normalized["session_id"])
+        event = self.add_event(
+            session_id=normalized["session_id"],
+            agent=normalized["agent"],
+            event_type=normalized["event_type"],
+            content=normalized["content"],
+            metadata=normalized["metadata"],
+            created_at=normalized.get("created_at"),
+            source_app=normalized["source_app"],
+            process=True,
+        )
+        if event.event_type.lower() in {"stop", "session_stop"}:
+            self.generate_session_summary(event.session_id)
+        return {"event_id": event.id, "session_id": event.session_id}
+
+    def build_hook_context(self, payload: dict, default_agent: str = "codex", limit: int = 6) -> str:
+        event_name = str(payload.get("hook_event_name") or payload.get("event_type") or "")
+        normalized_name = _snake(event_name)
+        if normalized_name == "session_start":
+            summaries = self.list_sessions(limit=5)
+            if not summaries:
+                return ""
+            lines = ["AMO local memory context: recent session summaries:"]
+            for row in summaries[:5]:
+                summary = _preview(row.get("summary_text") or "No summary yet.", 280)
+                lines.append(f"- session={row['id']} status={row['status']}: {summary}")
+            return "\n".join(lines)
+
+        if normalized_name != "user_prompt_submit":
+            return ""
+
+        prompt = str(payload.get("prompt") or payload.get("content") or "")
+        if not prompt.strip():
+            return ""
+        results = self.search_memories(prompt, session_id=None, limit=limit, include_historical=False)
+        if not results:
+            return ""
+
+        lines = [
+            "AMO local memory context retrieved for this prompt.",
+            "Use only if relevant; cite memory_id when using it.",
+        ]
+        for idx, item in enumerate(results, start=1):
+            lines.append(
+                f"{idx}. memory_id={item['memory_id']} type={item['memory_type']} "
+                f"status={item['status']} score={item['score']} session={item['session_id']}: "
+                f"{_preview(item['summary'], 420)}"
+            )
+        return "\n".join(lines)
+
+    def codex_hook_response(self, payload: dict, default_agent: str = "codex") -> dict:
+        event_name = str(payload.get("hook_event_name") or payload.get("event_type") or "")
+        normalized_name = _snake(event_name)
+        additional_context = self.build_hook_context(payload, default_agent=default_agent)
+        self.ingest_hook_payload(payload, default_agent=default_agent)
+
+        hook_event_name = {
+            "session_start": "SessionStart",
+            "user_prompt_submit": "UserPromptSubmit",
+            "post_tool_use": "PostToolUse",
+            "stop": "Stop",
+        }.get(normalized_name, event_name or "UserPromptSubmit")
+
+        response: dict[str, object] = {"continue": True}
+        if additional_context and self.settings.approval_mode == "auto_safe":
+            response["hookSpecificOutput"] = {
+                "hookEventName": hook_event_name,
+                "additionalContext": additional_context,
+            }
+        elif additional_context:
+            response["systemMessage"] = "AMO captured this turn. Memory context injection is disabled unless AMO_APPROVAL_MODE=auto_safe."
+        return response
+
+    def normalize_event_payload(
+        self,
+        item: dict,
+        *,
+        default_agent: str = "system",
+        default_session_id: str | None = None,
+    ) -> dict[str, object] | None:
+        codex_item = self._normalize_codex_rollout_item(item, default_agent=default_agent, default_session_id=default_session_id)
+        if codex_item is not None:
+            return codex_item
+        if item.get("type") in {"response_item", "event_msg", "turn_context", "compacted", "session_meta"}:
+            return None
+
+        event_name = str(item.get("hook_event_name") or item.get("event_type") or item.get("type") or "message")
+        session_id = str(item.get("session_id") or default_session_id or "default")
+        agent = str(item.get("agent") or item.get("model_provider") or default_agent).lower()
+        if "claude" in agent:
+            agent = "claude"
+        elif "codex" in agent or "openai" in agent:
+            agent = "codex"
+        elif agent not in {"claude", "codex", "user", "system"}:
+            agent = default_agent
+
+        content = item.get("content") or item.get("message") or item.get("text")
+        if content is None and event_name == "Stop":
+            content = item.get("last_assistant_message") or ""
+        if content is None and "tool" in item:
+            content = item.get("tool")
+        if not isinstance(content, str):
+            content = json.dumps(content or item, ensure_ascii=False)
+
+        metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+        for key in ("cwd", "turn_id", "transcript_path", "tool_name", "tool_input", "tool_output"):
+            if key in item and key not in metadata:
+                metadata[key] = item[key]
+
+        return {
+            "session_id": session_id,
+            "agent": agent,
+            "event_type": _snake(event_name),
+            "content": content,
+            "metadata": metadata,
+            "created_at": item.get("created_at") or item.get("timestamp"),
+            "source_app": "claude" if default_agent == "claude" else "codex",
+        }
+
+    def _normalize_codex_rollout_item(
+        self,
+        item: dict,
+        *,
+        default_agent: str,
+        default_session_id: str | None,
+    ) -> dict[str, object] | None:
+        kind = item.get("type")
+        payload = item.get("payload")
+        if not isinstance(payload, dict):
+            return None
+        ts = item.get("timestamp") or payload.get("timestamp")
+        session_id = default_session_id or str(payload.get("id") or payload.get("session_id") or "codex-session")
+        metadata = {"rollout_type": kind}
+
+        if kind == "session_meta":
+            session_id = str(payload.get("id") or session_id)
+            cwd = payload.get("cwd") or ""
+            source = payload.get("source") or payload.get("originator") or "codex"
+            model = payload.get("model") or payload.get("model_provider") or ""
+            return {
+                "session_id": session_id,
+                "agent": "system",
+                "event_type": "session_meta",
+                "content": f"Codex session started. cwd={cwd} source={source} model={model}",
+                "metadata": {
+                    "cwd": cwd,
+                    "source": source,
+                    "originator": payload.get("originator"),
+                    "cli_version": payload.get("cli_version"),
+                    "forked_from_id": payload.get("forked_from_id"),
+                },
+                "created_at": ts,
+                "source_app": "codex",
+            }
+
+        if kind == "turn_context":
+            return None
+
+        if kind == "compacted":
+            message = str(payload.get("message") or "").strip()
+            if not message:
+                return None
+            return {
+                "session_id": session_id,
+                "agent": "system",
+                "event_type": "summary",
+                "content": message,
+                "metadata": metadata,
+                "created_at": ts,
+                "source_app": "codex",
+            }
+
+        subtype = payload.get("type")
+        if kind == "event_msg":
+            if subtype == "user_message":
+                return self._normalized(session_id, "user", "prompt", payload.get("message"), metadata | {"turn_id": payload.get("turn_id")}, ts)
+            if subtype == "agent_message":
+                return self._normalized(session_id, "codex", "response", payload.get("message"), metadata | {"turn_id": payload.get("turn_id")}, ts)
+            if subtype in {"exec_command_end", "patch_apply_end", "mcp_tool_call_end"}:
+                content = _codex_tool_result_text(payload)
+                if not content.strip():
+                    return None
+                return self._normalized(session_id, "codex", "tool_result", content, metadata | _small_tool_metadata(payload), ts)
+            if subtype in {"task_complete", "turn_aborted", "error"}:
+                content = payload.get("message") or payload.get("error") or subtype
+                return self._normalized(session_id, "system", subtype, content, metadata | {"turn_id": payload.get("turn_id")}, ts)
+            return None
+
+        if kind == "response_item":
+            # Codex rollout files usually contain both response_item records and
+            # event_msg records for the same activity. For historical import we
+            # prefer event_msg to avoid duplicate memories and oversized imports.
+            return None
+
+        return None
+
+    def _normalized(
+        self,
+        session_id: str,
+        agent: str,
+        event_type: str,
+        content: object,
+        metadata: dict,
+        created_at: object,
+    ) -> dict[str, object] | None:
+        text = _codex_content_to_text(content)
+        if not text.strip():
+            return None
+        return {
+            "session_id": session_id,
+            "agent": agent,
+            "event_type": _snake(event_type),
+            "content": text,
+            "metadata": metadata,
+            "created_at": created_at,
+            "source_app": "codex",
+        }
+
+    def _infer_codex_session(self, file_path: Path) -> tuple[str, str]:
+        try:
+            with file_path.open("r", encoding="utf-8-sig") as f:
+                for line in f:
+                    if not line.strip():
+                        continue
+                    item = json.loads(line)
+                    if item.get("type") == "session_meta" and isinstance(item.get("payload"), dict):
+                        payload = item["payload"]
+                        sid = str(payload.get("id") or file_path.stem)
+                        cwd = payload.get("cwd") or ""
+                        return sid, f"Codex {sid} {cwd}".strip()
+                    break
+        except Exception:
+            pass
+        return file_path.stem, f"Codex {file_path.stem}"
+
+    def search_memories(
+        self,
+        query: str,
+        session_id: str | None = None,
+        limit: int = 10,
+        *,
+        include_historical: bool | None = None,
+    ) -> list[dict]:
+        started = time.perf_counter()
+        run_id = _id("rrun")
+        understood = understand_query(query, limit)
+        historical = understood.include_historical if include_historical is None else include_historical
+        ts = _utc_now()
+        self.conn.execute(
+            """
+            INSERT INTO retrieval_runs(
+              id, query, intent, session_id, include_historical, status,
+              started_at, config_json
+            )
+            VALUES(?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                run_id,
+                query,
+                understood.intent,
+                session_id,
+                1 if historical else 0,
+                "running",
+                ts,
+                _json({"pools": understood.pools, "entities": understood.entities}),
+            ),
+        )
+        self.conn.commit()
+
+        try:
+            bm25 = self._bm25_candidates(query, session_id, understood.pools["bm25"], historical)
+            vector = self._vector_candidates(query, session_id, understood.pools["vector"], historical)
+            kg = self._kg_candidates(query, session_id, understood.pools["kg"], historical)
+            fused = reciprocal_rank_fusion({"bm25": bm25, "vector": vector, "kg": kg})
+            results = self._materialize_results(query, fused, run_id, limit, historical)
+            self.conn.execute(
+                """
+                UPDATE retrieval_runs
+                SET status = ?, finished_at = ?, duration_ms = ?
+                WHERE id = ?
+                """,
+                ("completed", _utc_now(), _elapsed_ms(started), run_id),
+            )
+            self.conn.commit()
+            return results
+        except Exception:
+            self.conn.execute(
+                "UPDATE retrieval_runs SET status = ?, finished_at = ?, duration_ms = ? WHERE id = ?",
+                ("failed", _utc_now(), _elapsed_ms(started), run_id),
+            )
+            self.conn.commit()
+            raise
 
     def timeline(self, session_id: str, limit: int = 50) -> list[dict]:
         rows = self.conn.execute(
             """
-            SELECT id, session_id, agent, event_type, content, metadata_json, created_at
+            SELECT id, session_id, agent, event_type, content, metadata_json, source_app,
+                   visibility_scope, sensitivity_level, redacted, created_at
             FROM events
             WHERE session_id = ?
             ORDER BY created_at DESC
@@ -314,63 +775,111 @@ class MemoryService:
                 "event_type": row["event_type"],
                 "content": row["content"],
                 "metadata": json.loads(row["metadata_json"]),
+                "source_app": row["source_app"],
+                "visibility_scope": row["visibility_scope"],
+                "sensitivity_level": row["sensitivity_level"],
+                "redacted": bool(row["redacted"]),
                 "created_at": row["created_at"],
             }
             for row in rows
         ]
 
+    def generate_session_summary(self, session_id: str) -> dict:
+        rows = self.conn.execute(
+            """
+            SELECT id, memory_type, summary, entities_json
+            FROM memory_units
+            WHERE session_id = ? AND status = 'active'
+            ORDER BY created_at ASC
+            """,
+            (session_id,),
+        ).fetchall()
+        decisions = [row["summary"] for row in rows if row["memory_type"] == "decision"][:8]
+        blockers = [row["summary"] for row in rows if row["memory_type"] in {"bug", "blocker"}][:8]
+        changed_files: list[str] = []
+        evidence_ids = [row["id"] for row in rows]
+        for row in rows:
+            for entity in json.loads(row["entities_json"]):
+                if "." in entity and entity not in changed_files:
+                    changed_files.append(entity)
+        summary_parts = []
+        if decisions:
+            summary_parts.append("Decisions: " + " | ".join(decisions[:5]))
+        if changed_files:
+            summary_parts.append("Changed files/entities: " + ", ".join(changed_files[:12]))
+        if blockers:
+            summary_parts.append("Open blockers/bugs: " + " | ".join(blockers[:5]))
+        summary_text = "\n".join(summary_parts) or "No durable memory extracted yet."
+        ts = _utc_now()
+        self.conn.execute(
+            """
+            INSERT INTO session_summaries(
+              session_id, summary_text, key_decisions_json, open_blockers_json,
+              changed_files_json, evidence_memory_ids_json, generator, created_at, updated_at
+            )
+            VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(session_id) DO UPDATE SET
+              summary_text=excluded.summary_text,
+              key_decisions_json=excluded.key_decisions_json,
+              open_blockers_json=excluded.open_blockers_json,
+              changed_files_json=excluded.changed_files_json,
+              evidence_memory_ids_json=excluded.evidence_memory_ids_json,
+              updated_at=excluded.updated_at
+            """,
+            (
+                session_id,
+                summary_text,
+                _json(decisions),
+                _json(blockers),
+                _json(changed_files),
+                _json(evidence_ids),
+                "rule_v1",
+                ts,
+                ts,
+            ),
+        )
+        self.conn.commit()
+        return {
+            "session_id": session_id,
+            "summary_text": summary_text,
+            "key_decisions": decisions,
+            "open_blockers": blockers,
+            "changed_files": changed_files,
+        }
+
     def export_snapshot(self, out_path: Path, session_id: str | None = None) -> int:
         tables = [
             "sessions",
             "events",
+            "chunks",
+            "memory_units",
             "memories",
             "memory_vectors",
+            "entities",
+            "kg_edges",
+            "session_summaries",
+            "index_versions",
+            "pipeline_runs",
+            "extraction_runs",
+            "retrieval_runs",
+            "retrieval_candidates",
+            "consolidation_decisions",
+            "approval_decisions",
             "orchestration_rounds",
             "orchestration_decisions",
         ]
         rows_written = 0
         out_path.parent.mkdir(parents=True, exist_ok=True)
-
         with out_path.open("w", encoding="utf-8") as f:
             for table in tables:
-                query = f"SELECT * FROM {table}"
-                params: tuple[object, ...] = ()
-
-                if session_id:
-                    if table == "sessions":
-                        query = "SELECT * FROM sessions WHERE id = ?"
-                        params = (session_id,)
-                    elif table == "memory_vectors":
-                        query = """
-                        SELECT mv.*
-                        FROM memory_vectors mv
-                        JOIN memories m ON m.id = mv.memory_id
-                        WHERE m.session_id = ?
-                        """
-                        params = (session_id,)
-                    else:
-                        query = f"SELECT * FROM {table} WHERE session_id = ?"
-                        params = (session_id,)
-
-                rows = self.conn.execute(query, params).fetchall()
-                for row in rows:
-                    payload = {"table": table, "row": dict(row)}
-                    f.write(json.dumps(payload) + "\n")
+                for row in self._rows_for_export(table, session_id):
+                    f.write(_json({"table": table, "row": dict(row)}) + "\n")
                     rows_written += 1
         return rows_written
 
     def import_snapshot(self, in_path: Path) -> int:
-        ordered_tables = [
-            "sessions",
-            "events",
-            "memories",
-            "memory_vectors",
-            "orchestration_rounds",
-            "orchestration_decisions",
-        ]
-        buffered: dict[str, list[dict]] = {table: [] for table in ordered_tables}
-
-        with in_path.open("r", encoding="utf-8") as f:
+        inserted = 0
+        with in_path.open("r", encoding="utf-8-sig") as f:
             for line in f:
                 line = line.strip()
                 if not line:
@@ -378,21 +887,758 @@ class MemoryService:
                 payload = json.loads(line)
                 table = payload.get("table")
                 row = payload.get("row")
-                if table in buffered and isinstance(row, dict):
-                    buffered[table].append(row)
-
-        inserted = 0
-        for table in ordered_tables:
-            for row in buffered[table]:
+                if not table or not isinstance(row, dict):
+                    continue
                 columns = list(row.keys())
                 col_clause = ", ".join(columns)
                 val_clause = ", ".join(["?"] * len(columns))
-                values = tuple(row[col] for col in columns)
                 self.conn.execute(
                     f"INSERT OR REPLACE INTO {table} ({col_clause}) VALUES ({val_clause})",
-                    values,
+                    tuple(row[col] for col in columns),
                 )
                 inserted += 1
-
         self.conn.commit()
         return inserted
+
+    def inspect_metrics(self) -> dict:
+        tables = [
+            "sessions",
+            "events",
+            "chunks",
+            "memory_units",
+            "entities",
+            "kg_edges",
+            "pipeline_runs",
+            "retrieval_runs",
+            "retrieval_candidates",
+            "consolidation_decisions",
+        ]
+        counts = {}
+        for table in tables:
+            counts[table] = self.conn.execute(f"SELECT COUNT(*) AS c FROM {table}").fetchone()["c"]
+        latest_retrieval = self.conn.execute(
+            "SELECT * FROM retrieval_runs ORDER BY started_at DESC LIMIT 1"
+        ).fetchone()
+        return {"counts": counts, "latest_retrieval": dict(latest_retrieval) if latest_retrieval else None}
+
+    def dashboard_snapshot(self, limit: int = 25) -> dict:
+        return {
+            "metrics": self.inspect_metrics(),
+            "sessions": self.list_sessions(limit=limit),
+            "recent_events": self.list_events(limit=limit),
+            "recent_memories": self.list_memory_units(limit=limit, include_historical=True),
+            "retrieval_runs": self.list_retrieval_runs(limit=limit),
+        }
+
+    def list_sessions(self, limit: int = 50) -> list[dict]:
+        rows = self.conn.execute(
+            """
+            SELECT
+              s.id,
+              s.title,
+              s.status,
+              s.owner_user_id,
+              s.project_id,
+              s.visibility_scope,
+              s.created_at,
+              s.updated_at,
+              COUNT(DISTINCT e.id) AS event_count,
+              COUNT(DISTINCT mu.id) AS memory_count,
+              ss.summary_text AS summary_text
+            FROM sessions s
+            LEFT JOIN events e ON e.session_id = s.id
+            LEFT JOIN memory_units mu ON mu.session_id = s.id
+            LEFT JOIN session_summaries ss ON ss.session_id = s.id
+            GROUP BY s.id
+            ORDER BY s.updated_at DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    def list_events(self, session_id: str | None = None, limit: int = 50) -> list[dict]:
+        session_clause = "WHERE session_id = ?" if session_id else ""
+        params: tuple[object, ...] = (session_id, limit) if session_id else (limit,)
+        rows = self.conn.execute(
+            f"""
+            SELECT id, session_id, agent, event_type, content, source_app,
+                   visibility_scope, sensitivity_level, redacted, created_at
+            FROM events
+            {session_clause}
+            ORDER BY created_at DESC
+            LIMIT ?
+            """,
+            params,
+        ).fetchall()
+        return [
+            {
+                **dict(row),
+                "redacted": bool(row["redacted"]),
+                "content_preview": _preview(row["content"], 500),
+            }
+            for row in rows
+        ]
+
+    def list_memory_units(
+        self,
+        session_id: str | None = None,
+        limit: int = 50,
+        include_historical: bool = True,
+    ) -> list[dict]:
+        clauses = []
+        params: list[object] = []
+        if session_id:
+            clauses.append("session_id = ?")
+            params.append(session_id)
+        if not include_historical:
+            clauses.append("status = 'active'")
+        where = "WHERE " + " AND ".join(clauses) if clauses else ""
+        params.append(limit)
+        rows = self.conn.execute(
+            f"""
+            SELECT id, session_id, source_event_id, source_chunk_id, memory_type,
+                   subject, predicate, object, summary, topic_key, entities_json,
+                   tags_json, confidence, importance, status, supersedes_memory_id,
+                   created_at, updated_at
+            FROM memory_units
+            {where}
+            ORDER BY created_at DESC
+            LIMIT ?
+            """,
+            tuple(params),
+        ).fetchall()
+        return [
+            {
+                **dict(row),
+                "entities": json.loads(row["entities_json"]),
+                "tags": json.loads(row["tags_json"]),
+                "summary_preview": _preview(row["summary"], 500),
+            }
+            for row in rows
+        ]
+
+    def list_retrieval_runs(self, limit: int = 50) -> list[dict]:
+        rows = self.conn.execute(
+            """
+            SELECT
+              rr.id,
+              rr.query,
+              rr.intent,
+              rr.session_id,
+              rr.include_historical,
+              rr.status,
+              rr.started_at,
+              rr.finished_at,
+              rr.duration_ms,
+              rr.config_json,
+              COUNT(rc.id) AS candidate_count,
+              MAX(rc.final_score) AS top_score
+            FROM retrieval_runs rr
+            LEFT JOIN retrieval_candidates rc ON rc.retrieval_run_id = rr.id
+            GROUP BY rr.id
+            ORDER BY rr.started_at DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+        return [
+            {
+                **dict(row),
+                "include_historical": bool(row["include_historical"]),
+                "config": json.loads(row["config_json"]),
+            }
+            for row in rows
+        ]
+
+    def retrieval_run_detail(self, retrieval_run_id: str) -> dict:
+        run = self.conn.execute(
+            "SELECT * FROM retrieval_runs WHERE id = ?",
+            (retrieval_run_id,),
+        ).fetchone()
+        if run is None:
+            raise ValueError(f"retrieval run does not exist: {retrieval_run_id}")
+        candidates = self.conn.execute(
+            """
+            SELECT
+              rc.id,
+              rc.memory_id,
+              rc.source,
+              rc.rank,
+              rc.raw_score,
+              rc.rrf_score,
+              rc.rerank_score,
+              rc.final_score,
+              rc.score_breakdown_json,
+              rc.created_at,
+              mu.session_id,
+              mu.memory_type,
+              mu.summary,
+              mu.subject,
+              mu.predicate,
+              mu.object,
+              mu.topic_key,
+              mu.status,
+              mu.confidence,
+              mu.source_event_id,
+              mu.source_chunk_id
+            FROM retrieval_candidates rc
+            JOIN memory_units mu ON mu.id = rc.memory_id
+            WHERE rc.retrieval_run_id = ?
+            ORDER BY rc.rank ASC
+            """,
+            (retrieval_run_id,),
+        ).fetchall()
+        return {
+            "run": {
+                **dict(run),
+                "include_historical": bool(run["include_historical"]),
+                "config": json.loads(run["config_json"]),
+            },
+            "candidates": [
+                {
+                    **dict(row),
+                    "score_breakdown": json.loads(row["score_breakdown_json"]),
+                    "summary_preview": _preview(row["summary"], 700),
+                }
+                for row in candidates
+            ],
+        }
+
+    def rebuild_indexes(self) -> dict:
+        try:
+            self.conn.execute("DELETE FROM memory_units_fts")
+        except sqlite3.OperationalError:
+            pass
+        rows = self.conn.execute(
+            "SELECT id, summary, subject, object, topic_key FROM memory_units ORDER BY created_at ASC"
+        ).fetchall()
+        for row in rows:
+            self._write_fts(row["id"], row["summary"], row["subject"], row["object"], row["topic_key"])
+            vector_row = self.conn.execute("SELECT 1 FROM memory_vectors WHERE memory_id = ?", (row["id"],)).fetchone()
+            if vector_row is None:
+                self._write_vector(row["id"], row["summary"])
+        self.conn.execute(
+            """
+            INSERT INTO index_versions(id, index_type, model, backend, status, item_count, metadata_json, created_at)
+            VALUES(?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                _id("idx"),
+                "phase1_rebuild",
+                self.settings.embedding_model,
+                self.settings.vector_backend,
+                "completed",
+                len(rows),
+                _json({"fts": True, "vectors": True}),
+                _utc_now(),
+            ),
+        )
+        self.conn.commit()
+        return {"memory_units": len(rows)}
+
+    def _mirror_legacy_memory(
+        self,
+        memory_id: str,
+        session_id: str,
+        source_event_id: str,
+        summary: str,
+        tags: list[str],
+        importance: float,
+        created_at: str,
+    ) -> None:
+        self.conn.execute(
+            """
+            INSERT OR REPLACE INTO memories(id, session_id, source_event_id, summary, tags_json, importance, created_at)
+            VALUES(?, ?, ?, ?, ?, ?, ?)
+            """,
+            (memory_id, session_id, source_event_id, summary, _json(tags), importance, created_at),
+        )
+
+    def _write_vector(self, memory_id: str, summary: str) -> None:
+        vector, model = embed_text_with_model(summary, self.settings.embedding_dims, self.settings.embedding_model)
+        self.conn.execute(
+            """
+            INSERT INTO memory_vectors(memory_id, dims, model, backend, vector_json, created_at)
+            VALUES(?, ?, ?, ?, ?, ?)
+            ON CONFLICT(memory_id) DO UPDATE SET
+              dims=excluded.dims,
+              model=excluded.model,
+              backend=excluded.backend,
+              vector_json=excluded.vector_json,
+              created_at=excluded.created_at
+            """,
+            (memory_id, len(vector), model, "sqlite", _json(vector), _utc_now()),
+        )
+
+    def _write_fts(self, memory_id: str, summary: str, subject: str, object_text: str, topic_key: str) -> None:
+        try:
+            self.conn.execute("DELETE FROM memory_units_fts WHERE memory_id = ?", (memory_id,))
+            self.conn.execute(
+                "INSERT INTO memory_units_fts(memory_id, summary, subject, object, topic_key) VALUES(?, ?, ?, ?, ?)",
+                (memory_id, summary, subject, object_text, topic_key),
+            )
+        except sqlite3.OperationalError:
+            pass
+
+    def _write_kg_for_memory(
+        self,
+        memory_id: str,
+        source_chunk_id: str | None,
+        subject: str,
+        entities: list[str],
+        memory_type: str,
+        confidence: float,
+    ) -> None:
+        subject_id = self._upsert_entity(_entity_type(subject), subject)
+        memory_entity_id = self._upsert_entity("memory", memory_id)
+        self._insert_edge(subject_id, memory_entity_id, "evidenced_by", memory_id, source_chunk_id, confidence)
+        for entity in entities:
+            entity_id = self._upsert_entity(_entity_type(entity), entity)
+            self._insert_edge(subject_id, entity_id, "mentions", memory_id, source_chunk_id, confidence)
+        type_entity_id = self._upsert_entity("memory_type", memory_type)
+        self._insert_edge(subject_id, type_entity_id, "has_memory_type", memory_id, source_chunk_id, confidence)
+
+    def _upsert_entity(self, entity_type: str, name: str) -> str:
+        normalized = _normalize_entity(name)
+        row = self.conn.execute(
+            "SELECT id FROM entities WHERE entity_type = ? AND normalized_name = ?",
+            (entity_type, normalized),
+        ).fetchone()
+        if row:
+            return row["id"]
+        eid = _id("ent")
+        self.conn.execute(
+            """
+            INSERT INTO entities(id, entity_type, name, normalized_name, metadata_json, created_at)
+            VALUES(?, ?, ?, ?, ?, ?)
+            """,
+            (eid, entity_type, name, normalized, "{}", _utc_now()),
+        )
+        return eid
+
+    def _insert_edge(
+        self,
+        source_entity_id: str,
+        target_entity_id: str,
+        relation: str,
+        evidence_memory_id: str,
+        evidence_chunk_id: str | None,
+        confidence: float,
+    ) -> None:
+        self.conn.execute(
+            """
+            INSERT INTO kg_edges(
+              id, source_entity_id, target_entity_id, relation, evidence_memory_id,
+              evidence_chunk_id, status, confidence, created_at
+            )
+            VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (_id("edge"), source_entity_id, target_entity_id, relation, evidence_memory_id, evidence_chunk_id, "active", confidence, _utc_now()),
+        )
+
+    def _consolidate_memory(self, memory_id: str, topic_key: str) -> None:
+        new_row = self.conn.execute("SELECT * FROM memory_units WHERE id = ?", (memory_id,)).fetchone()
+        if new_row is None:
+            return
+        candidates = self.conn.execute(
+            """
+            SELECT mu.*, mv.vector_json
+            FROM memory_units mu
+            LEFT JOIN memory_vectors mv ON mv.memory_id = mu.id
+            WHERE mu.id != ? AND mu.topic_key = ? AND mu.status = 'active'
+            ORDER BY mu.created_at DESC
+            LIMIT 8
+            """,
+            (memory_id, topic_key),
+        ).fetchall()
+        new_vec_row = self.conn.execute(
+            "SELECT vector_json FROM memory_vectors WHERE memory_id = ?",
+            (memory_id,),
+        ).fetchone()
+        new_vec = json.loads(new_vec_row["vector_json"]) if new_vec_row else []
+        best: tuple[sqlite3.Row, float, dict] | None = None
+        for row in candidates:
+            old_vec = json.loads(row["vector_json"]) if row["vector_json"] else []
+            cosine = cosine_similarity(new_vec, old_vec) if new_vec and old_vec and len(new_vec) == len(old_vec) else 0.0
+            lexical = lexical_rerank_score(new_row["summary"], row["summary"])
+            entity_jaccard = _jaccard(json.loads(new_row["entities_json"]), json.loads(row["entities_json"]))
+            same_topic = 1.0 if new_row["topic_key"] == row["topic_key"] else 0.0
+            score = (0.45 * cosine) + (0.25 * lexical) + (0.20 * entity_jaccard) + (0.10 * same_topic)
+            breakdown = {"cosine": cosine, "lexical": lexical, "entity_jaccard": entity_jaccard, "same_topic": same_topic}
+            if best is None or score > best[1]:
+                best = (row, score, breakdown)
+        if best is None:
+            self._record_consolidation(memory_id, None, "independent", 0.0, {})
+            return
+
+        related, score, breakdown = best
+        if score < 0.65:
+            relation = "independent"
+        elif new_row["memory_type"] == related["memory_type"] and new_row["confidence"] >= related["confidence"]:
+            relation = "supersedes"
+        else:
+            relation = "refines"
+
+        if relation == "supersedes":
+            self.conn.execute("UPDATE memory_units SET status = ?, updated_at = ? WHERE id = ?", ("superseded", _utc_now(), related["id"]))
+            self.conn.execute("UPDATE memory_units SET supersedes_memory_id = ?, updated_at = ? WHERE id = ?", (related["id"], _utc_now(), memory_id))
+        self._record_consolidation(memory_id, related["id"], relation, score, breakdown)
+
+    def _record_consolidation(
+        self,
+        new_memory_id: str,
+        related_memory_id: str | None,
+        relation: str,
+        score: float,
+        breakdown: dict,
+    ) -> None:
+        self.conn.execute(
+            """
+            INSERT INTO consolidation_decisions(
+              id, new_memory_id, related_memory_id, relation, score,
+              score_breakdown_json, decision_status, created_at
+            )
+            VALUES(?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (_id("cdec"), new_memory_id, related_memory_id, relation, score, _json(breakdown), "applied", _utc_now()),
+        )
+
+    def _bm25_candidates(self, query: str, session_id: str | None, limit: int, include_historical: bool) -> list[tuple[str, float]]:
+        status_clause = "" if include_historical else "AND mu.status = 'active'"
+        session_clause = "AND mu.session_id = ?" if session_id else ""
+        params: list[object] = []
+        match = _fts_query(query)
+        try:
+            sql = f"""
+            SELECT mu.id, bm25(memory_units_fts) * -1 AS score
+            FROM memory_units_fts
+            JOIN memory_units mu ON mu.id = memory_units_fts.memory_id
+            WHERE memory_units_fts MATCH ?
+            {session_clause}
+            {status_clause}
+            ORDER BY bm25(memory_units_fts)
+            LIMIT ?
+            """
+            params = [match]
+            if session_id:
+                params.append(session_id)
+            params.append(limit)
+            rows = self.conn.execute(sql, tuple(params)).fetchall()
+            return [(row["id"], float(row["score"])) for row in rows]
+        except sqlite3.OperationalError:
+            like = f"%{query}%"
+            sql = f"""
+            SELECT id, 1.0 AS score
+            FROM memory_units mu
+            WHERE (summary LIKE ? OR subject LIKE ? OR object LIKE ? OR topic_key LIKE ?)
+            {session_clause}
+            {status_clause}
+            ORDER BY created_at DESC
+            LIMIT ?
+            """
+            params = [like, like, like, like]
+            if session_id:
+                params.append(session_id)
+            params.append(limit)
+            rows = self.conn.execute(sql, tuple(params)).fetchall()
+            return [(row["id"], float(row["score"])) for row in rows]
+
+    def _vector_candidates(self, query: str, session_id: str | None, limit: int, include_historical: bool) -> list[tuple[str, float]]:
+        query_vec, _ = embed_text_with_model(query, self.settings.embedding_dims, self.settings.embedding_model)
+        status_clause = "" if include_historical else "AND mu.status = 'active'"
+        session_clause = "AND mu.session_id = ?" if session_id else ""
+        rows = self.conn.execute(
+            f"""
+            SELECT mu.id, mu.summary, mv.vector_json
+            FROM memory_units mu
+            JOIN memory_vectors mv ON mv.memory_id = mu.id
+            WHERE 1 = 1
+            {session_clause}
+            {status_clause}
+            """,
+            (session_id,) if session_id else (),
+        ).fetchall()
+        scored = []
+        for row in rows:
+            vec = json.loads(row["vector_json"])
+            if len(vec) != len(query_vec):
+                continue
+            scored.append((row["id"], cosine_similarity(query_vec, vec)))
+        scored.sort(key=lambda item: item[1], reverse=True)
+        return scored[:limit]
+
+    def _kg_candidates(self, query: str, session_id: str | None, limit: int, include_historical: bool) -> list[tuple[str, float]]:
+        terms = [term for term in re.findall(r"[a-z0-9_.\\/-]+", query.lower()) if len(term) >= 3][:8]
+        if not terms:
+            return []
+        status_clause = "" if include_historical else "AND mu.status = 'active'"
+        session_clause = "AND mu.session_id = ?" if session_id else ""
+        scores: dict[str, float] = {}
+        for term in terms:
+            like = f"%{term}%"
+            params: list[object] = [like, like]
+            if session_id:
+                params.append(session_id)
+            params.append(limit)
+            rows = self.conn.execute(
+                f"""
+                SELECT DISTINCT mu.id, ke.confidence
+                FROM entities e
+                JOIN kg_edges ke ON ke.source_entity_id = e.id OR ke.target_entity_id = e.id
+                JOIN memory_units mu ON mu.id = ke.evidence_memory_id
+                WHERE (e.normalized_name LIKE ? OR e.name LIKE ?)
+                {session_clause}
+                {status_clause}
+                ORDER BY ke.confidence DESC
+                LIMIT ?
+                """,
+                tuple(params),
+            ).fetchall()
+            for row in rows:
+                scores[row["id"]] = max(scores.get(row["id"], 0.0), float(row["confidence"]))
+        ranked = sorted(scores.items(), key=lambda item: item[1], reverse=True)
+        return ranked[:limit]
+
+    def _materialize_results(
+        self,
+        query: str,
+        fused: dict[str, dict],
+        run_id: str,
+        limit: int,
+        include_historical: bool,
+    ) -> list[dict]:
+        materialized: list[dict] = []
+        for memory_id, fused_item in fused.items():
+            row = self.conn.execute(
+                """
+                SELECT mu.*, e.content AS source_content
+                FROM memory_units mu
+                JOIN events e ON e.id = mu.source_event_id
+                WHERE mu.id = ?
+                """,
+                (memory_id,),
+            ).fetchone()
+            if row is None:
+                continue
+            rerank_score = lexical_rerank_score(query, f"{row['summary']} {row['subject']} {row['object']}")
+            historical_penalty = 0.0 if include_historical or row["status"] == "active" else -0.2
+            final_score = (0.7 * rerank_score) + (0.3 * float(fused_item["rrf_score"])) + historical_penalty
+            if final_score <= 0.01:
+                continue
+            item = {
+                "memory_id": row["id"],
+                "session_id": row["session_id"],
+                "source_event_id": row["source_event_id"],
+                "source_chunk_id": row["source_chunk_id"],
+                "memory_type": row["memory_type"],
+                "summary": row["summary"],
+                "subject": row["subject"],
+                "predicate": row["predicate"],
+                "object": row["object"],
+                "topic_key": row["topic_key"],
+                "entities": json.loads(row["entities_json"]),
+                "tags": json.loads(row["tags_json"]),
+                "confidence": row["confidence"],
+                "importance": row["importance"],
+                "status": row["status"],
+                "created_at": row["created_at"],
+                "score": round(final_score, 6),
+                "rrf_score": round(float(fused_item["rrf_score"]), 6),
+                "rerank_score": round(rerank_score, 6),
+                "source_ranks": fused_item["sources"],
+                "raw_scores": fused_item["raw_scores"],
+            }
+            materialized.append(item)
+
+        materialized.sort(key=lambda item: item["score"], reverse=True)
+        for rank, item in enumerate(materialized, start=1):
+            self.conn.execute(
+                """
+                INSERT INTO retrieval_candidates(
+                  id, retrieval_run_id, memory_id, source, rank, raw_score,
+                  rrf_score, rerank_score, final_score, score_breakdown_json, created_at
+                )
+                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    _id("rcand"),
+                    run_id,
+                    item["memory_id"],
+                    ",".join(sorted(item["source_ranks"].keys())),
+                    rank,
+                    max([float(v) for v in item["raw_scores"].values()] or [0.0]),
+                    item["rrf_score"],
+                    item["rerank_score"],
+                    item["score"],
+                    _json({"source_ranks": item["source_ranks"], "raw_scores": item["raw_scores"]}),
+                    _utc_now(),
+                ),
+            )
+        return materialized[:limit]
+
+    def _start_pipeline_run(self, run_type: str, session_id: str | None, source_event_id: str | None) -> str:
+        run_id = _id("prun")
+        self.conn.execute(
+            """
+            INSERT INTO pipeline_runs(id, run_type, session_id, source_event_id, status, started_at)
+            VALUES(?, ?, ?, ?, ?, ?)
+            """,
+            (run_id, run_type, session_id, source_event_id, "running", _utc_now()),
+        )
+        self.conn.commit()
+        return run_id
+
+    def _finish_pipeline_run(
+        self,
+        run_id: str,
+        status: str,
+        started: float,
+        metrics: dict,
+        error: str = "",
+    ) -> None:
+        self.conn.execute(
+            """
+            UPDATE pipeline_runs
+            SET status = ?, finished_at = ?, duration_ms = ?, metrics_json = ?, error = ?
+            WHERE id = ?
+            """,
+            (status, _utc_now(), _elapsed_ms(started), _json(metrics), error, run_id),
+        )
+        self.conn.commit()
+
+    def _rows_for_export(self, table: str, session_id: str | None) -> list[sqlite3.Row]:
+        if not session_id:
+            return list(self.conn.execute(f"SELECT * FROM {table}").fetchall())
+        if table == "sessions":
+            return list(self.conn.execute("SELECT * FROM sessions WHERE id = ?", (session_id,)).fetchall())
+        session_tables = {
+            "events",
+            "chunks",
+            "memory_units",
+            "memories",
+            "session_summaries",
+            "pipeline_runs",
+            "extraction_runs",
+            "retrieval_runs",
+            "approval_decisions",
+            "orchestration_rounds",
+            "orchestration_decisions",
+        }
+        if table in session_tables:
+            return list(self.conn.execute(f"SELECT * FROM {table} WHERE session_id = ?", (session_id,)).fetchall())
+        if table == "memory_vectors":
+            return list(
+                self.conn.execute(
+                    """
+                    SELECT mv.*
+                    FROM memory_vectors mv
+                    JOIN memory_units mu ON mu.id = mv.memory_id
+                    WHERE mu.session_id = ?
+                    """,
+                    (session_id,),
+                ).fetchall()
+            )
+        return list(self.conn.execute(f"SELECT * FROM {table}").fetchall())
+
+
+def _snake(value: str) -> str:
+    value = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", value)
+    return re.sub(r"[^a-zA-Z0-9]+", "_", value).strip("_").lower() or "message"
+
+
+def _elapsed_ms(started: float) -> int:
+    return int((time.perf_counter() - started) * 1000)
+
+
+def _fts_query(query: str) -> str:
+    terms = re.findall(r"[A-Za-z0-9_./-]+", query)
+    safe = [term.replace('"', "") for term in terms if len(term) >= 2]
+    return " OR ".join(f'"{term}"' for term in safe) or '""'
+
+
+def _normalize_entity(name: str) -> str:
+    return re.sub(r"[^a-z0-9_.\\/-]+", "_", name.lower()).strip("_")
+
+
+def _entity_type(name: str) -> str:
+    if "." in name or "/" in name or "\\" in name:
+        return "file"
+    if name.startswith("mem_"):
+        return "memory"
+    return "topic"
+
+
+def _jaccard(a: list[str], b: list[str]) -> float:
+    left = {item.lower() for item in a}
+    right = {item.lower() for item in b}
+    if not left and not right:
+        return 0.0
+    return len(left & right) / len(left | right)
+
+
+def _preview(text: str, max_len: int) -> str:
+    clean = " ".join(str(text).split())
+    return clean if len(clean) <= max_len else clean[: max_len - 3] + "..."
+
+
+def _codex_content_to_text(content: object) -> str:
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for item in content:
+            if isinstance(item, dict):
+                if "text" in item:
+                    parts.append(str(item.get("text") or ""))
+                elif "content" in item:
+                    parts.append(_codex_content_to_text(item.get("content")))
+                else:
+                    parts.append(_compact_json(item))
+            else:
+                parts.append(str(item))
+        return "\n".join(part for part in parts if part.strip())
+    if isinstance(content, dict):
+        return _compact_json(content)
+    return str(content)
+
+
+def _compact_json(value: object) -> str:
+    if isinstance(value, str):
+        return value
+    try:
+        return json.dumps(value, ensure_ascii=False, sort_keys=True)
+    except TypeError:
+        return str(value)
+
+
+def _codex_tool_result_text(payload: dict) -> str:
+    subtype = payload.get("type")
+    if subtype == "exec_command_end":
+        command = payload.get("command") or ""
+        output = payload.get("aggregated_output") or payload.get("stdout") or payload.get("stderr") or ""
+        return _limit_import_text(f"Command completed: {_compact_json(command)}\nOutput:\n{output}")
+    if subtype == "patch_apply_end":
+        changes = payload.get("changes") or {}
+        changed_files = ", ".join(list(changes.keys())[:20]) if isinstance(changes, dict) else ""
+        stdout = payload.get("stdout") or ""
+        return _limit_import_text(f"Patch applied. changed_files={changed_files}\n{stdout}")
+    return _limit_import_text(_compact_json(payload))
+
+
+def _small_tool_metadata(payload: dict) -> dict:
+    return {
+        "turn_id": payload.get("turn_id"),
+        "call_id": payload.get("call_id"),
+        "tool_name": payload.get("tool_name") or payload.get("type"),
+        "cwd": payload.get("cwd"),
+        "success": payload.get("success"),
+    }
+
+
+def _limit_import_text(text: str) -> str:
+    if len(text) <= MAX_CODEX_IMPORT_CONTENT_CHARS:
+        return text
+    return text[:MAX_CODEX_IMPORT_CONTENT_CHARS] + "\n...[truncated by AMO historical Codex importer]"

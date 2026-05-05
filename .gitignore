@@ -25,6 +25,7 @@ exports/
 pytest-cache-files-*/
 _logs/
 _update-notifier-last-checked
+.amo-notes/
 *.db
 *.sqlite
 *.sqlite3
