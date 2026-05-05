@@ -1,12 +1,12 @@
 # Implementation Tracker
 
-Last updated: 2026-04-30  
+Last updated: 2026-05-05  
 Baseline design: `docs/FINAL_DESIGN_V1.md`
 
 ## Phase Status
 
 - Phase 0: Repo bootstrap - Completed
-- Phase 1: Core data and memory pipeline - In progress
+- Phase 1: Personal local memory engine - Implemented vertical slice
 - Phase 2: MCP memory server - Pending
 - Phase 3: Orchestrator workflow - Pending
 - Phase 4: Adapters (Claude/Codex) - Pending
@@ -32,23 +32,34 @@ Acceptance:
 
 - CLI starts and DB initializes cleanly on a fresh machine.
 
-## M1: Memory Pipeline
+## M1: Personal Local Memory Pipeline
 
 Goal:
 
-- Persist events and produce searchable memory artifacts.
+- Persist events and produce typed, searchable, observable memory artifacts.
 
 Tasks:
 
 - [x] Implement ingestion normalization for Claude/Codex JSONL (basic v0).
-- [x] Implement extraction pipeline (summary, tags, importance) (basic v0).
-- [x] Implement vector generation interface with local baseline embedder.
-- [x] Implement retrieval (`lexical + vector + rerank`) (basic v0).
-- [x] Add unit tests for extraction/retrieval and orchestration transitions.
+- [x] Add hook payload ingestion entrypoint.
+- [x] Add Codex rollout JSONL import for `~/.codex/sessions`.
+- [x] Add Codex-compatible hook responses with `additionalContext` on `UserPromptSubmit`/`SessionStart`.
+- [x] Add redaction before persistence.
+- [x] Add typed chunking for prose/code/diff/stacktrace/test/tool/json content.
+- [x] Add canonical `memory_units`, `chunks`, KG, summaries, and observability tables.
+- [x] Add rule extraction with fixed confidence table.
+- [x] Add local embedding interface targeting BGE-M3 with deterministic fallback.
+- [x] Add FTS5/BM25, vector, KG retrieval with RRF and rerank fallback.
+- [x] Add memory-level consolidation/versioning baseline.
+- [x] Add metrics, replayable retrieval candidates, and index rebuild command.
+- [x] Add local daemon Web UI for sessions, events, memories, retrieval runs, and returned candidates.
+- [x] Add unit/integration tests for Phase 1 pipeline and algorithms.
 
 Acceptance:
 
-- Given input transcripts, memory search returns cross-session relevant hits.
+- Given input transcripts/hooks, memory search returns relevant hits with provenance and trace rows.
+- Superseded memories are deprioritized unless historical retrieval is requested.
+- Pipeline/retrieval/consolidation observability rows are inspectable.
 
 ## M2: MCP Memory Tools
 
@@ -123,8 +134,9 @@ Acceptance:
 
 ## Current Risks
 
-- Test execution can fail under restricted temp directory permissions in some sandboxed environments.
-- Embedding quality may be low until a stronger local/embed provider is added.
+- Optional BGE-M3/FAISS dependencies are not mandatory; fallback behavior is deterministic but less semantically accurate.
+- The reranker is currently a local lexical fallback unless optional model dependencies are installed and wired deeper.
+- Phase 2 Work Ledger is architecturally reserved but not implemented.
 
 ## Change Control
 

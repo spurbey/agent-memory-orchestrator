@@ -13,10 +13,18 @@ When you run many parallel AI sessions, context gets fragmented and lost. This p
 ## Core capabilities
 
 - Persistent session and event store (SQLite).
-- Automatic memory extraction from raw events.
+- Canonical Phase 1 memory pipeline:
+  - raw events
+  - typed chunks
+  - rule-extracted memory units
+  - KG relationships
+  - deterministic session summaries
+  - pipeline/retrieval/consolidation traces
 - Hybrid retrieval:
-  - lexical search (keyword/tags/time)
-  - vector similarity search (local deterministic embedding baseline)
+  - SQLite FTS5 / BM25 lexical search
+  - local vector similarity search
+  - KG/entity traversal
+  - RRF fusion + local lexical rerank fallback
 - Local MCP server tools:
   - `memory_write`
   - `memory_search`
@@ -28,16 +36,19 @@ When you run many parallel AI sessions, context gets fragmented and lost. This p
 - Orchestrator state machine:
   - `draft -> review -> revise (loop) -> ready_for_user -> approved/rejected`
 - Transcript ingestion adapters for Claude/Codex JSONL.
+- Hook ingestion entrypoint for Claude/Codex lifecycle events.
 - Export pipeline for backup and audit (JSONL snapshots).
 
 ## Architecture (high level)
 
-1. Agent emits transcript/tool output.
-2. Ingestion adapter normalizes into a common event schema.
-3. Memory worker extracts observation summaries + tags + embedding.
-4. Data persists to SQLite (`events`, `memories`, `vectors`).
-5. MCP tools expose retrieval and orchestration actions to Claude/Codex.
-6. Orchestrator enforces two-agent review + explicit user approval.
+1. Agent emits transcript, hook payload, or tool output.
+2. Ingestion adapter normalizes into a canonical event schema.
+3. Redaction runs before persistence.
+4. Typed chunker splits by content semantics (diff/code/log/stacktrace/prose).
+5. Rule extractor creates durable `memory_units` with evidence links.
+6. SQLite stores canonical truth; FTS/vector/KG indexes are rebuildable.
+7. Retrieval runs BM25/vector/KG, fuses with RRF, reranks, and stores score traces.
+8. MCP/CLI/daemon surfaces expose memory and orchestration to agents.
 
 Canonical docs:
 
@@ -61,6 +72,13 @@ Then run:
 amo-mcp
 ```
 
+Phase 1 also installs:
+
+```bash
+amo-daemon
+amo-hook
+```
+
 ### 1) Create environment
 
 ```bash
@@ -75,7 +93,23 @@ pip install -e ".[dev]"
 amo-cli init-db
 ```
 
-### 3) Run MCP server (stdio)
+### 3) Run local daemon or MCP server
+
+Daemon:
+
+```bash
+amo-daemon
+```
+
+Then open:
+
+```text
+http://127.0.0.1:8765
+```
+
+The local dashboard shows sessions, recent Claude/Codex events, extracted memory units, retrieval queries, score traces, and the memory candidates returned by the system.
+
+MCP server (stdio):
 
 ```bash
 amo-mcp
@@ -87,6 +121,7 @@ Local-only defaults are enabled in `.env.example`:
 AMO_LOCAL_ONLY=true
 AMO_MCP_TRANSPORT=stdio
 AMO_MCP_HOST=127.0.0.1
+AMO_APPROVAL_MODE=manual
 ```
 
 ### 4) Optional: ingest transcripts
@@ -94,6 +129,72 @@ AMO_MCP_HOST=127.0.0.1
 ```bash
 amo-cli ingest-transcript --agent claude --file ./sample/claude.jsonl --session-id feature-x
 amo-cli ingest-transcript --agent codex --file ./sample/codex.jsonl --session-id feature-x
+```
+
+Hook payload ingestion:
+
+```bash
+amo-hook --agent codex --file ./sample/codex-hook.json
+amo-cli ingest-hook --agent claude --file ./sample/claude-hook.json
+```
+
+Inspect/rebuild:
+
+```bash
+amo-cli metrics
+amo-cli rebuild-indexes
+amo-cli session-summary --session-id feature-x
+amo-cli search --query "why did retry logic change" --include-historical
+```
+
+Import recent Codex sessions as a local memory dataset:
+
+```bash
+set AMO_EMBEDDING_MODEL=hash-fallback
+amo-cli import-codex-sessions --root %USERPROFILE%\.codex\sessions --limit 5
+```
+
+Enable Codex hot-path hooks in `~/.codex/config.toml`:
+
+```toml
+[features]
+codex_hooks = true
+
+[[hooks.SessionStart]]
+matcher = "startup|resume|clear"
+[[hooks.SessionStart.hooks]]
+type = "command"
+command = "python -m agent_memory_orchestrator.hook --agent codex"
+timeout = 30
+statusMessage = "AMO loading local memory context"
+
+[[hooks.UserPromptSubmit]]
+[[hooks.UserPromptSubmit.hooks]]
+type = "command"
+command = "python -m agent_memory_orchestrator.hook --agent codex"
+timeout = 30
+statusMessage = "AMO retrieving local memory"
+
+[[hooks.PostToolUse]]
+matcher = "*"
+[[hooks.PostToolUse.hooks]]
+type = "command"
+command = "python -m agent_memory_orchestrator.hook --agent codex"
+timeout = 30
+statusMessage = "AMO capturing tool result"
+
+[[hooks.Stop]]
+[[hooks.Stop.hooks]]
+type = "command"
+command = "python -m agent_memory_orchestrator.hook --agent codex"
+timeout = 30
+statusMessage = "AMO summarizing turn"
+```
+
+For automatic memory injection into Codex prompts, explicitly opt in:
+
+```bash
+set AMO_APPROVAL_MODE=auto_safe
 ```
 
 ### 5) Export memory snapshot
@@ -141,7 +242,12 @@ npm pack --dry-run
 
 ## Roadmap
 
-- Replace local baseline embeddings with hosted/local embedding model.
-- Plug a real vector DB (Qdrant/Chroma/pgvector) behind `VectorStore` interface.
+- Install optional local model backends:
+  - `pip install -e ".[models]"`
+  - defaults target `BAAI/bge-m3` and `BAAI/bge-reranker-base`
+  - if unavailable, deterministic hash/lexical fallbacks keep tests and offline operation working
+- Add full FAISS-backed rebuildable index files behind the existing vector cache contract.
+- Add Phase 2 Git-like Work Ledger for AI-produced code changes.
+- Add app connectors and the private agent hub after the personal memory engine is stable.
 - Add policy/rubric scoring for stronger auto-consensus.
 - Add web UI for manual memory search and orchestrator approvals.

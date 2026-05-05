@@ -21,10 +21,16 @@ dev = [
   "pytest>=8.0.0",
   "ruff>=0.6.0",
 ]
+models = [
+  "sentence-transformers>=3.0.0",
+  "faiss-cpu>=1.8.0",
+]
 
 [project.scripts]
 amo-cli = "agent_memory_orchestrator.cli:main"
 amo-mcp = "agent_memory_orchestrator.mcp_server:main"
+amo-daemon = "agent_memory_orchestrator.daemon:main"
+amo-hook = "agent_memory_orchestrator.hook:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
@@ -34,3 +40,5 @@ where = ["src"]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]
+norecursedirs = [".git", ".venv", "venv", ".data", ".tmp", ".pytest_cache", "pytest-cache-files-*"]
+addopts = "-p no:cacheprovider"
