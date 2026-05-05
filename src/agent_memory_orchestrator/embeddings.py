@@ -2,6 +2,31 @@ from __future__ import annotations
 
 import hashlib
 import math
+from functools import lru_cache
+
+
+@lru_cache(maxsize=2)
+def _load_sentence_transformer(model_name: str):
+    try:
+        from sentence_transformers import SentenceTransformer  # type: ignore
+    except Exception:
+        return None
+    try:
+        return SentenceTransformer(model_name)
+    except Exception:
+        return None
+
+
+def embed_text_with_model(text: str, dims: int, model_name: str = "BAAI/bge-m3") -> tuple[list[float], str]:
+    if model_name.strip().lower() in {"hash", "hash-fallback", "deterministic", "local-hash"}:
+        return embed_text(text, dims), "hash-fallback"
+    model = _load_sentence_transformer(model_name)
+    if model is None:
+        return embed_text(text, dims), "hash-fallback"
+
+    vector = model.encode(text, normalize_embeddings=True)
+    values = [float(v) for v in vector.tolist()]
+    return values, model_name
 
 
 def embed_text(text: str, dims: int) -> list[float]:

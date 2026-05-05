@@ -30,6 +30,15 @@ def create_server(settings: Settings) -> FastMCP:
             "db_path": str(settings.db_path),
             "export_dir": str(settings.export_dir),
             "embedding_dims": settings.embedding_dims,
+            "embedding_model": settings.embedding_model,
+            "reranker_model": settings.reranker_model,
+            "vector_backend": settings.vector_backend,
+            "approval_mode": settings.approval_mode,
+            "owner_user_id": settings.owner_user_id,
+            "workspace_id": settings.workspace_id,
+            "project_id": settings.project_id,
+            "visibility_scope": settings.visibility_scope,
+            "sensitivity_level": settings.sensitivity_level,
             "consensus_threshold": settings.consensus_threshold,
             "max_review_rounds": settings.max_review_rounds,
         }
@@ -52,22 +61,36 @@ def create_server(settings: Settings) -> FastMCP:
             event_type=event_type,
             content=content,
             metadata=metadata,
+            source_app=agent,
+            process=create_memory,
         )
         memory_id = None
         if create_memory:
-            mem = memory.add_memory(
-                session_id=session_id,
-                source_event_id=event.id,
-                summary=content,
-            )
-            memory_id = mem.id
+            row = memory.conn.execute(
+                "SELECT id FROM memory_units WHERE source_event_id = ? ORDER BY created_at DESC LIMIT 1",
+                (event.id,),
+            ).fetchone()
+            memory_id = row["id"] if row else None
         return {"event_id": event.id, "memory_id": memory_id}
 
     @mcp.tool()
-    def memory_search(query: str, session_id: str = "", limit: int = 10) -> dict:
+    def memory_search(query: str, session_id: str = "", limit: int = 10, include_historical: bool = False) -> dict:
         target_session = session_id or None
-        results = memory.search_memories(query=query, session_id=target_session, limit=limit)
+        results = memory.search_memories(
+            query=query,
+            session_id=target_session,
+            limit=limit,
+            include_historical=include_historical,
+        )
         return {"count": len(results), "results": results}
+
+    @mcp.tool()
+    def memory_metrics() -> dict:
+        return memory.inspect_metrics()
+
+    @mcp.tool()
+    def memory_rebuild_indexes() -> dict:
+        return memory.rebuild_indexes()
 
     @mcp.tool()
     def memory_timeline(session_id: str, limit: int = 50) -> dict:

@@ -21,6 +21,15 @@ class Settings:
     mcp_host: str
     mcp_port: int
     embedding_dims: int
+    embedding_model: str
+    reranker_model: str
+    vector_backend: str
+    approval_mode: str
+    owner_user_id: str
+    workspace_id: str
+    project_id: str
+    visibility_scope: str
+    sensitivity_level: str
     consensus_threshold: float
     max_review_rounds: int
 
@@ -34,6 +43,15 @@ class Settings:
         mcp_host = os.getenv("AMO_MCP_HOST", "127.0.0.1").strip()
         mcp_port = int(os.getenv("AMO_MCP_PORT", "8765"))
         embedding_dims = int(os.getenv("AMO_EMBEDDING_DIMS", "256"))
+        embedding_model = os.getenv("AMO_EMBEDDING_MODEL", "BAAI/bge-m3").strip()
+        reranker_model = os.getenv("AMO_RERANKER_MODEL", "BAAI/bge-reranker-base").strip()
+        vector_backend = os.getenv("AMO_VECTOR_BACKEND", "auto").strip().lower()
+        approval_mode = os.getenv("AMO_APPROVAL_MODE", "manual").strip().lower()
+        owner_user_id = os.getenv("AMO_OWNER_USER_ID", "local").strip() or "local"
+        workspace_id = os.getenv("AMO_WORKSPACE_ID", "local").strip() or "local"
+        project_id = os.getenv("AMO_PROJECT_ID", "default").strip() or "default"
+        visibility_scope = os.getenv("AMO_VISIBILITY_SCOPE", "private").strip().lower()
+        sensitivity_level = os.getenv("AMO_SENSITIVITY_LEVEL", "normal").strip().lower()
         consensus_threshold = float(os.getenv("AMO_CONSENSUS_THRESHOLD", "0.70"))
         max_review_rounds = int(os.getenv("AMO_MAX_REVIEW_ROUNDS", "5"))
 
@@ -55,6 +73,14 @@ class Settings:
 
         if embedding_dims <= 0:
             raise ValueError("AMO_EMBEDDING_DIMS must be a positive integer")
+        if vector_backend not in {"auto", "faiss", "sqlite"}:
+            raise ValueError("AMO_VECTOR_BACKEND must be one of: auto, faiss, sqlite")
+        if approval_mode not in {"manual", "auto_safe"}:
+            raise ValueError("AMO_APPROVAL_MODE must be one of: manual, auto_safe")
+        if visibility_scope not in {"private", "project", "team", "public", "restricted"}:
+            raise ValueError("AMO_VISIBILITY_SCOPE must be one of: private, project, team, public, restricted")
+        if sensitivity_level not in {"low", "normal", "high", "secret"}:
+            raise ValueError("AMO_SENSITIVITY_LEVEL must be one of: low, normal, high, secret")
         if not (0.0 <= consensus_threshold <= 1.0):
             raise ValueError("AMO_CONSENSUS_THRESHOLD must be between 0.0 and 1.0")
         if max_review_rounds <= 0:
@@ -71,6 +97,15 @@ class Settings:
             mcp_host=mcp_host,
             mcp_port=mcp_port,
             embedding_dims=embedding_dims,
+            embedding_model=embedding_model,
+            reranker_model=reranker_model,
+            vector_backend=vector_backend,
+            approval_mode=approval_mode,
+            owner_user_id=owner_user_id,
+            workspace_id=workspace_id,
+            project_id=project_id,
+            visibility_scope=visibility_scope,
+            sensitivity_level=sensitivity_level,
             consensus_threshold=consensus_threshold,
             max_review_rounds=max_review_rounds,
         )
