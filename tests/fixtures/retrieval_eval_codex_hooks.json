@@ -1,0 +1,27 @@
+{
+  "cases": [
+    {
+      "name": "codex_hooks_context_pack",
+      "query": "what did we decide about codex hooks",
+      "limit": 8,
+      "budget_tokens": 1200,
+      "must_include_terms": [
+        "codex_hooks",
+        "UserPromptSubmit",
+        "PostToolUse",
+        "Stop"
+      ],
+      "preferred_memory_types": [
+        "fix",
+        "decision",
+        "summary"
+      ],
+      "forbidden_terms": [
+        "Context from my IDE setup",
+        "Open tabs",
+        "call_id",
+        "invocation"
+      ]
+    }
+  ]
+}

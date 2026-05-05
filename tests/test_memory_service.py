@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import json
 from dataclasses import replace
+from pathlib import Path
 
 import pytest
 
 from agent_memory_orchestrator.cli import _rebuild_clean_db
 from agent_memory_orchestrator.config import Settings
+from agent_memory_orchestrator.context_pack import build_context_pack_payload
 from agent_memory_orchestrator.memory_service import MemoryService
 
 
@@ -534,6 +536,191 @@ def test_context_pack_prioritizes_durable_memory_and_tracks_exclusions(tmp_path)
     assert pack["items"][0]["source_event_id"] == decision_event.id
     assert "high confidence" in pack["items"][0]["include_reason"]
     assert any(item["memory_id"] == weak.id and item["reason"] == "observation_noise" for item in pack["excluded"])
+    svc.close()
+
+
+def test_context_pack_orders_by_score_before_type_and_excludes_known_noise() -> None:
+    pack = build_context_pack_payload(
+        query="what did we decide about codex hooks",
+        budget_tokens=1200,
+        results=[
+            {
+                "memory_id": "decision_low",
+                "session_id": "s1",
+                "memory_type": "decision",
+                "status": "active",
+                "summary": "Decision: generic hook design note.",
+                "source_event_id": "evt1",
+                "source_chunk_id": "chk1",
+                "score": 0.45,
+                "confidence": 0.95,
+                "ranking_policy": {"matched_terms": ["hook"], "exact_boost": 0.1},
+            },
+            {
+                "memory_id": "fix_high",
+                "session_id": "s1",
+                "memory_type": "fix",
+                "status": "active",
+                "summary": "Fix [/.codex/config.toml]: Codex hooks use UserPromptSubmit and PostToolUse.",
+                "source_event_id": "evt2",
+                "source_chunk_id": "chk2",
+                "score": 0.72,
+                "confidence": 0.9,
+                "ranking_policy": {"matched_terms": ["codex", "hook"], "exact_boost": 0.2},
+            },
+            {
+                "memory_id": "ide_noise",
+                "session_id": "s1",
+                "memory_type": "decision",
+                "status": "active",
+                "summary": "Decision [Untitled9.md]: # Context from my IDE setup: Open tabs: Untitled9.md",
+                "source_event_id": "evt3",
+                "source_chunk_id": "chk3",
+                "score": 0.8,
+                "confidence": 0.95,
+                "ranking_policy": {"matched_terms": ["codex"], "exact_boost": 0.1},
+            },
+            {
+                "memory_id": "json_noise",
+                "session_id": "s1",
+                "memory_type": "fix",
+                "status": "active",
+                "summary": 'Fix [hooks.js]: {"call_id":"call_1","invocation":{"tool":"fetch_openai_doc"},"result":{}}',
+                "source_event_id": "evt4",
+                "source_chunk_id": "chk4",
+                "score": 0.79,
+                "confidence": 0.9,
+                "ranking_policy": {"matched_terms": ["hooks"], "exact_boost": 0.2},
+            },
+        ],
+    )
+    assert pack.payload["items"][0]["memory_id"] == "fix_high"
+    assert "memory_id=fix_high" in pack.text
+    assert "Context from my IDE setup" not in pack.text
+    assert '"call_id"' not in pack.text
+    assert any(item["memory_id"] == "ide_noise" and item["reason"] == "ide_context_noise" for item in pack.payload["excluded"])
+    assert any(item["memory_id"] == "json_noise" and item["reason"] == "raw_tool_json_noise" for item in pack.payload["excluded"])
+
+
+def test_user_question_with_ide_context_is_not_promoted_to_decision(tmp_path) -> None:
+    settings = make_settings(tmp_path)
+    svc = MemoryService(settings)
+    svc.init_db()
+
+    raw_prompt = """# Context from my IDE setup:
+
+## Active file: Untitled9.md
+## Open tabs:
+- Untitled9.md: Untitled9.md
+
+## My request for Codex:
+what did we decide about codex hooks?
+"""
+    event = svc.add_event("s1", "user", "prompt", raw_prompt, process=True)
+    raw_event = svc.timeline("s1", limit=1)[0]
+    assert "Open tabs" in raw_event["content"]
+
+    chunk = svc.conn.execute("SELECT text, metadata_json FROM chunks WHERE event_id = ?", (event.id,)).fetchone()
+    assert chunk is not None
+    assert "Open tabs" not in chunk["text"]
+    assert "what did we decide" in chunk["text"].lower()
+    metadata = json.loads(chunk["metadata_json"])
+    assert metadata["amo_promote_memory"] is False
+    assert metadata["amo_suppression_reason"] == "user_question_not_durable"
+
+    memories = svc.conn.execute("SELECT COUNT(*) FROM memory_units WHERE source_event_id = ?", (event.id,)).fetchone()[0]
+    assert memories == 0
+    svc.close()
+
+
+def test_structured_mcp_tool_json_becomes_reference_without_raw_payload(tmp_path) -> None:
+    settings = make_settings(tmp_path)
+    svc = MemoryService(settings)
+    svc.init_db()
+
+    payload = {
+        "call_id": "call_vXOHlMsq8eVT9wmHPxCukVpX",
+        "duration": {"nanos": 284440900, "secs": 0},
+        "invocation": {
+            "server": "openaiDeveloperDocs",
+            "tool": "fetch_openai_doc",
+            "arguments": {"url": "https://developers.openai.com/codex/hooks"},
+        },
+        "result": {
+            "Ok": {
+                "content": [
+                    {
+                        "text": "# Hooks\n\nHooks are an extensibility framework for Codex. UserPromptSubmit can inject context.",
+                    }
+                ]
+            }
+        },
+    }
+    event = svc.add_event("s1", "codex", "tool_result", json.dumps(payload), process=True)
+
+    chunk = svc.conn.execute("SELECT text, metadata_json FROM chunks WHERE event_id = ?", (event.id,)).fetchone()
+    assert chunk is not None
+    assert "# Hooks" in chunk["text"]
+    assert "call_id" not in chunk["text"]
+    metadata = json.loads(chunk["metadata_json"])
+    assert metadata["amo_structured_tool_result"] is True
+    assert metadata["tool_name"] == "fetch_openai_doc"
+
+    memory = svc.conn.execute("SELECT memory_type, summary FROM memory_units WHERE source_event_id = ?", (event.id,)).fetchone()
+    assert memory is not None
+    assert memory["memory_type"] == "reference"
+    assert "Hooks are an extensibility framework" in memory["summary"]
+    assert "call_id" not in memory["summary"]
+    svc.close()
+
+
+def test_codex_hooks_retrieval_eval_fixture(tmp_path) -> None:
+    fixture = json.loads((Path(__file__).parent / "fixtures" / "retrieval_eval_codex_hooks.json").read_text())
+    case = fixture["cases"][0]
+    settings = make_settings(tmp_path)
+    svc = MemoryService(settings)
+    svc.init_db()
+    svc.create_session("eval", "Eval")
+    good_event = svc.add_event("eval", "codex", "response", "Codex hooks were implemented for prompt injection.")
+    bad_event = svc.add_event("eval", "user", "prompt", "Noisy IDE context paste.")
+    svc.add_memory_unit(
+        session_id="eval",
+        source_event_id=good_event.id,
+        source_chunk_id=None,
+        memory_type="fix",
+        subject="/.codex/config.toml",
+        predicate="fixes",
+        object_text="Codex hooks use codex_hooks, UserPromptSubmit, PostToolUse, Stop.",
+        summary="Fix [/.codex/config.toml]: Codex hooks use codex_hooks, UserPromptSubmit, PostToolUse, and Stop.",
+        topic_key="codex_config_toml",
+        entities=["/.codex/config.toml", "UserPromptSubmit", "PostToolUse", "Stop"],
+        tags=["codex", "hooks", "codex_hooks"],
+        confidence=0.9,
+        importance=0.85,
+    )
+    svc.add_memory_unit(
+        session_id="eval",
+        source_event_id=bad_event.id,
+        source_chunk_id=None,
+        memory_type="decision",
+        subject="Untitled9.md",
+        predicate="decides",
+        object_text="# Context from my IDE setup: Open tabs: Untitled9.md",
+        summary="Decision [Untitled9.md]: # Context from my IDE setup: Open tabs: Untitled9.md",
+        topic_key="untitled9_md",
+        entities=["Untitled9.md"],
+        tags=["codex", "hooks"],
+        confidence=0.95,
+        importance=0.85,
+    )
+
+    pack = svc.build_context_pack(case["query"], session_id="eval", limit=case["limit"], budget_tokens=case["budget_tokens"])
+    text = pack["text"].lower()
+    for term in case["must_include_terms"]:
+        assert term.lower() in text
+    for term in case["forbidden_terms"]:
+        assert term.lower() not in text
+    assert pack["items"][0]["memory_type"] in case["preferred_memory_types"]
     svc.close()
 
 
