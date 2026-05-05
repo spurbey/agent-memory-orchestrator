@@ -110,6 +110,21 @@ def test_decision_query_prefers_specific_high_confidence_hook_memory(tmp_path) -
         confidence=0.4,
         importance=0.45,
     )
+    svc.add_memory_unit(
+        session_id="s1",
+        source_event_id=generic_event.id,
+        source_chunk_id=None,
+        memory_type="observation",
+        subject="/.codex/config.toml",
+        predicate="observes",
+        object_text="That result means what did we decide about agent memory hooks was answered.",
+        summary="Observation [/.codex/config.toml]: That result means what did we decide about agent memory hooks was answered.",
+        topic_key="codex_config_toml",
+        entities=["/.codex/config.toml"],
+        tags=["agent", "memory", "hooks"],
+        confidence=0.4,
+        importance=0.49,
+    )
     hook = svc.add_memory_unit(
         session_id="s1",
         source_event_id=hook_event.id,
@@ -174,6 +189,80 @@ def test_hook_ingestion_redacts_chunks_extracts_and_summarizes(tmp_path) -> None
     summary = svc.generate_session_summary("hook-s1")
     assert "scraper/retry.py" in summary["summary_text"]
 
+    svc.close()
+
+
+def test_ide_context_is_kept_raw_but_cleaned_before_memory_extraction(tmp_path) -> None:
+    settings = make_settings(tmp_path)
+    svc = MemoryService(settings)
+    svc.init_db()
+
+    raw_prompt = """# Context from my IDE setup:
+
+## Active file: Untitled9.md
+## Open tabs:
+- Untitled9.md: Untitled9.md
+- temp_result.txt: temp_result.txt
+
+## My request for Codex:
+final decision: use Codex hooks through UserPromptSubmit for memory retrieval.
+"""
+    event = svc.add_event("s1", "user", "prompt", raw_prompt, process=True)
+    raw_event = svc.timeline("s1", limit=1)[0]
+    assert "Open tabs" in raw_event["content"]
+
+    chunk = svc.conn.execute(
+        "SELECT text, metadata_json FROM chunks WHERE event_id = ?",
+        (event.id,),
+    ).fetchone()
+    assert chunk is not None
+    assert "Open tabs" not in chunk["text"]
+    assert "final decision" in chunk["text"]
+    metadata = json.loads(chunk["metadata_json"])
+    assert metadata["amo_cleaning"]["removed_ide_context"] is True
+    assert metadata["amo_promote_memory"] is True
+
+    memories = svc.search_memories("Codex hooks UserPromptSubmit", session_id="s1", limit=5)
+    assert memories
+    assert memories[0]["memory_type"] == "decision"
+    svc.close()
+
+
+def test_low_value_tool_output_creates_evidence_chunk_but_no_memory_unit(tmp_path) -> None:
+    settings = make_settings(tmp_path)
+    svc = MemoryService(settings)
+    svc.init_db()
+
+    event = svc.add_event(
+        "s1",
+        "codex",
+        "tool_result",
+        'Command completed: ["powershell.exe", "-Command", "rg \\"^# Cell\\" Untitled9.md"]\nOutput:\n# Cell 1\n# Cell 2',
+        process=True,
+    )
+
+    chunk = svc.conn.execute(
+        "SELECT metadata_json FROM chunks WHERE event_id = ?",
+        (event.id,),
+    ).fetchone()
+    assert chunk is not None
+    metadata = json.loads(chunk["metadata_json"])
+    assert metadata["amo_promote_memory"] is False
+    assert metadata["amo_suppression_reason"] == "low_value_tool_output"
+
+    memories = svc.conn.execute(
+        "SELECT COUNT(*) FROM memory_units WHERE source_event_id = ?",
+        (event.id,),
+    ).fetchone()[0]
+    assert memories == 0
+
+    pipeline = svc.conn.execute(
+        "SELECT metrics_json FROM pipeline_runs WHERE source_event_id = ?",
+        (event.id,),
+    ).fetchone()
+    metrics = json.loads(pipeline["metrics_json"])
+    assert metrics["suppressed_memory_chunks"] == 1
+    assert metrics["cleanup_reasons"]["low_value_tool_output"] == 1
     svc.close()
 
 

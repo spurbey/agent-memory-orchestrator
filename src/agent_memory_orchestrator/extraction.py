@@ -63,6 +63,9 @@ def extract_memory_candidates(
     agent: str,
     metadata: dict[str, Any] | None = None,
 ) -> list[MemoryCandidate]:
+    if metadata and metadata.get("amo_promote_memory") is False:
+        return []
+
     clean = _compact(text)
     if not clean:
         return []
@@ -111,7 +114,7 @@ def classify_memory_type(text: str, content_type: str, event_type: str, agent: s
         return "bug", "tool_error"
     if content_type in {"diff", "code"}:
         return "file_change", "file_change"
-    if any(w in lowered for w in ("plan", "propose", "should", "will", "architecture", "design")):
+    if _looks_like_assistant_plan(lowered):
         return "decision", "assistant_plan"
     if len(text) >= 80:
         return "observation", "vague"
@@ -120,6 +123,14 @@ def classify_memory_type(text: str, content_type: str, event_type: str, agent: s
 
 def confidence_for_signal(signal: str) -> float:
     return CONFIDENCE_BY_SIGNAL.get(signal, CONFIDENCE_BY_SIGNAL["vague"])
+
+
+def _looks_like_assistant_plan(lowered: str) -> bool:
+    if any(w in lowered for w in ("architecture", "design", "proposal", "propose")):
+        return True
+    return bool(
+        re.search(r"\b(the plan is|plan:|implementation plan|we will|i will|i'm going to|i am going to)\b", lowered)
+    )
 
 
 def extract_entities(text: str, metadata: dict[str, Any] | None = None) -> list[str]:

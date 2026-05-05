@@ -9,6 +9,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from .chunker import chunk_text
+from .cleaning import clean_event_text
 from .config import Settings
 from .db import connect, init_schema
 from .embeddings import cosine_similarity, embed_text_with_model
@@ -151,9 +152,11 @@ class MemoryService:
         started = time.perf_counter()
         chunks_count = 0
         memory_count = 0
+        suppressed_chunks = 0
         try:
             chunks = self.create_chunks_for_event(event)
             chunks_count = len(chunks)
+            suppressed_chunks = sum(1 for chunk in chunks if chunk.metadata.get("amo_promote_memory") is False)
             for chunk in chunks:
                 memory_count += len(self.extract_memories_for_chunk(event, chunk, run_id))
             if event.event_type.lower() in {"stop", "session_stop"}:
@@ -162,19 +165,31 @@ class MemoryService:
                 run_id,
                 "completed",
                 started,
-                {"chunks": chunks_count, "memory_units": memory_count},
+                {
+                    "chunks": chunks_count,
+                    "memory_units": memory_count,
+                    "suppressed_memory_chunks": suppressed_chunks,
+                    "cleanup_reasons": _cleanup_reason_counts(chunks),
+                },
             )
-            return {"chunks": chunks_count, "memory_units": memory_count}
+            return {"chunks": chunks_count, "memory_units": memory_count, "suppressed_memory_chunks": suppressed_chunks}
         except Exception as exc:
             self._finish_pipeline_run(run_id, "failed", started, {"chunks": chunks_count}, str(exc))
             raise
 
     def create_chunks_for_event(self, event: Event) -> list[Chunk]:
-        candidates = chunk_text(event.content, event.event_type, event.metadata)
+        cleaned = clean_event_text(
+            event.content,
+            event_type=event.event_type,
+            agent=event.agent,
+            metadata=event.metadata,
+        )
+        candidates = chunk_text(cleaned.text, event.event_type, cleaned.metadata)
         chunks: list[Chunk] = []
         ts = _utc_now()
         for idx, candidate in enumerate(candidates):
             cid = _id("chk")
+            chunk_metadata = {**cleaned.metadata, **candidate.metadata}
             self.conn.execute(
                 """
                 INSERT OR IGNORE INTO chunks(
@@ -192,7 +207,7 @@ class MemoryService:
                     candidate.text,
                     candidate.token_count,
                     candidate.content_hash,
-                    _json(candidate.metadata),
+                    _json(chunk_metadata),
                     ts,
                 ),
             )
@@ -206,7 +221,7 @@ class MemoryService:
                     text=candidate.text,
                     token_count=candidate.token_count,
                     content_hash=candidate.content_hash,
-                    metadata=candidate.metadata,
+                    metadata=chunk_metadata,
                     created_at=ts,
                 )
             )
@@ -409,6 +424,7 @@ class MemoryService:
         events_count = 0
         chunks_count = 0
         memories_count = 0
+        suppressed_chunks_count = 0
         with file_path.open("r", encoding="utf-8-sig") as f:
             for line in f:
                 line = line.strip()
@@ -432,15 +448,22 @@ class MemoryService:
                 events_count += 1
                 chunks_count += counts["chunks"]
                 memories_count += counts["memory_units"]
+                suppressed_chunks_count += counts.get("suppressed_memory_chunks", 0)
 
         self.generate_session_summary(session_id)
-        return {"events": events_count, "chunks": chunks_count, "memories": memories_count, "memory_units": memories_count}
+        return {
+            "events": events_count,
+            "chunks": chunks_count,
+            "memories": memories_count,
+            "memory_units": memories_count,
+            "suppressed_memory_chunks": suppressed_chunks_count,
+        }
 
     def import_codex_sessions(self, root: Path, limit: int = 30) -> dict[str, object]:
         files = sorted(root.rglob("*.jsonl"), key=lambda p: p.stat().st_mtime, reverse=True)
         selected = files[:limit] if limit > 0 else files
         imported: list[dict[str, object]] = []
-        totals = {"files": 0, "events": 0, "chunks": 0, "memory_units": 0}
+        totals = {"files": 0, "events": 0, "chunks": 0, "memory_units": 0, "suppressed_memory_chunks": 0}
         for file_path in selected:
             session_id, title = self._infer_codex_session(file_path)
             result = self.ingest_transcript(
@@ -453,6 +476,7 @@ class MemoryService:
             totals["events"] += int(result["events"])
             totals["chunks"] += int(result["chunks"])
             totals["memory_units"] += int(result["memory_units"])
+            totals["suppressed_memory_chunks"] += int(result.get("suppressed_memory_chunks", 0))
             imported.append({"file": str(file_path), "session_id": session_id, **result})
         return {"root": str(root), "totals": totals, "imported": imported}
 
@@ -1559,6 +1583,15 @@ class MemoryService:
         return list(self.conn.execute(f"SELECT * FROM {table}").fetchall())
 
 
+def _cleanup_reason_counts(chunks: list[Chunk]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for chunk in chunks:
+        reason = str(chunk.metadata.get("amo_suppression_reason") or "")
+        if reason:
+            counts[reason] = counts.get(reason, 0) + 1
+    return counts
+
+
 def _snake(value: str) -> str:
     value = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", value)
     return re.sub(r"[^a-zA-Z0-9]+", "_", value).strip("_").lower() or "message"
@@ -1730,7 +1763,7 @@ def _memory_type_boost(query_terms: set[str], memory_type: str) -> float:
         if memory_type in {"blocker", "bug"}:
             return 0.04
         if memory_type == "observation":
-            return -0.08
+            return -0.16
     if asks_causal:
         if memory_type in {"decision", "fix", "bug"}:
             return 0.08
@@ -1767,6 +1800,8 @@ def _noise_penalty(row: sqlite3.Row, confidence: float) -> float:
         penalty += 0.12
     if any(marker in summary for marker in ("command completed:", "powershell.exe", "rg \\\"^# cell")):
         penalty += 0.10
+    if memory_type == "observation" and any(marker in summary for marker in ("that result means", "this output means")):
+        penalty += 0.08
     return min(0.30, penalty)
 
 
