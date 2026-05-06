@@ -988,6 +988,10 @@ class MemoryService:
         session_id: str | None = None,
         limit: int = 100,
         include_historical: bool = False,
+        relation: str | None = None,
+        node_type: str | None = None,
+        memory_type: str | None = None,
+        min_confidence: float | None = None,
     ) -> dict:
         clauses = []
         params: list[object] = []
@@ -997,6 +1001,18 @@ class MemoryService:
         if not include_historical:
             clauses.append("ke.status = 'active'")
             clauses.append("(mu.status IS NULL OR mu.status = 'active')")
+        if relation:
+            clauses.append("ke.relation = ?")
+            params.append(relation)
+        if node_type:
+            clauses.append("(se.entity_type = ? OR te.entity_type = ?)")
+            params.extend([node_type, node_type])
+        if memory_type:
+            clauses.append("mu.memory_type = ?")
+            params.append(memory_type)
+        if min_confidence is not None:
+            clauses.append("ke.confidence >= ?")
+            params.append(float(min_confidence))
         if query:
             like = f"%{query.strip()}%"
             clauses.append(
@@ -1086,6 +1102,12 @@ class MemoryService:
             "query": query or "",
             "session_id": session_id,
             "include_historical": include_historical,
+            "filters": {
+                "relation": relation or "",
+                "node_type": node_type or "",
+                "memory_type": memory_type or "",
+                "min_confidence": min_confidence,
+            },
             "limit": limit,
             "nodes": list(nodes.values()),
             "edges": edges,
@@ -1460,8 +1482,24 @@ class MemoryService:
             lexical = lexical_rerank_score(new_row["summary"], row["summary"])
             entity_jaccard = _jaccard(json.loads(new_row["entities_json"]), json.loads(row["entities_json"]))
             same_topic = 1.0 if new_row["topic_key"] == row["topic_key"] else 0.0
-            score = (0.45 * cosine) + (0.25 * lexical) + (0.20 * entity_jaccard) + (0.10 * same_topic)
-            breakdown = {"cosine": cosine, "lexical": lexical, "entity_jaccard": entity_jaccard, "same_topic": same_topic}
+            exact_duplicate = _memory_fingerprint(new_row) == _memory_fingerprint(row)
+            contradiction = _contradiction_signal(str(new_row["object"]), str(row["object"]))
+            duplicate_score = 1.0 if exact_duplicate else 0.0
+            score = (
+                (0.40 * cosine)
+                + (0.22 * lexical)
+                + (0.18 * entity_jaccard)
+                + (0.10 * same_topic)
+                + (0.10 * duplicate_score)
+            )
+            breakdown = {
+                "cosine": cosine,
+                "lexical": lexical,
+                "entity_jaccard": entity_jaccard,
+                "same_topic": same_topic,
+                "exact_duplicate": duplicate_score,
+                "contradiction": contradiction,
+            }
             if best is None or score > best[1]:
                 best = (row, score, breakdown)
         if best is None:
@@ -1471,15 +1509,49 @@ class MemoryService:
         related, score, breakdown = best
         if score < 0.65:
             relation = "independent"
+        elif breakdown.get("contradiction"):
+            relation = "contradicts"
         elif new_row["memory_type"] == related["memory_type"] and new_row["confidence"] >= related["confidence"]:
             relation = "supersedes"
+        elif breakdown.get("exact_duplicate") and new_row["confidence"] < related["confidence"]:
+            relation = "supports"
         else:
             relation = "refines"
 
         if relation == "supersedes":
             self.conn.execute("UPDATE memory_units SET status = ?, updated_at = ? WHERE id = ?", ("superseded", _utc_now(), related["id"]))
             self.conn.execute("UPDATE memory_units SET supersedes_memory_id = ?, updated_at = ? WHERE id = ?", (related["id"], _utc_now(), memory_id))
+            self._mark_memory_edges_status(related["id"], "superseded")
+            self._write_memory_relation_edge(memory_id, related["id"], "supersedes", new_row["source_chunk_id"], new_row["confidence"])
+        elif relation == "supports" and breakdown.get("exact_duplicate"):
+            self.conn.execute("UPDATE memory_units SET status = ?, supersedes_memory_id = ?, updated_at = ? WHERE id = ?", ("superseded", related["id"], _utc_now(), memory_id))
+            self._mark_memory_edges_status(memory_id, "superseded")
+            self._write_memory_relation_edge(memory_id, related["id"], "supports", new_row["source_chunk_id"], new_row["confidence"])
+        elif relation in {"refines", "contradicts"}:
+            self._write_memory_relation_edge(memory_id, related["id"], relation, new_row["source_chunk_id"], new_row["confidence"])
         self._record_consolidation(memory_id, related["id"], relation, score, breakdown)
+
+    def _write_memory_relation_edge(
+        self,
+        memory_id: str,
+        related_memory_id: str,
+        relation: str,
+        source_chunk_id: str | None,
+        confidence: float,
+    ) -> None:
+        source_entity_id = self._upsert_entity("memory", memory_id)
+        target_entity_id = self._upsert_entity("memory", related_memory_id)
+        self._insert_edge(source_entity_id, target_entity_id, relation, memory_id, source_chunk_id, confidence)
+
+    def _mark_memory_edges_status(self, memory_id: str, status: str) -> None:
+        self.conn.execute(
+            """
+            UPDATE kg_edges
+            SET status = ?
+            WHERE evidence_memory_id = ?
+            """,
+            (status, memory_id),
+        )
 
     def _record_consolidation(
         self,
@@ -1912,6 +1984,26 @@ def _jaccard(a: list[str], b: list[str]) -> float:
     if not left and not right:
         return 0.0
     return len(left & right) / len(left | right)
+
+
+def _memory_fingerprint(row: sqlite3.Row) -> str:
+    summary = str(row["summary"] or "")
+    summary = re.sub(r"^(decision|fix|bug|validation|reference|observation|file change)\s*(\[[^\]]+\])?:\s*", "", summary, flags=re.I)
+    text = " ".join([str(row["memory_type"] or ""), str(row["topic_key"] or ""), summary])
+    return re.sub(r"[^a-z0-9]+", " ", text.lower()).strip()
+
+
+def _contradiction_signal(new_object: str, old_object: str) -> float:
+    new_terms = _ranking_terms(new_object)
+    old_terms = _ranking_terms(old_object)
+    positive = {"enable", "enabled", "use", "uses", "used", "supported", "works", "pass", "passed"}
+    negative = {"disable", "disabled", "not", "never", "unsupported", "fails", "failed", "error"}
+    shared = new_terms & old_terms
+    if len(shared) < 2:
+        return 0.0
+    if (new_terms & positive and old_terms & negative) or (new_terms & negative and old_terms & positive):
+        return 1.0
+    return 0.0
 
 
 def _ranking_policy(

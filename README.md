@@ -117,7 +117,7 @@ SQLite knowledge graph visualization:
 http://127.0.0.1:8765/graph
 ```
 
-The graph view renders local `entities`, `kg_edges`, and evidence `memory_units` as an interactive 3D canvas with filters for query, session, and historical status. SQLite remains canonical; no external graph database or remote visualization service is required for Phase 1.
+The graph view renders local `entities`, `kg_edges`, and evidence `memory_units` as an interactive 3D canvas with filters for query, session, relation, node type, memory type, confidence, and historical status. SQLite remains canonical; no external graph database or remote visualization service is required for Phase 1.
 
 MCP server (stdio):
 
@@ -159,6 +159,7 @@ amo-cli context-pack --query "why did retry logic change" --format text
 ```
 
 The context pack is the safer form to inject into Claude/Codex. It excludes weak observations, superseded memories by default, IDE context noise, and raw tool-call JSON.
+It also applies a final low-score cutoff so broad tail results do not enter hosted-agent context just because budget is available.
 
 Import recent Codex sessions as a local memory dataset:
 
@@ -297,6 +298,7 @@ Regression fixtures live under `tests/fixtures/`. They encode expected behavior 
 - Codex hook queries should include `codex_hooks`, `UserPromptSubmit`, `PostToolUse`, and `Stop`.
 - Context packs should prefer high-scoring durable memories instead of blindly sorting all decisions first.
 - Packed context must not include IDE setup blocks, open tabs, raw `call_id` payloads, or MCP invocation JSON.
+- Duplicate/superseded memory behavior should be inspectable through `consolidation_decisions` and KG edges.
 
 Run the eval-backed tests with:
 

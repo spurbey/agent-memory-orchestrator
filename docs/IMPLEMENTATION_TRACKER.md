@@ -1,6 +1,6 @@
 # Implementation Tracker
 
-Last updated: 2026-05-06  
+Last updated: 2026-05-07  
 Baseline design: `docs/FINAL_DESIGN_V1.md`
 
 ## Phase Status
@@ -61,6 +61,7 @@ Tasks:
 - [x] Add retrieval eval fixture coverage for Codex hook memory recall and forbidden packed-context terms.
 - [x] Add explicit local model management commands for preset selection, status, download, and preflight.
 - [x] Add local SQLite knowledge graph API and interactive 3D `/graph` visualization page.
+- [x] Add Phase 1 hardening for low-score context cutoffs, duplicate memory suppression, KG versioning edges, graph filters, and expanded retrieval eval fixtures.
 - [x] Add unit/integration tests for Phase 1 pipeline and algorithms.
 
 Acceptance:
@@ -145,6 +146,7 @@ Acceptance:
 - Optional BGE-M3/FAISS/cross-encoder dependencies are not mandatory; fallback behavior is deterministic but less semantically accurate.
 - Optional model loaders are local-only. Models must already be available locally; AMO should not download model artifacts during memory operations.
 - Retrieval eval coverage is still small; expand with real user queries before treating auto-injection as production-grade.
+- Duplicate/supersession rules are deterministic heuristics; keep reviewing `consolidation_decisions` before trusting automatic replacement at large scale.
 - Phase 2 Work Ledger is architecturally reserved but not implemented.
 
 ## Change Control
