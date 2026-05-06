@@ -16,6 +16,19 @@ DURABLE_TYPE_ORDER = {
 }
 
 
+MIN_CONTEXT_PACK_SCORE_BY_TYPE = {
+    "decision": 0.34,
+    "fix": 0.34,
+    "bug": 0.38,
+    "blocker": 0.38,
+    "validation": 0.34,
+    "summary": 0.30,
+    "file_change": 0.42,
+    "reference": 0.42,
+    "observation": 0.55,
+}
+
+
 @dataclass(slots=True, frozen=True)
 class ContextPack:
     text: str
@@ -81,13 +94,15 @@ def _pre_budget_exclusion(item: dict, include_historical: bool) -> str:
     if _looks_like_raw_tool_json(summary):
         return "raw_tool_json_noise"
     memory_type = str(item.get("memory_type") or "")
+    score = float(item.get("score") or 0.0)
     if memory_type == "observation":
-        score = float(item.get("score") or 0.0)
         confidence = float(item.get("confidence") or 0.0)
         policy = item.get("ranking_policy") if isinstance(item.get("ranking_policy"), dict) else {}
         exact = float(policy.get("exact_boost") or 0.0)
         if score < 0.45 or confidence < 0.5 or exact <= 0.0:
             return "observation_noise"
+    if score < MIN_CONTEXT_PACK_SCORE_BY_TYPE.get(memory_type, 0.45):
+        return "low_relevance_score"
     return ""
 
 

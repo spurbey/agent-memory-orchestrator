@@ -324,6 +324,86 @@ def test_consolidation_supersedes_and_historical_search(tmp_path) -> None:
     ).fetchone()
     assert decision["relation"] == "supersedes"
     assert "cosine" in decision["score_breakdown_json"]
+    old_edges = svc.conn.execute(
+        "SELECT DISTINCT status FROM kg_edges WHERE evidence_memory_id = ?",
+        (first.id,),
+    ).fetchall()
+    assert {row["status"] for row in old_edges} == {"superseded"}
+    supersedes_edge = svc.conn.execute(
+        """
+        SELECT ke.relation
+        FROM kg_edges ke
+        WHERE ke.evidence_memory_id = ? AND ke.relation = 'supersedes'
+        """,
+        (second.id,),
+    ).fetchone()
+    assert supersedes_edge is not None
+    svc.close()
+
+
+def test_exact_duplicate_lower_confidence_is_suppressed_but_audited(tmp_path) -> None:
+    settings = make_settings(tmp_path)
+    svc = MemoryService(settings)
+    svc.init_db()
+    svc.create_session("s1", "Session 1")
+    event1 = svc.add_event("s1", "codex", "response", "Decision: Codex hooks use UserPromptSubmit.")
+    event2 = svc.add_event("s1", "codex", "response", "Decision: Codex hooks use UserPromptSubmit.")
+    first = svc.add_memory_unit(
+        session_id="s1",
+        source_event_id=event1.id,
+        source_chunk_id=None,
+        memory_type="decision",
+        subject="codex hooks",
+        predicate="decides",
+        object_text="Codex hooks use UserPromptSubmit.",
+        summary="Decision [codex hooks]: Codex hooks use UserPromptSubmit.",
+        topic_key="codex_hooks",
+        entities=["UserPromptSubmit"],
+        tags=["codex", "hooks"],
+        confidence=0.95,
+    )
+    second = svc.add_memory_unit(
+        session_id="s1",
+        source_event_id=event2.id,
+        source_chunk_id=None,
+        memory_type="decision",
+        subject="codex hooks",
+        predicate="decides",
+        object_text="Codex hooks use UserPromptSubmit.",
+        summary="Decision [codex hooks]: Codex hooks use UserPromptSubmit.",
+        topic_key="codex_hooks",
+        entities=["UserPromptSubmit"],
+        tags=["codex", "hooks"],
+        confidence=0.6,
+    )
+
+    second_row = svc.conn.execute(
+        "SELECT status, supersedes_memory_id FROM memory_units WHERE id = ?",
+        (second.id,),
+    ).fetchone()
+    assert second_row["status"] == "superseded"
+    assert second_row["supersedes_memory_id"] == first.id
+    decision = svc.conn.execute(
+        "SELECT relation, score_breakdown_json FROM consolidation_decisions WHERE new_memory_id = ?",
+        (second.id,),
+    ).fetchone()
+    assert decision["relation"] == "supports"
+    assert json.loads(decision["score_breakdown_json"])["exact_duplicate"] == 1.0
+    support_edge = svc.conn.execute(
+        "SELECT relation FROM kg_edges WHERE evidence_memory_id = ? AND relation = 'supports'",
+        (second.id,),
+    ).fetchone()
+    assert support_edge is not None
+
+    active_hits = svc.search_memories("Codex hooks UserPromptSubmit", session_id="s1", limit=5)
+    assert [hit["memory_id"] for hit in active_hits] == [first.id]
+    historical_hits = svc.search_memories(
+        "Codex hooks UserPromptSubmit",
+        session_id="s1",
+        limit=5,
+        include_historical=True,
+    )
+    assert {hit["memory_id"] for hit in historical_hits} >= {first.id, second.id}
     svc.close()
 
 
@@ -397,6 +477,18 @@ def test_graph_snapshot_returns_sqlite_kg_nodes_edges_and_evidence(tmp_path) -> 
 
     active_graph = svc.graph_snapshot(query="Codex hooks", session_id="graph-s1", limit=50, include_historical=False)
     assert active_graph["edges"]
+    mention_graph = svc.graph_snapshot(
+        query="Codex hooks",
+        session_id="graph-s1",
+        limit=50,
+        relation="mentions",
+        node_type="topic",
+        memory_type="decision",
+        min_confidence=0.9,
+    )
+    assert mention_graph["filters"]["relation"] == "mentions"
+    assert mention_graph["edges"]
+    assert all(edge["relation"] == "mentions" and edge["confidence"] >= 0.9 for edge in mention_graph["edges"])
     svc.close()
 
 
@@ -638,6 +730,44 @@ def test_context_pack_orders_by_score_before_type_and_excludes_known_noise() -> 
     assert any(item["memory_id"] == "json_noise" and item["reason"] == "raw_tool_json_noise" for item in pack.payload["excluded"])
 
 
+def test_context_pack_excludes_low_score_tail_results() -> None:
+    pack = build_context_pack_payload(
+        query="why did retry jitter change",
+        budget_tokens=1200,
+        results=[
+            {
+                "memory_id": "strong_decision",
+                "session_id": "s1",
+                "memory_type": "decision",
+                "status": "active",
+                "summary": "Decision [retry.py]: retry jitter changed to avoid rate limits.",
+                "source_event_id": "evt1",
+                "source_chunk_id": "chk1",
+                "score": 0.72,
+                "confidence": 0.95,
+                "ranking_policy": {"matched_terms": ["retry", "jitter"], "exact_boost": 0.2},
+            },
+            {
+                "memory_id": "weak_reference",
+                "session_id": "s1",
+                "memory_type": "reference",
+                "status": "active",
+                "summary": "Reference: general retry docs mention jitter.",
+                "source_event_id": "evt2",
+                "source_chunk_id": "chk2",
+                "score": 0.21,
+                "confidence": 0.55,
+                "ranking_policy": {"matched_terms": ["retry"], "exact_boost": 0.03},
+            },
+        ],
+    )
+    assert [item["memory_id"] for item in pack.payload["items"]] == ["strong_decision"]
+    assert any(
+        item["memory_id"] == "weak_reference" and item["reason"] == "low_relevance_score"
+        for item in pack.payload["excluded"]
+    )
+
+
 def test_user_question_with_ide_context_is_not_promoted_to_decision(tmp_path) -> None:
     settings = make_settings(tmp_path)
     svc = MemoryService(settings)
@@ -757,6 +887,82 @@ def test_codex_hooks_retrieval_eval_fixture(tmp_path) -> None:
     for term in case["forbidden_terms"]:
         assert term.lower() not in text
     assert pack["items"][0]["memory_type"] in case["preferred_memory_types"]
+    svc.close()
+
+
+def test_phase1_hardening_retrieval_eval_fixture(tmp_path) -> None:
+    fixture = json.loads((Path(__file__).parent / "fixtures" / "retrieval_eval_phase1_hardening.json").read_text())
+    case = fixture["cases"][0]
+    settings = make_settings(tmp_path)
+    svc = MemoryService(settings)
+    svc.init_db()
+    svc.create_session("eval", "Eval")
+    good_event = svc.add_event(
+        "eval",
+        "codex",
+        "response",
+        "Decision: scraper/retry.py changed to exponential backoff with jitter because fixed delay caused rate limits.",
+    )
+    noisy_event = svc.add_event("eval", "user", "prompt", "Noisy IDE context paste.")
+    raw_tool_event = svc.add_event("eval", "codex", "tool_result", "Raw MCP JSON.")
+    svc.add_memory_unit(
+        session_id="eval",
+        source_event_id=good_event.id,
+        source_chunk_id=None,
+        memory_type="decision",
+        subject="scraper/retry.py",
+        predicate="decides",
+        object_text="retry jitter changed to exponential backoff because fixed delay caused rate limits",
+        summary=(
+            "Decision [scraper/retry.py]: retry jitter changed to exponential backoff because "
+            "fixed delay caused rate limits."
+        ),
+        topic_key="scraper_retry_py",
+        entities=["scraper/retry.py"],
+        tags=["retry", "jitter", "backoff", "rate-limits"],
+        confidence=0.95,
+        importance=0.9,
+    )
+    svc.add_memory_unit(
+        session_id="eval",
+        source_event_id=noisy_event.id,
+        source_chunk_id=None,
+        memory_type="decision",
+        subject="Untitled9.md",
+        predicate="decides",
+        object_text="# Context from my IDE setup: Open tabs: Untitled9.md",
+        summary="Decision [Untitled9.md]: # Context from my IDE setup: Open tabs: Untitled9.md",
+        topic_key="untitled9_md",
+        entities=["Untitled9.md"],
+        tags=["retry", "jitter"],
+        confidence=0.95,
+        importance=0.85,
+    )
+    svc.add_memory_unit(
+        session_id="eval",
+        source_event_id=raw_tool_event.id,
+        source_chunk_id=None,
+        memory_type="reference",
+        subject="retry docs",
+        predicate="references",
+        object_text='{"call_id":"call_1","invocation":{"tool":"docs"},"result":{"text":"retry jitter"}}',
+        summary='Reference: {"call_id":"call_1","invocation":{"tool":"docs"},"result":{"text":"retry jitter"}}',
+        topic_key="retry_docs",
+        entities=[],
+        tags=["retry", "jitter"],
+        confidence=0.55,
+        importance=0.55,
+    )
+
+    pack = svc.build_context_pack(case["query"], session_id="eval", limit=case["limit"], budget_tokens=case["budget_tokens"])
+    text = pack["text"].lower()
+    for term in case["must_include_terms"]:
+        assert term.lower() in text
+    for term in case["forbidden_terms"]:
+        assert term.lower() not in text
+    assert pack["items"][0]["memory_type"] in case["preferred_memory_types"]
+    assert any(item["reason"] == "ide_context_noise" for item in pack["excluded"])
+    assert any(item["reason"] == "raw_tool_json_noise" for item in pack["excluded"])
     svc.close()
 
 

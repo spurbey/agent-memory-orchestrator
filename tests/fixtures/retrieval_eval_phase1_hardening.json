@@ -1,0 +1,25 @@
+{
+  "cases": [
+    {
+      "name": "retry_jitter_causal_context_pack",
+      "query": "why did retry jitter change",
+      "limit": 8,
+      "budget_tokens": 1200,
+      "must_include_terms": [
+        "exponential backoff",
+        "rate limits",
+        "scraper/retry.py"
+      ],
+      "preferred_memory_types": [
+        "decision",
+        "fix"
+      ],
+      "forbidden_terms": [
+        "Context from my IDE setup",
+        "Open tabs",
+        "call_id",
+        "invocation"
+      ]
+    }
+  ]
+}

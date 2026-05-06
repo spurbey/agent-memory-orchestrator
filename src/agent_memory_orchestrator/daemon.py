@@ -63,6 +63,8 @@ class AmoHandler(BaseHTTPRequestHandler):
                 if path == "/api/graph":
                     include_historical = (query.get("include_historical") or ["false"])[0].lower() == "true"
                     graph_query = (query.get("query") or query.get("q") or [""])[0] or None
+                    min_confidence_raw = (query.get("min_confidence") or [""])[0]
+                    min_confidence = float(min_confidence_raw) if min_confidence_raw else None
                     self._write_json(
                         200,
                         {
@@ -72,6 +74,10 @@ class AmoHandler(BaseHTTPRequestHandler):
                                 session_id=session_id,
                                 limit=limit,
                                 include_historical=include_historical,
+                                relation=(query.get("relation") or [""])[0] or None,
+                                node_type=(query.get("node_type") or [""])[0] or None,
+                                memory_type=(query.get("memory_type") or [""])[0] or None,
+                                min_confidence=min_confidence,
                             ),
                         },
                     )
@@ -505,6 +511,10 @@ GRAPH_HTML = r"""<!doctype html>
     <div class="toolbar">
       <input id="query" placeholder="Filter graph, e.g. codex hooks" />
       <input id="session" placeholder="Optional session_id" />
+      <input id="relation" placeholder="relation, e.g. supersedes" style="min-width:190px" />
+      <input id="memoryType" placeholder="memory_type" style="min-width:140px" />
+      <input id="nodeType" placeholder="node_type" style="min-width:120px" />
+      <input id="minConfidence" type="number" step="0.05" min="0" max="1" placeholder="min conf" style="min-width:92px;width:92px" />
       <input id="limit" type="number" value="100" min="10" max="500" style="min-width:90px;width:90px" />
       <label><input id="historical" type="checkbox" /> history</label>
       <button onclick="loadGraph()">Load Graph</button>
@@ -577,9 +587,17 @@ GRAPH_HTML = r"""<!doctype html>
       const params = new URLSearchParams();
       const query = document.getElementById("query").value.trim();
       const session = document.getElementById("session").value.trim();
+      const relation = document.getElementById("relation").value.trim();
+      const memoryType = document.getElementById("memoryType").value.trim();
+      const nodeType = document.getElementById("nodeType").value.trim();
+      const minConfidence = document.getElementById("minConfidence").value.trim();
       const limit = document.getElementById("limit").value || "100";
       if (query) params.set("query", query);
       if (session) params.set("session_id", session);
+      if (relation) params.set("relation", relation);
+      if (memoryType) params.set("memory_type", memoryType);
+      if (nodeType) params.set("node_type", nodeType);
+      if (minConfidence) params.set("min_confidence", minConfidence);
       params.set("limit", limit);
       params.set("include_historical", document.getElementById("historical").checked ? "true" : "false");
       try {
