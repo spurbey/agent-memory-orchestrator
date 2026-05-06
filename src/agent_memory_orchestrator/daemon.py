@@ -468,7 +468,8 @@ GRAPH_HTML = r"""<!doctype html>
       box-shadow: 0 18px 70px rgba(0,0,0,0.28);
     }
     #graphWrap { position: relative; }
-    svg { width: 100%; height: 100%; display: block; }
+    canvas { width: 100%; height: 100%; display: block; cursor: grab; }
+    canvas.dragging { cursor: grabbing; }
     .side { padding: 16px; overflow: auto; }
     h2 { font-size: 12px; text-transform: uppercase; color: var(--muted); letter-spacing: 0.12em; margin: 0 0 12px; }
     .statgrid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 16px; }
@@ -486,11 +487,6 @@ GRAPH_HTML = r"""<!doctype html>
       font-size: 12px;
       margin: 2px 4px 2px 0;
     }
-    .node { cursor: pointer; }
-    .node circle { stroke: #0d1117; stroke-width: 2; }
-    .node text { fill: var(--ink); font-size: 11px; paint-order: stroke; stroke: #0d1117; stroke-width: 4px; stroke-linejoin: round; }
-    .edge { stroke: var(--edge); stroke-width: 1.4; opacity: 0.72; }
-    .edge-label { fill: var(--muted); font-size: 10px; paint-order: stroke; stroke: #0d1117; stroke-width: 3px; }
     pre { white-space: pre-wrap; overflow-wrap: anywhere; color: var(--ink); }
     @media (max-width: 980px) {
       header { flex-direction: column; }
@@ -512,12 +508,14 @@ GRAPH_HTML = r"""<!doctype html>
       <input id="limit" type="number" value="100" min="10" max="500" style="min-width:90px;width:90px" />
       <label><input id="historical" type="checkbox" /> history</label>
       <button onclick="loadGraph()">Load Graph</button>
+      <button id="spinButton" onclick="toggleSpin()">Pause Spin</button>
+      <button onclick="resetView()">Reset 3D</button>
       <button onclick="location.href='/'">Dashboard</button>
     </div>
   </header>
   <main>
     <section id="graphWrap" class="panel">
-      <svg id="graph" role="img" aria-label="Knowledge graph visualization"></svg>
+      <canvas id="graph3d" role="img" aria-label="3D knowledge graph visualization"></canvas>
     </section>
     <aside class="panel side">
       <h2>Graph Stats</h2>
@@ -529,18 +527,43 @@ GRAPH_HTML = r"""<!doctype html>
     </aside>
   </main>
   <script>
-    const svg = document.getElementById("graph");
+    const canvas = document.getElementById("graph3d");
+    const ctx = canvas.getContext("2d");
+    const css = name => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+    const palette = {
+      ink: css("--ink"),
+      muted: css("--muted"),
+      edge: css("--edge"),
+      accent: css("--accent"),
+      entity: css("--entity"),
+      memory: css("--memory"),
+      file: css("--file"),
+      type: css("--type")
+    };
+    let graphState = {
+      nodes: [],
+      edges: [],
+      nodeMap: new Map(),
+      rotationX: -0.25,
+      rotationY: 0.6,
+      zoom: 1,
+      autoRotate: true,
+      dragging: false,
+      dragStart: null,
+      hovered: null,
+      projected: []
+    };
     const esc = value => String(value ?? "").replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
     const short = (value, n = 90) => {
       const text = String(value ?? "").replace(/\s+/g, " ");
       return text.length > n ? text.slice(0, n - 3) + "..." : text;
     };
     const colorFor = type => ({
-      file: "var(--file)",
-      memory: "var(--memory)",
-      memory_type: "var(--type)",
-      topic: "var(--entity)"
-    })[type] || "var(--entity)";
+      file: palette.file,
+      memory: palette.memory,
+      memory_type: palette.type,
+      topic: palette.entity
+    })[type] || palette.entity;
     const radiusFor = node => node.type === "memory" ? 15 : node.type === "file" ? 13 : node.type === "memory_type" ? 10 : 12;
 
     async function getJson(url) {
@@ -585,72 +608,194 @@ GRAPH_HTML = r"""<!doctype html>
     }
 
     function renderGraph(nodes, edges) {
-      const width = svg.clientWidth || 900;
-      const height = svg.clientHeight || 640;
-      const cx = width / 2;
-      const cy = height / 2;
-      const nodeMap = new Map(nodes.map(n => [n.id, {...n}]));
       const degree = new Map(nodes.map(n => [n.id, 0]));
       for (const edge of edges) {
         degree.set(edge.source, (degree.get(edge.source) || 0) + 1);
         degree.set(edge.target, (degree.get(edge.target) || 0) + 1);
       }
-      const ordered = [...nodeMap.values()].sort((a, b) => (degree.get(b.id) || 0) - (degree.get(a.id) || 0));
-      const rings = [0, 150, 260, 360, 460];
+      const ordered = nodes
+        .map(n => ({...n, degree: degree.get(n.id) || 0}))
+        .sort((a, b) => b.degree - a.degree);
+      const sphereRadius = Math.max(180, Math.min(520, 90 + Math.sqrt(Math.max(1, ordered.length)) * 42));
       ordered.forEach((node, index) => {
-        if (index === 0) {
-          node.x = cx;
-          node.y = cy;
-        } else {
-          const ring = Math.min(rings.length - 1, Math.floor(Math.sqrt(index / 4)) + 1);
-          const itemsBefore = ring === 1 ? 1 : 1 + (ring - 1) * (ring - 1) * 4;
-          const slot = index - itemsBefore;
-          const slots = Math.max(8, ring * 10);
-          const angle = (slot / slots) * Math.PI * 2 + ring * 0.31;
-          node.x = cx + Math.cos(angle) * rings[ring];
-          node.y = cy + Math.sin(angle) * rings[ring] * 0.72;
-        }
-        nodeMap.set(node.id, node);
+        const t = ordered.length <= 1 ? 0.5 : index / (ordered.length - 1);
+        const theta = index * 2.399963229728653;
+        const z = sphereRadius * (1 - 2 * t);
+        const radial = Math.sqrt(Math.max(0, sphereRadius * sphereRadius - z * z));
+        const hubPull = Math.max(0.35, 1 - Math.min(0.45, node.degree * 0.025));
+        node.x = Math.cos(theta) * radial * hubPull;
+        node.y = Math.sin(theta) * radial * hubPull;
+        node.z = z * hubPull;
+        node.vx = 0; node.vy = 0; node.vz = 0;
       });
-
-      svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
-      svg.innerHTML = `
-        <defs>
-          <marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto" markerUnits="strokeWidth">
-            <path d="M0,0 L0,6 L7,3 z" fill="var(--edge)"></path>
-          </marker>
-        </defs>
-        <g class="edges">
-          ${edges.map(edge => {
-            const source = nodeMap.get(edge.source);
-            const target = nodeMap.get(edge.target);
-            if (!source || !target) return "";
-            const mx = (source.x + target.x) / 2;
-            const my = (source.y + target.y) / 2;
-            return `
-              <line class="edge" x1="${source.x}" y1="${source.y}" x2="${target.x}" y2="${target.y}" marker-end="url(#arrow)"></line>
-              <text class="edge-label" x="${mx}" y="${my}">${esc(edge.relation)}</text>
-            `;
-          }).join("")}
-        </g>
-        <g class="nodes">
-          ${ordered.map(node => `
-            <g class="node" transform="translate(${node.x},${node.y})" data-node="${esc(node.id)}">
-              <circle r="${radiusFor(node) + Math.min(10, (degree.get(node.id) || 0) * 0.8)}" fill="${colorFor(node.type)}"></circle>
-              <text x="${radiusFor(node) + 9}" y="4">${esc(short(node.label, 34))}</text>
-            </g>
-          `).join("")}
-        </g>
-      `;
-      for (const el of svg.querySelectorAll(".node")) {
-        el.addEventListener("click", () => {
-          const node = nodeMap.get(el.getAttribute("data-node"));
-          if (node) selectNode(node, edges.filter(e => e.source === node.id || e.target === node.id));
-        });
-      }
-      if (!nodes.length) {
+      runLayout(ordered, edges);
+      graphState.nodes = ordered;
+      graphState.edges = edges;
+      graphState.nodeMap = new Map(ordered.map(n => [n.id, n]));
+      graphState.hovered = null;
+      if (!ordered.length) {
         document.getElementById("selected").innerHTML = `<div class="muted">No graph rows matched this filter.</div>`;
       }
+      drawGraph();
+    }
+
+    function runLayout(nodes, edges) {
+      const nodeMap = new Map(nodes.map(n => [n.id, n]));
+      const iterations = Math.min(180, Math.max(60, nodes.length * 2));
+      for (let step = 0; step < iterations; step++) {
+        for (let i = 0; i < nodes.length; i++) {
+          for (let j = i + 1; j < nodes.length; j++) {
+            const a = nodes[i], b = nodes[j];
+            const dx = a.x - b.x, dy = a.y - b.y, dz = a.z - b.z;
+            const dist2 = Math.max(90, dx * dx + dy * dy + dz * dz);
+            const force = 5200 / dist2;
+            const dist = Math.sqrt(dist2);
+            const fx = (dx / dist) * force, fy = (dy / dist) * force, fz = (dz / dist) * force;
+            a.vx += fx; a.vy += fy; a.vz += fz;
+            b.vx -= fx; b.vy -= fy; b.vz -= fz;
+          }
+        }
+        for (const edge of edges) {
+          const a = nodeMap.get(edge.source), b = nodeMap.get(edge.target);
+          if (!a || !b) continue;
+          const dx = b.x - a.x, dy = b.y - a.y, dz = b.z - a.z;
+          const dist = Math.max(1, Math.sqrt(dx * dx + dy * dy + dz * dz));
+          const target = edge.relation === "evidenced_by" ? 125 : 185;
+          const force = (dist - target) * 0.018;
+          const fx = (dx / dist) * force, fy = (dy / dist) * force, fz = (dz / dist) * force;
+          a.vx += fx; a.vy += fy; a.vz += fz;
+          b.vx -= fx; b.vy -= fy; b.vz -= fz;
+        }
+        for (const node of nodes) {
+          node.vx += -node.x * 0.0016;
+          node.vy += -node.y * 0.0016;
+          node.vz += -node.z * 0.0016;
+          node.x += node.vx;
+          node.y += node.vy;
+          node.z += node.vz;
+          node.vx *= 0.72;
+          node.vy *= 0.72;
+          node.vz *= 0.72;
+        }
+      }
+    }
+
+    function resizeCanvas() {
+      const rect = canvas.getBoundingClientRect();
+      const ratio = window.devicePixelRatio || 1;
+      const width = Math.max(1, Math.floor(rect.width * ratio));
+      const height = Math.max(1, Math.floor(rect.height * ratio));
+      if (canvas.width !== width || canvas.height !== height) {
+        canvas.width = width;
+        canvas.height = height;
+      }
+      ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+      return { width: rect.width, height: rect.height };
+    }
+
+    function rotatePoint(node) {
+      const cx = Math.cos(graphState.rotationX), sx = Math.sin(graphState.rotationX);
+      const cy = Math.cos(graphState.rotationY), sy = Math.sin(graphState.rotationY);
+      const x1 = node.x * cy + node.z * sy;
+      const z1 = -node.x * sy + node.z * cy;
+      const y1 = node.y * cx - z1 * sx;
+      const z2 = node.y * sx + z1 * cx;
+      return { x: x1, y: y1, z: z2 };
+    }
+
+    function project(node, width, height) {
+      const rotated = rotatePoint(node);
+      const camera = 850;
+      const scale = (camera / (camera + rotated.z)) * graphState.zoom;
+      return {
+        node,
+        x: width / 2 + rotated.x * scale,
+        y: height / 2 + rotated.y * scale,
+        z: rotated.z,
+        scale,
+        radius: (radiusFor(node) + Math.min(9, node.degree * 0.7)) * Math.max(0.55, scale)
+      };
+    }
+
+    function drawGraph() {
+      const { width, height } = resizeCanvas();
+      ctx.clearRect(0, 0, width, height);
+      ctx.fillStyle = "#0a0d12";
+      ctx.fillRect(0, 0, width, height);
+      const projected = graphState.nodes.map(node => project(node, width, height));
+      graphState.projected = projected;
+      const byId = new Map(projected.map(p => [p.node.id, p]));
+
+      ctx.lineWidth = 1.2;
+      for (const edge of graphState.edges) {
+        const a = byId.get(edge.source), b = byId.get(edge.target);
+        if (!a || !b) continue;
+        const alpha = Math.max(0.18, Math.min(0.82, 0.48 + (a.z + b.z) / 2200));
+        ctx.strokeStyle = rgba(palette.edge, alpha);
+        ctx.beginPath();
+        ctx.moveTo(a.x, a.y);
+        ctx.lineTo(b.x, b.y);
+        ctx.stroke();
+        if (a.scale > 0.92 && b.scale > 0.92 && graphState.edges.length <= 60) {
+          ctx.fillStyle = rgba(palette.muted, alpha);
+          ctx.font = "10px ui-monospace, Menlo, Consolas, monospace";
+          ctx.fillText(edge.relation, (a.x + b.x) / 2, (a.y + b.y) / 2);
+        }
+      }
+
+      const sorted = projected.sort((a, b) => a.z - b.z);
+      for (const point of sorted) {
+        const node = point.node;
+        const alpha = Math.max(0.45, Math.min(1, 0.72 + point.z / 1100));
+        ctx.beginPath();
+        ctx.fillStyle = rgba(colorFor(node.type), alpha);
+        ctx.arc(point.x, point.y, point.radius, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.lineWidth = node === graphState.hovered ? 3 : 1.5;
+        ctx.strokeStyle = node === graphState.hovered ? palette.accent : "#0d1117";
+        ctx.stroke();
+        if (point.scale > 0.78 || node === graphState.hovered) {
+          ctx.font = `${Math.max(10, 11 * point.scale)}px ui-monospace, Menlo, Consolas, monospace`;
+          ctx.lineWidth = 4;
+          ctx.strokeStyle = "#0d1117";
+          ctx.strokeText(short(node.label, node === graphState.hovered ? 42 : 28), point.x + point.radius + 7, point.y + 4);
+          ctx.fillStyle = palette.ink;
+          ctx.fillText(short(node.label, node === graphState.hovered ? 42 : 28), point.x + point.radius + 7, point.y + 4);
+        }
+      }
+    }
+
+    function rgba(hex, alpha) {
+      if (!hex.startsWith("#")) return hex;
+      const value = hex.slice(1);
+      const bigint = parseInt(value.length === 3 ? value.split("").map(ch => ch + ch).join("") : value, 16);
+      const r = (bigint >> 16) & 255;
+      const g = (bigint >> 8) & 255;
+      const b = bigint & 255;
+      return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+    }
+
+    function resetView() {
+      graphState.rotationX = -0.25;
+      graphState.rotationY = 0.6;
+      graphState.zoom = 1;
+      drawGraph();
+    }
+
+    function toggleSpin() {
+      graphState.autoRotate = !graphState.autoRotate;
+      document.getElementById("spinButton").textContent = graphState.autoRotate ? "Pause Spin" : "Resume Spin";
+    }
+
+    function nodeAt(event) {
+      const rect = canvas.getBoundingClientRect();
+      const x = event.clientX - rect.left;
+      const y = event.clientY - rect.top;
+      const candidates = [...graphState.projected].sort((a, b) => b.z - a.z);
+      return candidates.find(p => {
+        const dx = x - p.x, dy = y - p.y;
+        return dx * dx + dy * dy <= (p.radius + 5) * (p.radius + 5);
+      })?.node || null;
     }
 
     function selectNode(node, edges) {
@@ -669,7 +814,53 @@ GRAPH_HTML = r"""<!doctype html>
       `;
     }
 
+    canvas.addEventListener("pointerdown", event => {
+      graphState.dragging = true;
+      graphState.dragStart = { x: event.clientX, y: event.clientY, rx: graphState.rotationX, ry: graphState.rotationY };
+      canvas.classList.add("dragging");
+      canvas.setPointerCapture(event.pointerId);
+    });
+    canvas.addEventListener("pointermove", event => {
+      if (graphState.dragging && graphState.dragStart) {
+        const dx = event.clientX - graphState.dragStart.x;
+        const dy = event.clientY - graphState.dragStart.y;
+        graphState.rotationY = graphState.dragStart.ry + dx * 0.008;
+        graphState.rotationX = Math.max(-1.35, Math.min(1.35, graphState.dragStart.rx + dy * 0.008));
+        drawGraph();
+        return;
+      }
+      const hovered = nodeAt(event);
+      if (hovered !== graphState.hovered) {
+        graphState.hovered = hovered;
+        drawGraph();
+      }
+    });
+    canvas.addEventListener("pointerup", event => {
+      graphState.dragging = false;
+      graphState.dragStart = null;
+      canvas.classList.remove("dragging");
+      canvas.releasePointerCapture(event.pointerId);
+    });
+    canvas.addEventListener("click", event => {
+      const node = nodeAt(event);
+      if (node) selectNode(node, graphState.edges.filter(e => e.source === node.id || e.target === node.id));
+    });
+    canvas.addEventListener("wheel", event => {
+      event.preventDefault();
+      graphState.zoom = Math.max(0.35, Math.min(3.2, graphState.zoom * (event.deltaY > 0 ? 0.92 : 1.08)));
+      drawGraph();
+    }, { passive: false });
+    window.addEventListener("resize", drawGraph);
+
     loadGraph();
+    function animateGraph() {
+      if (graphState.autoRotate && !graphState.dragging && graphState.nodes.length) {
+        graphState.rotationY += 0.0022;
+        drawGraph();
+      }
+      requestAnimationFrame(animateGraph);
+    }
+    requestAnimationFrame(animateGraph);
   </script>
 </body>
 </html>
