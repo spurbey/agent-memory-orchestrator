@@ -42,6 +42,7 @@ When you run many parallel AI sessions, context gets fragmented and lost. This p
   - `draft -> review -> revise (loop) -> ready_for_user -> approved/rejected`
 - Transcript ingestion adapters for Claude/Codex JSONL.
 - Hook ingestion entrypoint for Claude/Codex lifecycle events.
+- Modular adapter layer for Codex, Claude, and optional non-authoritative Omnara visibility events.
 - Export pipeline for backup and audit (JSONL snapshots).
 
 ## Architecture (high level)
@@ -243,6 +244,23 @@ agent_memory_orchestrator.mcp_memory_tools.MemoryMcpToolService
 ```
 
 The FastMCP server only registers tool functions and delegates to that service. This keeps `memory_write`, `memory_search`, `memory_context_pack`, `memory_timeline`, `memory_export`, and `memory_import` contract-testable without starting an MCP transport.
+
+## Adapter Layer
+
+Provider/app payloads are normalized before storage through:
+
+```text
+agent_memory_orchestrator.adapters
+```
+
+Implemented adapters:
+
+- `codex`: Codex rollout JSONL, session metadata, user/agent messages, command/tool results.
+- `claude`: Claude hook/session/message payloads.
+- `omnara`: optional visibility events marked `authoritative=false`.
+- `base`: shared `NormalizedAdapterEvent` contract and generic fallback.
+
+Redaction still happens centrally in `MemoryService.add_event` before persistence.
 
 ## Local model behavior
 

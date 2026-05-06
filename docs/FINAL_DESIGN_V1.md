@@ -1,6 +1,6 @@
 # Final Design v1
 
-Status: Phase 2 MCP memory tools implemented  
+Status: Phase 4 adapter layer implemented  
 Date: 2026-05-07  
 Owner: Agent Memory Orchestrator contributors
 
@@ -46,6 +46,7 @@ Core modules:
 1. `ingestion_gateway`
 - Accepts transcript events from Claude/Codex adapters.
 - Normalizes to canonical `Event` schema.
+- Implemented through `agent_memory_orchestrator.adapters` with provider-specific modules.
 
 2. `memory_pipeline`
 - Extracts candidate memories from events.
@@ -79,6 +80,7 @@ Core modules:
 9. `omnara_adapter` (optional)
 - Bridges external orchestration visibility/control.
 - Never becomes source of truth for authoritative state.
+- Events are marked non-authoritative in metadata.
 
 ## 5) Canonical Data Model
 
@@ -120,7 +122,7 @@ Primary entities:
 ## 6) Memory Lifecycle
 
 1. Ingest event.
-2. Normalize + validate schema.
+2. Adapter normalizes provider/app payload into canonical event schema.
 3. Chunk by content semantics.
 4. Extract memory candidate(s) with rule confidence.
 5. Embed memory text.
@@ -221,6 +223,27 @@ Single-device topology:
 - Optional adapter process for external visibility.
 
 No external call path for memory/orchestration operations.
+
+## 10.1) Adapter Contract
+
+Adapters convert external payloads into one canonical event shape before storage:
+
+- `session_id`
+- `agent`
+- `event_type`
+- `content`
+- `metadata`
+- `created_at`
+- `source_app`
+
+Implemented adapters:
+
+- `adapters.codex`: Codex rollout JSONL/session artifacts and tool-result normalization.
+- `adapters.claude`: Claude hook/session/message payload normalization.
+- `adapters.omnara`: optional non-authoritative visibility events.
+- `adapters.base`: shared `NormalizedAdapterEvent` contract and generic fallback.
+
+Raw payload redaction still happens in `MemoryService.add_event` before persistence, after adapter normalization and before chunking/extraction.
 
 ## 11) Security and Privacy Baseline
 

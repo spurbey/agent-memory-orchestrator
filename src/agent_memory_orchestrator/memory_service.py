@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
 
+from .adapters import infer_codex_session, normalize_adapter_event
 from .chunker import chunk_text
 from .cleaning import clean_event_text
 from .config import Settings
@@ -20,9 +21,6 @@ from .privacy import redact_secrets
 from .rerankers import RerankCandidate, rerank_candidates
 from .retrieval import lexical_rerank_score, reciprocal_rank_fusion, understand_query
 from .vector_cache import VectorRow, build_faiss_cache, search_faiss_cache
-
-MAX_CODEX_IMPORT_CONTENT_CHARS = 12000
-
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -580,160 +578,14 @@ class MemoryService:
         default_agent: str = "system",
         default_session_id: str | None = None,
     ) -> dict[str, object] | None:
-        codex_item = self._normalize_codex_rollout_item(item, default_agent=default_agent, default_session_id=default_session_id)
-        if codex_item is not None:
-            return codex_item
-        if item.get("type") in {"response_item", "event_msg", "turn_context", "compacted", "session_meta"}:
-            return None
-
-        event_name = str(item.get("hook_event_name") or item.get("event_type") or item.get("type") or "message")
-        session_id = str(item.get("session_id") or default_session_id or "default")
-        agent = str(item.get("agent") or item.get("model_provider") or default_agent).lower()
-        if "claude" in agent:
-            agent = "claude"
-        elif "codex" in agent or "openai" in agent:
-            agent = "codex"
-        elif agent not in {"claude", "codex", "user", "system"}:
-            agent = default_agent
-
-        content = item.get("content") or item.get("message") or item.get("text")
-        if content is None and event_name == "Stop":
-            content = item.get("last_assistant_message") or ""
-        if content is None and "tool" in item:
-            content = item.get("tool")
-        if not isinstance(content, str):
-            content = json.dumps(content or item, ensure_ascii=False)
-
-        metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
-        for key in ("cwd", "turn_id", "transcript_path", "tool_name", "tool_input", "tool_output"):
-            if key in item and key not in metadata:
-                metadata[key] = item[key]
-
-        return {
-            "session_id": session_id,
-            "agent": agent,
-            "event_type": _snake(event_name),
-            "content": content,
-            "metadata": metadata,
-            "created_at": item.get("created_at") or item.get("timestamp"),
-            "source_app": "claude" if default_agent == "claude" else "codex",
-        }
-
-    def _normalize_codex_rollout_item(
-        self,
-        item: dict,
-        *,
-        default_agent: str,
-        default_session_id: str | None,
-    ) -> dict[str, object] | None:
-        kind = item.get("type")
-        payload = item.get("payload")
-        if not isinstance(payload, dict):
-            return None
-        ts = item.get("timestamp") or payload.get("timestamp")
-        session_id = default_session_id or str(payload.get("id") or payload.get("session_id") or "codex-session")
-        metadata = {"rollout_type": kind}
-
-        if kind == "session_meta":
-            session_id = str(payload.get("id") or session_id)
-            cwd = payload.get("cwd") or ""
-            source = payload.get("source") or payload.get("originator") or "codex"
-            model = payload.get("model") or payload.get("model_provider") or ""
-            return {
-                "session_id": session_id,
-                "agent": "system",
-                "event_type": "session_meta",
-                "content": f"Codex session started. cwd={cwd} source={source} model={model}",
-                "metadata": {
-                    "cwd": cwd,
-                    "source": source,
-                    "originator": payload.get("originator"),
-                    "cli_version": payload.get("cli_version"),
-                    "forked_from_id": payload.get("forked_from_id"),
-                },
-                "created_at": ts,
-                "source_app": "codex",
-            }
-
-        if kind == "turn_context":
-            return None
-
-        if kind == "compacted":
-            message = str(payload.get("message") or "").strip()
-            if not message:
-                return None
-            return {
-                "session_id": session_id,
-                "agent": "system",
-                "event_type": "summary",
-                "content": message,
-                "metadata": metadata,
-                "created_at": ts,
-                "source_app": "codex",
-            }
-
-        subtype = payload.get("type")
-        if kind == "event_msg":
-            if subtype == "user_message":
-                return self._normalized(session_id, "user", "prompt", payload.get("message"), metadata | {"turn_id": payload.get("turn_id")}, ts)
-            if subtype == "agent_message":
-                return self._normalized(session_id, "codex", "response", payload.get("message"), metadata | {"turn_id": payload.get("turn_id")}, ts)
-            if subtype in {"exec_command_end", "patch_apply_end", "mcp_tool_call_end"}:
-                content = _codex_tool_result_text(payload)
-                if not content.strip():
-                    return None
-                return self._normalized(session_id, "codex", "tool_result", content, metadata | _small_tool_metadata(payload), ts)
-            if subtype in {"task_complete", "turn_aborted", "error"}:
-                content = payload.get("message") or payload.get("error") or subtype
-                return self._normalized(session_id, "system", subtype, content, metadata | {"turn_id": payload.get("turn_id")}, ts)
-            return None
-
-        if kind == "response_item":
-            # Codex rollout files usually contain both response_item records and
-            # event_msg records for the same activity. For historical import we
-            # prefer event_msg to avoid duplicate memories and oversized imports.
-            return None
-
-        return None
-
-    def _normalized(
-        self,
-        session_id: str,
-        agent: str,
-        event_type: str,
-        content: object,
-        metadata: dict,
-        created_at: object,
-    ) -> dict[str, object] | None:
-        text = _codex_content_to_text(content)
-        if not text.strip():
-            return None
-        return {
-            "session_id": session_id,
-            "agent": agent,
-            "event_type": _snake(event_type),
-            "content": text,
-            "metadata": metadata,
-            "created_at": created_at,
-            "source_app": "codex",
-        }
+        return normalize_adapter_event(
+            item,
+            default_agent=default_agent,
+            default_session_id=default_session_id,
+        )
 
     def _infer_codex_session(self, file_path: Path) -> tuple[str, str]:
-        try:
-            with file_path.open("r", encoding="utf-8-sig") as f:
-                for line in f:
-                    if not line.strip():
-                        continue
-                    item = json.loads(line)
-                    if item.get("type") == "session_meta" and isinstance(item.get("payload"), dict):
-                        payload = item["payload"]
-                        sid = str(payload.get("id") or file_path.stem)
-                        cwd = payload.get("cwd") or ""
-                        return sid, f"Codex {sid} {cwd}".strip()
-                    break
-        except Exception:
-            pass
-        return file_path.stem, f"Codex {file_path.stem}"
+        return infer_codex_session(file_path)
 
     def search_memories(
         self,
@@ -2195,65 +2047,3 @@ def _clamp(value: float, lower: float, upper: float) -> float:
 def _preview(text: str, max_len: int) -> str:
     clean = " ".join(str(text).split())
     return clean if len(clean) <= max_len else clean[: max_len - 3] + "..."
-
-
-def _codex_content_to_text(content: object) -> str:
-    if content is None:
-        return ""
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):
-        parts: list[str] = []
-        for item in content:
-            if isinstance(item, dict):
-                if "text" in item:
-                    parts.append(str(item.get("text") or ""))
-                elif "content" in item:
-                    parts.append(_codex_content_to_text(item.get("content")))
-                else:
-                    parts.append(_compact_json(item))
-            else:
-                parts.append(str(item))
-        return "\n".join(part for part in parts if part.strip())
-    if isinstance(content, dict):
-        return _compact_json(content)
-    return str(content)
-
-
-def _compact_json(value: object) -> str:
-    if isinstance(value, str):
-        return value
-    try:
-        return json.dumps(value, ensure_ascii=False, sort_keys=True)
-    except TypeError:
-        return str(value)
-
-
-def _codex_tool_result_text(payload: dict) -> str:
-    subtype = payload.get("type")
-    if subtype == "exec_command_end":
-        command = payload.get("command") or ""
-        output = payload.get("aggregated_output") or payload.get("stdout") or payload.get("stderr") or ""
-        return _limit_import_text(f"Command completed: {_compact_json(command)}\nOutput:\n{output}")
-    if subtype == "patch_apply_end":
-        changes = payload.get("changes") or {}
-        changed_files = ", ".join(list(changes.keys())[:20]) if isinstance(changes, dict) else ""
-        stdout = payload.get("stdout") or ""
-        return _limit_import_text(f"Patch applied. changed_files={changed_files}\n{stdout}")
-    return _limit_import_text(_compact_json(payload))
-
-
-def _small_tool_metadata(payload: dict) -> dict:
-    return {
-        "turn_id": payload.get("turn_id"),
-        "call_id": payload.get("call_id"),
-        "tool_name": payload.get("tool_name") or payload.get("type"),
-        "cwd": payload.get("cwd"),
-        "success": payload.get("success"),
-    }
-
-
-def _limit_import_text(text: str) -> str:
-    if len(text) <= MAX_CODEX_IMPORT_CONTENT_CHARS:
-        return text
-    return text[:MAX_CODEX_IMPORT_CONTENT_CHARS] + "\n...[truncated by AMO historical Codex importer]"
