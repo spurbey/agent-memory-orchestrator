@@ -16,7 +16,7 @@ def make_settings(tmp_path) -> Settings:
         mcp_host="127.0.0.1",
         mcp_port=8765,
         embedding_dims=64,
-        embedding_model="BAAI/bge-m3",
+        embedding_model="hash-fallback",
         reranker_model="BAAI/bge-reranker-base",
         vector_backend="sqlite",
         approval_mode="manual",

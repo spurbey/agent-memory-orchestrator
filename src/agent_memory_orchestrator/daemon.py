@@ -37,6 +37,9 @@ class AmoHandler(BaseHTTPRequestHandler):
         if path == "/":
             self._write_html(200, DASHBOARD_HTML)
             return
+        if path == "/graph":
+            self._write_html(200, GRAPH_HTML)
+            return
         if path == "/health":
             self._write_json(200, {"ok": True, "service": "agent-memory-orchestrator"})
             return
@@ -56,6 +59,22 @@ class AmoHandler(BaseHTTPRequestHandler):
                 session_id = (query.get("session_id") or [""])[0] or None
                 if path == "/api/dashboard":
                     self._write_json(200, {"ok": True, "data": svc.dashboard_snapshot(limit=limit)})
+                    return
+                if path == "/api/graph":
+                    include_historical = (query.get("include_historical") or ["false"])[0].lower() == "true"
+                    graph_query = (query.get("query") or query.get("q") or [""])[0] or None
+                    self._write_json(
+                        200,
+                        {
+                            "ok": True,
+                            "graph": svc.graph_snapshot(
+                                query=graph_query,
+                                session_id=session_id,
+                                limit=limit,
+                                include_historical=include_historical,
+                            ),
+                        },
+                    )
                     return
                 if path == "/api/sessions":
                     self._write_json(200, {"ok": True, "sessions": svc.list_sessions(limit=limit)})
@@ -375,6 +394,282 @@ DASHBOARD_HTML = r"""<!doctype html>
 
     loadDashboard();
     setInterval(loadDashboard, 5000);
+  </script>
+</body>
+</html>
+"""
+
+
+GRAPH_HTML = r"""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>AMO Knowledge Graph</title>
+  <style>
+    :root {
+      --bg: #0d1117;
+      --panel: #111a24;
+      --panel-2: #172232;
+      --ink: #e6edf3;
+      --muted: #8b949e;
+      --line: #30363d;
+      --entity: #79c0ff;
+      --memory: #a5d6ff;
+      --file: #7ee787;
+      --type: #d2a8ff;
+      --edge: #6e7681;
+      --accent: #ffa657;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at 20% 0%, rgba(121, 192, 255, 0.16), transparent 32rem),
+        linear-gradient(145deg, #0d1117 0%, #101923 54%, #0a0d12 100%);
+      font: 14px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+    }
+    header {
+      padding: 22px 26px 16px;
+      border-bottom: 1px solid var(--line);
+      display: flex;
+      justify-content: space-between;
+      gap: 18px;
+      align-items: flex-start;
+    }
+    h1 { margin: 0; font-size: 22px; letter-spacing: -0.03em; }
+    .subtitle { color: var(--muted); margin-top: 6px; max-width: 820px; }
+    .toolbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; justify-content: flex-end; }
+    input, button, label {
+      border: 1px solid var(--line);
+      background: var(--panel-2);
+      color: var(--ink);
+      border-radius: 10px;
+      padding: 9px 11px;
+      font: inherit;
+    }
+    input { min-width: 280px; }
+    button { color: var(--accent); cursor: pointer; }
+    label { color: var(--muted); display: flex; gap: 8px; align-items: center; }
+    main {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 390px;
+      gap: 14px;
+      padding: 16px;
+      height: calc(100vh - 92px);
+    }
+    .panel {
+      background: rgba(17, 26, 36, 0.92);
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      overflow: hidden;
+      min-width: 0;
+      box-shadow: 0 18px 70px rgba(0,0,0,0.28);
+    }
+    #graphWrap { position: relative; }
+    svg { width: 100%; height: 100%; display: block; }
+    .side { padding: 16px; overflow: auto; }
+    h2 { font-size: 12px; text-transform: uppercase; color: var(--muted); letter-spacing: 0.12em; margin: 0 0 12px; }
+    .statgrid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 16px; }
+    .stat { border: 1px solid var(--line); border-radius: 12px; padding: 10px; background: #0b1220; }
+    .stat strong { display: block; font-size: 22px; color: var(--accent); }
+    .muted { color: var(--muted); }
+    .item { border-top: 1px solid var(--line); padding: 11px 0; }
+    .item:first-child { border-top: 0; padding-top: 0; }
+    .pill {
+      display: inline-block;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 3px 8px;
+      color: var(--entity);
+      font-size: 12px;
+      margin: 2px 4px 2px 0;
+    }
+    .node { cursor: pointer; }
+    .node circle { stroke: #0d1117; stroke-width: 2; }
+    .node text { fill: var(--ink); font-size: 11px; paint-order: stroke; stroke: #0d1117; stroke-width: 4px; stroke-linejoin: round; }
+    .edge { stroke: var(--edge); stroke-width: 1.4; opacity: 0.72; }
+    .edge-label { fill: var(--muted); font-size: 10px; paint-order: stroke; stroke: #0d1117; stroke-width: 3px; }
+    pre { white-space: pre-wrap; overflow-wrap: anywhere; color: var(--ink); }
+    @media (max-width: 980px) {
+      header { flex-direction: column; }
+      main { grid-template-columns: 1fr; height: auto; }
+      #graphWrap { height: 620px; }
+      input { min-width: 0; width: 100%; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <h1>AMO Knowledge Graph</h1>
+      <div class="subtitle">SQLite-backed graph view over <code>entities</code>, <code>kg_edges</code>, and evidence memories. This is local visualization, not an external graph database.</div>
+    </div>
+    <div class="toolbar">
+      <input id="query" placeholder="Filter graph, e.g. codex hooks" />
+      <input id="session" placeholder="Optional session_id" />
+      <input id="limit" type="number" value="100" min="10" max="500" style="min-width:90px;width:90px" />
+      <label><input id="historical" type="checkbox" /> history</label>
+      <button onclick="loadGraph()">Load Graph</button>
+      <button onclick="location.href='/'">Dashboard</button>
+    </div>
+  </header>
+  <main>
+    <section id="graphWrap" class="panel">
+      <svg id="graph" role="img" aria-label="Knowledge graph visualization"></svg>
+    </section>
+    <aside class="panel side">
+      <h2>Graph Stats</h2>
+      <div id="stats" class="statgrid"></div>
+      <h2>Selected Node</h2>
+      <div id="selected" class="muted">Click a node to inspect its metadata and evidence.</div>
+      <h2 style="margin-top:18px">Relations</h2>
+      <div id="relations"></div>
+    </aside>
+  </main>
+  <script>
+    const svg = document.getElementById("graph");
+    const esc = value => String(value ?? "").replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
+    const short = (value, n = 90) => {
+      const text = String(value ?? "").replace(/\s+/g, " ");
+      return text.length > n ? text.slice(0, n - 3) + "..." : text;
+    };
+    const colorFor = type => ({
+      file: "var(--file)",
+      memory: "var(--memory)",
+      memory_type: "var(--type)",
+      topic: "var(--entity)"
+    })[type] || "var(--entity)";
+    const radiusFor = node => node.type === "memory" ? 15 : node.type === "file" ? 13 : node.type === "memory_type" ? 10 : 12;
+
+    async function getJson(url) {
+      const res = await fetch(url);
+      const data = await res.json();
+      if (!res.ok || data.ok === false) throw new Error(data.error || res.statusText);
+      return data;
+    }
+
+    async function loadGraph() {
+      const params = new URLSearchParams();
+      const query = document.getElementById("query").value.trim();
+      const session = document.getElementById("session").value.trim();
+      const limit = document.getElementById("limit").value || "100";
+      if (query) params.set("query", query);
+      if (session) params.set("session_id", session);
+      params.set("limit", limit);
+      params.set("include_historical", document.getElementById("historical").checked ? "true" : "false");
+      try {
+        const { graph } = await getJson("/api/graph?" + params.toString());
+        renderStats(graph.stats || {});
+        renderRelations((graph.stats || {}).relation_counts || {});
+        renderGraph(graph.nodes || [], graph.edges || []);
+      } catch (err) {
+        document.getElementById("selected").innerHTML = `<span class="muted">Graph error: ${esc(err.message)}</span>`;
+      }
+    }
+
+    function renderStats(stats) {
+      document.getElementById("stats").innerHTML = `
+        <div class="stat"><strong>${esc(stats.node_count || 0)}</strong><span class="muted">nodes</span></div>
+        <div class="stat"><strong>${esc(stats.edge_count || 0)}</strong><span class="muted">edges</span></div>
+        <div class="stat"><strong>${esc(stats.evidence_memory_count || 0)}</strong><span class="muted">memories</span></div>
+      `;
+    }
+
+    function renderRelations(counts) {
+      const entries = Object.entries(counts).sort((a, b) => b[1] - a[1]);
+      document.getElementById("relations").innerHTML = entries.length
+        ? entries.map(([key, value]) => `<span class="pill">${esc(key)}: ${esc(value)}</span>`).join("")
+        : `<div class="muted">No relations loaded.</div>`;
+    }
+
+    function renderGraph(nodes, edges) {
+      const width = svg.clientWidth || 900;
+      const height = svg.clientHeight || 640;
+      const cx = width / 2;
+      const cy = height / 2;
+      const nodeMap = new Map(nodes.map(n => [n.id, {...n}]));
+      const degree = new Map(nodes.map(n => [n.id, 0]));
+      for (const edge of edges) {
+        degree.set(edge.source, (degree.get(edge.source) || 0) + 1);
+        degree.set(edge.target, (degree.get(edge.target) || 0) + 1);
+      }
+      const ordered = [...nodeMap.values()].sort((a, b) => (degree.get(b.id) || 0) - (degree.get(a.id) || 0));
+      const rings = [0, 150, 260, 360, 460];
+      ordered.forEach((node, index) => {
+        if (index === 0) {
+          node.x = cx;
+          node.y = cy;
+        } else {
+          const ring = Math.min(rings.length - 1, Math.floor(Math.sqrt(index / 4)) + 1);
+          const itemsBefore = ring === 1 ? 1 : 1 + (ring - 1) * (ring - 1) * 4;
+          const slot = index - itemsBefore;
+          const slots = Math.max(8, ring * 10);
+          const angle = (slot / slots) * Math.PI * 2 + ring * 0.31;
+          node.x = cx + Math.cos(angle) * rings[ring];
+          node.y = cy + Math.sin(angle) * rings[ring] * 0.72;
+        }
+        nodeMap.set(node.id, node);
+      });
+
+      svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
+      svg.innerHTML = `
+        <defs>
+          <marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto" markerUnits="strokeWidth">
+            <path d="M0,0 L0,6 L7,3 z" fill="var(--edge)"></path>
+          </marker>
+        </defs>
+        <g class="edges">
+          ${edges.map(edge => {
+            const source = nodeMap.get(edge.source);
+            const target = nodeMap.get(edge.target);
+            if (!source || !target) return "";
+            const mx = (source.x + target.x) / 2;
+            const my = (source.y + target.y) / 2;
+            return `
+              <line class="edge" x1="${source.x}" y1="${source.y}" x2="${target.x}" y2="${target.y}" marker-end="url(#arrow)"></line>
+              <text class="edge-label" x="${mx}" y="${my}">${esc(edge.relation)}</text>
+            `;
+          }).join("")}
+        </g>
+        <g class="nodes">
+          ${ordered.map(node => `
+            <g class="node" transform="translate(${node.x},${node.y})" data-node="${esc(node.id)}">
+              <circle r="${radiusFor(node) + Math.min(10, (degree.get(node.id) || 0) * 0.8)}" fill="${colorFor(node.type)}"></circle>
+              <text x="${radiusFor(node) + 9}" y="4">${esc(short(node.label, 34))}</text>
+            </g>
+          `).join("")}
+        </g>
+      `;
+      for (const el of svg.querySelectorAll(".node")) {
+        el.addEventListener("click", () => {
+          const node = nodeMap.get(el.getAttribute("data-node"));
+          if (node) selectNode(node, edges.filter(e => e.source === node.id || e.target === node.id));
+        });
+      }
+      if (!nodes.length) {
+        document.getElementById("selected").innerHTML = `<div class="muted">No graph rows matched this filter.</div>`;
+      }
+    }
+
+    function selectNode(node, edges) {
+      document.getElementById("selected").innerHTML = `
+        <div class="item">
+          <div><strong>${esc(node.label)}</strong></div>
+          <div class="muted">${esc(node.id)} · ${esc(node.type)}</div>
+          ${node.memory_id ? `<div><span class="pill">${esc(node.memory_type)}</span><span class="pill">${esc(node.memory_status)}</span></div>` : ""}
+          ${node.summary_preview ? `<p>${esc(node.summary_preview)}</p>` : ""}
+        </div>
+        <div class="item">
+          <strong>Connected edges</strong>
+          ${edges.map(edge => `<div class="muted">${esc(edge.source)} --${esc(edge.relation)}--> ${esc(edge.target)} · confidence ${esc(edge.confidence)}</div>`).join("") || `<div class="muted">No connected edges.</div>`}
+        </div>
+        <pre>${esc(JSON.stringify(node, null, 2))}</pre>
+      `;
+    }
+
+    loadGraph();
   </script>
 </body>
 </html>

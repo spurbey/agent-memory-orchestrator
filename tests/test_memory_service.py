@@ -22,7 +22,7 @@ def make_settings(tmp_path) -> Settings:
         mcp_host="127.0.0.1",
         mcp_port=8765,
         embedding_dims=64,
-        embedding_model="BAAI/bge-m3",
+        embedding_model="hash-fallback",
         reranker_model="BAAI/bge-reranker-base",
         vector_backend="sqlite",
         approval_mode="manual",
@@ -361,6 +361,42 @@ def test_dashboard_snapshot_and_retrieval_detail(tmp_path) -> None:
     assert detail["candidates"][0]["memory_id"] == hits[0]["memory_id"]
     assert detail["candidates"][0]["score_breakdown"]["reranker"]["backend"] == "lexical"
 
+    svc.close()
+
+
+def test_graph_snapshot_returns_sqlite_kg_nodes_edges_and_evidence(tmp_path) -> None:
+    settings = make_settings(tmp_path)
+    svc = MemoryService(settings)
+    svc.init_db()
+    svc.create_session("graph-s1", "Graph Session")
+    event = svc.add_event("graph-s1", "codex", "response", "Codex hooks use UserPromptSubmit.")
+    memory = svc.add_memory_unit(
+        session_id="graph-s1",
+        source_event_id=event.id,
+        source_chunk_id=None,
+        memory_type="decision",
+        subject="Codex hooks",
+        predicate="decides",
+        object_text="UserPromptSubmit is used for memory retrieval.",
+        summary="Decision [Codex hooks]: UserPromptSubmit is used for memory retrieval.",
+        topic_key="codex_hooks",
+        entities=["UserPromptSubmit", "amo-hook"],
+        tags=["codex", "hooks"],
+        confidence=0.95,
+    )
+
+    graph = svc.graph_snapshot(query="Codex hooks", session_id="graph-s1", limit=50)
+    assert graph["stats"]["node_count"] >= 3
+    assert graph["stats"]["edge_count"] >= 3
+    assert graph["stats"]["evidence_memory_count"] == 1
+    assert graph["stats"]["relation_counts"]["evidenced_by"] >= 1
+    assert graph["stats"]["relation_counts"]["mentions"] >= 1
+    assert any(node["label"] == "Codex hooks" for node in graph["nodes"])
+    assert any(node.get("memory_id") == memory.id and node["type"] == "memory" for node in graph["nodes"])
+    assert all(edge["evidence_memory_id"] == memory.id for edge in graph["edges"])
+
+    active_graph = svc.graph_snapshot(query="Codex hooks", session_id="graph-s1", limit=50, include_historical=False)
+    assert active_graph["edges"]
     svc.close()
 
 
