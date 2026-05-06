@@ -8,6 +8,7 @@ from pathlib import Path
 
 from .config import Settings
 from .memory_service import MemoryService
+from .model_manager import download_models, list_model_presets, model_status, preflight_models
 from .orchestrator import OrchestratorService
 
 
@@ -75,6 +76,18 @@ def _build_parser() -> argparse.ArgumentParser:
     rebuild = sub.add_parser("rebuild-indexes", help="Rebuild FTS/vector index rows from canonical memory_units")
     rebuild.add_argument("--force-vectors", action="store_true")
 
+    models = sub.add_parser("models", help="Manage local embedding/reranker models")
+    model_sub = models.add_subparsers(dest="models_command", required=True)
+    model_sub.add_parser("list", help="List hardware-aware model presets")
+    model_status_cmd = model_sub.add_parser("status", help="Check whether selected models are cached locally")
+    _add_model_selection_args(model_status_cmd)
+    model_status_cmd.add_argument("--load-check", action="store_true", help="Also try loading models with local_files_only")
+    model_download = model_sub.add_parser("download", help="Intentionally download/cache selected models once")
+    _add_model_selection_args(model_download)
+    model_download.add_argument("--cache-dir", type=Path)
+    model_preflight = model_sub.add_parser("preflight", help="Require selected models to load from local cache")
+    _add_model_selection_args(model_preflight)
+
     orch_start = sub.add_parser("orchestrate-start", help="Start orchestrator session")
     orch_start.add_argument("--session-id", required=True)
     orch_start.add_argument("--title")
@@ -112,6 +125,43 @@ def main(argv: list[str] | None = None) -> int:
             finally:
                 svc.close()
             _print({"ok": True, "db_path": str(settings.db_path)})
+            return 0
+
+        if args.command == "models":
+            if args.models_command == "list":
+                _print({"ok": True, "presets": list_model_presets()})
+            elif args.models_command == "status":
+                _print(
+                    {
+                        "ok": True,
+                        "result": model_status(
+                            preset=args.preset,
+                            embedding_model=args.embedding_model,
+                            reranker_model=args.reranker_model,
+                            load_check=args.load_check,
+                        ),
+                    }
+                )
+            elif args.models_command == "download":
+                _print(
+                    {
+                        "ok": True,
+                        "result": download_models(
+                            preset=args.preset,
+                            embedding_model=args.embedding_model,
+                            reranker_model=args.reranker_model,
+                            cache_dir=args.cache_dir,
+                        ),
+                    }
+                )
+            elif args.models_command == "preflight":
+                result = preflight_models(
+                    preset=args.preset,
+                    embedding_model=args.embedding_model,
+                    reranker_model=args.reranker_model,
+                )
+                _print({"ok": result["ok"], "result": result})
+                return 0 if result["ok"] else 1
             return 0
 
         if args.command in {
@@ -285,6 +335,17 @@ def _codex_hooks_snippet() -> dict:
             ],
         },
     }
+
+
+def _add_model_selection_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--preset",
+        choices=["cpu-light", "cpu-balanced", "gpu-quality"],
+        default="cpu-balanced",
+        help="Hardware-oriented model preset.",
+    )
+    parser.add_argument("--embedding-model", help="Override preset embedding model.")
+    parser.add_argument("--reranker-model", help="Override preset reranker model.")
 
 
 def _rebuild_clean_db(settings: Settings, out_path: Path, codex_root: Path, limit: int, force: bool) -> dict:

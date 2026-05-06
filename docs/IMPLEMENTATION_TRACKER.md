@@ -59,6 +59,7 @@ Tasks:
 - [x] Add optional FAISS vector cache build/search with SQLite vector scan fallback.
 - [x] Add Phase 1.3 retrieval-quality hardening for context-pack ordering, IDE noise, raw tool JSON, and user-question suppression.
 - [x] Add retrieval eval fixture coverage for Codex hook memory recall and forbidden packed-context terms.
+- [x] Add explicit local model management commands for preset selection, status, download, and preflight.
 - [x] Add unit/integration tests for Phase 1 pipeline and algorithms.
 
 Acceptance:

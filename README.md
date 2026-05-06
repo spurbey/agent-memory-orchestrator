@@ -240,6 +240,48 @@ Defaults target:
 
 The runtime tries locally available models only. If a model or FAISS is unavailable, AMO falls back to deterministic hash vectors, SQLite vector scan, and lexical reranking rather than making external API calls.
 
+Model downloads are explicit setup actions. AMO will not silently download models during normal retrieval.
+
+List hardware-oriented presets:
+
+```bash
+amo-cli models list
+```
+
+Recommended presets:
+
+- `cpu-light`: lower memory CPU setup, faster but less accurate.
+- `cpu-balanced`: default local production setup, `BAAI/bge-m3` + `BAAI/bge-reranker-base`.
+- `gpu-quality`: heavier reranker for GPU/high-RAM machines.
+
+Check what is already cached locally:
+
+```bash
+amo-cli models status --preset cpu-balanced
+```
+
+Download/cache selected models once:
+
+```bash
+amo-cli models download --preset cpu-balanced
+```
+
+Verify production retrieval can load models from local disk:
+
+```bash
+amo-cli models preflight --preset cpu-balanced
+```
+
+Then configure retrieval:
+
+```bash
+set AMO_EMBEDDING_MODEL=BAAI/bge-m3
+set AMO_RERANKER_BACKEND=cross-encoder
+set AMO_RERANKER_MODEL=BAAI/bge-reranker-base
+set AMO_VECTOR_BACKEND=faiss
+amo-cli rebuild-indexes --force-vectors
+```
+
 ## Retrieval Quality Evals
 
 Regression fixtures live under `tests/fixtures/`. They encode expected behavior such as:
