@@ -30,7 +30,10 @@ When you run many parallel AI sessions, context gets fragmented and lost. This p
 - Local MCP server tools:
   - `memory_write`
   - `memory_search`
+  - `memory_context_pack`
   - `memory_timeline`
+  - `memory_export`
+  - `memory_import`
   - `orchestrator_start`
   - `orchestrator_submit`
   - `orchestrator_status`
@@ -232,6 +235,14 @@ python -m agent_memory_orchestrator.mcp_server
 ```
 
 Both agents then operate on the same local memory and orchestration state.
+
+Phase 2 memory tools are implemented behind a testable service module:
+
+```text
+agent_memory_orchestrator.mcp_memory_tools.MemoryMcpToolService
+```
+
+The FastMCP server only registers tool functions and delegates to that service. This keeps `memory_write`, `memory_search`, `memory_context_pack`, `memory_timeline`, `memory_export`, and `memory_import` contract-testable without starting an MCP transport.
 
 ## Local model behavior
 

@@ -7,7 +7,7 @@ Baseline design: `docs/FINAL_DESIGN_V1.md`
 
 - Phase 0: Repo bootstrap - Completed
 - Phase 1: Personal local memory engine - Implemented vertical slice
-- Phase 2: MCP memory server - Pending
+- Phase 2: MCP memory server - Implemented
 - Phase 3: Orchestrator workflow - Pending
 - Phase 4: Adapters (Claude/Codex) - Pending
 - Phase 5: Hardening and release prep - Pending
@@ -78,11 +78,14 @@ Goal:
 
 Tasks:
 
-- [ ] Implement `memory_write`.
-- [ ] Implement `memory_search`.
-- [ ] Implement `memory_timeline`.
-- [ ] Implement `memory_export` and `memory_import`.
-- [ ] Add MCP contract tests.
+- [x] Implement modular `MemoryMcpToolService` behind thin FastMCP registration.
+- [x] Implement `memory_write`.
+- [x] Implement `memory_search`.
+- [x] Implement `memory_context_pack`.
+- [x] Implement `memory_timeline`.
+- [x] Implement `memory_export` and `memory_import`.
+- [x] Add explicit `tool_contracts`.
+- [x] Add MCP contract tests.
 
 Acceptance:
 

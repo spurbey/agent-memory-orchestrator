@@ -1,7 +1,7 @@
 # Final Design v1
 
-Status: Phase 1 implementation baseline  
-Date: 2026-05-05  
+Status: Phase 2 MCP memory tools implemented  
+Date: 2026-05-07  
 Owner: Agent Memory Orchestrator contributors
 
 ## 1) Objective
@@ -64,6 +64,7 @@ Core modules:
 5. `mcp_memory_server`
 - Exposes memory and orchestrator tools via MCP.
 - Shared endpoint consumed by both Claude and Codex runtimes.
+- Implemented as thin FastMCP registration over a testable memory tool service.
 
 6. `orchestrator_core`
 - Maintains state machine and round artifacts.
@@ -184,9 +185,17 @@ Memory tools:
 
 - `memory_write`
 - `memory_search`
+- `memory_context_pack`
 - `memory_timeline`
 - `memory_export`
 - `memory_import`
+
+Memory MCP implementation rule:
+
+- Tool behavior lives in `MemoryMcpToolService`.
+- `mcp_server.py` only registers FastMCP tool wrappers.
+- Every memory tool returns structured JSON with `ok`, identifiers, provenance, and counts where applicable.
+- Snapshot import rebuilds local indexes after loading canonical rows so imported memory is immediately searchable.
 
 Orchestrator tools:
 
