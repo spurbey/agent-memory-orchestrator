@@ -117,7 +117,7 @@ SQLite knowledge graph visualization:
 http://127.0.0.1:8765/graph
 ```
 
-The graph view renders local `entities`, `kg_edges`, and evidence `memory_units` with filters for query, session, and historical status. SQLite remains canonical; no external graph database is required for Phase 1 visualization.
+The graph view renders local `entities`, `kg_edges`, and evidence `memory_units` as an interactive 3D canvas with filters for query, session, and historical status. SQLite remains canonical; no external graph database or remote visualization service is required for Phase 1.
 
 MCP server (stdio):
 
