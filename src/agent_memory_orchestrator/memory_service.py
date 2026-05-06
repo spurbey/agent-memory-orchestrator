@@ -981,6 +981,123 @@ class MemoryService:
             "retrieval_runs": self.list_retrieval_runs(limit=limit),
         }
 
+    def graph_snapshot(
+        self,
+        *,
+        query: str | None = None,
+        session_id: str | None = None,
+        limit: int = 100,
+        include_historical: bool = False,
+    ) -> dict:
+        clauses = []
+        params: list[object] = []
+        if session_id:
+            clauses.append("mu.session_id = ?")
+            params.append(session_id)
+        if not include_historical:
+            clauses.append("ke.status = 'active'")
+            clauses.append("(mu.status IS NULL OR mu.status = 'active')")
+        if query:
+            like = f"%{query.strip()}%"
+            clauses.append(
+                """
+                (
+                  se.name LIKE ? OR se.normalized_name LIKE ? OR
+                  te.name LIKE ? OR te.normalized_name LIKE ? OR
+                  mu.summary LIKE ? OR mu.subject LIKE ? OR mu.object LIKE ? OR
+                  mu.topic_key LIKE ? OR mu.entities_json LIKE ? OR mu.tags_json LIKE ?
+                )
+                """
+            )
+            params.extend([like] * 10)
+        where = "WHERE " + " AND ".join(clauses) if clauses else ""
+        params.append(max(1, limit))
+        rows = self.conn.execute(
+            f"""
+            SELECT
+              ke.id AS edge_id,
+              ke.relation,
+              ke.status AS edge_status,
+              ke.confidence AS edge_confidence,
+              ke.created_at AS edge_created_at,
+              ke.evidence_memory_id,
+              ke.evidence_chunk_id,
+              se.id AS source_id,
+              se.name AS source_name,
+              se.entity_type AS source_type,
+              te.id AS target_id,
+              te.name AS target_name,
+              te.entity_type AS target_type,
+              mu.id AS memory_id,
+              mu.session_id,
+              mu.memory_type,
+              mu.subject,
+              mu.summary,
+              mu.topic_key,
+              mu.status AS memory_status,
+              mu.confidence AS memory_confidence
+            FROM kg_edges ke
+            JOIN entities se ON se.id = ke.source_entity_id
+            JOIN entities te ON te.id = ke.target_entity_id
+            LEFT JOIN memory_units mu ON mu.id = ke.evidence_memory_id
+            {where}
+            ORDER BY ke.created_at DESC
+            LIMIT ?
+            """,
+            tuple(params),
+        ).fetchall()
+
+        nodes: dict[str, dict] = {}
+        edges: list[dict] = []
+        relation_counts: dict[str, int] = {}
+        type_counts: dict[str, int] = {}
+        memory_ids: set[str] = set()
+
+        for row in rows:
+            source = _graph_node(row["source_id"], row["source_name"], row["source_type"])
+            target = _graph_node(row["target_id"], row["target_name"], row["target_type"])
+            if row["source_type"] == "memory" and row["source_name"] == row["memory_id"]:
+                source.update(_graph_memory_fields(row))
+            if row["target_type"] == "memory" and row["target_name"] == row["memory_id"]:
+                target.update(_graph_memory_fields(row))
+            nodes[source["id"]] = {**nodes.get(source["id"], {}), **source}
+            nodes[target["id"]] = {**nodes.get(target["id"], {}), **target}
+            relation = str(row["relation"])
+            relation_counts[relation] = relation_counts.get(relation, 0) + 1
+            type_counts[source["type"]] = type_counts.get(source["type"], 0) + 1
+            type_counts[target["type"]] = type_counts.get(target["type"], 0) + 1
+            if row["memory_id"]:
+                memory_ids.add(row["memory_id"])
+            edges.append(
+                {
+                    "id": row["edge_id"],
+                    "source": row["source_id"],
+                    "target": row["target_id"],
+                    "relation": relation,
+                    "status": row["edge_status"],
+                    "confidence": row["edge_confidence"],
+                    "evidence_memory_id": row["evidence_memory_id"],
+                    "evidence_chunk_id": row["evidence_chunk_id"],
+                    "created_at": row["edge_created_at"],
+                }
+            )
+
+        return {
+            "query": query or "",
+            "session_id": session_id,
+            "include_historical": include_historical,
+            "limit": limit,
+            "nodes": list(nodes.values()),
+            "edges": edges,
+            "stats": {
+                "node_count": len(nodes),
+                "edge_count": len(edges),
+                "evidence_memory_count": len(memory_ids),
+                "relation_counts": relation_counts,
+                "node_type_counts": type_counts,
+            },
+        }
+
     def list_sessions(self, limit: int = 50) -> list[dict]:
         rows = self.conn.execute(
             """
@@ -1725,6 +1842,28 @@ def _cleanup_reason_counts(chunks: list[Chunk]) -> dict[str, int]:
         if reason:
             counts[reason] = counts.get(reason, 0) + 1
     return counts
+
+
+def _graph_node(node_id: str, label: str, node_type: str) -> dict:
+    return {
+        "id": node_id,
+        "label": label,
+        "type": node_type,
+    }
+
+
+def _graph_memory_fields(row: sqlite3.Row) -> dict:
+    return {
+        "label": _preview(row["summary"] or row["memory_id"], 80),
+        "memory_id": row["memory_id"],
+        "session_id": row["session_id"],
+        "memory_type": row["memory_type"],
+        "memory_status": row["memory_status"],
+        "memory_confidence": row["memory_confidence"],
+        "topic_key": row["topic_key"],
+        "summary": row["summary"],
+        "summary_preview": _preview(row["summary"] or "", 280),
+    }
 
 
 def _faiss_build_result_dict(result) -> dict:
