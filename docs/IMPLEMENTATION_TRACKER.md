@@ -9,7 +9,7 @@ Baseline design: `docs/FINAL_DESIGN_V1.md`
 - Phase 1: Personal local memory engine - Implemented vertical slice
 - Phase 2: MCP memory server - Implemented
 - Phase 3: Orchestrator workflow - Pending
-- Phase 4: Adapters (Claude/Codex) - Pending
+- Phase 4: Adapters (Claude/Codex/Omnara) - Implemented
 - Phase 5: Hardening and release prep - Pending
 
 ## Milestones
@@ -117,10 +117,13 @@ Goal:
 
 Tasks:
 
-- [ ] Add Claude adapter (session/hook artifact normalization).
-- [ ] Add Codex adapter (session artifact normalization).
-- [ ] Add optional Omnara adapter (non-authoritative).
-- [ ] Add redaction hooks before persistence.
+- [x] Add adapter package with shared normalized event contract.
+- [x] Add Claude adapter (session/hook artifact normalization).
+- [x] Add Codex adapter (session artifact normalization).
+- [x] Add optional Omnara adapter (non-authoritative).
+- [x] Route `MemoryService.normalize_event_payload` through adapter router.
+- [x] Keep redaction in `MemoryService.add_event` before persistence.
+- [x] Add adapter contract tests.
 
 Acceptance:
 
