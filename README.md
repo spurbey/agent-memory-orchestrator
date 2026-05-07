@@ -115,6 +115,12 @@ Daemon:
 amo-daemon
 ```
 
+Installed Codex/Claude setup:
+
+```powershell
+python -m agent_memory_orchestrator.daemon --amo-home "$env:USERPROFILE\.agent-memory-orchestrator"
+```
+
 Then open:
 
 ```text
@@ -129,7 +135,7 @@ SQLite knowledge graph visualization:
 http://127.0.0.1:8765/graph
 ```
 
-The graph view renders local `entities`, `kg_edges`, and evidence `memory_units` as an interactive 3D canvas with filters for query, session, relation, node type, memory type, confidence, and historical status. SQLite remains canonical; no external graph database or remote visualization service is required for Phase 1.
+The graph view renders local `entities`, `kg_edges`, and evidence `memory_units` as an interactive 3D canvas with filters for query, session, relation, node type, memory type, confidence, and historical status. SQLite remains canonical; no external graph database or remote visualization service is required for Phase 1. Graph API responses are bounded to prevent large local databases from overwhelming the browser.
 
 MCP server (stdio):
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 from urllib.parse import parse_qs, urlparse
@@ -9,25 +10,43 @@ from urllib.parse import parse_qs, urlparse
 from .config import Settings
 from .memory_service import MemoryService
 
+_CLIENT_ABORT_ERRORS = (BrokenPipeError, ConnectionAbortedError, ConnectionResetError)
+
+
+def _bounded_int(raw: str | None, *, default: int, minimum: int, maximum: int) -> int:
+    try:
+        value = int(raw) if raw is not None else default
+    except (TypeError, ValueError):
+        value = default
+    return max(minimum, min(maximum, value))
+
 
 class AmoHandler(BaseHTTPRequestHandler):
     settings: Settings
 
-    def _write_html(self, status: int, body: str) -> None:
+    def _write_html(self, status: int, body: str) -> bool:
         encoded = body.encode("utf-8")
-        self.send_response(status)
-        self.send_header("Content-Type", "text/html; charset=utf-8")
-        self.send_header("Content-Length", str(len(encoded)))
-        self.end_headers()
-        self.wfile.write(encoded)
+        try:
+            self.send_response(status)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(encoded)))
+            self.end_headers()
+            self.wfile.write(encoded)
+        except _CLIENT_ABORT_ERRORS:
+            return False
+        return True
 
-    def _write_json(self, status: int, payload: dict[str, Any]) -> None:
+    def _write_json(self, status: int, payload: dict[str, Any]) -> bool:
         body = json.dumps(payload, indent=2).encode("utf-8")
-        self.send_response(status)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
+        try:
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        except _CLIENT_ABORT_ERRORS:
+            return False
+        return True
 
     def do_GET(self) -> None:  # noqa: N802
         parsed = urlparse(self.path)
@@ -55,7 +74,8 @@ class AmoHandler(BaseHTTPRequestHandler):
             svc = MemoryService(self.settings)
             try:
                 svc.init_db()
-                limit = int((query.get("limit") or ["25"])[0])
+                raw_limit = (query.get("limit") or ["25"])[0]
+                limit = _bounded_int(raw_limit, default=25, minimum=1, maximum=100)
                 session_id = (query.get("session_id") or [""])[0] or None
                 if path == "/api/dashboard":
                     self._write_json(200, {"ok": True, "data": svc.dashboard_snapshot(limit=limit)})
@@ -65,6 +85,7 @@ class AmoHandler(BaseHTTPRequestHandler):
                     graph_query = (query.get("query") or query.get("q") or [""])[0] or None
                     min_confidence_raw = (query.get("min_confidence") or [""])[0]
                     min_confidence = float(min_confidence_raw) if min_confidence_raw else None
+                    graph_limit = _bounded_int(raw_limit, default=100, minimum=10, maximum=500)
                     self._write_json(
                         200,
                         {
@@ -72,7 +93,7 @@ class AmoHandler(BaseHTTPRequestHandler):
                             "graph": svc.graph_snapshot(
                                 query=graph_query,
                                 session_id=session_id,
-                                limit=limit,
+                                limit=graph_limit,
                                 include_historical=include_historical,
                                 relation=(query.get("relation") or [""])[0] or None,
                                 node_type=(query.get("node_type") or [""])[0] or None,
@@ -109,6 +130,8 @@ class AmoHandler(BaseHTTPRequestHandler):
                     run_id = path.rsplit("/", 1)[-1]
                     self._write_json(200, {"ok": True, "detail": svc.retrieval_run_detail(run_id)})
                     return
+            except _CLIENT_ABORT_ERRORS:
+                return
             except Exception as exc:
                 self._write_json(500, {"ok": False, "error": str(exc)})
                 return
@@ -133,14 +156,19 @@ class AmoHandler(BaseHTTPRequestHandler):
                 self._write_json(200, {"ok": True, **result})
                 return
             if self.path == "/memory/search":
+                limit = _bounded_int(str(payload.get("limit") or ""), default=10, minimum=1, maximum=50)
                 result = svc.search_memories(
                     query=str(payload.get("query") or ""),
                     session_id=payload.get("session_id") or None,
-                    limit=int(payload.get("limit") or 10),
+                    limit=limit,
                 )
                 self._write_json(200, {"ok": True, "results": result})
                 return
             self._write_json(404, {"error": "not found"})
+        except _CLIENT_ABORT_ERRORS:
+            return
+        except Exception as exc:
+            self._write_json(500, {"ok": False, "error": str(exc)})
         finally:
             svc.close()
 
@@ -289,6 +317,7 @@ DASHBOARD_HTML = r"""<!doctype html>
       const text = fmt(value).replace(/\s+/g, " ");
       return text.length > n ? text.slice(0, n - 3) + "..." : text;
     };
+    let dashboardLoading = false;
 
     async function getJson(url, options) {
       const res = await fetch(url, options);
@@ -298,6 +327,8 @@ DASHBOARD_HTML = r"""<!doctype html>
     }
 
     async function loadDashboard() {
+      if (dashboardLoading) return;
+      dashboardLoading = true;
       try {
         const { data } = await getJson("/api/dashboard?limit=30");
         renderMetrics(data.metrics.counts || {});
@@ -307,6 +338,8 @@ DASHBOARD_HTML = r"""<!doctype html>
         renderRetrievalRuns(data.retrieval_runs || []);
       } catch (err) {
         document.getElementById("searchResult").textContent = "Dashboard error: " + err.message;
+      } finally {
+        dashboardLoading = false;
       }
     }
 
@@ -399,7 +432,7 @@ DASHBOARD_HTML = r"""<!doctype html>
     }
 
     loadDashboard();
-    setInterval(loadDashboard, 5000);
+    setInterval(loadDashboard, 10000);
   </script>
 </body>
 </html>
@@ -887,9 +920,12 @@ GRAPH_HTML = r"""<!doctype html>
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Run the local Agent Memory Orchestrator daemon")
+    parser.add_argument("--amo-home", help="AMO home directory containing config.json and .data/")
     parser.add_argument("--host")
     parser.add_argument("--port", type=int)
     args = parser.parse_args(argv)
+    if args.amo_home:
+        os.environ["AMO_HOME"] = args.amo_home
     settings = Settings.load()
     host = args.host or settings.mcp_host
     port = args.port or settings.mcp_port

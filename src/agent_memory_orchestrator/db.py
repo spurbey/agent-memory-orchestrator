@@ -257,14 +257,23 @@ CREATE TABLE IF NOT EXISTS orchestration_decisions (
   FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
 );
 
+CREATE INDEX IF NOT EXISTS idx_sessions_updated
+ON sessions(updated_at DESC);
+
 CREATE INDEX IF NOT EXISTS idx_events_session_created
 ON events(session_id, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_events_created
+ON events(created_at DESC);
 
 CREATE INDEX IF NOT EXISTS idx_chunks_session_event
 ON chunks(session_id, event_id, chunk_index);
 
 CREATE INDEX IF NOT EXISTS idx_memory_units_session_created
 ON memory_units(session_id, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_memory_units_created
+ON memory_units(created_at DESC);
 
 CREATE INDEX IF NOT EXISTS idx_memory_units_topic_status
 ON memory_units(topic_key, status);
@@ -280,6 +289,9 @@ ON kg_edges(source_entity_id, relation, status);
 
 CREATE INDEX IF NOT EXISTS idx_retrieval_candidates_run
 ON retrieval_candidates(retrieval_run_id, final_score DESC);
+
+CREATE INDEX IF NOT EXISTS idx_retrieval_runs_started
+ON retrieval_runs(started_at DESC);
 
 CREATE INDEX IF NOT EXISTS idx_rounds_session_round
 ON orchestration_rounds(session_id, round_index DESC);
@@ -298,8 +310,18 @@ CREATE VIRTUAL TABLE IF NOT EXISTS memory_units_fts USING fts5(
 
 
 def connect(db_path: Path) -> sqlite3.Connection:
-    conn = sqlite3.connect(str(db_path))
+    conn = sqlite3.connect(str(db_path), timeout=30.0)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys = ON")
+    conn.execute("PRAGMA busy_timeout = 30000")
+    try:
+        conn.execute("PRAGMA journal_mode = WAL")
+        conn.execute("PRAGMA synchronous = NORMAL")
+    except sqlite3.OperationalError:
+        # Another process may hold a lock during startup. The busy timeout
+        # still protects normal reads/writes; WAL will be enabled on a later
+        # connection when the lock clears.
+        pass
     return conn
 
 

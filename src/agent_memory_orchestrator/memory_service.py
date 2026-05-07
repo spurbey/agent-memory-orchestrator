@@ -1021,14 +1021,19 @@ class MemoryService:
               s.visibility_scope,
               s.created_at,
               s.updated_at,
-              COUNT(DISTINCT e.id) AS event_count,
-              COUNT(DISTINCT mu.id) AS memory_count,
+              (
+                SELECT COUNT(*)
+                FROM events e
+                WHERE e.session_id = s.id
+              ) AS event_count,
+              (
+                SELECT COUNT(*)
+                FROM memory_units mu
+                WHERE mu.session_id = s.id
+              ) AS memory_count,
               ss.summary_text AS summary_text
             FROM sessions s
-            LEFT JOIN events e ON e.session_id = s.id
-            LEFT JOIN memory_units mu ON mu.session_id = s.id
             LEFT JOIN session_summaries ss ON ss.session_id = s.id
-            GROUP BY s.id
             ORDER BY s.updated_at DESC
             LIMIT ?
             """,
