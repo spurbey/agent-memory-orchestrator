@@ -38,6 +38,7 @@ class MemoryService:
     def __init__(self, settings: Settings, conn: sqlite3.Connection | None = None) -> None:
         self.settings = settings
         self.conn = conn or connect(settings.db_path)
+        self.defer_vectors = False
 
     def init_db(self) -> None:
         init_schema(self.conn)
@@ -78,6 +79,10 @@ class MemoryService:
 
     def session_exists(self, session_id: str) -> bool:
         row = self.conn.execute("SELECT 1 FROM sessions WHERE id = ?", (session_id,)).fetchone()
+        return row is not None
+
+    def _session_has_events(self, session_id: str) -> bool:
+        row = self.conn.execute("SELECT 1 FROM events WHERE session_id = ? LIMIT 1", (session_id,)).fetchone()
         return row is not None
 
     def add_event(
@@ -340,7 +345,8 @@ class MemoryService:
             ),
         )
         self._mirror_legacy_memory(mid, session_id, source_event_id, summary, tag_list, importance, ts)
-        self._write_vector(mid, summary)
+        if not self.defer_vectors:
+            self._write_vector(mid, summary)
         self._write_fts(mid, summary, subject, object_text, topic_key)
         self._write_kg_for_memory(mid, source_chunk_id, subject, entity_list, memory_type, confidence)
         self._consolidate_memory(mid, topic_key)
@@ -460,26 +466,57 @@ class MemoryService:
             "suppressed_memory_chunks": suppressed_chunks_count,
         }
 
-    def import_codex_sessions(self, root: Path, limit: int = 30) -> dict[str, object]:
+    def import_codex_sessions(
+        self,
+        root: Path,
+        limit: int = 30,
+        *,
+        defer_vectors: bool = False,
+        skip_existing: bool = True,
+    ) -> dict[str, object]:
         files = sorted(root.rglob("*.jsonl"), key=lambda p: p.stat().st_mtime, reverse=True)
         selected = files[:limit] if limit > 0 else files
         imported: list[dict[str, object]] = []
-        totals = {"files": 0, "events": 0, "chunks": 0, "memory_units": 0, "suppressed_memory_chunks": 0}
-        for file_path in selected:
-            session_id, title = self._infer_codex_session(file_path)
-            result = self.ingest_transcript(
-                agent="codex",
-                file_path=file_path,
-                session_id=session_id,
-                session_title=title,
-            )
-            totals["files"] += 1
-            totals["events"] += int(result["events"])
-            totals["chunks"] += int(result["chunks"])
-            totals["memory_units"] += int(result["memory_units"])
-            totals["suppressed_memory_chunks"] += int(result.get("suppressed_memory_chunks", 0))
-            imported.append({"file": str(file_path), "session_id": session_id, **result})
-        return {"root": str(root), "totals": totals, "imported": imported}
+        skipped: list[dict[str, object]] = []
+        totals = {
+            "files": 0,
+            "skipped_existing": 0,
+            "events": 0,
+            "chunks": 0,
+            "memory_units": 0,
+            "suppressed_memory_chunks": 0,
+        }
+        previous_defer = self.defer_vectors
+        self.defer_vectors = defer_vectors
+        try:
+            for file_path in selected:
+                session_id, title = self._infer_codex_session(file_path)
+                if skip_existing and self._session_has_events(session_id):
+                    totals["skipped_existing"] += 1
+                    skipped.append({"file": str(file_path), "session_id": session_id, "reason": "session_already_imported"})
+                    continue
+                result = self.ingest_transcript(
+                    agent="codex",
+                    file_path=file_path,
+                    session_id=session_id,
+                    session_title=title,
+                )
+                totals["files"] += 1
+                totals["events"] += int(result["events"])
+                totals["chunks"] += int(result["chunks"])
+                totals["memory_units"] += int(result["memory_units"])
+                totals["suppressed_memory_chunks"] += int(result.get("suppressed_memory_chunks", 0))
+                imported.append({"file": str(file_path), "session_id": session_id, **result})
+        finally:
+            self.defer_vectors = previous_defer
+        return {
+            "root": str(root),
+            "defer_vectors": defer_vectors,
+            "skip_existing": skip_existing,
+            "totals": totals,
+            "imported": imported,
+            "skipped": skipped,
+        }
 
     def ingest_hook_payload(self, payload: dict, default_agent: str = "codex") -> dict[str, object]:
         normalized = self.normalize_event_payload(payload, default_agent=default_agent)
@@ -1886,7 +1923,8 @@ def _ranking_policy(
     confidence_boost = 0.16 * confidence if has_query_evidence else 0.0
     importance_boost = 0.06 * importance if has_query_evidence else 0.0
     type_boost = _memory_type_boost(query_terms, memory_type) if has_query_evidence else 0.0
-    noise_penalty = _noise_penalty(row, confidence)
+    quality_boost = _quality_boost(query_terms, row) if has_query_evidence else 0.0
+    noise_penalty = _noise_penalty(row, confidence, query_terms)
     historical_penalty = 0.0 if include_historical or row["status"] == "active" else -0.20
 
     final_score = (
@@ -1895,6 +1933,7 @@ def _ranking_policy(
         + confidence_boost
         + importance_boost
         + type_boost
+        + quality_boost
         + exact_boost
         + historical_penalty
         - noise_penalty
@@ -1906,6 +1945,7 @@ def _ranking_policy(
         "confidence_boost": round(confidence_boost, 6),
         "importance_boost": round(importance_boost, 6),
         "type_boost": round(type_boost, 6),
+        "quality_boost": round(quality_boost, 6),
         "exact_boost": round(exact_boost, 6),
         "noise_penalty": round(noise_penalty, 6),
         "historical_penalty": round(historical_penalty, 6),
@@ -1919,6 +1959,7 @@ _RANKING_STOPWORDS = {
     "after",
     "before",
     "does",
+    "did",
     "from",
     "have",
     "into",
@@ -1928,11 +1969,13 @@ _RANKING_STOPWORDS = {
     "there",
     "this",
     "what",
+    "were",
     "when",
     "where",
     "which",
     "with",
     "would",
+    "you",
 }
 
 
@@ -1954,6 +1997,27 @@ _DECISION_TERMS = {
 
 
 _CAUSAL_TERMS = {"cause", "caused", "reason", "rationale", "why"}
+
+
+_RETRIEVAL_TERMS = {
+    "bm25",
+    "candidate",
+    "candidates",
+    "cross",
+    "encoder",
+    "faiss",
+    "fusion",
+    "kg",
+    "rank",
+    "ranking",
+    "rerank",
+    "reranker",
+    "reranking",
+    "retrieval",
+    "rrf",
+    "score",
+    "vector",
+}
 
 
 _HOOK_TERMS = {
@@ -1987,6 +2051,8 @@ def _memory_type_boost(query_terms: set[str], memory_type: str) -> float:
     asks_decision = bool(query_terms & _DECISION_TERMS)
     asks_causal = bool(query_terms & _CAUSAL_TERMS)
     if asks_decision:
+        if memory_type in {"meta", "test_artifact"}:
+            return -0.28
         if memory_type == "decision":
             return 0.14
         if memory_type in {"fix", "summary", "validation"}:
@@ -2001,6 +2067,26 @@ def _memory_type_boost(query_terms: set[str], memory_type: str) -> float:
         if memory_type == "observation":
             return -0.03
     return 0.0
+
+
+def _quality_boost(query_terms: set[str], row: sqlite3.Row) -> float:
+    summary = str(row["summary"] or "").lower()
+    memory_type = str(row["memory_type"] or "").lower()
+    boost = 0.0
+    if query_terms & _DECISION_TERMS:
+        if any(marker in summary for marker in ("final decision", "we decided", "decided to", "actual architecture")):
+            boost += 0.12
+        if any(marker in summary for marker in ("implemented now", "official codex docs", "supported behind this feature flag")):
+            boost += 0.08
+    if query_terms & {"hook", "hooks", "codex_hooks"}:
+        hook_markers = {"codex_hooks", "userpromptsubmit", "sessionstart", "posttooluse", "pretooluse", "stop"}
+        matched = sum(1 for marker in hook_markers if marker in summary)
+        boost += min(0.16, 0.04 * matched)
+        if ".codex/config.toml" in summary:
+            boost += 0.05
+    if memory_type in {"meta", "test_artifact"}:
+        boost -= 0.10
+    return round(max(-0.20, min(0.28, boost)), 6)
 
 
 def _exact_match_boost(
@@ -2018,13 +2104,18 @@ def _exact_match_boost(
     return entity_boost + tag_boost + body_boost + hook_boost
 
 
-def _noise_penalty(row: sqlite3.Row, confidence: float) -> float:
+def _noise_penalty(row: sqlite3.Row, confidence: float, query_terms: set[str]) -> float:
     summary = str(row["summary"] or "").lower()
     subject = str(row["subject"] or "").lower()
     memory_type = str(row["memory_type"] or "").lower()
     penalty = 0.0
+    retrieval_query = bool(query_terms & _RETRIEVAL_TERMS)
     if memory_type == "observation" and confidence <= 0.45:
         penalty += 0.06
+    if memory_type == "meta" and not retrieval_query:
+        penalty += 0.35
+    if memory_type == "test_artifact":
+        penalty += 0.45
     if subject in {"change", "changes", "command", "context", "output", "session"}:
         penalty += 0.04
     if any(marker in summary for marker in ("context from my ide setup", "open tabs:", "active file:")):
@@ -2035,9 +2126,50 @@ def _noise_penalty(row: sqlite3.Row, confidence: float) -> float:
         penalty += 0.10
     if '"call_id"' in summary and '"invocation"' in summary and '"result"' in summary:
         penalty += 0.18
+    if not retrieval_query and _looks_like_retrieval_meta_noise(summary):
+        penalty += 0.45
+    if _looks_like_test_artifact_noise(summary):
+        penalty += 0.50
     if memory_type == "observation" and any(marker in summary for marker in ("that result means", "this output means")):
         penalty += 0.08
-    return min(0.30, penalty)
+    return min(0.85, penalty)
+
+
+def _looks_like_retrieval_meta_noise(summary: str) -> bool:
+    markers = (
+        "cross-encoder",
+        "reranking",
+        "reranker",
+        "bm25",
+        "vector search",
+        "kg finds",
+        "candidate a",
+        "candidate b",
+        "for query:",
+        "query: what did we decide",
+        "ranking policy",
+        "what is now fixed",
+        "correct memory is now ranked",
+        "context pack",
+        "raw mcp/tool json",
+    )
+    return sum(1 for marker in markers if marker in summary) >= 2
+
+
+def _looks_like_test_artifact_noise(summary: str) -> bool:
+    markers = (
+        "source_event_id=",
+        "source_chunk_id=",
+        "memory_type=",
+        "object_text=",
+        "assert ",
+        "tmp_path",
+        "svc.add_event",
+        "make_settings(",
+        "rollout-test",
+        "pytest",
+    )
+    return sum(1 for marker in markers if marker in summary) >= 2
 
 
 def _clamp(value: float, lower: float, upper: float) -> float:

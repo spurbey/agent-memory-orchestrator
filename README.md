@@ -66,23 +66,31 @@ Canonical docs:
 
 ### One-command install (npx style)
 
-After publishing the npm wrapper package, users can install with:
+Install the Python runtime, write local AMO config, register Claude/Codex hooks + MCP, and initialize SQLite:
 
 ```bash
 npx agent-memory-orchestrator-cli install
 ```
 
-Then run:
+Target one agent if preferred:
 
 ```bash
-amo-mcp
+npx agent-memory-orchestrator-cli install --target codex
+npx agent-memory-orchestrator-cli install --target claude
 ```
 
-Phase 1 also installs:
+Select local model profile during install:
 
 ```bash
-amo-daemon
-amo-hook
+npx agent-memory-orchestrator-cli install --preset cpu-balanced --download-models
+```
+
+The installer previews changes and backs up agent config files before writing. It configures hooks to call `amo-hook` and MCP to call `amo-mcp` through the selected AMO home directory.
+
+Diagnostics:
+
+```bash
+amo-cli doctor
 ```
 
 ### 1) Create environment
@@ -168,9 +176,11 @@ It also applies a final low-score cutoff so broad tail results do not enter host
 Import recent Codex sessions as a local memory dataset:
 
 ```bash
-set AMO_EMBEDDING_MODEL=hash-fallback
-amo-cli import-codex-sessions --root %USERPROFILE%\.codex\sessions --limit 5
+amo-cli import-codex-sessions --root %USERPROFILE%\.codex\sessions --limit 5 --defer-vectors
+amo-cli rebuild-indexes --force-vectors
 ```
+
+Historical imports skip already-imported sessions by default to avoid duplicate memories. Use `--include-existing` only when intentionally replaying the same sessions into a fresh or throwaway DB.
 
 Build a clean test DB from raw Codex sessions without polluting the default DB:
 
@@ -178,42 +188,7 @@ Build a clean test DB from raw Codex sessions without polluting the default DB:
 amo-cli rebuild-clean-db --out .data/clean-codex.db --codex-root %USERPROFILE%\.codex\sessions --limit 30 --force
 ```
 
-Enable Codex hot-path hooks in `~/.codex/config.toml`:
-
-```toml
-[features]
-codex_hooks = true
-
-[[hooks.SessionStart]]
-matcher = "startup|resume|clear"
-[[hooks.SessionStart.hooks]]
-type = "command"
-command = "python -m agent_memory_orchestrator.hook --agent codex"
-timeout = 30
-statusMessage = "AMO loading local memory context"
-
-[[hooks.UserPromptSubmit]]
-[[hooks.UserPromptSubmit.hooks]]
-type = "command"
-command = "python -m agent_memory_orchestrator.hook --agent codex"
-timeout = 30
-statusMessage = "AMO retrieving local memory"
-
-[[hooks.PostToolUse]]
-matcher = "*"
-[[hooks.PostToolUse.hooks]]
-type = "command"
-command = "python -m agent_memory_orchestrator.hook --agent codex"
-timeout = 30
-statusMessage = "AMO capturing tool result"
-
-[[hooks.Stop]]
-[[hooks.Stop.hooks]]
-type = "command"
-command = "python -m agent_memory_orchestrator.hook --agent codex"
-timeout = 30
-statusMessage = "AMO summarizing turn"
-```
+`amo-cli install --target codex --dry-run` prints the exact Codex hook/MCP block before applying it.
 
 For automatic memory injection into Codex prompts, explicitly opt in:
 
@@ -310,13 +285,9 @@ Verify production retrieval can load models from local disk:
 amo-cli models preflight --preset cpu-balanced
 ```
 
-Then configure retrieval:
+Installer-selected models are persisted in `AMO_HOME/config.json`. If you change the embedding model later, rebuild vectors:
 
 ```bash
-set AMO_EMBEDDING_MODEL=BAAI/bge-m3
-set AMO_RERANKER_BACKEND=cross-encoder
-set AMO_RERANKER_MODEL=BAAI/bge-reranker-base
-set AMO_VECTOR_BACKEND=faiss
 amo-cli rebuild-indexes --force-vectors
 ```
 

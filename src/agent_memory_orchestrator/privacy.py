@@ -12,6 +12,12 @@ SECRET_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
         ),
         r"\1=***REDACTED***",
     ),
+    (
+        re.compile(
+            r"(?i)(['\"][^'\"\n]*(?:api[_-]?key|token|secret|password|authorization)[^'\"\n]*['\"]\s*[:=]\s*)['\"]?[^'\"\n,;]+['\"]?"
+        ),
+        r'\1"***REDACTED***"',
+    ),
     (re.compile(r"(?i)\bBearer\s+[A-Za-z0-9_\-.=]{16,}"), "Bearer ***REDACTED***"),
 )
 

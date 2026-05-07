@@ -13,6 +13,8 @@ CONFIDENCE_BY_SIGNAL = {
     "file_change": 0.70,
     "assistant_plan": 0.60,
     "reference": 0.55,
+    "meta_discussion": 0.35,
+    "test_artifact": 0.30,
     "vague": 0.40,
 }
 
@@ -105,6 +107,10 @@ def classify_memory_type(text: str, content_type: str, event_type: str, agent: s
     lowered = text.lower()
     if _is_reference_tool_text(lowered, content_type, event_type):
         return "reference", "reference"
+    if _looks_like_test_artifact(lowered):
+        return "test_artifact", "test_artifact"
+    if _looks_like_meta_retrieval_discussion(lowered):
+        return "meta", "meta_discussion"
     if agent == "user":
         if _looks_like_user_question(lowered) and "final decision" not in lowered:
             return "none", "vague"
@@ -230,6 +236,8 @@ def _predicate_for(memory_type: str) -> str:
         "bug": "reports",
         "file_change": "changes",
         "reference": "references",
+        "meta": "describes",
+        "test_artifact": "contains",
         "observation": "observes",
     }.get(memory_type, "observes")
 
@@ -257,6 +265,8 @@ def _importance(memory_type: str, confidence: float, content_len: int) -> float:
         "bug": 0.75,
         "file_change": 0.65,
         "reference": 0.55,
+        "meta": 0.30,
+        "test_artifact": 0.20,
         "observation": 0.45,
     }.get(memory_type, 0.4)
     length_bonus = min(0.1, content_len / 4000)
@@ -265,3 +275,36 @@ def _importance(memory_type: str, confidence: float, content_len: int) -> float:
 
 def _compact(text: str) -> str:
     return " ".join(text.split())
+
+
+def _looks_like_meta_retrieval_discussion(lowered: str) -> bool:
+    markers = (
+        "cross-encoder",
+        "reranking",
+        "reranker",
+        "bm25",
+        "vector search",
+        "kg finds",
+        "reciprocal rank fusion",
+        "candidate a",
+        "candidate b",
+        "score cutoff",
+        "ranking policy",
+    )
+    return sum(1 for marker in markers if marker in lowered) >= 2
+
+
+def _looks_like_test_artifact(lowered: str) -> bool:
+    markers = (
+        "source_event_id=",
+        "source_chunk_id=",
+        "memory_type=",
+        "object_text=",
+        "pytest",
+        "tmp_path",
+        "assert ",
+        "svc.add_event",
+        "make_settings(",
+        "rollout-test",
+    )
+    return sum(1 for marker in markers if marker in lowered) >= 2

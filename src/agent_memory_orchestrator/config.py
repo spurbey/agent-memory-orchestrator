@@ -1,14 +1,41 @@
 from __future__ import annotations
 
 import os
+import json
 from dataclasses import dataclass
 from pathlib import Path
 
 
-def _parse_bool(value: str, default: bool) -> bool:
+def _parse_bool(value: object, default: bool) -> bool:
     if value is None:
         return default
+    if isinstance(value, bool):
+        return value
     return value.strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def _load_config_file(home: Path) -> dict:
+    config_path = Path(os.getenv("AMO_CONFIG_PATH", home / "config.json"))
+    if not config_path.is_absolute():
+        config_path = (home / config_path).resolve()
+    if not config_path.exists():
+        return {}
+    payload = json.loads(config_path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError(f"AMO config must be a JSON object: {config_path}")
+    return payload
+
+
+def _setting(config: dict, key: str, default: object, env_key: str | None = None) -> object:
+    env_name = env_key or f"AMO_{key.upper()}"
+    if env_name in os.environ:
+        return os.environ[env_name]
+    if key in config:
+        return config[key]
+    settings = config.get("settings")
+    if isinstance(settings, dict) and key in settings:
+        return settings[key]
+    return default
 
 
 @dataclass(frozen=True)
@@ -40,28 +67,29 @@ class Settings:
     @classmethod
     def load(cls) -> "Settings":
         home = Path(os.getenv("AMO_HOME", ".")).resolve()
-        db_path = Path(os.getenv("AMO_DB_PATH", ".data/agent_memory.db"))
-        export_dir = Path(os.getenv("AMO_EXPORT_DIR", "exports"))
-        local_only = _parse_bool(os.getenv("AMO_LOCAL_ONLY"), default=True)
-        mcp_transport = os.getenv("AMO_MCP_TRANSPORT", "stdio").strip().lower()
-        mcp_host = os.getenv("AMO_MCP_HOST", "127.0.0.1").strip()
-        mcp_port = int(os.getenv("AMO_MCP_PORT", "8765"))
-        embedding_dims = int(os.getenv("AMO_EMBEDDING_DIMS", "256"))
-        embedding_model = os.getenv("AMO_EMBEDDING_MODEL", "BAAI/bge-m3").strip()
-        reranker_model = os.getenv("AMO_RERANKER_MODEL", "BAAI/bge-reranker-base").strip()
-        vector_backend = os.getenv("AMO_VECTOR_BACKEND", "auto").strip().lower()
-        approval_mode = os.getenv("AMO_APPROVAL_MODE", "manual").strip().lower()
-        owner_user_id = os.getenv("AMO_OWNER_USER_ID", "local").strip() or "local"
-        workspace_id = os.getenv("AMO_WORKSPACE_ID", "local").strip() or "local"
-        project_id = os.getenv("AMO_PROJECT_ID", "default").strip() or "default"
-        visibility_scope = os.getenv("AMO_VISIBILITY_SCOPE", "private").strip().lower()
-        sensitivity_level = os.getenv("AMO_SENSITIVITY_LEVEL", "normal").strip().lower()
-        consensus_threshold = float(os.getenv("AMO_CONSENSUS_THRESHOLD", "0.70"))
-        max_review_rounds = int(os.getenv("AMO_MAX_REVIEW_ROUNDS", "5"))
-        context_budget = int(os.getenv("AMO_CONTEXT_BUDGET", "2500"))
-        reranker_backend = os.getenv("AMO_RERANKER_BACKEND", "auto").strip().lower()
-        rerank_top_k = int(os.getenv("AMO_RERANK_TOP_K", "50"))
-        rerank_max_chars = int(os.getenv("AMO_RERANK_MAX_CHARS", "1800"))
+        config = _load_config_file(home)
+        db_path = Path(str(_setting(config, "db_path", ".data/agent_memory.db")))
+        export_dir = Path(str(_setting(config, "export_dir", "exports")))
+        local_only = _parse_bool(_setting(config, "local_only", True), default=True)
+        mcp_transport = str(_setting(config, "mcp_transport", "stdio")).strip().lower()
+        mcp_host = str(_setting(config, "mcp_host", "127.0.0.1")).strip()
+        mcp_port = int(_setting(config, "mcp_port", "8765"))
+        embedding_dims = int(_setting(config, "embedding_dims", "256"))
+        embedding_model = str(_setting(config, "embedding_model", "BAAI/bge-m3")).strip()
+        reranker_model = str(_setting(config, "reranker_model", "BAAI/bge-reranker-base")).strip()
+        vector_backend = str(_setting(config, "vector_backend", "auto")).strip().lower()
+        approval_mode = str(_setting(config, "approval_mode", "manual")).strip().lower()
+        owner_user_id = str(_setting(config, "owner_user_id", "local")).strip() or "local"
+        workspace_id = str(_setting(config, "workspace_id", "local")).strip() or "local"
+        project_id = str(_setting(config, "project_id", "default")).strip() or "default"
+        visibility_scope = str(_setting(config, "visibility_scope", "private")).strip().lower()
+        sensitivity_level = str(_setting(config, "sensitivity_level", "normal")).strip().lower()
+        consensus_threshold = float(_setting(config, "consensus_threshold", "0.70"))
+        max_review_rounds = int(_setting(config, "max_review_rounds", "5"))
+        context_budget = int(_setting(config, "context_budget", "2500"))
+        reranker_backend = str(_setting(config, "reranker_backend", "auto")).strip().lower()
+        rerank_top_k = int(_setting(config, "rerank_top_k", "50"))
+        rerank_max_chars = int(_setting(config, "rerank_max_chars", "1800"))
 
         if not db_path.is_absolute():
             db_path = (home / db_path).resolve()

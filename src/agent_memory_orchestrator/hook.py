@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -13,7 +14,11 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Ingest one Claude/Codex hook payload")
     parser.add_argument("--agent", default="codex", choices=["claude", "codex", "user", "system"])
     parser.add_argument("--file", type=Path, help="JSON payload file. Defaults to stdin.")
+    parser.add_argument("--amo-home", type=Path, help="AMO home directory containing config.json and .data.")
     args = parser.parse_args(argv)
+
+    if args.amo_home:
+        os.environ["AMO_HOME"] = str(args.amo_home.expanduser().resolve())
 
     raw = args.file.read_text(encoding="utf-8") if args.file else sys.stdin.read()
     payload = json.loads(raw or "{}")

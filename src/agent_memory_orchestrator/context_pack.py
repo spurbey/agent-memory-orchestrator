@@ -25,6 +25,8 @@ MIN_CONTEXT_PACK_SCORE_BY_TYPE = {
     "summary": 0.30,
     "file_change": 0.42,
     "reference": 0.42,
+    "meta": 0.70,
+    "test_artifact": 0.90,
     "observation": 0.55,
 }
 
@@ -48,11 +50,16 @@ def build_context_pack_payload(
     included: list[dict[str, Any]] = []
     excluded: list[dict[str, Any]] = []
     used = _estimate_tokens(_pack_header(query))
+    top_score = max((float(item.get("score") or 0.0) for item in ordered), default=0.0)
 
     for item in ordered:
         exclusion = _pre_budget_exclusion(item, include_historical)
         if exclusion:
             excluded.append(_excluded(item, exclusion))
+            continue
+        score = float(item.get("score") or 0.0)
+        if top_score >= 0.70 and score < top_score * 0.55:
+            excluded.append(_excluded(item, "low_relative_score"))
             continue
         rendered = _render_item(len(included) + 1, item)
         item_tokens = _estimate_tokens(rendered)
@@ -93,6 +100,10 @@ def _pre_budget_exclusion(item: dict, include_historical: bool) -> str:
         return "ide_context_noise"
     if _looks_like_raw_tool_json(summary):
         return "raw_tool_json_noise"
+    if _looks_like_retrieval_meta_noise(summary):
+        return "retrieval_meta_noise"
+    if _looks_like_test_artifact_noise(summary):
+        return "test_artifact_noise"
     memory_type = str(item.get("memory_type") or "")
     score = float(item.get("score") or 0.0)
     if memory_type == "observation":
@@ -112,6 +123,38 @@ def _looks_like_raw_tool_json(summary: str) -> bool:
         and '"invocation"' in summary
         and ('"result"' in summary or '"duration"' in summary)
     )
+
+
+def _looks_like_retrieval_meta_noise(summary: str) -> bool:
+    markers = (
+        "cross-encoder",
+        "reranking",
+        "reranker",
+        "bm25",
+        "vector search",
+        "candidate a",
+        "candidate b",
+        "query: what did we decide",
+        "what is now fixed",
+        "correct memory is now ranked",
+        "context pack",
+        "raw mcp/tool json",
+    )
+    return sum(1 for marker in markers if marker in summary) >= 2
+
+
+def _looks_like_test_artifact_noise(summary: str) -> bool:
+    markers = (
+        "source_event_id=",
+        "source_chunk_id=",
+        "memory_type=",
+        "object_text=",
+        "assert ",
+        "tmp_path",
+        "svc.add_event",
+        "rollout-test",
+    )
+    return sum(1 for marker in markers if marker in summary) >= 2
 
 
 def _included(item: dict, rendered: str, tokens: int) -> dict[str, Any]:
