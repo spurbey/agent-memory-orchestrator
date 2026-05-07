@@ -560,6 +560,52 @@ def test_codex_rollout_import_normalizes_useful_events(tmp_path) -> None:
     hits = svc.search_memories("retry jitter", session_id="codex-session-1")
     assert hits
     assert any("scraper/retry.py" in hit["summary"] for hit in hits)
+
+    second = svc.import_codex_sessions(root, limit=10)
+    assert second["totals"]["files"] == 0
+    assert second["totals"]["skipped_existing"] == 1
+    svc.close()
+
+
+def test_codex_rollout_import_can_defer_vectors(tmp_path) -> None:
+    settings = make_settings(tmp_path)
+    svc = MemoryService(settings)
+    svc.init_db()
+
+    root = tmp_path / "codex" / "sessions"
+    root.mkdir(parents=True)
+    rollout = root / "rollout-test.jsonl"
+    rollout.write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "timestamp": "2026-05-05T00:00:00Z",
+                        "type": "session_meta",
+                        "payload": {"id": "codex-session-2", "cwd": str(tmp_path), "source": "vscode"},
+                    }
+                ),
+                json.dumps(
+                    {
+                        "timestamp": "2026-05-05T00:00:02Z",
+                        "type": "event_msg",
+                        "payload": {
+                            "type": "agent_message",
+                            "message": "Implemented amo import-codex-sessions --defer-vectors to defer embeddings during historical imports.",
+                        },
+                    }
+                ),
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    result = svc.import_codex_sessions(root, limit=10, defer_vectors=True)
+
+    assert result["defer_vectors"] is True
+    assert result["totals"]["memory_units"] >= 1
+    vector_count = svc.conn.execute("SELECT COUNT(*) FROM memory_vectors").fetchone()[0]
+    assert vector_count == 0
     svc.close()
 
 
@@ -667,6 +713,73 @@ def test_context_pack_prioritizes_durable_memory_and_tracks_exclusions(tmp_path)
     svc.close()
 
 
+def test_codex_hook_query_prefers_canonical_decision_over_meta_noise(tmp_path) -> None:
+    settings = make_settings(tmp_path)
+    svc = MemoryService(settings)
+    svc.init_db()
+    svc.create_session("s1", "Quality")
+    event = svc.add_event("s1", "codex", "response", "quality memories")
+    meta = svc.add_memory_unit(
+        session_id="s1",
+        source_event_id=event.id,
+        source_chunk_id=None,
+        memory_type="decision",
+        subject="codex",
+        predicate="decides",
+        object_text="Query: what did we decide about codex hooks? Candidate A and Candidate B show BM25/vector reranking noise.",
+        summary="Decision [codex, hook, hooks]: Query: what did we decide about codex hooks? Candidate A vs Candidate B. BM25/vector and cross-encoder reranking discussion.",
+        topic_key="codex",
+        entities=["codex", "hook", "hooks"],
+        tags=["codex", "hooks", "reranking"],
+        confidence=0.9,
+        importance=0.9,
+    )
+    artifact = svc.add_memory_unit(
+        session_id="s1",
+        source_event_id=event.id,
+        source_chunk_id=None,
+        memory_type="fix",
+        subject="rollout-test.js",
+        predicate="fixes",
+        object_text='source_event_id=generic_event.id source_chunk_id=None memory_type="observation" assert tmp_path',
+        summary='Fix [rollout-test.js, .codex/config.toml]: source_event_id=generic_event.id source_chunk_id=None memory_type="observation" assert tmp_path final decision: use Codex hooks.',
+        topic_key="rollout_test_js",
+        entities=["rollout-test.js", ".codex/config.toml"],
+        tags=["codex", "hooks"],
+        confidence=0.9,
+        importance=0.9,
+    )
+    canonical = svc.add_memory_unit(
+        session_id="s1",
+        source_event_id=event.id,
+        source_chunk_id=None,
+        memory_type="fix",
+        subject="/.codex/config.toml",
+        predicate="fixes",
+        object_text="Official Codex docs say hooks are supported behind codex_hooks; use UserPromptSubmit for retrieval and SessionStart/PostToolUse/Stop for lifecycle capture.",
+        summary="Fix [/.codex/config.toml, SessionStart, UserPromptSubmit]: Official Codex docs say hooks are supported behind codex_hooks. Use UserPromptSubmit for retrieval; SessionStart, PostToolUse, and Stop capture lifecycle memory.",
+        topic_key="codex_config_toml",
+        entities=["/.codex/config.toml", "SessionStart", "UserPromptSubmit", "PostToolUse", "Stop"],
+        tags=["codex", "hooks", "codex_hooks"],
+        confidence=0.9,
+        importance=0.9,
+    )
+
+    hits = svc.search_memories("what did we decide about codex hooks", session_id="s1", limit=3)
+    assert hits[0]["memory_id"] == canonical.id
+    assert hits[0]["ranking_policy"]["quality_boost"] > 0
+    by_id = {item["memory_id"]: item for item in hits}
+    assert by_id[meta.id]["ranking_policy"]["noise_penalty"] > 0
+    assert by_id[artifact.id]["ranking_policy"]["noise_penalty"] > 0
+
+    pack = svc.build_context_pack("what did we decide about codex hooks", session_id="s1", limit=3)
+    packed_ids = {item["memory_id"] for item in pack["items"]}
+    assert canonical.id in packed_ids
+    assert meta.id not in packed_ids
+    assert artifact.id not in packed_ids
+    svc.close()
+
+
 def test_context_pack_orders_by_score_before_type_and_excludes_known_noise() -> None:
     pack = build_context_pack_payload(
         query="what did we decide about codex hooks",
@@ -720,14 +833,28 @@ def test_context_pack_orders_by_score_before_type_and_excludes_known_noise() -> 
                 "confidence": 0.9,
                 "ranking_policy": {"matched_terms": ["hooks"], "exact_boost": 0.2},
             },
+            {
+                "memory_id": "diagnostic_noise",
+                "session_id": "s1",
+                "memory_type": "fix",
+                "status": "active",
+                "summary": "Fix [/.codex/config.toml]: This output is a clear improvement. What Is Now Fixed: The correct memory is now ranked #1 and context pack excludes raw MCP/tool JSON.",
+                "source_event_id": "evt5",
+                "source_chunk_id": "chk5",
+                "score": 0.92,
+                "confidence": 0.9,
+                "ranking_policy": {"matched_terms": ["codex", "hooks"], "exact_boost": 0.2},
+            },
         ],
     )
     assert pack.payload["items"][0]["memory_id"] == "fix_high"
     assert "memory_id=fix_high" in pack.text
     assert "Context from my IDE setup" not in pack.text
     assert '"call_id"' not in pack.text
+    assert "What Is Now Fixed" not in pack.text
     assert any(item["memory_id"] == "ide_noise" and item["reason"] == "ide_context_noise" for item in pack.payload["excluded"])
     assert any(item["memory_id"] == "json_noise" and item["reason"] == "raw_tool_json_noise" for item in pack.payload["excluded"])
+    assert any(item["memory_id"] == "diagnostic_noise" and item["reason"] == "retrieval_meta_noise" for item in pack.payload["excluded"])
 
 
 def test_context_pack_excludes_low_score_tail_results() -> None:

@@ -11,13 +11,15 @@ function printUsage() {
 Agent Memory Orchestrator installer
 
 Usage:
-  npx agent-memory-orchestrator-cli install [--from <pip_spec>] [--skip-init-db]
+  npx agent-memory-orchestrator-cli install [--from <pip_spec>] [amo install flags]
   npx agent-memory-orchestrator-cli doctor
   npx agent-memory-orchestrator-cli --help
 
 Examples:
   npx agent-memory-orchestrator-cli install
-  npx agent-memory-orchestrator-cli install --from git+https://github.com/<you>/agent-memory-orchestrator.git
+  npx agent-memory-orchestrator-cli install --target codex --preset cpu-balanced
+  npx agent-memory-orchestrator-cli install --download-models --target all
+  npx agent-memory-orchestrator-cli install --from git+https://github.com/<you>/agent-memory-orchestrator.git --target claude
   `);
 }
 
@@ -71,7 +73,7 @@ function getPipxRunner() {
 
 function parseInstallArgs(argv) {
   let spec = DEFAULT_SPEC;
-  let skipInitDb = false;
+  const amoArgs = [];
 
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
@@ -84,18 +86,19 @@ function parseInstallArgs(argv) {
       i += 1;
       continue;
     }
-    if (arg === "--skip-init-db") {
-      skipInitDb = true;
-      continue;
-    }
     if (arg === "--help" || arg === "-h") {
       printUsage();
       process.exit(0);
     }
-    throw new Error(`Unknown argument: ${arg}`);
+    amoArgs.push(arg);
+    const next = argv[i + 1];
+    if (next && !next.startsWith("-") && ["--target", "--user-home", "--amo-home", "--preset", "--embedding-model", "--reranker-model", "--python-command"].includes(arg)) {
+      amoArgs.push(next);
+      i += 1;
+    }
   }
 
-  return { spec, skipInitDb };
+  return { spec, amoArgs };
 }
 
 function bootstrapPipx(pyCmd) {
@@ -110,7 +113,7 @@ function bootstrapPipx(pyCmd) {
 }
 
 function runInstall(argv) {
-  const { spec, skipInitDb } = parseInstallArgs(argv);
+  const { spec, amoArgs } = parseInstallArgs(argv);
   const runner = getPipxRunner();
   if (!runner) {
     throw new Error(
@@ -128,25 +131,30 @@ function runInstall(argv) {
     throw new Error("pipx install failed.");
   }
 
-  if (!skipInitDb) {
-    console.log("[4/4] Initializing local database...");
-    const initDb = run("amo-cli", ["init-db"]);
-    if (!initDb.ok) {
-      console.error("`amo-cli` was installed but not found in current shell PATH.");
-      console.error("Open a new terminal and run: amo-cli init-db");
-    }
+  console.log("[4/4] Configuring local agent integrations...");
+  const installConfig = run("amo-cli", ["install", ...amoArgs]);
+  if (!installConfig.ok) {
+    console.error("`amo-cli install` failed or was cancelled.");
+    console.error("You can rerun after opening a new terminal:");
+    console.error(`  amo-cli install ${amoArgs.join(" ")}`.trim());
+    process.exit(installConfig.status || 1);
   }
 
   console.log("Install complete.");
   console.log("Next:");
-  console.log("  1) Run: amo-mcp");
-  console.log("  2) Point Claude/Codex MCP config to: python -m agent_memory_orchestrator.mcp_server");
+  console.log("  1) Restart Claude/Codex so they reload hooks and MCP config.");
+  console.log("  2) Run: amo-cli doctor");
 }
 
 function runDoctor() {
   const py = findPythonLauncher();
   const pipxCmd = commandExists("pipx");
-  console.log(JSON.stringify({ python: py || null, pipx_on_path: pipxCmd }, null, 2));
+  const amoCli = commandExists("amo-cli");
+  if (amoCli) {
+    const result = run("amo-cli", ["doctor"]);
+    process.exit(result.status || 0);
+  }
+  console.log(JSON.stringify({ python: py || null, pipx_on_path: pipxCmd, amo_cli_on_path: false }, null, 2));
 }
 
 function main() {

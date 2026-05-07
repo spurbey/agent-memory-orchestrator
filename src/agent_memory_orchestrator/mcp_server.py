@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import argparse
+import os
+from pathlib import Path
+
 from mcp.server.fastmcp import FastMCP
 
 from .config import Settings
@@ -136,7 +140,13 @@ def create_server(settings: Settings) -> FastMCP:
     return mcp
 
 
-def main() -> None:
+def main(argv: list[str] | None = None) -> None:
+    parser = argparse.ArgumentParser(description="Run the local Agent Memory Orchestrator MCP server")
+    parser.add_argument("--amo-home", type=Path, help="AMO home directory containing config.json and .data.")
+    args = parser.parse_args(argv)
+    if args.amo_home:
+        os.environ["AMO_HOME"] = str(args.amo_home.expanduser().resolve())
+
     settings = Settings.load()
     mcp = create_server(settings)
     if settings.mcp_transport == "stdio":

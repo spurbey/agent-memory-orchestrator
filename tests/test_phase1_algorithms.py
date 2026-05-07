@@ -14,6 +14,10 @@ def test_redaction_rules() -> None:
     assert "hunter2" not in redacted
     assert "***REDACTED***" in redacted
 
+    toml_redacted, toml_changed = redact_secrets('"X-Goog-Api-Key" = "AQ.real-secret-value"')
+    assert toml_changed is True
+    assert "real-secret-value" not in toml_redacted
+
 
 def test_content_type_and_chunking_for_diff() -> None:
     diff = """diff --git a/retry.py b/retry.py
@@ -42,6 +46,24 @@ def test_rule_extraction_and_confidence_table() -> None:
     assert "scraper/retry.py" in candidates[0].entities
     assert confidence_for_signal("completed_fix") == 0.90
     assert confidence_for_signal("missing") == 0.40
+
+
+def test_rule_extraction_classifies_meta_and_test_artifacts() -> None:
+    meta = extract_memory_candidates(
+        "Decision: For query what did we decide about codex hooks, BM25 and vector search may rank Candidate A. Cross-encoder reranking fixes it.",
+        content_type="prose",
+        event_type="response",
+        agent="codex",
+    )
+    assert meta[0].memory_type == "meta"
+
+    artifact = extract_memory_candidates(
+        'Fix [rollout-test.js]: source_event_id=event.id source_chunk_id=None memory_type="observation" assert tmp_path',
+        content_type="prose",
+        event_type="response",
+        agent="codex",
+    )
+    assert artifact[0].memory_type == "test_artifact"
 
 
 def test_cleaning_strips_ide_context_and_marks_prompt_promotion() -> None:

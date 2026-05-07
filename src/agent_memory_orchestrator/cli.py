@@ -2,14 +2,21 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from dataclasses import replace
 from pathlib import Path
 
 from .config import Settings
+from .install_service import InstallOptions
+from .install_service import apply_install_plan
+from .install_service import build_install_plan
+from .install_service import doctor as install_doctor
+from .install_service import uninstall as uninstall_targets
 from .memory_service import MemoryService
 from .model_manager import download_models, list_model_presets, model_status, preflight_models
 from .orchestrator import OrchestratorService
+from .privacy import redact_secrets
 
 
 def _print(payload: object) -> None:
@@ -21,6 +28,33 @@ def _build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", required=True)
 
     sub.add_parser("init-db", help="Initialize local database schema")
+
+    install = sub.add_parser("install", help="Configure Claude/Codex hooks, MCP, and local AMO runtime config")
+    install.add_argument("--target", choices=["codex", "claude", "all"], default="all")
+    install.add_argument("--user-home", type=Path, default=Path.home(), help="Home directory containing .codex/.claude")
+    install.add_argument(
+        "--amo-home",
+        type=Path,
+        default=Path.home() / ".agent-memory-orchestrator",
+        help="AMO data/config home used by hooks and MCP.",
+    )
+    _add_model_selection_args(install)
+    install.add_argument("--python-command", default="python", help="Python command visible to Claude/Codex hooks.")
+    install.add_argument("--download-models", action="store_true", help="Download selected local models during install.")
+    install.add_argument("--skip-init-db", action="store_true", help="Do not initialize the AMO SQLite database.")
+    install.add_argument("--dry-run", action="store_true", help="Show planned changes without writing files.")
+    install.add_argument("--yes", action="store_true", help="Apply without interactive confirmation.")
+    install.add_argument("--force", action="store_true", help="Overwrite existing AMO target entries when safe.")
+
+    doctor_cmd = sub.add_parser("doctor", help="Check AMO install/config status")
+    doctor_cmd.add_argument("--target", choices=["codex", "claude", "all"], default="all")
+    doctor_cmd.add_argument("--user-home", type=Path, default=Path.home())
+    doctor_cmd.add_argument("--amo-home", type=Path, default=Path.home() / ".agent-memory-orchestrator")
+
+    uninstall_cmd = sub.add_parser("uninstall", help="Remove AMO-managed Claude/Codex config entries")
+    uninstall_cmd.add_argument("--target", choices=["codex", "claude", "all"], default="all")
+    uninstall_cmd.add_argument("--user-home", type=Path, default=Path.home())
+    uninstall_cmd.add_argument("--yes", action="store_true", help="Apply without interactive confirmation.")
 
     ingest = sub.add_parser("ingest-transcript", help="Ingest JSONL transcript")
     ingest.add_argument("--agent", required=True, choices=["claude", "codex", "user", "system"])
@@ -35,6 +69,12 @@ def _build_parser() -> argparse.ArgumentParser:
     codex_import = sub.add_parser("import-codex-sessions", help="Import Codex rollout JSONL sessions")
     codex_import.add_argument("--root", type=Path, default=Path.home() / ".codex" / "sessions")
     codex_import.add_argument("--limit", type=int, default=30)
+    codex_import.add_argument("--defer-vectors", action="store_true", help="Skip embeddings during import; run rebuild-indexes later.")
+    codex_import.add_argument(
+        "--include-existing",
+        action="store_true",
+        help="Reprocess sessions that already have imported events. Default skips them to avoid duplicates.",
+    )
 
     clean = sub.add_parser("rebuild-clean-db", help="Create a fresh DB from raw Codex sessions")
     clean.add_argument("--out", required=True, type=Path)
@@ -115,10 +155,64 @@ def _build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
-    settings = Settings.load()
 
     try:
+        if args.command == "install":
+            options = InstallOptions(
+                target=args.target,
+                user_home=args.user_home,
+                amo_home=args.amo_home,
+                preset=args.preset,
+                embedding_model=args.embedding_model,
+                reranker_model=args.reranker_model,
+                python_command=args.python_command,
+                force=args.force,
+            )
+            plan = build_install_plan(options)
+            summary = _summarize_install_plan(plan)
+            if args.dry_run:
+                _print({"ok": True, "dry_run": True, "plan": summary})
+                return 0
+            if not args.yes:
+                _print({"ok": True, "pending_plan": summary})
+                if not _confirm("Apply AMO install changes?"):
+                    _print({"ok": False, "cancelled": True, "plan": summary})
+                    return 1
+            result = apply_install_plan(plan)
+            model_result = None
+            if args.download_models:
+                model_result = download_models(
+                    preset=args.preset,
+                    embedding_model=args.embedding_model,
+                    reranker_model=args.reranker_model,
+                )
+            init_result = None
+            if not args.skip_init_db:
+                os.environ["AMO_HOME"] = plan["amo_home"]
+                init_settings = Settings.load()
+                svc = MemoryService(init_settings)
+                try:
+                    svc.init_db()
+                    init_result = {"db_path": str(init_settings.db_path)}
+                finally:
+                    svc.close()
+            _print({"ok": True, "plan": summary, "apply": result, "models": model_result, "init_db": init_result})
+            return 0
+
+        if args.command == "doctor":
+            result = install_doctor(target=args.target, user_home=args.user_home, amo_home=args.amo_home)
+            _print(result)
+            return 0 if result["ok"] else 1
+
+        if args.command == "uninstall":
+            if not args.yes and not _confirm("Remove AMO-managed config entries?"):
+                _print({"ok": False, "cancelled": True})
+                return 1
+            _print(uninstall_targets(target=args.target, user_home=args.user_home))
+            return 0
+
         if args.command == "init-db":
+            settings = Settings.load()
             svc = MemoryService(settings)
             try:
                 svc.init_db()
@@ -180,10 +274,12 @@ def main(argv: list[str] | None = None) -> int:
             "print-codex-hooks",
         }:
             if args.command == "rebuild-clean-db":
+                settings = Settings.load()
                 result = _rebuild_clean_db(settings, args.out, args.codex_root, args.limit, args.force)
                 _print({"ok": True, "result": result})
                 return 0
 
+            settings = Settings.load()
             svc = MemoryService(settings)
             try:
                 svc.init_db()
@@ -200,7 +296,12 @@ def main(argv: list[str] | None = None) -> int:
                     result = svc.ingest_hook_payload(payload, default_agent=args.agent)
                     _print({"ok": True, **result})
                 elif args.command == "import-codex-sessions":
-                    result = svc.import_codex_sessions(args.root, limit=args.limit)
+                    result = svc.import_codex_sessions(
+                        args.root,
+                        limit=args.limit,
+                        defer_vectors=args.defer_vectors,
+                        skip_existing=not args.include_existing,
+                    )
                     _print({"ok": True, "result": result})
                 elif args.command == "print-codex-hooks":
                     _print({"ok": True, "hooks": _codex_hooks_snippet()})
@@ -244,6 +345,7 @@ def main(argv: list[str] | None = None) -> int:
                 svc.close()
             return 0
 
+        settings = Settings.load()
         orch = OrchestratorService(settings)
         try:
             if args.command == "orchestrate-start":
@@ -346,6 +448,42 @@ def _add_model_selection_args(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument("--embedding-model", help="Override preset embedding model.")
     parser.add_argument("--reranker-model", help="Override preset reranker model.")
+
+
+def _confirm(prompt: str) -> bool:
+    if not sys.stdin.isatty():
+        return False
+    answer = input(f"{prompt} [y/N] ").strip().lower()
+    return answer in {"y", "yes"}
+
+
+def _summarize_install_plan(plan: dict) -> dict:
+    operations = []
+    for op in plan["operations"]:
+        path = Path(op["path"])
+        before = path.read_text(encoding="utf-8") if path.exists() else ""
+        after = op["after"]
+        safe_after = redact_secrets(after)[0]
+        operations.append(
+            {
+                "target": op["target"],
+                "path": op["path"],
+                "description": op["description"],
+                "exists": op["exists"],
+                "changed": before != after,
+                "after_preview": safe_after[:2000],
+                "after_truncated": len(safe_after) > 2000,
+            }
+        )
+    return {
+        "target": plan["target"],
+        "targets": plan["targets"],
+        "user_home": plan["user_home"],
+        "amo_home": plan["amo_home"],
+        "models": plan["models"],
+        "operations": operations,
+        "notes": plan["notes"],
+    }
 
 
 def _rebuild_clean_db(settings: Settings, out_path: Path, codex_root: Path, limit: int, force: bool) -> dict:
