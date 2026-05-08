@@ -103,6 +103,46 @@ def create_server(settings: Settings) -> FastMCP:
         return memory_tools.memory_import(in_path=in_path)
 
     @mcp.tool()
+    def amo_graph_search(
+        query: str,
+        limit: int = 8,
+        include_raw: bool = False,
+        include_historical: bool = False,
+    ) -> dict:
+        """Explicit Kuzu GraphRAG search. Use only when the user/agent asks AMO memory."""
+        return memory_tools.amo_graph_search(
+            query=query,
+            limit=limit,
+            include_raw=include_raw,
+            include_historical=include_historical,
+        )
+
+    @mcp.tool()
+    def amo_current_context(session_id: str = "", limit: int = 8) -> dict:
+        """Read current AMO graph context without hook auto-retrieval."""
+        return memory_tools.amo_current_context(session_id=session_id, limit=limit)
+
+    @mcp.tool()
+    def amo_decision_history(query: str, limit: int = 8) -> dict:
+        """Retrieve active and historical decisions from the Kuzu graph."""
+        return memory_tools.amo_decision_history(query=query, limit=limit)
+
+    @mcp.tool()
+    def amo_work_history(query: str, limit: int = 8) -> dict:
+        """Retrieve work-change and commit-linked history from the Kuzu graph."""
+        return memory_tools.amo_work_history(query=query, limit=limit)
+
+    @mcp.tool()
+    def amo_raw_evidence(query: str, limit: int = 8) -> dict:
+        """Retrieve raw evidence refs explicitly; raw evidence is not injected by hooks."""
+        return memory_tools.amo_raw_evidence(query=query, limit=limit)
+
+    @mcp.tool()
+    def amo_merge_status(session_id: str = "") -> dict:
+        """Inspect graph merge status for a session or the central graph."""
+        return memory_tools.amo_merge_status(session_id=session_id)
+
+    @mcp.tool()
     def orchestrator_start(session_id: str, title: str = "") -> dict:
         return orchestrator.start(session_id=session_id, title=(title or None))
 

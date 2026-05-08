@@ -5,7 +5,10 @@ from pathlib import Path
 from typing import Any
 
 from .config import Settings
+from .graph_service import GraphRagService
+from .graph_store import GraphBackendUnavailable
 from .memory_service import MemoryService
+from .qwen_client import QwenUnavailable
 
 
 AGENTS = {"claude", "codex", "user", "system"}
@@ -42,6 +45,36 @@ MCP_MEMORY_TOOL_CONTRACTS: dict[str, dict[str, Any]] = {
         "required": ["in_path"],
         "returns": ["rows"],
     },
+    "amo_graph_search": {
+        "description": "Explicit Kuzu GraphRAG retrieval over committed/session graph memory.",
+        "required": ["query"],
+        "returns": ["context", "nodes", "plan"],
+    },
+    "amo_current_context": {
+        "description": "Read current graph context without automatic hook retrieval.",
+        "required": [],
+        "returns": ["nodes"],
+    },
+    "amo_decision_history": {
+        "description": "Retrieve active and historical decision graph nodes.",
+        "required": ["query"],
+        "returns": ["context", "nodes", "plan"],
+    },
+    "amo_work_history": {
+        "description": "Retrieve work-change and commit-linked graph history.",
+        "required": ["query"],
+        "returns": ["context", "nodes", "plan"],
+    },
+    "amo_raw_evidence": {
+        "description": "Retrieve raw evidence refs only when explicitly requested.",
+        "required": ["query"],
+        "returns": ["context", "nodes", "plan"],
+    },
+    "amo_merge_status": {
+        "description": "Inspect Kuzu graph merge status for a session or central graph.",
+        "required": [],
+        "returns": ["counts"],
+    },
 }
 
 
@@ -52,13 +85,21 @@ class MemoryMcpToolService:
     keeps contracts testable without booting an MCP transport.
     """
 
-    def __init__(self, settings: Settings, memory: MemoryService | None = None) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        memory: MemoryService | None = None,
+        graph: GraphRagService | None = None,
+    ) -> None:
         self.settings = settings
         self.memory = memory or MemoryService(settings)
+        self._graph = graph
         self.memory.init_db()
 
     def close(self) -> None:
         self.memory.close()
+        if self._graph is not None:
+            self._graph.close()
 
     def health_ping(self) -> dict[str, Any]:
         return {"ok": True, "service": "agent-memory-orchestrator"}
@@ -88,6 +129,12 @@ class MemoryMcpToolService:
             "reranker_backend": self.settings.reranker_backend,
             "rerank_top_k": self.settings.rerank_top_k,
             "rerank_max_chars": self.settings.rerank_max_chars,
+            "graph_backend": self.settings.graph_backend,
+            "graph_path": str(self.settings.graph_path),
+            "evidence_dir": str(self.settings.evidence_dir),
+            "qwen_runtime": self.settings.qwen_runtime,
+            "qwen_model": self.settings.qwen_model,
+            "qwen_endpoint": self.settings.qwen_endpoint,
         }
 
     def tool_contracts(self) -> dict[str, Any]:
@@ -201,6 +248,60 @@ class MemoryMcpToolService:
         rows = self.memory.import_snapshot(source)
         indexes = self.memory.rebuild_indexes(force_vectors=False)
         return {"ok": True, "rows": rows, "in_path": str(source.resolve()), "indexes": indexes}
+
+    def amo_graph_search(
+        self,
+        *,
+        query: str,
+        limit: int = 8,
+        include_raw: bool = False,
+        include_historical: bool = False,
+    ) -> dict[str, Any]:
+        return self._graph_call(
+            "amo_graph_search",
+            lambda graph: graph.graph_search(
+                query=_require_text(query, "query"),
+                limit=_bounded_limit(limit, default=8, maximum=50),
+                include_raw=include_raw,
+                include_historical=include_historical,
+            ),
+        )
+
+    def amo_current_context(self, *, session_id: str = "", limit: int = 8) -> dict[str, Any]:
+        return self._graph_call(
+            "amo_current_context",
+            lambda graph: graph.current_context(session_id=session_id, limit=_bounded_limit(limit, default=8, maximum=50)),
+        )
+
+    def amo_decision_history(self, *, query: str, limit: int = 8) -> dict[str, Any]:
+        return self._graph_call(
+            "amo_decision_history",
+            lambda graph: graph.decision_history(query=_require_text(query, "query"), limit=_bounded_limit(limit, default=8, maximum=50)),
+        )
+
+    def amo_work_history(self, *, query: str, limit: int = 8) -> dict[str, Any]:
+        return self._graph_call(
+            "amo_work_history",
+            lambda graph: graph.work_history(query=_require_text(query, "query"), limit=_bounded_limit(limit, default=8, maximum=50)),
+        )
+
+    def amo_raw_evidence(self, *, query: str, limit: int = 8) -> dict[str, Any]:
+        return self._graph_call(
+            "amo_raw_evidence",
+            lambda graph: graph.raw_evidence(query=_require_text(query, "query"), limit=_bounded_limit(limit, default=8, maximum=50)),
+        )
+
+    def amo_merge_status(self, *, session_id: str = "") -> dict[str, Any]:
+        return self._graph_call("amo_merge_status", lambda graph: graph.merge_status(session_id=session_id))
+
+    def _graph_call(self, tool: str, fn) -> dict[str, Any]:
+        try:
+            graph = self._graph or GraphRagService(self.settings)
+            if self._graph is None:
+                self._graph = graph
+            return fn(graph)
+        except (GraphBackendUnavailable, QwenUnavailable) as exc:
+            return {"ok": False, "tool": tool, "error": str(exc)}
 
 
 def _require_text(value: str, name: str) -> str:

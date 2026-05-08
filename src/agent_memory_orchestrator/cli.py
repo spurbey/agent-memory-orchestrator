@@ -8,6 +8,8 @@ from dataclasses import replace
 from pathlib import Path
 
 from .config import Settings
+from .graph_service import GraphRagService
+from .graph_store import GraphBackendUnavailable
 from .install_service import InstallOptions
 from .install_service import apply_install_plan
 from .install_service import build_install_plan
@@ -17,6 +19,7 @@ from .memory_service import MemoryService
 from .model_manager import download_models, list_model_presets, model_status, preflight_models
 from .orchestrator import OrchestratorService
 from .privacy import redact_secrets
+from .qwen_client import QwenUnavailable
 
 
 def _print(payload: object) -> None:
@@ -28,6 +31,7 @@ def _build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", required=True)
 
     sub.add_parser("init-db", help="Initialize local database schema")
+    sub.add_parser("init-graph", help="Initialize local Kuzu GraphRAG schema")
 
     install = sub.add_parser("install", help="Configure Claude/Codex hooks, MCP, and local AMO runtime config")
     install.add_argument("--target", choices=["codex", "claude", "all"], default="all")
@@ -98,6 +102,15 @@ def _build_parser() -> argparse.ArgumentParser:
     context.add_argument("--include-historical", action="store_true")
     context.add_argument("--format", choices=["json", "text"], default="json")
 
+    graph_search = sub.add_parser("graph-search", help="Explicit Kuzu GraphRAG search")
+    graph_search.add_argument("--query", required=True)
+    graph_search.add_argument("--limit", type=int, default=8)
+    graph_search.add_argument("--include-raw", action="store_true")
+    graph_search.add_argument("--include-historical", action="store_true")
+
+    graph_status = sub.add_parser("graph-status", help="Inspect Kuzu graph merge status")
+    graph_status.add_argument("--session-id", default="")
+
     timeline = sub.add_parser("timeline", help="View session timeline")
     timeline.add_argument("--session-id", required=True)
     timeline.add_argument("--limit", type=int, default=50)
@@ -165,6 +178,7 @@ def main(argv: list[str] | None = None) -> int:
                 preset=args.preset,
                 embedding_model=args.embedding_model,
                 reranker_model=args.reranker_model,
+                qwen_model=args.qwen_model,
                 python_command=args.python_command,
                 force=args.force,
             )
@@ -185,8 +199,10 @@ def main(argv: list[str] | None = None) -> int:
                     preset=args.preset,
                     embedding_model=args.embedding_model,
                     reranker_model=args.reranker_model,
+                    qwen_model=args.qwen_model,
                 )
             init_result = None
+            init_graph = None
             if not args.skip_init_db:
                 os.environ["AMO_HOME"] = plan["amo_home"]
                 init_settings = Settings.load()
@@ -196,7 +212,22 @@ def main(argv: list[str] | None = None) -> int:
                     init_result = {"db_path": str(init_settings.db_path)}
                 finally:
                     svc.close()
-            _print({"ok": True, "plan": summary, "apply": result, "models": model_result, "init_db": init_result})
+                try:
+                    graph = GraphRagService(init_settings)
+                    graph.close()
+                    init_graph = {"ok": True, "graph_path": str(init_settings.graph_path)}
+                except GraphBackendUnavailable as exc:
+                    init_graph = {"ok": False, "error": str(exc)}
+            _print(
+                {
+                    "ok": True,
+                    "plan": summary,
+                    "apply": result,
+                    "models": model_result,
+                    "init_db": init_result,
+                    "init_graph": init_graph,
+                }
+            )
             return 0
 
         if args.command == "doctor":
@@ -221,6 +252,15 @@ def main(argv: list[str] | None = None) -> int:
             _print({"ok": True, "db_path": str(settings.db_path)})
             return 0
 
+        if args.command == "init-graph":
+            settings = Settings.load()
+            graph = GraphRagService(settings)
+            try:
+                _print({"ok": True, "graph_path": str(settings.graph_path), "backend": settings.graph_backend})
+            finally:
+                graph.close()
+            return 0
+
         if args.command == "models":
             if args.models_command == "list":
                 _print({"ok": True, "presets": list_model_presets()})
@@ -232,6 +272,7 @@ def main(argv: list[str] | None = None) -> int:
                             preset=args.preset,
                             embedding_model=args.embedding_model,
                             reranker_model=args.reranker_model,
+                            qwen_model=args.qwen_model,
                             load_check=args.load_check,
                         ),
                     }
@@ -244,6 +285,7 @@ def main(argv: list[str] | None = None) -> int:
                             preset=args.preset,
                             embedding_model=args.embedding_model,
                             reranker_model=args.reranker_model,
+                            qwen_model=args.qwen_model,
                             cache_dir=args.cache_dir,
                         ),
                     }
@@ -253,6 +295,7 @@ def main(argv: list[str] | None = None) -> int:
                     preset=args.preset,
                     embedding_model=args.embedding_model,
                     reranker_model=args.reranker_model,
+                    qwen_model=args.qwen_model,
                 )
                 _print({"ok": result["ok"], "result": result})
                 return 0 if result["ok"] else 1
@@ -345,6 +388,24 @@ def main(argv: list[str] | None = None) -> int:
                 svc.close()
             return 0
 
+        if args.command in {"graph-search", "graph-status"}:
+            settings = Settings.load()
+            graph = GraphRagService(settings)
+            try:
+                if args.command == "graph-search":
+                    result = graph.graph_search(
+                        query=args.query,
+                        limit=args.limit,
+                        include_raw=args.include_raw,
+                        include_historical=args.include_historical,
+                    )
+                else:
+                    result = graph.merge_status(session_id=args.session_id)
+                _print(result)
+            finally:
+                graph.close()
+            return 0
+
         settings = Settings.load()
         orch = OrchestratorService(settings)
         try:
@@ -375,6 +436,9 @@ def main(argv: list[str] | None = None) -> int:
         finally:
             orch.close()
         return 0
+    except (GraphBackendUnavailable, QwenUnavailable) as exc:
+        print(json.dumps({"ok": False, "error": str(exc)}), file=sys.stderr)
+        return 1
     except Exception as exc:  # pragma: no cover
         print(json.dumps({"ok": False, "error": str(exc)}), file=sys.stderr)
         return 1
@@ -393,7 +457,7 @@ def _codex_hooks_snippet() -> dict:
                             "type": "command",
                             "command": command,
                             "timeout": 30,
-                            "statusMessage": "AMO loading local memory context",
+                            "statusMessage": "AMO starting graph capture",
                         }
                     ],
                 }
@@ -405,7 +469,7 @@ def _codex_hooks_snippet() -> dict:
                             "type": "command",
                             "command": command,
                             "timeout": 30,
-                            "statusMessage": "AMO retrieving local memory",
+                            "statusMessage": "AMO capturing prompt evidence",
                         }
                     ]
                 }
@@ -418,7 +482,7 @@ def _codex_hooks_snippet() -> dict:
                             "type": "command",
                             "command": command,
                             "timeout": 30,
-                            "statusMessage": "AMO capturing tool result",
+                            "statusMessage": "AMO capturing tool evidence",
                         }
                     ],
                 }
@@ -430,7 +494,7 @@ def _codex_hooks_snippet() -> dict:
                             "type": "command",
                             "command": command,
                             "timeout": 30,
-                            "statusMessage": "AMO summarizing turn",
+                            "statusMessage": "AMO capturing session stop",
                         }
                     ]
                 }
@@ -448,6 +512,7 @@ def _add_model_selection_args(parser: argparse.ArgumentParser) -> None:
     )
     parser.add_argument("--embedding-model", help="Override preset embedding model.")
     parser.add_argument("--reranker-model", help="Override preset reranker model.")
+    parser.add_argument("--qwen-model", help="Override preset Ollama Qwen model.")
 
 
 def _confirm(prompt: str) -> bool:

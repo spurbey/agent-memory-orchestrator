@@ -1,10 +1,10 @@
 # Agent Memory Orchestrator
 
 Public-ready reference implementation for:
-- Shared persistent memory across multiple coding agents (Claude + Codex).
-- Autonomous memory extraction and retrieval.
-- Local MCP tools for both agents.
-- A review orchestrator loop (Claude drafts, Codex critiques, user approves).
+- Local Kuzu GraphRAG memory across coding agents (Claude + Codex first).
+- Capture-only hooks that record evidence without polluting every prompt.
+- Explicit MCP retrieval tools for agents/users when memory is actually needed.
+- Git-linked work history so decisions, file changes, tests, and commits stay connected.
 
 ## Why this exists
 
@@ -12,49 +12,55 @@ When you run many parallel AI sessions, context gets fragmented and lost. This p
 
 ## Core capabilities
 
-- Persistent session and event store (SQLite).
-- Canonical Phase 1 memory pipeline:
-  - raw events
-  - typed chunks
-  - rule-extracted memory units
-  - KG relationships
-  - deterministic session summaries
-  - pipeline/retrieval/consolidation traces
-- Hybrid retrieval:
-  - SQLite FTS5 / BM25 lexical search
-  - local vector similarity search, with optional FAISS cache
-  - KG/entity traversal
-  - RRF fusion + local reranking
-  - agent-ready context-pack generation with provenance
-  - quality guards for IDE-context noise, raw tool JSON, and non-durable user questions
+- Kuzu graph database as the primary memory brain.
+- Raw hook/transcript events stored as append-only evidence refs, not injected memory.
+- Per-session draft graph linked to repo, branch, prompts, responses, tool events, and raw evidence.
+- Local Git backend links work graph nodes to commits.
+- Qwen via Ollama is the required local LLM runtime for GraphRAG planning, extraction, merging, and context compression.
+- Legacy SQLite memory pipeline remains available for compatibility/debugging, but is not the new hook or GraphRAG path.
 - Local MCP server tools:
+  - `amo_graph_search`
+  - `amo_current_context`
+  - `amo_decision_history`
+  - `amo_work_history`
+  - `amo_raw_evidence`
+  - `amo_merge_status`
+  - legacy: `memory_write`
+  - legacy: `memory_search`
+  - legacy: `memory_context_pack`
+  - legacy: `memory_timeline`
+  - legacy: `memory_export`
+  - legacy: `memory_import`
+- Orchestrator state machine:
+  - `draft -> review -> revise (loop) -> ready_for_user -> approved/rejected`
+- Transcript ingestion adapters for Claude/Codex JSONL.
+- Hook capture entrypoint for Claude/Codex lifecycle events.
+- Modular adapter layer for Codex, Claude, and optional non-authoritative Omnara visibility events.
+- Export pipeline for backup and audit (JSONL snapshots).
+
+## Legacy SQLite tools
+
+The original Phase 1 memory tools are still present for compatibility:
+
   - `memory_write`
   - `memory_search`
   - `memory_context_pack`
   - `memory_timeline`
   - `memory_export`
   - `memory_import`
-  - `orchestrator_start`
-  - `orchestrator_submit`
-  - `orchestrator_status`
-  - `orchestrator_user_decision`
-- Orchestrator state machine:
-  - `draft -> review -> revise (loop) -> ready_for_user -> approved/rejected`
-- Transcript ingestion adapters for Claude/Codex JSONL.
-- Hook ingestion entrypoint for Claude/Codex lifecycle events.
-- Modular adapter layer for Codex, Claude, and optional non-authoritative Omnara visibility events.
-- Export pipeline for backup and audit (JSONL snapshots).
+
+They should not power automatic prompt injection in the new architecture.
 
 ## Architecture (high level)
 
-1. Agent emits transcript, hook payload, or tool output.
-2. Ingestion adapter normalizes into a canonical event schema.
-3. Redaction runs before persistence.
-4. Typed chunker splits by content semantics (diff/code/log/stacktrace/prose).
-5. Rule extractor creates durable `memory_units` with evidence links.
-6. SQLite stores canonical truth; FTS/vector/KG indexes are rebuildable.
-7. Retrieval runs BM25/vector/KG, fuses with RRF, reranks, and stores score traces.
-8. MCP/CLI/daemon surfaces expose memory and orchestration to agents.
+1. Claude/Codex emits hook payloads, transcript events, or tool output.
+2. `amo-hook` captures the payload as raw evidence and fails open if graph runtime is unavailable.
+3. `amo-daemon` owns Kuzu, Qwen/Ollama, graph jobs, Git snapshots, and explicit GraphRAG retrieval.
+4. Kuzu stores a personal graph across sessions, apps, repos, commits, decisions, work changes, and evidence refs.
+5. `UserPromptSubmit` is capture-only; it does not auto-retrieve memory.
+6. `SessionStart` may inject only a tiny startup status saying AMO GraphRAG is active.
+7. Claude/Codex call explicit MCP tools such as `amo_graph_search` when memory is needed.
+8. On Git commit, daemon links session graph nodes to the commit and merges them into the central personal graph.
 
 Canonical docs:
 
@@ -66,7 +72,7 @@ Canonical docs:
 
 ### One-command install (npx style)
 
-Install the Python runtime, write local AMO config, register Claude/Codex hooks + MCP, and initialize SQLite:
+Install the Python runtime, write local AMO config, register Claude/Codex hooks + MCP, and initialize local stores:
 
 ```bash
 npx agent-memory-orchestrator-cli install
@@ -85,7 +91,13 @@ Select local model profile during install:
 npx agent-memory-orchestrator-cli install --preset cpu-balanced --download-models
 ```
 
-The installer previews changes and backs up agent config files before writing. It configures hooks to call `amo-hook` and MCP to call `amo-mcp` through the selected AMO home directory.
+The installer previews changes and backs up agent config files before writing. It configures capture-only hooks to call `amo-hook` and MCP to call `amo-mcp` through the selected AMO home directory.
+
+Kuzu is embedded; no Neo4j/Docker/server process is required. Qwen runs through local Ollama:
+
+```bash
+ollama pull qwen3:4b
+```
 
 Diagnostics:
 
@@ -101,10 +113,11 @@ python -m venv .venv
 pip install -e ".[dev]"
 ```
 
-### 2) Initialize DB
+### 2) Initialize stores
 
 ```bash
 amo-cli init-db
+amo-cli init-graph
 ```
 
 ### 3) Run local daemon or MCP server
@@ -127,15 +140,15 @@ Then open:
 http://127.0.0.1:8765
 ```
 
-The local dashboard shows sessions, recent Claude/Codex events, extracted memory units, retrieval queries, score traces, and the memory candidates returned by the system.
+The local dashboard shows local AMO state. The new GraphRAG APIs are explicit; hook prompt submission does not retrieve memory automatically.
 
-SQLite knowledge graph visualization:
+Graph visualization:
 
 ```text
 http://127.0.0.1:8765/graph
 ```
 
-The graph view renders local `entities`, `kg_edges`, and evidence `memory_units` as an interactive 3D canvas with filters for query, session, relation, node type, memory type, confidence, and historical status. SQLite remains canonical; no external graph database or remote visualization service is required for Phase 1. Graph API responses are bounded to prevent large local databases from overwhelming the browser.
+The legacy graph view still renders the old SQLite KG/debug data. The new Kuzu-backed graph APIs are exposed through MCP/daemon endpoints and will replace this UI surface.
 
 MCP server (stdio):
 
@@ -159,14 +172,14 @@ amo-cli ingest-transcript --agent claude --file ./sample/claude.jsonl --session-
 amo-cli ingest-transcript --agent codex --file ./sample/codex.jsonl --session-id feature-x
 ```
 
-Hook payload ingestion:
+Hook payload capture:
 
 ```bash
 amo-hook --agent codex --file ./sample/codex-hook.json
 amo-cli ingest-hook --agent claude --file ./sample/claude-hook.json
 ```
 
-Inspect/rebuild:
+Legacy inspect/rebuild:
 
 ```bash
 amo-cli metrics
@@ -176,8 +189,12 @@ amo-cli search --query "why did retry logic change" --include-historical
 amo-cli context-pack --query "why did retry logic change" --format text
 ```
 
-The context pack is the safer form to inject into Claude/Codex. It excludes weak observations, superseded memories by default, IDE context noise, and raw tool-call JSON.
-It also applies a final low-score cutoff so broad tail results do not enter hosted-agent context just because budget is available.
+Do not use legacy context-pack as automatic hook injection in the Kuzu architecture. Use explicit MCP GraphRAG tools instead:
+
+```bash
+amo-cli graph-search --query "why did retry logic change"
+amo-cli graph-status
+```
 
 Import recent Codex sessions as a local memory dataset:
 
@@ -196,11 +213,7 @@ amo-cli rebuild-clean-db --out .data/clean-codex.db --codex-root %USERPROFILE%\.
 
 `amo-cli install --target codex --dry-run` prints the exact Codex hook/MCP block before applying it.
 
-For automatic memory injection into Codex prompts, explicitly opt in:
-
-```bash
-set AMO_APPROVAL_MODE=auto_safe
-```
+Automatic memory injection into every Codex prompt is intentionally disabled. Retrieval should be explicit through MCP (`amo_graph_search`) or CLI (`amo-cli graph-search`).
 
 ### 5) Export memory snapshot
 
@@ -224,7 +237,7 @@ Phase 2 memory tools are implemented behind a testable service module:
 agent_memory_orchestrator.mcp_memory_tools.MemoryMcpToolService
 ```
 
-The FastMCP server only registers tool functions and delegates to that service. This keeps `memory_write`, `memory_search`, `memory_context_pack`, `memory_timeline`, `memory_export`, and `memory_import` contract-testable without starting an MCP transport.
+The FastMCP server only registers tool functions and delegates to that service. New GraphRAG tools are `amo_graph_search`, `amo_current_context`, `amo_decision_history`, `amo_work_history`, `amo_raw_evidence`, and `amo_merge_status`.
 
 ## Adapter Layer
 
@@ -245,7 +258,7 @@ Redaction still happens centrally in `MemoryService.add_event` before persistenc
 
 ## Local model behavior
 
-Memory operations remain offline. Optional model packages can be installed with:
+Memory operations remain offline. Kuzu is embedded and Qwen runs locally through Ollama. Optional embedding/reranker packages can be installed with:
 
 ```bash
 pip install -e ".[models]"
@@ -257,9 +270,21 @@ Defaults target:
 - Reranker: `BAAI/bge-reranker-base`
 - Vector cache: FAISS when available
 
-The runtime tries locally available models only. If a model or FAISS is unavailable, AMO falls back to deterministic hash vectors, SQLite vector scan, and lexical reranking rather than making external API calls.
+Legacy vector/reranker runtime tries locally available models only. New GraphRAG retrieval requires local Qwen via Ollama for query planning and context compression.
 
 Model downloads are explicit setup actions. AMO will not silently download models during normal retrieval.
+
+Qwen preset defaults:
+
+- `cpu-light`: `qwen3:1.7b`
+- `cpu-balanced`: `qwen3:4b`
+- `gpu-quality`: `qwen3:8b`
+
+If `qwen3:1.7b` cannot load on a very constrained machine, install with an explicit smaller override:
+
+```bash
+amo-cli install --target codex --preset cpu-light --qwen-model qwen3:0.6b --yes
+```
 
 List hardware-oriented presets:
 

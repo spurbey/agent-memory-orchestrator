@@ -655,6 +655,40 @@ def test_codex_user_prompt_hook_returns_additional_context_when_auto_safe(tmp_pa
     svc.close()
 
 
+def test_codex_hook_response_stores_raw_event_without_hot_path_processing(tmp_path) -> None:
+    settings = make_settings(tmp_path)
+    svc = MemoryService(settings)
+    try:
+        svc.init_db()
+        response = svc.codex_hook_response(
+            {
+                "session_id": "hook-fast-path",
+                "hook_event_name": "UserPromptSubmit",
+                "prompt": "final decision: use Codex hooks through UserPromptSubmit.",
+            },
+            default_agent="codex",
+        )
+
+        assert response["continue"] is True
+        event_count = svc.conn.execute(
+            "SELECT COUNT(*) AS c FROM events WHERE session_id = ?",
+            ("hook-fast-path",),
+        ).fetchone()["c"]
+        chunk_count = svc.conn.execute(
+            "SELECT COUNT(*) AS c FROM chunks WHERE session_id = ?",
+            ("hook-fast-path",),
+        ).fetchone()["c"]
+        memory_count = svc.conn.execute(
+            "SELECT COUNT(*) AS c FROM memory_units WHERE session_id = ?",
+            ("hook-fast-path",),
+        ).fetchone()["c"]
+        assert event_count == 1
+        assert chunk_count == 0
+        assert memory_count == 0
+    finally:
+        svc.close()
+
+
 def test_context_pack_prioritizes_durable_memory_and_tracks_exclusions(tmp_path) -> None:
     settings = make_settings(tmp_path)
     svc = MemoryService(settings)

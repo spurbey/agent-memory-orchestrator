@@ -27,6 +27,7 @@ class InstallOptions:
     preset: str = "cpu-balanced"
     embedding_model: str | None = None
     reranker_model: str | None = None
+    qwen_model: str | None = None
     python_command: str = "python"
     force: bool = False
 
@@ -38,6 +39,7 @@ def build_install_plan(options: InstallOptions) -> dict[str, Any]:
         preset=options.preset,
         embedding_model=options.embedding_model,
         reranker_model=options.reranker_model,
+        qwen_model=options.qwen_model,
     )
     amo_home = options.amo_home.expanduser().resolve()
     user_home = options.user_home.expanduser().resolve()
@@ -183,6 +185,12 @@ def _runtime_config_payload(resolved_models: dict[str, str]) -> dict[str, Any]:
         "local_only": True,
         "db_path": ".data/codex_live_memory.db",
         "export_dir": "exports",
+        "graph_backend": "kuzu",
+        "graph_path": ".graph/amo.kuzu",
+        "evidence_dir": ".evidence",
+        "qwen_runtime": "ollama",
+        "qwen_model": resolved_models["qwen_model"],
+        "qwen_endpoint": "http://127.0.0.1:11434",
         "approval_mode": "manual",
         "embedding_model": resolved_models["embedding_model"],
         "embedding_dims": 1024 if resolved_models["embedding_model"] == "BAAI/bge-m3" else 384,
@@ -272,10 +280,10 @@ def _codex_managed_block(*, amo_home: Path, python_command: str) -> str:
 
 def _hook_events() -> list[tuple[str, str, str]]:
     return [
-        ("SessionStart", "startup|resume|clear", "AMO loading local memory context"),
-        ("UserPromptSubmit", "", "AMO retrieving local memory"),
-        ("PostToolUse", "*", "AMO capturing tool result"),
-        ("Stop", "", "AMO summarizing session"),
+        ("SessionStart", "startup|resume|clear", "AMO starting graph capture"),
+        ("UserPromptSubmit", "", "AMO capturing prompt evidence"),
+        ("PostToolUse", "*", "AMO capturing tool evidence"),
+        ("Stop", "", "AMO capturing session stop"),
     ]
 
 

@@ -518,7 +518,13 @@ class MemoryService:
             "skipped": skipped,
         }
 
-    def ingest_hook_payload(self, payload: dict, default_agent: str = "codex") -> dict[str, object]:
+    def ingest_hook_payload(
+        self,
+        payload: dict,
+        default_agent: str = "codex",
+        *,
+        process: bool = True,
+    ) -> dict[str, object]:
         normalized = self.normalize_event_payload(payload, default_agent=default_agent)
         if normalized is None:
             return {"event_id": None, "session_id": payload.get("session_id") or "default", "skipped": True}
@@ -532,9 +538,9 @@ class MemoryService:
             metadata=normalized["metadata"],
             created_at=normalized.get("created_at"),
             source_app=normalized["source_app"],
-            process=True,
+            process=process,
         )
-        if event.event_type.lower() in {"stop", "session_stop"}:
+        if process and event.event_type.lower() in {"stop", "session_stop"}:
             self.generate_session_summary(event.session_id)
         return {"event_id": event.id, "session_id": event.session_id}
 
@@ -589,7 +595,6 @@ class MemoryService:
         event_name = str(payload.get("hook_event_name") or payload.get("event_type") or "")
         normalized_name = _snake(event_name)
         additional_context = self.build_hook_context(payload, default_agent=default_agent)
-        self.ingest_hook_payload(payload, default_agent=default_agent)
 
         hook_event_name = {
             "session_start": "SessionStart",
@@ -606,6 +611,16 @@ class MemoryService:
             }
         elif additional_context:
             response["systemMessage"] = "AMO captured this turn. Memory context injection is disabled unless AMO_APPROVAL_MODE=auto_safe."
+
+        try:
+            # Hooks must stay below Codex's timeout. Store raw evidence now;
+            # chunking, extraction, embeddings, and consolidation belong in
+            # daemon/background processing, not the prompt submission hot path.
+            self.ingest_hook_payload(payload, default_agent=default_agent, process=False)
+        except Exception as exc:
+            message = f"AMO hook capture failed open: {exc}"
+            existing = str(response.get("systemMessage") or "")
+            response["systemMessage"] = f"{existing}\n{message}".strip() if existing else message
         return response
 
     def normalize_event_payload(
@@ -1507,6 +1522,8 @@ class MemoryService:
             return [(row["id"], float(row["score"])) for row in rows]
 
     def _vector_candidates(self, query: str, session_id: str | None, limit: int, include_historical: bool) -> list[tuple[str, float]]:
+        if self.settings.vector_backend == "disabled":
+            return []
         query_vec, _ = embed_text_with_model(query, self.settings.embedding_dims, self.settings.embedding_model)
         if self.settings.vector_backend in {"auto", "faiss"}:
             faiss = search_faiss_cache(self.settings.db_path, query_vec, max(limit * 5, limit))

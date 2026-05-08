@@ -95,6 +95,7 @@ def test_settings_loads_installer_runtime_config(tmp_path: Path, monkeypatch) ->
     assert settings.reranker_model == "cross-encoder/ms-marco-MiniLM-L-6-v2"
     assert settings.reranker_backend == "cross-encoder"
     assert settings.vector_backend == "faiss"
+    assert settings.qwen_model == "qwen3:1.7b"
 
 
 def test_cli_install_dry_run_does_not_write(tmp_path: Path, capsys) -> None:
