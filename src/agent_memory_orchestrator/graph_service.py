@@ -58,19 +58,21 @@ class GraphRagService:
         cwd = _event_cwd(payload, normalized)
         git = self.version_backend.snapshot(cwd)
 
-        self._upsert_basic_nodes(normalized, evidence=evidence, git=git.as_dict())
-        merge = self._auto_merge_if_commit_event(normalized, evidence=evidence, git=git.as_dict())
+        git_raw = git.as_dict()
+        git_compact = _compact_git(git_raw)
+        self._upsert_basic_nodes(normalized, evidence=evidence, git=git_compact)
+        merge = self._auto_merge_if_commit_event(normalized, evidence=evidence, git=git_raw)
 
         context = ""
         if event_type in HOOK_CONTEXT_EVENTS:
-            context = self.startup_context(session_id=session_id, source_app=source_app, git=git.as_dict())
+            context = self.startup_context(session_id=session_id, source_app=source_app, git=git_compact)
         return {
             "ok": True,
             "session_id": session_id,
             "event_type": event_type,
             "source_app": source_app,
             "evidence": evidence.as_dict(),
-            "git": git.as_dict(),
+            "git": git_compact,
             "merge": merge,
             "additional_context": context,
             "capture_only": event_type in CAPTURE_ONLY_EVENTS,
@@ -160,7 +162,11 @@ class GraphRagService:
 
     def current_context(self, *, session_id: str = "", limit: int = 8) -> dict[str, Any]:
         safe_limit = max(1, min(25, int(limit)))
-        nodes = self.store.list_nodes(kinds=["ContextSnapshot"], session_id=session_id, limit=safe_limit)
+        nodes = [
+            node
+            for node in self.store.list_nodes(kinds=["ContextSnapshot"], session_id=session_id, limit=max(safe_limit * 5, 25))
+            if str(node.get("id") or "").startswith("context:")
+        ][:safe_limit]
         return {
             "ok": True,
             "session_id": session_id,
@@ -370,8 +376,6 @@ def _node_kind_for_event(event_type: str) -> str:
         return "Prompt"
     if "tool" in event_type:
         return "ToolResult"
-    if event_type in {"stop", "session_stop"}:
-        return "ContextSnapshot"
     if "response" in event_type:
         return "Response"
     return "Turn"
@@ -418,7 +422,14 @@ def _expand_nodes(seed_nodes: list[dict[str, Any]], store: GraphStore) -> list[d
 def _filter_answer_grade_nodes(nodes: list[dict[str, Any]], *, include_raw: bool) -> list[dict[str, Any]]:
     if include_raw:
         return nodes
-    return [node for node in nodes if node.get("kind") not in EVIDENCE_ONLY_KINDS]
+    filtered: list[dict[str, Any]] = []
+    for node in nodes:
+        if node.get("kind") in EVIDENCE_ONLY_KINDS:
+            continue
+        if node.get("kind") == "ContextSnapshot" and not str(node.get("id") or "").startswith("context:"):
+            continue
+        filtered.append(node)
+    return filtered
 
 
 def _rank_nodes(query: str, nodes: list[dict[str, Any]], *, include_historical: bool) -> list[dict[str, Any]]:
@@ -473,6 +484,23 @@ def _evidence_roots(settings: Settings) -> list[Path]:
 def _snake(value: str) -> str:
     value = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", value)
     return re.sub(r"[^a-zA-Z0-9]+", "_", value).strip("_").lower() or "message"
+
+
+def _compact_git(git: dict[str, Any]) -> dict[str, Any]:
+    changed = [str(path) for path in git.get("changed_files", []) if path]
+    staged = [str(path) for path in git.get("staged_files", []) if path]
+    return {
+        "available": bool(git.get("available")),
+        "repo_root": str(git.get("repo_root") or ""),
+        "branch": str(git.get("branch") or ""),
+        "head": str(git.get("head") or ""),
+        "dirty": bool(git.get("dirty")),
+        "changed_count": len(changed),
+        "staged_count": len(staged),
+        "changed_files": changed[:20],
+        "staged_files": staged[:20],
+        "error": str(git.get("error") or ""),
+    }
 
 
 def _elapsed_ms(start: float) -> int:

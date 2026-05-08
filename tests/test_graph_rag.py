@@ -140,6 +140,33 @@ def test_graph_search_excludes_raw_evidence_without_explicit_raw_request(tmp_pat
     assert "No answer-grade graph memory" in result["context"]
 
 
+def test_stop_events_do_not_become_current_context_snapshots(tmp_path: Path) -> None:
+    store = InMemoryGraphStore()
+    svc = GraphRagService(
+        make_settings(tmp_path),
+        store=store,
+        planner=DeterministicPlanner(),
+        version_backend=_StaticGitBackend(),
+    )
+    try:
+        svc.capture_hook(
+            {
+                "session_id": "s1",
+                "hook_event_name": "Stop",
+                "last_assistant_message": "weather answer should stay raw evidence only",
+            },
+            default_agent="codex",
+        )
+        context = svc.current_context(session_id="s1")
+        search = svc.graph_search(query="weather answer", limit=3)
+    finally:
+        svc.close()
+
+    assert context["count"] == 0
+    assert all(not node["id"].startswith("event:raw_") for node in context["nodes"])
+    assert search["count"] == 0
+
+
 def test_commit_event_auto_links_session_to_git_commit(tmp_path: Path) -> None:
     git = GitSnapshot(
         available=True,
