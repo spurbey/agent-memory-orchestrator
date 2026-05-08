@@ -96,7 +96,7 @@ The installer previews changes and backs up agent config files before writing. I
 Kuzu is embedded; no Neo4j/Docker/server process is required. Qwen runs through local Ollama:
 
 ```bash
-ollama pull qwen3:4b
+ollama pull qwen3:1.7b
 ```
 
 Diagnostics:
@@ -277,7 +277,7 @@ Model downloads are explicit setup actions. AMO will not silently download model
 Qwen preset defaults:
 
 - `cpu-light`: `qwen3:1.7b`
-- `cpu-balanced`: `qwen3:4b`
+- `cpu-balanced`: `qwen3:1.7b`
 - `gpu-quality`: `qwen3:8b`
 
 If `qwen3:1.7b` cannot load on a very constrained machine, install with an explicit smaller override:
