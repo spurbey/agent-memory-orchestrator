@@ -43,7 +43,11 @@ def _build_parser() -> argparse.ArgumentParser:
         help="AMO data/config home used by hooks and MCP.",
     )
     _add_model_selection_args(install)
-    install.add_argument("--python-command", default="python", help="Python command visible to Claude/Codex hooks.")
+    install.add_argument(
+        "--python-command",
+        default=sys.executable or "python",
+        help="Python executable visible to Claude/Codex hooks.",
+    )
     install.add_argument("--download-models", action="store_true", help="Download selected local models during install.")
     install.add_argument("--skip-init-db", action="store_true", help="Do not initialize the AMO SQLite database.")
     install.add_argument("--dry-run", action="store_true", help="Show planned changes without writing files.")
@@ -86,7 +90,7 @@ def _build_parser() -> argparse.ArgumentParser:
     clean.add_argument("--limit", type=int, default=30)
     clean.add_argument("--force", action="store_true")
 
-    sub.add_parser("print-codex-hooks", help="Print a Codex hooks.json snippet for AMO hot-path capture/retrieval")
+    sub.add_parser("print-codex-hooks", help="Print a Codex config.toml snippet for AMO capture-only hooks")
 
     search = sub.add_parser("search", help="Search memories")
     search.add_argument("--query", required=True)
@@ -447,59 +451,43 @@ def main(argv: list[str] | None = None) -> int:
 def _codex_hooks_snippet() -> dict:
     command = "python -m agent_memory_orchestrator.hook --agent codex"
     return {
-        "features": {"codex_hooks": True},
-        "hooks": {
-            "SessionStart": [
-                {
-                    "matcher": "startup|resume|clear",
-                    "hooks": [
-                        {
-                            "type": "command",
-                            "command": command,
-                            "timeout": 30,
-                            "statusMessage": "AMO starting graph capture",
-                        }
-                    ],
-                }
-            ],
-            "UserPromptSubmit": [
-                {
-                    "hooks": [
-                        {
-                            "type": "command",
-                            "command": command,
-                            "timeout": 30,
-                            "statusMessage": "AMO capturing prompt evidence",
-                        }
-                    ]
-                }
-            ],
-            "PostToolUse": [
-                {
-                    "matcher": "*",
-                    "hooks": [
-                        {
-                            "type": "command",
-                            "command": command,
-                            "timeout": 30,
-                            "statusMessage": "AMO capturing tool evidence",
-                        }
-                    ],
-                }
-            ],
-            "Stop": [
-                {
-                    "hooks": [
-                        {
-                            "type": "command",
-                            "command": command,
-                            "timeout": 30,
-                            "statusMessage": "AMO capturing session stop",
-                        }
-                    ]
-                }
-            ],
-        },
+        "format": "toml",
+        "snippet": "\n".join(
+            [
+                "[features]",
+                "codex_hooks = true",
+                "",
+                "[[hooks.SessionStart]]",
+                'matcher = "startup|resume|clear"',
+                "[[hooks.SessionStart.hooks]]",
+                'type = "command"',
+                f"command = {json.dumps(command)}",
+                "timeout = 30",
+                'statusMessage = "AMO starting graph capture"',
+                "",
+                "[[hooks.UserPromptSubmit]]",
+                "[[hooks.UserPromptSubmit.hooks]]",
+                'type = "command"',
+                f"command = {json.dumps(command)}",
+                "timeout = 30",
+                'statusMessage = "AMO capturing prompt evidence"',
+                "",
+                "[[hooks.PostToolUse]]",
+                'matcher = "*"',
+                "[[hooks.PostToolUse.hooks]]",
+                'type = "command"',
+                f"command = {json.dumps(command)}",
+                "timeout = 30",
+                'statusMessage = "AMO capturing tool evidence"',
+                "",
+                "[[hooks.Stop]]",
+                "[[hooks.Stop.hooks]]",
+                'type = "command"',
+                f"command = {json.dumps(command)}",
+                "timeout = 30",
+                'statusMessage = "AMO capturing session stop"',
+            ]
+        ),
     }
 
 

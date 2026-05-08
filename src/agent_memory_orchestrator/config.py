@@ -67,7 +67,7 @@ class Settings:
     graph_path: Path = Path(".graph/amo.kuzu")
     evidence_dir: Path = Path(".evidence")
     qwen_runtime: str = "ollama"
-    qwen_model: str = "qwen3:4b"
+    qwen_model: str = "qwen3:1.7b"
     qwen_endpoint: str = "http://127.0.0.1:11434"
 
     @classmethod
@@ -100,7 +100,7 @@ class Settings:
         graph_path = Path(str(_setting(config, "graph_path", ".graph/amo.kuzu")))
         evidence_dir = Path(str(_setting(config, "evidence_dir", ".evidence")))
         qwen_runtime = str(_setting(config, "qwen_runtime", "ollama")).strip().lower()
-        qwen_model = str(_setting(config, "qwen_model", "qwen3:4b")).strip()
+        qwen_model = str(_setting(config, "qwen_model", "qwen3:1.7b")).strip()
         qwen_endpoint = str(_setting(config, "qwen_endpoint", "http://127.0.0.1:11434")).strip().rstrip("/")
 
         if not db_path.is_absolute():

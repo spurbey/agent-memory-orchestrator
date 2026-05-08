@@ -30,10 +30,10 @@ MODEL_PRESETS: dict[str, ModelPreset] = {
         name="cpu-balanced",
         embedding_model="BAAI/bge-m3",
         reranker_model="BAAI/bge-reranker-base",
-        qwen_model="qwen3:4b",
+        qwen_model="qwen3:1.7b",
         vector_backend="faiss",
         recommended_for="Modern CPU machines with roughly 8-16 GB RAM available.",
-        notes="Recommended default for local production quality.",
+        notes="Recommended default for reliable local GraphRAG planning; override to qwen3:4b only when latency is acceptable.",
     ),
     "gpu-quality": ModelPreset(
         name="gpu-quality",

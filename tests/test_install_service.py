@@ -29,13 +29,23 @@ def test_codex_install_applies_managed_hooks_and_mcp(tmp_path: Path) -> None:
     assert "existing = true" in text
     assert "codex_hooks = true" in text
     assert "[mcp_servers.agent_memory_orchestrator]" in text
-    assert "[[hooks.UserPromptSubmit]]" in text
-    assert "agent_memory_orchestrator.hook --agent codex" in text
+    assert "[[hooks.UserPromptSubmit]]" not in text
+    assert "agent_memory_orchestrator.hook --agent codex" not in text
     assert str(amo_home.resolve()).replace("\\", "\\\\") in text
+    assert (amo_home / "bin" / "amo_hook_launcher.py").exists()
+
+    hooks_payload = json.loads((user_home / ".codex" / "hooks.json").read_text(encoding="utf-8"))
+    assert "UserPromptSubmit" in hooks_payload["hooks"]
+    assert "PostToolUse" in hooks_payload["hooks"]
+    hook_command = hooks_payload["hooks"]["UserPromptSubmit"][0]["hooks"][0]["command"]
+    assert "amo_hook_launcher.py" in hook_command
+    assert "--agent codex" in hook_command
+    assert str(amo_home.resolve()) in hook_command
 
     status = doctor(target="codex", user_home=user_home, amo_home=amo_home)
     assert status["ok"] is True
     assert status["checks"]["codex"]["hooks_configured"] is True
+    assert status["checks"]["codex"]["hooks_file_exists"] is True
 
 
 def test_claude_install_merges_json_settings(tmp_path: Path) -> None:
@@ -72,8 +82,11 @@ def test_uninstall_removes_managed_entries(tmp_path: Path) -> None:
 
     assert result["ok"] is True
     codex_text = (user_home / ".codex" / "config.toml").read_text(encoding="utf-8")
+    codex_hooks = (user_home / ".codex" / "hooks.json").read_text(encoding="utf-8")
     claude_payload = json.loads((user_home / ".claude" / "settings.json").read_text(encoding="utf-8"))
     assert "agent_memory_orchestrator.hook" not in codex_text
+    assert "agent_memory_orchestrator.hook" not in codex_hooks
+    assert "amo_hook_launcher.py" not in codex_hooks
     assert "agent-memory-orchestrator" not in claude_payload.get("mcpServers", {})
     assert not any(claude_payload.get("hooks", {}).values())
 
