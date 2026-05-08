@@ -10,6 +10,7 @@ class ModelPreset:
     name: str
     embedding_model: str
     reranker_model: str
+    qwen_model: str
     vector_backend: str
     recommended_for: str
     notes: str
@@ -20,14 +21,16 @@ MODEL_PRESETS: dict[str, ModelPreset] = {
         name="cpu-light",
         embedding_model="BAAI/bge-small-en-v1.5",
         reranker_model="cross-encoder/ms-marco-MiniLM-L-6-v2",
+        qwen_model="qwen3:1.7b",
         vector_backend="faiss",
         recommended_for="CPU-only laptops or low-memory machines.",
-        notes="Fastest local setup, lower recall/precision than BGE-M3.",
+        notes="Fast local setup; use --qwen-model qwen3:0.6b only when 1.7b cannot load.",
     ),
     "cpu-balanced": ModelPreset(
         name="cpu-balanced",
         embedding_model="BAAI/bge-m3",
         reranker_model="BAAI/bge-reranker-base",
+        qwen_model="qwen3:4b",
         vector_backend="faiss",
         recommended_for="Modern CPU machines with roughly 8-16 GB RAM available.",
         notes="Recommended default for local production quality.",
@@ -36,6 +39,7 @@ MODEL_PRESETS: dict[str, ModelPreset] = {
         name="gpu-quality",
         embedding_model="BAAI/bge-m3",
         reranker_model="BAAI/bge-reranker-large",
+        qwen_model="qwen3:8b",
         vector_backend="faiss",
         recommended_for="GPU or high-RAM workstation where reranking quality matters more than latency.",
         notes="Higher-quality reranking, heavier model load and slower CPU fallback.",
@@ -52,6 +56,7 @@ def resolve_models(
     preset: str | None = None,
     embedding_model: str | None = None,
     reranker_model: str | None = None,
+    qwen_model: str | None = None,
 ) -> dict[str, str]:
     selected = MODEL_PRESETS.get((preset or "cpu-balanced").strip())
     if selected is None:
@@ -60,6 +65,7 @@ def resolve_models(
         "preset": selected.name,
         "embedding_model": (embedding_model or selected.embedding_model).strip(),
         "reranker_model": (reranker_model or selected.reranker_model).strip(),
+        "qwen_model": (qwen_model or selected.qwen_model).strip(),
         "vector_backend": selected.vector_backend,
     }
 
@@ -69,13 +75,20 @@ def model_status(
     preset: str | None = None,
     embedding_model: str | None = None,
     reranker_model: str | None = None,
+    qwen_model: str | None = None,
     load_check: bool = False,
 ) -> dict[str, Any]:
-    resolved = resolve_models(preset=preset, embedding_model=embedding_model, reranker_model=reranker_model)
+    resolved = resolve_models(
+        preset=preset,
+        embedding_model=embedding_model,
+        reranker_model=reranker_model,
+        qwen_model=qwen_model,
+    )
     embedding = _single_model_status(resolved["embedding_model"], "embedding", load_check=load_check)
     reranker = _single_model_status(resolved["reranker_model"], "reranker", load_check=load_check)
     return {
         "preset": resolved["preset"],
+        "qwen_model": resolved["qwen_model"],
         "models": {
             "embedding": embedding,
             "reranker": reranker,
@@ -90,9 +103,15 @@ def download_models(
     preset: str | None = None,
     embedding_model: str | None = None,
     reranker_model: str | None = None,
+    qwen_model: str | None = None,
     cache_dir: Path | None = None,
 ) -> dict[str, Any]:
-    resolved = resolve_models(preset=preset, embedding_model=embedding_model, reranker_model=reranker_model)
+    resolved = resolve_models(
+        preset=preset,
+        embedding_model=embedding_model,
+        reranker_model=reranker_model,
+        qwen_model=qwen_model,
+    )
     results = {
         "embedding": _download_model(resolved["embedding_model"], "embedding", cache_dir),
         "reranker": _download_model(resolved["reranker_model"], "reranker", cache_dir),
@@ -110,11 +129,13 @@ def preflight_models(
     preset: str | None = None,
     embedding_model: str | None = None,
     reranker_model: str | None = None,
+    qwen_model: str | None = None,
 ) -> dict[str, Any]:
     return model_status(
         preset=preset,
         embedding_model=embedding_model,
         reranker_model=reranker_model,
+        qwen_model=qwen_model,
         load_check=True,
     )
 
@@ -124,6 +145,7 @@ def _preset_payload(preset: ModelPreset) -> dict[str, str]:
         "name": preset.name,
         "embedding_model": preset.embedding_model,
         "reranker_model": preset.reranker_model,
+        "qwen_model": preset.qwen_model,
         "vector_backend": preset.vector_backend,
         "recommended_for": preset.recommended_for,
         "notes": preset.notes,
@@ -200,4 +222,5 @@ def _env_for(resolved: dict[str, str]) -> dict[str, str]:
         "AMO_RERANKER_BACKEND": "cross-encoder",
         "AMO_RERANKER_MODEL": resolved["reranker_model"],
         "AMO_VECTOR_BACKEND": resolved["vector_backend"],
+        "AMO_QWEN_MODEL": resolved["qwen_model"],
     }

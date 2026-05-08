@@ -13,6 +13,7 @@ authors = [
   { name = "Agent Memory Orchestrator Contributors" }
 ]
 dependencies = [
+  "kuzu>=0.9.0",
   "mcp[cli]>=1.10.0",
 ]
 

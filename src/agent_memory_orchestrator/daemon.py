@@ -8,7 +8,10 @@ from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 from .config import Settings
+from .graph_service import GraphRagService
+from .graph_store import GraphBackendUnavailable
 from .memory_service import MemoryService
+from .qwen_client import QwenUnavailable
 
 _CLIENT_ABORT_ERRORS = (BrokenPipeError, ConnectionAbortedError, ConnectionResetError)
 
@@ -60,7 +63,17 @@ class AmoHandler(BaseHTTPRequestHandler):
             self._write_html(200, GRAPH_HTML)
             return
         if path == "/health":
-            self._write_json(200, {"ok": True, "service": "agent-memory-orchestrator"})
+            self._write_json(
+                200,
+                {
+                    "ok": True,
+                    "service": "agent-memory-orchestrator",
+                    "graph_backend": self.settings.graph_backend,
+                    "graph_path": str(self.settings.graph_path),
+                    "qwen_runtime": self.settings.qwen_runtime,
+                    "qwen_model": self.settings.qwen_model,
+                },
+            )
             return
         if path == "/metrics":
             svc = MemoryService(self.settings)
@@ -130,6 +143,16 @@ class AmoHandler(BaseHTTPRequestHandler):
                     run_id = path.rsplit("/", 1)[-1]
                     self._write_json(200, {"ok": True, "detail": svc.retrieval_run_detail(run_id)})
                     return
+                if path == "/api/graph-merge-status":
+                    try:
+                        graph = GraphRagService(self.settings)
+                        try:
+                            self._write_json(200, graph.merge_status(session_id=session_id or ""))
+                        finally:
+                            graph.close()
+                    except GraphBackendUnavailable as exc:
+                        self._write_json(200, {"ok": False, "error": str(exc)})
+                    return
             except _CLIENT_ABORT_ERRORS:
                 return
             except Exception as exc:
@@ -148,29 +171,50 @@ class AmoHandler(BaseHTTPRequestHandler):
             self._write_json(400, {"error": f"invalid json: {exc}"})
             return
 
-        svc = MemoryService(self.settings)
         try:
-            svc.init_db()
             if self.path == "/hooks/ingest":
-                result = svc.ingest_hook_payload(payload, default_agent=str(payload.get("agent") or "codex"))
-                self._write_json(200, {"ok": True, **result})
+                graph = GraphRagService(self.settings)
+                try:
+                    result = graph.capture_hook(payload, default_agent=str(payload.get("agent") or "codex"))
+                    self._write_json(200, {"ok": True, **result})
+                finally:
+                    graph.close()
                 return
-            if self.path == "/memory/search":
-                limit = _bounded_int(str(payload.get("limit") or ""), default=10, minimum=1, maximum=50)
-                result = svc.search_memories(
-                    query=str(payload.get("query") or ""),
-                    session_id=payload.get("session_id") or None,
-                    limit=limit,
-                )
-                self._write_json(200, {"ok": True, "results": result})
+            if self.path == "/graph/search":
+                graph = GraphRagService(self.settings)
+                try:
+                    limit = _bounded_int(str(payload.get("limit") or ""), default=8, minimum=1, maximum=50)
+                    result = graph.graph_search(
+                        query=str(payload.get("query") or ""),
+                        limit=limit,
+                        include_raw=bool(payload.get("include_raw")),
+                        include_historical=bool(payload.get("include_historical")),
+                    )
+                    self._write_json(200, result)
+                finally:
+                    graph.close()
                 return
+            svc = MemoryService(self.settings)
+            try:
+                svc.init_db()
+                if self.path == "/memory/search":
+                    limit = _bounded_int(str(payload.get("limit") or ""), default=10, minimum=1, maximum=50)
+                    result = svc.search_memories(
+                        query=str(payload.get("query") or ""),
+                        session_id=payload.get("session_id") or None,
+                        limit=limit,
+                    )
+                    self._write_json(200, {"ok": True, "results": result})
+                    return
+            finally:
+                svc.close()
             self._write_json(404, {"error": "not found"})
         except _CLIENT_ABORT_ERRORS:
             return
+        except (GraphBackendUnavailable, QwenUnavailable) as exc:
+            self._write_json(200, {"ok": False, "error": str(exc)})
         except Exception as exc:
             self._write_json(500, {"ok": False, "error": str(exc)})
-        finally:
-            svc.close()
 
     def log_message(self, format: str, *args: object) -> None:
         return

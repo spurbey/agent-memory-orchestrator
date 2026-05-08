@@ -6,7 +6,10 @@ from pathlib import Path
 import pytest
 
 from agent_memory_orchestrator.config import Settings
+from agent_memory_orchestrator.graph_service import GraphRagService
+from agent_memory_orchestrator.graph_store import GraphNode, InMemoryGraphStore
 from agent_memory_orchestrator.mcp_memory_tools import MCP_MEMORY_TOOL_CONTRACTS, MemoryMcpToolService
+from agent_memory_orchestrator.qwen_client import DeterministicPlanner
 
 
 def make_settings(tmp_path: Path) -> Settings:
@@ -49,11 +52,55 @@ def test_mcp_memory_tool_contracts_are_explicit(tmp_path) -> None:
             "memory_timeline",
             "memory_export",
             "memory_import",
+            "amo_graph_search",
+            "amo_current_context",
+            "amo_decision_history",
+            "amo_work_history",
+            "amo_raw_evidence",
+            "amo_merge_status",
         ]:
             assert name in contracts["tools"]
             assert MCP_MEMORY_TOOL_CONTRACTS[name]["required"] == contracts["tools"][name]["required"]
     finally:
         svc.close()
+
+
+def test_mcp_graph_tools_are_explicit_and_do_not_use_legacy_context_pack(tmp_path) -> None:
+    settings = make_settings(tmp_path)
+    store = InMemoryGraphStore()
+    store.upsert_node(
+        GraphNode(
+            id="decision:mcp-graph-tools",
+            kind="Decision",
+            label="Explicit MCP GraphRAG tools",
+            summary="Use Kuzu GraphRAG through explicit MCP tools, not legacy context-pack injection.",
+            status="committed",
+            scope="central",
+            source_app="codex",
+        )
+    )
+    graph = GraphRagService(settings, store=store, planner=DeterministicPlanner())
+    svc = MemoryMcpToolService(settings, graph=graph)
+    try:
+        graph.capture_hook(
+            {
+                "session_id": "graph-mcp-s1",
+                "hook_event_name": "UserPromptSubmit",
+                "prompt": "final decision: use Kuzu GraphRAG through explicit MCP tools",
+            },
+            default_agent="codex",
+        )
+
+        result = svc.amo_graph_search(query="Kuzu GraphRAG explicit MCP tools", limit=3)
+        status = svc.amo_merge_status(session_id="graph-mcp-s1")
+    finally:
+        svc.close()
+
+    assert result["ok"] is True
+    assert result["count"] >= 1
+    assert "AMO GraphRAG context" in result["context"]
+    assert status["ok"] is True
+    assert status["counts"]["draft"] >= 1
 
 
 def test_mcp_memory_write_search_context_and_timeline(tmp_path) -> None:

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import os
 import json
+import os
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -63,6 +63,12 @@ class Settings:
     reranker_backend: str = "auto"
     rerank_top_k: int = 50
     rerank_max_chars: int = 1800
+    graph_backend: str = "kuzu"
+    graph_path: Path = Path(".graph/amo.kuzu")
+    evidence_dir: Path = Path(".evidence")
+    qwen_runtime: str = "ollama"
+    qwen_model: str = "qwen3:4b"
+    qwen_endpoint: str = "http://127.0.0.1:11434"
 
     @classmethod
     def load(cls) -> "Settings":
@@ -90,14 +96,26 @@ class Settings:
         reranker_backend = str(_setting(config, "reranker_backend", "auto")).strip().lower()
         rerank_top_k = int(_setting(config, "rerank_top_k", "50"))
         rerank_max_chars = int(_setting(config, "rerank_max_chars", "1800"))
+        graph_backend = str(_setting(config, "graph_backend", "kuzu")).strip().lower()
+        graph_path = Path(str(_setting(config, "graph_path", ".graph/amo.kuzu")))
+        evidence_dir = Path(str(_setting(config, "evidence_dir", ".evidence")))
+        qwen_runtime = str(_setting(config, "qwen_runtime", "ollama")).strip().lower()
+        qwen_model = str(_setting(config, "qwen_model", "qwen3:4b")).strip()
+        qwen_endpoint = str(_setting(config, "qwen_endpoint", "http://127.0.0.1:11434")).strip().rstrip("/")
 
         if not db_path.is_absolute():
             db_path = (home / db_path).resolve()
         if not export_dir.is_absolute():
             export_dir = (home / export_dir).resolve()
+        if not graph_path.is_absolute():
+            graph_path = (home / graph_path).resolve()
+        if not evidence_dir.is_absolute():
+            evidence_dir = (home / evidence_dir).resolve()
 
         db_path.parent.mkdir(parents=True, exist_ok=True)
         export_dir.mkdir(parents=True, exist_ok=True)
+        graph_path.parent.mkdir(parents=True, exist_ok=True)
+        evidence_dir.mkdir(parents=True, exist_ok=True)
 
         if mcp_transport not in {"stdio", "sse"}:
             raise ValueError("AMO_MCP_TRANSPORT must be one of: stdio, sse")
@@ -109,8 +127,8 @@ class Settings:
 
         if embedding_dims <= 0:
             raise ValueError("AMO_EMBEDDING_DIMS must be a positive integer")
-        if vector_backend not in {"auto", "faiss", "sqlite"}:
-            raise ValueError("AMO_VECTOR_BACKEND must be one of: auto, faiss, sqlite")
+        if vector_backend not in {"auto", "faiss", "sqlite", "disabled"}:
+            raise ValueError("AMO_VECTOR_BACKEND must be one of: auto, faiss, sqlite, disabled")
         if reranker_backend not in {"auto", "lexical", "cross-encoder"}:
             raise ValueError("AMO_RERANKER_BACKEND must be one of: auto, lexical, cross-encoder")
         if approval_mode not in {"manual", "auto_safe"}:
@@ -131,6 +149,14 @@ class Settings:
             raise ValueError("AMO_RERANK_MAX_CHARS must be a positive integer")
         if not (1 <= mcp_port <= 65535):
             raise ValueError("AMO_MCP_PORT must be a valid TCP port")
+        if graph_backend != "kuzu":
+            raise ValueError("AMO_GRAPH_BACKEND must be: kuzu")
+        if qwen_runtime != "ollama":
+            raise ValueError("AMO_QWEN_RUNTIME must be: ollama")
+        if not qwen_model:
+            raise ValueError("AMO_QWEN_MODEL is required")
+        if not qwen_endpoint.startswith(("http://", "https://")):
+            raise ValueError("AMO_QWEN_ENDPOINT must be an HTTP URL")
 
         return cls(
             home=home,
@@ -156,4 +182,10 @@ class Settings:
             reranker_backend=reranker_backend,
             rerank_top_k=rerank_top_k,
             rerank_max_chars=rerank_max_chars,
+            graph_backend=graph_backend,
+            graph_path=graph_path,
+            evidence_dir=evidence_dir,
+            qwen_runtime=qwen_runtime,
+            qwen_model=qwen_model,
+            qwen_endpoint=qwen_endpoint,
         )

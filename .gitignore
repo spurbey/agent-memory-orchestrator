@@ -19,6 +19,8 @@ dist/
 
 # Local runtime data
 .data/
+.evidence/
+.graph/
 .env
 exports/
 .tmp/
