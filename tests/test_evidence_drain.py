@@ -130,6 +130,34 @@ def test_drain_git_commit_links_work_change_to_commit_from_snapshot(tmp_path: Pa
     assert commits[0]["commit_id"] == "abcdef1234567890abcdef1234567890abcdef12"
 
 
+def test_basic_event_git_metadata_is_compact(tmp_path: Path) -> None:
+    settings = make_settings(tmp_path)
+    store = InMemoryGraphStore()
+    backend = _StaticGitBackend(
+        GitSnapshot(
+            available=True,
+            repo_root=str(tmp_path),
+            branch="main",
+            head="abcdef1234567890abcdef1234567890abcdef12",
+            status_porcelain="M huge.py\n?? generated.bin",
+            changed_files=["huge.py"],
+        )
+    )
+    RawEvidenceStore(settings.evidence_dir).append(
+        {"hook_event_name": "UserPromptSubmit", "session_id": "s1", "prompt": "read only"},
+        session_id="s1",
+        source_app="codex",
+        event_name="user_prompt_submit",
+    )
+
+    _drain(settings, store, backend).drain()
+
+    prompt = store.list_nodes(kinds=["Prompt"], session_id="s1")[0]
+    git = prompt["metadata"]["git"]
+    assert git["changed_count"] == 1
+    assert "status_porcelain" not in git
+
+
 def _drain(settings: Settings, store: InMemoryGraphStore, backend: _StaticGitBackend) -> EvidenceDrain:
     return EvidenceDrain(
         settings,

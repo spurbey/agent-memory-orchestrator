@@ -142,7 +142,7 @@ class SessionGraphBuilder:
         event_name = _event_name(record)
         evidence = _evidence_ref(record)
         cwd = payload.get("cwd") or payload.get("repo_root")
-        git = self.version_backend.snapshot(cwd).as_dict()
+        git = _compact_git(self.version_backend.snapshot(cwd).as_dict())
 
         session_node = GraphNode(
             id=f"session:{session_id}",
@@ -404,8 +404,6 @@ def _node_kind_for_event(event_type: str) -> str:
         return "Prompt"
     if "tool" in event_type:
         return "ToolResult"
-    if event_type in {"stop", "session_stop"}:
-        return "ContextSnapshot"
     if "response" in event_type:
         return "Response"
     return "Turn"
@@ -484,6 +482,23 @@ def _snake(value: str) -> str:
 def _trim(value: str, limit: int) -> str:
     compact = " ".join(str(value or "").split())
     return compact if len(compact) <= limit else compact[: limit - 3] + "..."
+
+
+def _compact_git(git: dict[str, Any]) -> dict[str, Any]:
+    changed = [str(path) for path in git.get("changed_files", []) if path]
+    staged = [str(path) for path in git.get("staged_files", []) if path]
+    return {
+        "available": bool(git.get("available")),
+        "repo_root": str(git.get("repo_root") or ""),
+        "branch": str(git.get("branch") or ""),
+        "head": str(git.get("head") or ""),
+        "dirty": bool(git.get("dirty")),
+        "changed_count": len(changed),
+        "staged_count": len(staged),
+        "changed_files": changed[:20],
+        "staged_files": staged[:20],
+        "error": str(git.get("error") or ""),
+    }
 
 
 def _string_list(value: Any, *, limit: int) -> list[str]:
