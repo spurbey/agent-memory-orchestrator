@@ -199,6 +199,26 @@ class GraphRagService:
         drain = self._new_drain()
         return drain.pending(session_id=session_id)
 
+    def cleanup_noisy_drafts(self, *, limit: int = 500, apply: bool = False) -> dict[str, Any]:
+        candidates = self.store.list_nodes(
+            kinds=["ContextSnapshot", "WorkChange", "Decision", "Fix", "Bug", "TestRun"],
+            limit=max(1, min(5000, int(limit))),
+        )
+        noisy = [node for node in candidates if not _is_answer_quality_node(node)]
+        changed = 0
+        if apply:
+            for node in noisy:
+                if self.store.set_node_status(str(node["id"]), "abandoned"):
+                    changed += 1
+        return {
+            "ok": True,
+            "apply": apply,
+            "scanned": len(candidates),
+            "noisy_count": len(noisy),
+            "changed": changed,
+            "nodes": noisy[:50],
+        }
+
     def work_trace(self, *, commit: str = "HEAD", cwd: str | Path | None = None) -> dict[str, Any]:
         trace = WorkLedger(self.version_backend).trace_commit(commit=commit, cwd=cwd)
         return {"ok": trace.commit.available, "trace": trace.as_dict()}
@@ -430,10 +450,19 @@ def _filter_answer_grade_nodes(nodes: list[dict[str, Any]], *, include_raw: bool
     for node in nodes:
         if node.get("kind") in EVIDENCE_ONLY_KINDS:
             continue
-        if node.get("kind") == "ContextSnapshot" and not _is_clean_context_snapshot(node):
+        if not _is_answer_quality_node(node):
             continue
         filtered.append(node)
     return filtered
+
+
+def _is_answer_quality_node(node: dict[str, Any]) -> bool:
+    kind = str(node.get("kind") or "")
+    if kind == "ContextSnapshot":
+        return _is_clean_context_snapshot(node)
+    if kind in {"WorkChange", "Decision", "Fix", "Bug", "Blocker", "TestRun"}:
+        return _is_clean_answer_summary(str(node.get("summary") or ""), node.get("metadata"))
+    return True
 
 
 def _rank_nodes(query: str, nodes: list[dict[str, Any]], *, include_historical: bool) -> list[dict[str, Any]]:
@@ -476,7 +505,8 @@ def _context_from_snapshots(nodes: list[dict[str, Any]]) -> str:
 def _is_clean_context_snapshot(node: dict[str, Any]) -> bool:
     if not str(node.get("id") or "").startswith("context:"):
         return False
-    summary = str(node.get("summary") or "").strip().lower()
+    summary = str(node.get("summary") or "").strip()
+    lowered = summary.lower()
     noisy_prefixes = (
         '"continue":',
         "{",
@@ -493,15 +523,74 @@ def _is_clean_context_snapshot(node: dict[str, Any]) -> bool:
         "status_porcelain",
         "raw_",
     )
-    if summary.startswith(noisy_prefixes):
+    if lowered.startswith(noisy_prefixes):
         return False
-    if any(term in summary for term in noisy_terms):
+    if any(term in lowered for term in noisy_terms):
+        return False
+    if not _is_clean_answer_summary(summary, node.get("metadata")):
         return False
     meta = node.get("metadata") if isinstance(node.get("metadata"), dict) else {}
     return any(
         bool(meta.get(key))
         for key in ("goal", "latest_decision", "changed_files", "tests", "blockers", "next_step")
     ) or bool(summary)
+
+
+def _is_clean_answer_summary(summary: str, metadata: object = None) -> bool:
+    text = summary.strip()
+    lowered = text.lower()
+    if len(text) < 16:
+        return False
+    noisy_prefixes = (
+        '"continue":',
+        "{",
+        "[",
+        "from __future__",
+        "import ",
+        "class ",
+        "def ",
+        "all checks passed!",
+    )
+    noisy_terms = (
+        "manualsmoke",
+        "captureonly",
+        "hook_event_name",
+        "status_porcelain",
+        "after_preview",
+        "raw_",
+        "traceback",
+        "content-length",
+    )
+    if lowered.startswith(noisy_prefixes):
+        return False
+    if any(term in lowered for term in noisy_terms):
+        return False
+    if len(text) > 240 and _punctuation_ratio(text) > 0.18:
+        return False
+    if len(text) > 240 and _code_token_ratio(text) > 0.18:
+        return False
+    meta = metadata if isinstance(metadata, dict) else {}
+    if meta.get("trigger", {}).get("trigger_type") == "write" and not any(
+        term in lowered
+        for term in ("changed", "implemented", "fixed", "decision", "added", "updated", "removed", "refactor", "test")
+    ):
+        return False
+    return True
+
+
+def _punctuation_ratio(text: str) -> float:
+    if not text:
+        return 0.0
+    punct = sum(1 for ch in text if ch in "{}[]()\\\"=:,")
+    return punct / max(1, len(text))
+
+
+def _code_token_ratio(text: str) -> float:
+    tokens = text.split()
+    if not tokens:
+        return 0.0
+    code_like = sum(1 for token in tokens if any(mark in token for mark in ("::", "=>", "()", "=", "{", "}", ";")))
+    return code_like / len(tokens)
 
 
 def _evidence_roots(settings: Settings) -> list[Path]:

@@ -197,6 +197,49 @@ def test_current_context_filters_noisy_legacy_context_snapshots(tmp_path: Path) 
     assert search["count"] == 0
 
 
+def test_graph_search_filters_noisy_legacy_work_changes(tmp_path: Path) -> None:
+    store = InMemoryGraphStore()
+    store.upsert_node(
+        GraphNode(
+            id="work:s1:noisy",
+            kind="WorkChange",
+            label="raw hook payload",
+            summary='"continue": true, "manualSmoke": false, "captureOnly": true, raw_abc after_preview',
+            status="draft",
+            scope="session",
+            session_id="s1",
+            metadata={"trigger": {"trigger_type": "write"}},
+        )
+    )
+    store.upsert_node(
+        GraphNode(
+            id="work:s1:clean",
+            kind="WorkChange",
+            label="GraphRAG cleanup",
+            summary="Updated GraphRAG retrieval to filter noisy draft work changes.",
+            status="draft",
+            scope="session",
+            session_id="s1",
+            metadata={"trigger": {"trigger_type": "write"}},
+        )
+    )
+    svc = GraphRagService(
+        make_settings(tmp_path),
+        store=store,
+        planner=DeterministicPlanner(),
+        version_backend=_StaticGitBackend(),
+    )
+    try:
+        search = svc.graph_search(query="GraphRAG noisy work changes", limit=5)
+        cleanup = svc.cleanup_noisy_drafts(apply=True)
+    finally:
+        svc.close()
+
+    assert [node["id"] for node in search["nodes"]] == ["work:s1:clean"]
+    assert cleanup["noisy_count"] == 1
+    assert store.nodes["work:s1:noisy"].status == "abandoned"
+
+
 def test_commit_event_auto_links_session_to_git_commit(tmp_path: Path) -> None:
     git = GitSnapshot(
         available=True,

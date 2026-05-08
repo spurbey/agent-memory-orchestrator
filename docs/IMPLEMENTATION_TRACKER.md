@@ -110,6 +110,7 @@ Tasks:
 - [x] Add trigger detection for write/edit, test after write, git operations, explicit finalize prompts, and stop-with-pending-write.
 - [x] Add Qwen-backed GraphDelta extractor with deterministic fallback for tests/offline failure.
 - [x] Add latest per-session `ContextSnapshot` built only after trigger windows.
+- [x] Add answer-quality gates and noisy draft quarantine for early graph drain pollution.
 - [x] Add local Git commit metadata, changed files, diff stats, and patch-id support.
 - [x] Add CLI debug commands for hooks, drain, Qwen, graph, and retrieval.
 - [x] Add unit tests for trigger detection, drain idempotency, session context build, daemon-required MCP behavior, and Git work ledger.

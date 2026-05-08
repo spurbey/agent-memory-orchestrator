@@ -123,6 +123,10 @@ class AmoHandler(BaseHTTPRequestHandler):
                         if path == "/api/debug/graph":
                             self._write_json(200, debug_graph(graph, session_id=session_id))
                             return
+                        if path == "/api/debug/cleanup-noisy":
+                            apply = (query.get("apply") or ["false"])[0].lower() == "true"
+                            self._write_json(200, graph.cleanup_noisy_drafts(limit=limit, apply=apply))
+                            return
                     finally:
                         graph.close()
             except _CLIENT_ABORT_ERRORS:
@@ -254,6 +258,16 @@ class AmoHandler(BaseHTTPRequestHandler):
                             commit=str(payload.get("commit") or "HEAD"),
                             cwd=payload.get("cwd") or None,
                         )
+                        self._write_json(200, result)
+                    finally:
+                        graph.close()
+                return
+            if self.path == "/graph/cleanup-noisy":
+                with _GRAPH_LOCK:
+                    graph = GraphRagService(self.settings)
+                    try:
+                        limit = _bounded_int(str(payload.get("limit") or ""), default=500, minimum=1, maximum=5000)
+                        result = graph.cleanup_noisy_drafts(limit=limit, apply=bool(payload.get("apply")))
                         self._write_json(200, result)
                     finally:
                         graph.close()

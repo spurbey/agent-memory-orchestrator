@@ -221,6 +221,15 @@ amo-cli debug graph --session-id SESSION_ID
 amo-cli debug retrieval --query "why did this change?"
 ```
 
+If an early drain promoted raw hook/install/test payloads into draft answer nodes, quarantine them without deleting evidence:
+
+```bash
+amo-cli graph-cleanup-noisy --limit 500
+amo-cli graph-cleanup-noisy --limit 500 --apply
+```
+
+The first command is a dry run. The second marks noisy draft answer nodes as `abandoned`; raw evidence remains available through `amo_raw_evidence`.
+
 Import recent Codex sessions as a local memory dataset:
 
 ```bash
