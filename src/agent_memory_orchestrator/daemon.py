@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 from urllib.parse import parse_qs, urlparse
@@ -15,6 +16,7 @@ from .memory_service import MemoryService
 from .qwen_client import QwenUnavailable
 
 _CLIENT_ABORT_ERRORS = (BrokenPipeError, ConnectionAbortedError, ConnectionResetError)
+_GRAPH_LOCK = threading.RLock()
 
 
 def _bounded_int(raw: str | None, *, default: int, minimum: int, maximum: int) -> int:
@@ -89,38 +91,39 @@ class AmoHandler(BaseHTTPRequestHandler):
                 raw_limit = (query.get("limit") or ["25"])[0]
                 limit = _bounded_int(raw_limit, default=25, minimum=1, maximum=500)
                 session_id = (query.get("session_id") or [""])[0]
-                graph = GraphRagService(self.settings)
-                try:
-                    if path == "/api/graph/status" or path == "/api/graph-merge-status":
-                        self._write_json(200, graph.merge_status(session_id=session_id))
-                        return
-                    if path == "/api/graph/session-context":
-                        self._write_json(200, graph.current_context(session_id=session_id, limit=limit))
-                        return
-                    if path == "/api/graph/raw-evidence":
-                        graph_query = (query.get("query") or query.get("q") or [""])[0]
-                        self._write_json(200, graph.raw_evidence(query=graph_query, limit=limit))
-                        return
-                    if path == "/api/graph/work-trace":
-                        commit = (query.get("commit") or ["HEAD"])[0] or "HEAD"
-                        cwd = (query.get("cwd") or [""])[0] or None
-                        self._write_json(200, graph.work_trace(commit=commit, cwd=cwd))
-                        return
-                    if path == "/api/debug/hooks":
-                        self._write_json(200, debug_hooks(self.settings))
-                        return
-                    if path == "/api/debug/drain":
-                        self._write_json(200, debug_drain(graph._new_drain(), session_id=session_id))  # noqa: SLF001
-                        return
-                    if path == "/api/debug/qwen":
-                        sample = (query.get("sample") or ["Classify a decision lookup query."])[0]
-                        self._write_json(200, debug_qwen(self.settings, sample=sample))
-                        return
-                    if path == "/api/debug/graph":
-                        self._write_json(200, debug_graph(graph, session_id=session_id))
-                        return
-                finally:
-                    graph.close()
+                if path == "/api/debug/hooks":
+                    self._write_json(200, debug_hooks(self.settings))
+                    return
+                if path == "/api/debug/qwen":
+                    sample = (query.get("sample") or ["Classify a decision lookup query."])[0]
+                    self._write_json(200, debug_qwen(self.settings, sample=sample))
+                    return
+                with _GRAPH_LOCK:
+                    graph = GraphRagService(self.settings)
+                    try:
+                        if path == "/api/graph/status" or path == "/api/graph-merge-status":
+                            self._write_json(200, graph.merge_status(session_id=session_id))
+                            return
+                        if path == "/api/graph/session-context":
+                            self._write_json(200, graph.current_context(session_id=session_id, limit=limit))
+                            return
+                        if path == "/api/graph/raw-evidence":
+                            graph_query = (query.get("query") or query.get("q") or [""])[0]
+                            self._write_json(200, graph.raw_evidence(query=graph_query, limit=limit))
+                            return
+                        if path == "/api/graph/work-trace":
+                            commit = (query.get("commit") or ["HEAD"])[0] or "HEAD"
+                            cwd = (query.get("cwd") or [""])[0] or None
+                            self._write_json(200, graph.work_trace(commit=commit, cwd=cwd))
+                            return
+                        if path == "/api/debug/drain":
+                            self._write_json(200, debug_drain(graph._new_drain(), session_id=session_id))  # noqa: SLF001
+                            return
+                        if path == "/api/debug/graph":
+                            self._write_json(200, debug_graph(graph, session_id=session_id))
+                            return
+                    finally:
+                        graph.close()
             except _CLIENT_ABORT_ERRORS:
                 return
             except (GraphBackendUnavailable, QwenUnavailable) as exc:
@@ -209,46 +212,50 @@ class AmoHandler(BaseHTTPRequestHandler):
 
         try:
             if self.path == "/hooks/ingest":
-                graph = GraphRagService(self.settings)
-                try:
-                    result = graph.capture_hook(payload, default_agent=str(payload.get("agent") or "codex"))
-                    self._write_json(200, {"ok": True, **result})
-                finally:
-                    graph.close()
+                with _GRAPH_LOCK:
+                    graph = GraphRagService(self.settings)
+                    try:
+                        result = graph.capture_hook(payload, default_agent=str(payload.get("agent") or "codex"))
+                        self._write_json(200, {"ok": True, **result})
+                    finally:
+                        graph.close()
                 return
             if self.path == "/graph/search":
-                graph = GraphRagService(self.settings)
-                try:
-                    limit = _bounded_int(str(payload.get("limit") or ""), default=8, minimum=1, maximum=50)
-                    result = graph.graph_search(
-                        query=str(payload.get("query") or ""),
-                        limit=limit,
-                        include_raw=bool(payload.get("include_raw")),
-                        include_historical=bool(payload.get("include_historical")),
-                    )
-                    self._write_json(200, result)
-                finally:
-                    graph.close()
+                with _GRAPH_LOCK:
+                    graph = GraphRagService(self.settings)
+                    try:
+                        limit = _bounded_int(str(payload.get("limit") or ""), default=8, minimum=1, maximum=50)
+                        result = graph.graph_search(
+                            query=str(payload.get("query") or ""),
+                            limit=limit,
+                            include_raw=bool(payload.get("include_raw")),
+                            include_historical=bool(payload.get("include_historical")),
+                        )
+                        self._write_json(200, result)
+                    finally:
+                        graph.close()
                 return
             if self.path == "/graph/drain":
-                graph = GraphRagService(self.settings)
-                try:
-                    limit = _bounded_int(str(payload.get("limit") or ""), default=500, minimum=1, maximum=5000)
-                    result = graph.drain_evidence(limit=limit, session_id=str(payload.get("session_id") or ""))
-                    self._write_json(200, result)
-                finally:
-                    graph.close()
+                with _GRAPH_LOCK:
+                    graph = GraphRagService(self.settings)
+                    try:
+                        limit = _bounded_int(str(payload.get("limit") or ""), default=500, minimum=1, maximum=5000)
+                        result = graph.drain_evidence(limit=limit, session_id=str(payload.get("session_id") or ""))
+                        self._write_json(200, result)
+                    finally:
+                        graph.close()
                 return
             if self.path == "/graph/work-trace":
-                graph = GraphRagService(self.settings)
-                try:
-                    result = graph.work_trace(
-                        commit=str(payload.get("commit") or "HEAD"),
-                        cwd=payload.get("cwd") or None,
-                    )
-                    self._write_json(200, result)
-                finally:
-                    graph.close()
+                with _GRAPH_LOCK:
+                    graph = GraphRagService(self.settings)
+                    try:
+                        result = graph.work_trace(
+                            commit=str(payload.get("commit") or "HEAD"),
+                            cwd=payload.get("cwd") or None,
+                        )
+                        self._write_json(200, result)
+                    finally:
+                        graph.close()
                 return
             svc = MemoryService(self.settings)
             try:

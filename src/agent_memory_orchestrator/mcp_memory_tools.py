@@ -96,7 +96,7 @@ class MemoryMcpToolService:
         self.settings = settings
         self.memory = memory or MemoryService(settings)
         self._graph = graph
-        self._daemon = daemon or DaemonClient.from_settings(settings)
+        self._daemon = daemon or DaemonClient.from_settings(settings, timeout_seconds=60)
         self.memory.init_db()
 
     def close(self) -> None:

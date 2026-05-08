@@ -434,7 +434,8 @@ def main(argv: list[str] | None = None) -> int:
                 finally:
                     graph.close()
             else:
-                client = DaemonClient.from_settings(settings, timeout_seconds=30)
+                client_timeout = 300 if args.command == "graph-drain" else 60
+                client = DaemonClient.from_settings(settings, timeout_seconds=client_timeout)
                 try:
                     if args.command == "graph-search":
                         result = client.post(
