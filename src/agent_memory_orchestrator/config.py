@@ -20,7 +20,7 @@ def _load_config_file(home: Path) -> dict:
         config_path = (home / config_path).resolve()
     if not config_path.exists():
         return {}
-    payload = json.loads(config_path.read_text(encoding="utf-8"))
+    payload = json.loads(config_path.read_text(encoding="utf-8-sig"))
     if not isinstance(payload, dict):
         raise ValueError(f"AMO config must be a JSON object: {config_path}")
     return payload

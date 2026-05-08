@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import gc
 import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -86,6 +87,16 @@ class GraphStore(Protocol):
 
     def search_nodes(self, query: str, *, limit: int = 25, kinds: list[str] | None = None) -> list[dict[str, Any]]:
         """Search graph nodes by text."""
+
+    def list_nodes(
+        self,
+        *,
+        limit: int = 25,
+        kinds: list[str] | None = None,
+        session_id: str = "",
+        status: str = "",
+    ) -> list[dict[str, Any]]:
+        """List graph nodes with simple filters."""
 
     def neighbors(self, node_id: str, *, limit: int = 25) -> list[dict[str, Any]]:
         """Return adjacent nodes."""
@@ -204,6 +215,32 @@ class KuzuGraphStore:
         )
         return [_row_to_node(row) for row in _rows(result)]
 
+    def list_nodes(
+        self,
+        *,
+        limit: int = 25,
+        kinds: list[str] | None = None,
+        session_id: str = "",
+        status: str = "",
+    ) -> list[dict[str, Any]]:
+        clauses: list[str] = []
+        if kinds:
+            clauses.append("(" + " OR ".join(f"n.kind = {_q(kind)}" for kind in kinds) + ")")
+        if session_id:
+            clauses.append(f"n.session_id = {_q(session_id)}")
+        if status:
+            clauses.append(f"n.status = {_q(status)}")
+        where = "WHERE " + " AND ".join(clauses) if clauses else ""
+        result = self._conn.execute(
+            "MATCH (n:GraphNode) "
+            f"{where} "
+            "RETURN n.id, n.kind, n.label, n.summary, n.status, n.scope, n.session_id, "
+            "n.project_id, n.source_app, n.evidence_id, n.commit_id, n.created_at, n.updated_at, n.metadata_json "
+            "ORDER BY n.updated_at DESC "
+            f"LIMIT {int(limit)}"
+        )
+        return [_row_to_node(row) for row in _rows(result)]
+
     def neighbors(self, node_id: str, *, limit: int = 25) -> list[dict[str, Any]]:
         result = self._conn.execute(
             "MATCH (n:GraphNode)-[e:GraphEdge]-(m:GraphNode) "
@@ -223,7 +260,16 @@ class KuzuGraphStore:
         return {"backend": "kuzu", "graph_path": str(self.graph_path), "counts": counts}
 
     def close(self) -> None:
-        return
+        for attr in ("_conn", "_db"):
+            obj = getattr(self, attr, None)
+            close = getattr(obj, "close", None)
+            if callable(close):
+                try:
+                    close()
+                except Exception:
+                    pass
+            setattr(self, attr, None)
+        gc.collect()
 
 
 class InMemoryGraphStore:
@@ -264,6 +310,25 @@ class InMemoryGraphStore:
                 rows.append((score + status_bonus, node))
         rows.sort(key=lambda item: item[0], reverse=True)
         return [{**node.as_dict(), "graph_score": score} for score, node in rows[:limit]]
+
+    def list_nodes(
+        self,
+        *,
+        limit: int = 25,
+        kinds: list[str] | None = None,
+        session_id: str = "",
+        status: str = "",
+    ) -> list[dict[str, Any]]:
+        allowed = set(kinds or [])
+        rows = [
+            node
+            for node in self.nodes.values()
+            if (not allowed or node.kind in allowed)
+            and (not session_id or node.session_id == session_id)
+            and (not status or node.status == status)
+        ]
+        rows.sort(key=lambda node: node.updated_at, reverse=True)
+        return [node.as_dict() for node in rows[:limit]]
 
     def neighbors(self, node_id: str, *, limit: int = 25) -> list[dict[str, Any]]:
         found: list[GraphNode] = []
@@ -374,4 +439,3 @@ def _terms(text: str) -> list[str]:
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
-

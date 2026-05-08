@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from .config import Settings
+from .daemon_client import DaemonClient, DaemonUnavailable
 from .graph_service import GraphRagService
 from .graph_store import GraphBackendUnavailable
 from .memory_service import MemoryService
@@ -90,10 +91,12 @@ class MemoryMcpToolService:
         settings: Settings,
         memory: MemoryService | None = None,
         graph: GraphRagService | None = None,
+        daemon: DaemonClient | None = None,
     ) -> None:
         self.settings = settings
         self.memory = memory or MemoryService(settings)
         self._graph = graph
+        self._daemon = daemon or DaemonClient.from_settings(settings)
         self.memory.init_db()
 
     def close(self) -> None:
@@ -257,49 +260,100 @@ class MemoryMcpToolService:
         include_raw: bool = False,
         include_historical: bool = False,
     ) -> dict[str, Any]:
+        safe_query = _require_text(query, "query")
+        safe_limit = _bounded_limit(limit, default=8, maximum=50)
         return self._graph_call(
             "amo_graph_search",
             lambda graph: graph.graph_search(
-                query=_require_text(query, "query"),
-                limit=_bounded_limit(limit, default=8, maximum=50),
+                query=safe_query,
+                limit=safe_limit,
                 include_raw=include_raw,
                 include_historical=include_historical,
             ),
+            daemon_path="/graph/search",
+            daemon_method="POST",
+            daemon_payload={
+                "query": safe_query,
+                "limit": safe_limit,
+                "include_raw": include_raw,
+                "include_historical": include_historical,
+            },
         )
 
     def amo_current_context(self, *, session_id: str = "", limit: int = 8) -> dict[str, Any]:
+        safe_limit = _bounded_limit(limit, default=8, maximum=50)
         return self._graph_call(
             "amo_current_context",
-            lambda graph: graph.current_context(session_id=session_id, limit=_bounded_limit(limit, default=8, maximum=50)),
+            lambda graph: graph.current_context(session_id=session_id, limit=safe_limit),
+            daemon_path="/api/graph/session-context",
+            daemon_method="GET",
+            daemon_payload={"session_id": session_id, "limit": safe_limit},
         )
 
     def amo_decision_history(self, *, query: str, limit: int = 8) -> dict[str, Any]:
+        safe_query = _require_text(query, "query")
+        safe_limit = _bounded_limit(limit, default=8, maximum=50)
         return self._graph_call(
             "amo_decision_history",
-            lambda graph: graph.decision_history(query=_require_text(query, "query"), limit=_bounded_limit(limit, default=8, maximum=50)),
+            lambda graph: graph.decision_history(query=safe_query, limit=safe_limit),
+            daemon_path="/graph/search",
+            daemon_method="POST",
+            daemon_payload={"query": safe_query, "limit": safe_limit, "include_historical": True},
         )
 
     def amo_work_history(self, *, query: str, limit: int = 8) -> dict[str, Any]:
+        safe_query = _require_text(query, "query")
+        safe_limit = _bounded_limit(limit, default=8, maximum=50)
         return self._graph_call(
             "amo_work_history",
-            lambda graph: graph.work_history(query=_require_text(query, "query"), limit=_bounded_limit(limit, default=8, maximum=50)),
+            lambda graph: graph.work_history(query=safe_query, limit=safe_limit),
+            daemon_path="/graph/search",
+            daemon_method="POST",
+            daemon_payload={"query": safe_query, "limit": safe_limit, "include_historical": True},
         )
 
     def amo_raw_evidence(self, *, query: str, limit: int = 8) -> dict[str, Any]:
+        safe_query = _require_text(query, "query")
+        safe_limit = _bounded_limit(limit, default=8, maximum=50)
         return self._graph_call(
             "amo_raw_evidence",
-            lambda graph: graph.raw_evidence(query=_require_text(query, "query"), limit=_bounded_limit(limit, default=8, maximum=50)),
+            lambda graph: graph.raw_evidence(query=safe_query, limit=safe_limit),
+            daemon_path="/graph/search",
+            daemon_method="POST",
+            daemon_payload={
+                "query": safe_query,
+                "limit": safe_limit,
+                "include_raw": True,
+                "include_historical": True,
+            },
         )
 
     def amo_merge_status(self, *, session_id: str = "") -> dict[str, Any]:
-        return self._graph_call("amo_merge_status", lambda graph: graph.merge_status(session_id=session_id))
+        return self._graph_call(
+            "amo_merge_status",
+            lambda graph: graph.merge_status(session_id=session_id),
+            daemon_path="/api/graph/status",
+            daemon_method="GET",
+            daemon_payload={"session_id": session_id},
+        )
 
-    def _graph_call(self, tool: str, fn) -> dict[str, Any]:
+    def _graph_call(
+        self,
+        tool: str,
+        fn,
+        *,
+        daemon_path: str,
+        daemon_method: str,
+        daemon_payload: dict[str, Any],
+    ) -> dict[str, Any]:
         try:
-            graph = self._graph or GraphRagService(self.settings)
-            if self._graph is None:
-                self._graph = graph
-            return fn(graph)
+            if self._graph is not None:
+                return fn(self._graph)
+            if daemon_method == "GET":
+                return self._daemon.get(daemon_path, daemon_payload)
+            return self._daemon.post(daemon_path, daemon_payload)
+        except DaemonUnavailable as exc:
+            return {"ok": False, "tool": tool, "requires_daemon": True, "error": str(exc)}
         except (GraphBackendUnavailable, QwenUnavailable) as exc:
             return {"ok": False, "tool": tool, "error": str(exc)}
 

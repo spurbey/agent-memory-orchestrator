@@ -8,6 +8,8 @@ from dataclasses import replace
 from pathlib import Path
 
 from .config import Settings
+from .daemon_client import DaemonClient, DaemonUnavailable
+from .graph_diagnostics import debug_hooks, debug_qwen
 from .graph_service import GraphRagService
 from .graph_store import GraphBackendUnavailable
 from .install_service import InstallOptions
@@ -111,9 +113,29 @@ def _build_parser() -> argparse.ArgumentParser:
     graph_search.add_argument("--limit", type=int, default=8)
     graph_search.add_argument("--include-raw", action="store_true")
     graph_search.add_argument("--include-historical", action="store_true")
+    graph_search.add_argument("--offline", action="store_true", help="Open Kuzu directly for single-process maintenance.")
 
     graph_status = sub.add_parser("graph-status", help="Inspect Kuzu graph merge status")
     graph_status.add_argument("--session-id", default="")
+    graph_status.add_argument("--offline", action="store_true", help="Open Kuzu directly for single-process maintenance.")
+
+    graph_drain = sub.add_parser("graph-drain", help="Daemon drains captured evidence into the Kuzu session graph")
+    graph_drain.add_argument("--session-id", default="")
+    graph_drain.add_argument("--limit", type=int, default=500)
+    graph_drain.add_argument("--offline", action="store_true", help="Open Kuzu directly for single-process maintenance.")
+
+    debug = sub.add_parser("debug", help="Debug AMO hook, drain, Qwen, graph, and retrieval stages")
+    debug_sub = debug.add_subparsers(dest="debug_command", required=True)
+    debug_sub.add_parser("hooks", help="Check hook config, log, and latest evidence")
+    debug_drain = debug_sub.add_parser("drain", help="Show pending drain cursor/evidence state")
+    debug_drain.add_argument("--session-id", default="")
+    debug_qwen_cmd = debug_sub.add_parser("qwen", help="Check Qwen availability and query-planner JSON")
+    debug_qwen_cmd.add_argument("--sample", default="what did we decide about codex hooks")
+    debug_graph_cmd = debug_sub.add_parser("graph", help="Show graph status and current context")
+    debug_graph_cmd.add_argument("--session-id", default="")
+    debug_retrieval = debug_sub.add_parser("retrieval", help="Show retrieval output through daemon")
+    debug_retrieval.add_argument("--query", required=True)
+    debug_retrieval.add_argument("--limit", type=int, default=8)
 
     timeline = sub.add_parser("timeline", help="View session timeline")
     timeline.add_argument("--session-id", required=True)
@@ -392,23 +414,76 @@ def main(argv: list[str] | None = None) -> int:
                 svc.close()
             return 0
 
-        if args.command in {"graph-search", "graph-status"}:
+        if args.command in {"graph-search", "graph-status", "graph-drain"}:
             settings = Settings.load()
-            graph = GraphRagService(settings)
-            try:
-                if args.command == "graph-search":
-                    result = graph.graph_search(
-                        query=args.query,
-                        limit=args.limit,
-                        include_raw=args.include_raw,
-                        include_historical=args.include_historical,
+            if args.offline:
+                graph = GraphRagService(settings)
+                try:
+                    if args.command == "graph-search":
+                        result = graph.graph_search(
+                            query=args.query,
+                            limit=args.limit,
+                            include_raw=args.include_raw,
+                            include_historical=args.include_historical,
+                        )
+                    elif args.command == "graph-drain":
+                        result = graph.drain_evidence(limit=args.limit, session_id=args.session_id)
+                    else:
+                        result = graph.merge_status(session_id=args.session_id)
+                    _print(result)
+                finally:
+                    graph.close()
+            else:
+                client = DaemonClient.from_settings(settings, timeout_seconds=30)
+                try:
+                    if args.command == "graph-search":
+                        result = client.post(
+                            "/graph/search",
+                            {
+                                "query": args.query,
+                                "limit": args.limit,
+                                "include_raw": args.include_raw,
+                                "include_historical": args.include_historical,
+                            },
+                        )
+                    elif args.command == "graph-drain":
+                        result = client.post("/graph/drain", {"session_id": args.session_id, "limit": args.limit})
+                    else:
+                        result = client.get("/api/graph/status", {"session_id": args.session_id})
+                except DaemonUnavailable as exc:
+                    _print(
+                        {
+                            "ok": False,
+                            "requires_daemon": True,
+                            "error": str(exc),
+                            "hint": "Start the daemon with: python -m agent_memory_orchestrator.daemon",
+                        }
                     )
-                else:
-                    result = graph.merge_status(session_id=args.session_id)
+                    return 1
                 _print(result)
-            finally:
-                graph.close()
             return 0
+
+        if args.command == "debug":
+            settings = Settings.load()
+            if args.debug_command == "hooks":
+                _print(debug_hooks(settings))
+                return 0
+            if args.debug_command == "qwen":
+                _print(debug_qwen(settings, sample=args.sample))
+                return 0
+            if args.debug_command in {"drain", "retrieval", "graph"}:
+                client = DaemonClient.from_settings(settings, timeout_seconds=30)
+                try:
+                    if args.debug_command == "drain":
+                        _print(client.get("/api/debug/drain", {"session_id": args.session_id}))
+                    elif args.debug_command == "graph":
+                        _print(client.get("/api/debug/graph", {"session_id": args.session_id}))
+                    else:
+                        _print(client.post("/graph/search", {"query": args.query, "limit": args.limit, "debug": True}))
+                except DaemonUnavailable as exc:
+                    _print({"ok": False, "requires_daemon": True, "error": str(exc)})
+                    return 1
+                return 0
 
         settings = Settings.load()
         orch = OrchestratorService(settings)
@@ -440,7 +515,7 @@ def main(argv: list[str] | None = None) -> int:
         finally:
             orch.close()
         return 0
-    except (GraphBackendUnavailable, QwenUnavailable) as exc:
+    except (DaemonUnavailable, GraphBackendUnavailable, QwenUnavailable) as exc:
         print(json.dumps({"ok": False, "error": str(exc)}), file=sys.stderr)
         return 1
     except Exception as exc:  # pragma: no cover

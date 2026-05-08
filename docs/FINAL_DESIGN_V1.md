@@ -1,189 +1,142 @@
-# Final Design v1
+﻿# Final Design v1
 
-Status: Phase 4 adapter layer implemented  
-Date: 2026-05-07  
+Status: Kuzu GraphRAG architecture pivot in progress
+Date: 2026-05-09
 Owner: Agent Memory Orchestrator contributors
 
 ## 1) Objective
 
-Build a local-first system that gives Claude and Codex:
+Build a local-first memory brain for Claude, Codex, and future apps where:
 
-- Shared persistent memory across sessions.
-- Autonomous memory capture, analysis, and retrieval.
-- A deterministic orchestration loop where one agent proposes, the other critiques, and the user is final authority.
-
-Model inference remains with providers (Anthropic/OpenAI). Memory and orchestration stay on device.
+- Hooks capture raw evidence without heavy processing or prompt pollution.
+- `amo-daemon` owns Kuzu, Qwen/Ollama, graph jobs, retrieval, and merge jobs.
+- One central personal graph links sessions, repos, commits, files, decisions, fixes, tests, and raw evidence refs.
+- Local Git remains code truth; AMO stores reasoning and provenance above Git.
+- Agents retrieve memory explicitly through MCP tools when the user or agent asks for it.
 
 ## 2) Scope and Boundaries
 
 In scope:
 
-- Local ingestion of Claude/Codex session artifacts.
-- Local ingestion of Claude/Codex hook payloads.
-- Structured memory extraction and storage.
-- Hybrid retrieval (BM25/FTS + vector + KG + RRF + rerank fallback).
-- Local MCP server for memory and orchestration tools.
-- Two-agent review workflow with explicit user approval/rejection.
+- Capture-only Claude/Codex hooks.
+- Append-only raw evidence storage with hashes and file offsets.
+- Daemon-owned embedded Kuzu graph.
+- Session draft graph and rolling `ContextSnapshot` built only after meaningful write/test/git/finalize triggers.
+- Qwen via Ollama for bounded GraphDelta extraction, query planning, merge classification, and context compression.
+- Local Git work ledger linking `Decision -> WorkChange -> File/TestRun -> GitCommit`.
+- Explicit MCP tools for GraphRAG retrieval and diagnostics.
 
-Out of scope for v1:
+Out of scope for this phase:
 
-- Replacing Claude/Codex hosted inference with local model inference.
-- Dependence on third-party orchestrator APIs as core state authority.
-- Fully automatic execution without user approval.
+- Hosted sync or team graph sharing.
+- Replacing Claude/Codex inference.
+- Migrating old noisy SQLite memory rows into the new graph by default.
+- Heavy model work inside hooks.
 
 ## 3) Design Principles
 
-- Local-first by default.
-- Provider-agnostic interfaces (adapters for Claude/Codex).
-- Auditability of every memory write and orchestration transition.
-- Deterministic state machine for orchestration.
-- Replaceable storage/retrieval backends behind interfaces.
+- Daemon owns stateful graph/model resources.
+- Hooks fail open and must stay fast.
+- Raw evidence is evidence, not memory.
+- Graph writes are non-destructive: supersession/refinement/merge decisions are edges and statuses.
+- Retrieval is explicit by MCP/daemon, not automatic on every prompt.
+- Git anchors code truth; AMO anchors reasoning and work provenance.
 
-## 4) System Architecture
+## 4) Runtime Architecture
 
-Core modules:
+1. `amo-hook`
+- Parses hook payload.
+- Appends redacted raw evidence to `AMO_HOME/.evidence`.
+- Falls back to workspace `.amo-spool/evidence` if AMO home is blocked.
+- Returns startup status only on `SessionStart`.
+- Does not call Kuzu, Qwen, retrieval, or graph writes.
 
-1. `ingestion_gateway`
-- Accepts transcript events from Claude/Codex adapters.
-- Normalizes to canonical `Event` schema.
-- Implemented through `agent_memory_orchestrator.adapters` with provider-specific modules.
+2. `amo-daemon`
+- Owns Kuzu and all graph writes.
+- Drains evidence with durable cursors and idempotent hashes.
+- Detects write/test/git/finalize triggers.
+- Calls Qwen only for bounded trigger windows.
+- Updates session graph, `ContextSnapshot`, and commit-linked work ledger.
+- Serves GraphRAG APIs and diagnostics.
 
-2. `memory_pipeline`
-- Extracts candidate memories from events.
-- Generates tags, importance, and optional confidence.
-- Creates vector representation.
+3. `amo-mcp`
+- Exposes explicit graph tools.
+- Delegates GraphRAG calls to daemon by default.
+- If daemon is down, returns `requires_daemon=true` instead of opening Kuzu directly.
 
-3. `memory_store`
-- Persists sessions, events, chunks, memory units, vectors, KG relations, summaries, and retrieval metadata.
-- Default backend: SQLite (single-node local).
-- Future backend options: Postgres/pgvector.
+4. Legacy SQLite pipeline
+- Remains available for compatibility/debugging.
+- Does not power capture hooks or new GraphRAG retrieval.
 
-4. `retrieval_engine`
-- Executes lexical recall + vector similarity + rerank.
-- Returns compact context packets for agent prompts.
+## 5) Graph Model
 
-5. `mcp_memory_server`
-- Exposes memory and orchestrator tools via MCP.
-- Shared endpoint consumed by both Claude and Codex runtimes.
-- Implemented as thin FastMCP registration over a testable memory tool service.
+Core nodes:
 
-6. `orchestrator_core`
-- Maintains state machine and round artifacts.
-- Enforces critique/revise loop and consensus threshold.
+- `User`, `Agent`, `App`, `Project`, `Repo`, `Branch`, `GitCommit`
+- `Session`, `Turn`, `Prompt`, `Response`, `ToolUse`, `ToolResult`
+- `WorkChange`, `Decision`, `Bug`, `Fix`, `Blocker`, `TestRun`
+- `File`, `Symbol`, `Topic`, `ContextSnapshot`, `RawEvidenceRef`
 
-7. `approval_gateway`
-- Captures user final decision and closes session state.
+Core edges:
 
-8. `local_dashboard`
-- Read-only localhost UI for observing sessions, events, extracted memories, retrieval runs, and returned candidates.
+- `PART_OF`, `HAS_TURN`, `ASKED`, `ANSWERED`, `USED_TOOL`, `PRODUCED`
+- `TOUCHES`, `MODIFIES`, `IMPLEMENTS`, `FIXES`, `VALIDATED_BY`
+- `ABOUT`, `EVIDENCED_BY`, `SUPERSEDES`, `REFINES`, `CONTRADICTS`
+- `DEPENDS_ON`, `MERGED_INTO`, `COMMITTED_AS`
 
-9. `omnara_adapter` (optional)
-- Bridges external orchestration visibility/control.
-- Never becomes source of truth for authoritative state.
-- Events are marked non-authoritative in metadata.
+Statuses:
 
-## 5) Canonical Data Model
+- `draft`, `committed`, `active`, `superseded`, `contested`, `abandoned`
 
-Primary entities:
+## 6) Session Lifecycle
 
-- `sessions`: logical task thread.
-- `events`: normalized raw interaction units.
-- `chunks`: typed evidence segments derived from raw events.
-- `memory_units`: extracted durable facts/decisions/fixes/bugs/observations.
-- `entities`: files, symbols, topics, agents, sessions, and memory anchors.
-- `kg_edges`: typed relationships and version links.
-- `session_summaries`: deterministic session-level summaries.
-- `pipeline_runs`, `extraction_runs`, `retrieval_runs`, `retrieval_candidates`, `consolidation_decisions`: replayable observability.
-- `memories`: compatibility mirror for legacy CLI/export surfaces.
-- `memory_vectors`: semantic vectors for memories.
-- `orchestration_rounds`: each Claude/Codex review turn.
-- `orchestration_decisions`: user final approval/rejection.
+1. Session starts.
+- Hook records `SessionStart` raw evidence.
+- Daemon creates/updates session, app, repo, branch, and raw evidence refs when drained.
+- Hook may inject only tiny startup status.
 
-`events` minimum fields:
+2. Discussion/read-only work happens.
+- Hooks capture prompts/tool results as raw evidence.
+- Daemon stores evidence refs and lightweight event nodes.
+- No Qwen extraction and no session context update unless a trigger appears.
 
-- `id`
-- `session_id`
-- `agent` (`claude` | `codex` | `system` | `user`)
-- `event_type` (`prompt`, `response`, `tool_call`, `tool_result`, `decision`, ...)
-- `content`
-- `metadata_json`
-- `created_at`
+3. Write/test/git/finalize trigger appears.
+- Daemon collects evidence since last checkpoint.
+- Qwen extracts a validated `GraphDelta`.
+- Daemon creates/updates draft `WorkChange`, `Decision`, `Bug`, `Fix`, `TestRun`, `File`, and latest `ContextSnapshot`.
 
-`memories` minimum fields:
-
-- `id`
-- `session_id`
-- `source_event_id`
-- `summary`
-- `tags_json`
-- `importance`
-- `created_at`
-
-## 6) Memory Lifecycle
-
-1. Ingest event.
-2. Adapter normalizes provider/app payload into canonical event schema.
-3. Chunk by content semantics.
-4. Extract memory candidate(s) with rule confidence.
-5. Embed memory text.
-6. Persist memory unit + vector + KG evidence links.
-7. Update FTS/vector/KG index metadata.
-8. Emit observability rows for pipeline, extraction, retrieval, and consolidation.
-
-Autonomous export:
-
-- Time-based snapshot export (`N` minutes).
-- Session-close export.
-- Optional manual export command.
+4. Git commit happens.
+- Local Git backend reads commit metadata, diff summary, changed files, patch-id, branch, and repo.
+- Daemon links work graph to `GitCommit` and central graph using non-destructive merge edges.
 
 ## 7) Retrieval Contract
 
-Query flow:
+Explicit MCP/daemon retrieval pipeline:
 
-1. Apply filters (`session_id`, `agent`, `time_range`, `tags`).
-2. Retrieve lexical candidates (SQLite text match / FTS).
-3. Retrieve vector candidates (cosine similarity).
-4. Merge and rerank.
-5. Return top `k` memories + provenance.
+1. Qwen query planner classifies intent.
+2. Seed retrieval uses Kuzu text search and graph node filters.
+3. Graph expansion follows nearby edges.
+4. Ranking applies deterministic product policy:
+- committed/active over draft/superseded,
+- evidence-backed over loose summaries,
+- answer-grade nodes over raw evidence,
+- raw payloads only through `amo_raw_evidence`.
+5. Qwen compresses selected graph nodes into clean agent context.
 
-Return payload includes:
+Current implementation includes deterministic ranking and Qwen planner/compressor fallback. BM25/FAISS/BGE cross-encoder caches remain planned as rebuildable derived indexes, not graph truth.
 
-- `memory_id`
-- `summary`
-- `score`
-- `source_event_id`
-- `session_id`
-- `created_at`
+## 8) MCP Tool Surface
 
-## 8) Orchestrator Protocol
+GraphRAG tools:
 
-### 8.1 States
+- `amo_graph_search`
+- `amo_current_context`
+- `amo_decision_history`
+- `amo_work_history`
+- `amo_raw_evidence`
+- `amo_merge_status`
 
-- `draft`
-- `review`
-- `revise`
-- `ready_for_user`
-- `approved`
-- `rejected`
-
-### 8.2 Transition Rules
-
-- `draft -> review`: Claude submits plan/design artifact.
-- `review -> revise`: Codex flags blockers or low confidence.
-- `review -> ready_for_user`: No blockers and confidence threshold met.
-- `revise -> review`: Claude submits updated artifact.
-- `ready_for_user -> approved|rejected`: user decision only.
-
-### 8.3 Consensus Rules (v1)
-
-- Codex can mark `blocking_issues`.
-- If `blocking_issues` not empty, must loop to `revise`.
-- If both agents pass threshold and no blockers, can ask user.
-- Maximum rounds guard: `AMO_MAX_REVIEW_ROUNDS` (default 5).
-
-## 9) MCP Tool Surface (v1)
-
-Memory tools:
+Legacy compatibility tools:
 
 - `memory_write`
 - `memory_search`
@@ -192,86 +145,46 @@ Memory tools:
 - `memory_export`
 - `memory_import`
 
-Memory MCP implementation rule:
+Implementation rule:
 
-- Tool behavior lives in `MemoryMcpToolService`.
-- `mcp_server.py` only registers FastMCP tool wrappers.
-- Every memory tool returns structured JSON with `ok`, identifiers, provenance, and counts where applicable.
-- Snapshot import rebuilds local indexes after loading canonical rows so imported memory is immediately searchable.
+- `mcp_server.py` registers thin wrappers.
+- `MemoryMcpToolService` implements contracts.
+- Graph tools call daemon by default and report daemon unavailability clearly.
 
-Orchestrator tools:
+## 9) Debuggability
 
-- `orchestrator_start`
-- `orchestrator_submit`
-- `orchestrator_status`
-- `orchestrator_user_decision`
-- `orchestrator_history`
+Every stage should be inspectable:
 
-Admin/health:
+- `amo-cli debug hooks`: config, hook log, latest evidence.
+- `amo-cli debug drain`: cursor and pending evidence.
+- `amo-cli debug qwen`: local model JSON/latency check.
+- `amo-cli debug graph`: graph status and latest session context.
+- `amo-cli debug retrieval`: daemon retrieval output and timing.
 
-- `health_ping`
-- `config_view`
+Latency targets:
 
-## 10) Local Deployment Topology
+- Hook: target under 500ms, fail open before configured timeout.
+- Drain without Qwen: under 1s per batch.
+- Qwen extraction: target under 30s per bounded write window.
+- Explicit retrieval: target under 10s warm local model.
 
-Single-device topology:
+## 10) Locked Decisions
 
-- `amo-daemon` local process serving API and dashboard on `127.0.0.1`.
-- `amo-mcp` process (stdio or local port).
-- SQLite DB in `.data/`.
-- Optional local vector service (Qdrant/Chroma) behind interface.
-- Optional adapter process for external visibility.
+1. Kuzu is graph truth.
+2. SQLite is legacy/compatibility only for this pivot.
+3. Qwen via Ollama is the default local LLM runtime.
+4. `qwen3:1.7b` is the reliable default; larger Qwen models are opt-in.
+5. Hooks capture only; retrieval is explicit except tiny `SessionStart` status.
+6. Raw evidence is not included in context unless explicitly requested.
+7. Local Git ships first behind a version backend interface.
+8. Existing noisy SQLite memory rows are not migrated into Kuzu by default.
 
-No external call path for memory/orchestration operations.
+## 11) Exit Criteria
 
-## 10.1) Adapter Contract
-
-Adapters convert external payloads into one canonical event shape before storage:
-
-- `session_id`
-- `agent`
-- `event_type`
-- `content`
-- `metadata`
-- `created_at`
-- `source_app`
-
-Implemented adapters:
-
-- `adapters.codex`: Codex rollout JSONL/session artifacts and tool-result normalization.
-- `adapters.claude`: Claude hook/session/message payload normalization.
-- `adapters.omnara`: optional non-authoritative visibility events.
-- `adapters.base`: shared `NormalizedAdapterEvent` contract and generic fallback.
-
-Raw payload redaction still happens in `MemoryService.add_event` before persistence, after adapter normalization and before chunking/extraction.
-
-## 11) Security and Privacy Baseline
-
-- Secrets via `.env`, never committed.
-- Memory export files ignored by git.
-- Local-only bind address (`127.0.0.1`) when using TCP transport.
-- Redaction hook for secrets before persistence (planned early milestone).
-
-## 12) Observability and Audit
-
-- Append-only event log for ingest/write/search/orchestrator transitions.
-- Per-session trace identifiers.
-- Replay capability from exported JSONL snapshots.
-
-## 13) Decisions Locked for v1
-
-1. Authoritative state is local DB, not external orchestrator.
-2. MCP is the integration boundary for both agents.
-3. SQLite-first implementation before distributed DB complexity.
-4. Orchestrator requires explicit user final decision.
-5. Omnara integration is optional and adapter-only.
-
-## 14) v1 Exit Criteria
-
-All must pass:
-
-1. Claude and Codex can both read/write same memory through MCP.
-2. Memory persists across restarts and across sessions.
-3. Orchestration loop blocks finalization on Codex blockers.
-4. User can approve/reject and decision is persisted.
-5. Memory search returns relevant cross-session context with provenance.
+- Hook capture works without Kuzu/Qwen and never hangs Codex.
+- Daemon drains evidence idempotently into Kuzu.
+- Read-only prompts do not trigger Qwen or context snapshots.
+- Write/test/git/finalize events produce session graph and `ContextSnapshot`.
+- Commit events link work changes to Git commits.
+- MCP GraphRAG tools retrieve from daemon and never silently fall back to legacy SQLite.
+- Debug commands identify hook, drain, Qwen, graph, retrieval, and latency failures.

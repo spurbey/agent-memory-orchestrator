@@ -1,16 +1,17 @@
 # Implementation Tracker
 
-Last updated: 2026-05-07  
+Last updated: 2026-05-09  
 Baseline design: `docs/FINAL_DESIGN_V1.md`
 
 ## Phase Status
 
 - Phase 0: Repo bootstrap - Completed
-- Phase 1: Personal local memory engine - Implemented vertical slice
-- Phase 2: MCP memory server - Implemented
+- Phase 1: Legacy SQLite memory engine - Compatibility-only
+- Phase 2: MCP memory server - Implemented; GraphRAG tools delegate to daemon
 - Phase 3: Orchestrator workflow - Pending
 - Phase 4: Adapters (Claude/Codex/Omnara) - Implemented
-- Phase 5: Hardening and release prep - Pending
+- Phase 5: Kuzu GraphRAG + session work ledger - Implemented foundation
+- Phase 6: Derived retrieval caches, reclustering, and release hardening - Pending
 
 ## Milestones
 
@@ -86,10 +87,39 @@ Tasks:
 - [x] Implement `memory_export` and `memory_import`.
 - [x] Add explicit `tool_contracts`.
 - [x] Add MCP contract tests.
+- [x] Route new GraphRAG MCP calls to daemon by default.
+- [x] Return `requires_daemon=true` when daemon is unavailable instead of opening Kuzu directly.
 
 Acceptance:
 
-- Claude and Codex can use the same MCP server to read/write memory.
+- Claude and Codex can use the same MCP server for explicit GraphRAG retrieval and legacy memory compatibility.
+
+## M2.5: Kuzu GraphRAG + Session Work Ledger
+
+Goal:
+
+- Pivot primary memory architecture to daemon-owned Kuzu, capture-only hooks, event-triggered Qwen processing, and Git-linked work provenance.
+
+Tasks:
+
+- [x] Add `.amo-spool/` to `.gitignore` and keep generated spool evidence out of the repo.
+- [x] Add modular graph subsystems: daemon client, evidence drain, trigger detector, session graph builder, diagnostics, and work ledger.
+- [x] Keep hooks capture-only; no Qwen, retrieval, or graph writes inside hook path.
+- [x] Add daemon graph endpoints for drain, graph status, session context, raw evidence search, work trace, and debug checks.
+- [x] Add durable evidence cursors and idempotent evidence drain.
+- [x] Add trigger detection for write/edit, test after write, git operations, explicit finalize prompts, and stop-with-pending-write.
+- [x] Add Qwen-backed GraphDelta extractor with deterministic fallback for tests/offline failure.
+- [x] Add latest per-session `ContextSnapshot` built only after trigger windows.
+- [x] Add local Git commit metadata, changed files, diff stats, and patch-id support.
+- [x] Add CLI debug commands for hooks, drain, Qwen, graph, and retrieval.
+- [x] Add unit tests for trigger detection, drain idempotency, session context build, daemon-required MCP behavior, and Git work ledger.
+
+Acceptance:
+
+- Read-only prompts remain raw evidence only.
+- Write/test/git/finalize triggers create session graph nodes and a clean current context snapshot.
+- MCP GraphRAG tools use daemon by default and fail clearly if daemon is down.
+- Git commit traces are available for linking work changes to code history.
 
 ## M3: Orchestrator Core
 
@@ -149,11 +179,11 @@ Acceptance:
 
 ## Current Risks
 
-- Optional BGE-M3/FAISS/cross-encoder dependencies are not mandatory; fallback behavior is deterministic but less semantically accurate.
-- Optional model loaders are local-only. Models must already be available locally; AMO should not download model artifacts during memory operations.
-- Retrieval eval coverage is still small; expand with real user queries before treating auto-injection as production-grade.
-- Duplicate/supersession rules are deterministic heuristics; keep reviewing `consolidation_decisions` before trusting automatic replacement at large scale.
-- Phase 2 Work Ledger is architecturally reserved but not implemented.
+- Kuzu GraphRAG retrieval currently has deterministic graph ranking plus Qwen planning/compression; BM25/FAISS/BGE cross-encoder derived caches are still pending.
+- Qwen extraction falls back deterministically when Ollama is unavailable; production installs should treat Qwen availability as required and monitor debug latency.
+- Central graph reclustering/consolidation is not implemented yet.
+- Commit auto-merge is foundation-level; deeper supersession/refinement classification still needs Qwen merge policy tests.
+- Legacy SQLite tools remain present and can confuse operators if docs/CLI labels are ignored.
 
 ## Change Control
 

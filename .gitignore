@@ -24,6 +24,7 @@ dist/
 .env
 exports/
 .tmp/
+.amo-spool/
 pytest-cache-files-*/
 _logs/
 _update-notifier-last-checked
