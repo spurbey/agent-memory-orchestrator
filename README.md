@@ -196,6 +196,31 @@ amo-cli graph-search --query "why did retry logic change"
 amo-cli graph-status
 ```
 
+By default these graph commands call the daemon, because the daemon is the Kuzu owner:
+
+```powershell
+python -m agent_memory_orchestrator.daemon --amo-home "$env:USERPROFILE\.agent-memory-orchestrator"
+python -m agent_memory_orchestrator.cli graph-drain --limit 500
+python -m agent_memory_orchestrator.cli graph-search --query "why did this change?"
+```
+
+Use `--offline` only for single-process maintenance when the daemon is stopped:
+
+```bash
+amo-cli graph-search --query "why did this change?" --offline
+amo-cli graph-status --offline
+```
+
+Debug the new pipeline stage by stage:
+
+```bash
+amo-cli debug hooks
+amo-cli debug drain --session-id SESSION_ID
+amo-cli debug qwen --sample "what did we decide about codex hooks"
+amo-cli debug graph --session-id SESSION_ID
+amo-cli debug retrieval --query "why did this change?"
+```
+
 Import recent Codex sessions as a local memory dataset:
 
 ```bash

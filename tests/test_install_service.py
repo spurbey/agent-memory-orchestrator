@@ -111,6 +111,21 @@ def test_settings_loads_installer_runtime_config(tmp_path: Path, monkeypatch) ->
     assert settings.qwen_model == "qwen3:1.7b"
 
 
+def test_settings_loads_bom_prefixed_json_config(tmp_path: Path, monkeypatch) -> None:
+    amo_home = tmp_path / "amo"
+    amo_home.mkdir()
+    (amo_home / "config.json").write_text(
+        "\ufeff" + json.dumps({"mcp_port": 18765, "qwen_model": "qwen3:1.7b"}),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setenv("AMO_HOME", str(amo_home))
+    settings = Settings.load()
+
+    assert settings.mcp_port == 18765
+    assert settings.qwen_model == "qwen3:1.7b"
+
+
 def test_cli_install_dry_run_does_not_write(tmp_path: Path, capsys) -> None:
     user_home = tmp_path / "home"
     amo_home = tmp_path / "amo"

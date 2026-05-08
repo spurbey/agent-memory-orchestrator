@@ -103,6 +103,20 @@ def test_mcp_graph_tools_are_explicit_and_do_not_use_legacy_context_pack(tmp_pat
     assert status["counts"]["draft"] >= 1
 
 
+def test_mcp_graph_tool_without_injected_graph_requires_daemon(tmp_path) -> None:
+    settings = make_settings(tmp_path)
+    settings = Settings(**{**settings.__dict__, "mcp_port": 9})
+    svc = MemoryMcpToolService(settings)
+    try:
+        result = svc.amo_graph_search(query="codex hooks", limit=3)
+    finally:
+        svc.close()
+
+    assert result["ok"] is False
+    assert result["requires_daemon"] is True
+    assert result["tool"] == "amo_graph_search"
+
+
 def test_mcp_memory_write_search_context_and_timeline(tmp_path) -> None:
     svc = MemoryMcpToolService(make_settings(tmp_path))
     try:

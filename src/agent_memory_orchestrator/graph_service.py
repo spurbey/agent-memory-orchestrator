@@ -3,15 +3,19 @@ from __future__ import annotations
 import json
 import os
 import re
+import time
 from pathlib import Path
 from typing import Any
 
 from .adapters import normalize_adapter_event
 from .config import Settings
+from .evidence_drain import EvidenceDrain
 from .graph_store import GraphEdge, GraphNode, GraphStore, KuzuGraphStore
 from .qwen_client import DeterministicPlanner, OllamaQwenClient, QwenPlanner, QwenUnavailable
 from .raw_evidence import RawEvidenceRef, RawEvidenceStore
+from .session_graph import QwenGraphExtractor, SessionGraphBuilder
 from .versioning import LocalGitBackend, VersionBackend
+from .work_ledger import WorkLedger
 
 
 HOOK_CONTEXT_EVENTS = {"session_start"}
@@ -93,6 +97,8 @@ class GraphRagService:
         query = str(query or "").strip()
         if not query:
             raise ValueError("query is required")
+        started = time.monotonic()
+        timings: dict[str, int] = {}
         qwen_status: dict[str, Any] = {
             "planner_fallback": False,
             "compression_fallback": False,
@@ -100,25 +106,33 @@ class GraphRagService:
             "compression_error": "",
         }
         try:
+            plan_started = time.monotonic()
             plan = self.planner.plan_query(query)
+            timings["planner_ms"] = _elapsed_ms(plan_started)
         except QwenUnavailable as exc:
+            timings["planner_ms"] = _elapsed_ms(plan_started)
             qwen_status["planner_fallback"] = True
             qwen_status["planner_error"] = str(exc)
             plan = DeterministicPlanner().plan_query(query)
         kinds = _kinds_for_intent(plan.intent)
+        search_started = time.monotonic()
         seed_nodes = self.store.search_nodes(query, limit=max(limit * 4, 20), kinds=kinds)
         raw_requested = bool(include_raw or plan.include_raw)
         expanded = _filter_answer_grade_nodes(_expand_nodes(seed_nodes, self.store), include_raw=raw_requested)
         candidates = _rank_nodes(query, expanded, include_historical=include_historical or plan.include_historical)
         selected = candidates[: max(1, min(50, int(limit)))]
+        timings["retrieval_ms"] = _elapsed_ms(search_started)
         if selected:
             try:
+                compression_started = time.monotonic()
                 context = self.planner.compress_context(
                     query=query,
                     nodes=selected,
                     include_raw=raw_requested,
                 )
+                timings["compression_ms"] = _elapsed_ms(compression_started)
             except QwenUnavailable as exc:
+                timings["compression_ms"] = _elapsed_ms(compression_started)
                 qwen_status["compression_fallback"] = True
                 qwen_status["compression_error"] = str(exc)
                 context = DeterministicPlanner().compress_context(
@@ -141,12 +155,19 @@ class GraphRagService:
             "nodes": selected,
             "raw_included": raw_requested,
             "qwen": qwen_status,
+            "timing": {**timings, "total_ms": _elapsed_ms(started)},
         }
 
     def current_context(self, *, session_id: str = "", limit: int = 8) -> dict[str, Any]:
-        query = session_id or "current active committed session context"
-        nodes = self.store.search_nodes(query, limit=max(1, min(25, int(limit))))
-        return {"ok": True, "session_id": session_id, "count": len(nodes), "nodes": nodes}
+        safe_limit = max(1, min(25, int(limit)))
+        nodes = self.store.list_nodes(kinds=["ContextSnapshot"], session_id=session_id, limit=safe_limit)
+        return {
+            "ok": True,
+            "session_id": session_id,
+            "count": len(nodes),
+            "nodes": nodes,
+            "context": _context_from_snapshots(nodes),
+        }
 
     def decision_history(self, *, query: str, limit: int = 8) -> dict[str, Any]:
         return self.graph_search(query=query, limit=limit, include_historical=True)
@@ -159,6 +180,29 @@ class GraphRagService:
 
     def merge_status(self, *, session_id: str = "") -> dict[str, Any]:
         return {"ok": True, **self.store.merge_status(session_id=session_id)}
+
+    def drain_evidence(self, *, limit: int = 500, session_id: str = "") -> dict[str, Any]:
+        drain = self._new_drain()
+        return drain.drain(limit=max(1, int(limit)), session_id=session_id)
+
+    def pending_evidence(self, *, session_id: str = "") -> dict[str, Any]:
+        drain = self._new_drain()
+        return drain.pending(session_id=session_id)
+
+    def work_trace(self, *, commit: str = "HEAD", cwd: str | Path | None = None) -> dict[str, Any]:
+        trace = WorkLedger(self.version_backend).trace_commit(commit=commit, cwd=cwd)
+        return {"ok": trace.commit.available, "trace": trace.as_dict()}
+
+    def _new_drain(self) -> EvidenceDrain:
+        extractor = QwenGraphExtractor(self.settings)
+        builder = SessionGraphBuilder(self.settings, self.store, self.version_backend, extractor=extractor)
+        return EvidenceDrain(
+            self.settings,
+            self.store,
+            self.version_backend,
+            evidence_roots=_evidence_roots(self.settings),
+            builder=builder,
+        )
 
     def _upsert_basic_nodes(self, normalized: dict[str, Any], *, evidence: RawEvidenceRef, git: dict[str, Any]) -> None:
         session_id = str(normalized["session_id"])
@@ -392,6 +436,44 @@ def _rank_nodes(query: str, nodes: list[dict[str, Any]], *, include_historical: 
     return [{**node, "score": round(score, 6)} for score, node in ranked]
 
 
+def _context_from_snapshots(nodes: list[dict[str, Any]]) -> str:
+    if not nodes:
+        return "No AMO session context snapshot is available yet. A write/test/git/finalize trigger must be drained first."
+    lines = ["AMO current session context."]
+    for node in nodes[:5]:
+        meta = node.get("metadata") if isinstance(node.get("metadata"), dict) else {}
+        lines.append(
+            "\n".join(
+                [
+                    f"- node_id={node.get('id')} status={node.get('status')} evidence_id={node.get('evidence_id')}",
+                    f"  summary: {node.get('summary') or ''}",
+                    f"  goal: {meta.get('goal') or ''}",
+                    f"  latest_decision: {meta.get('latest_decision') or ''}",
+                    f"  changed_files: {', '.join(meta.get('changed_files') or [])}",
+                    f"  tests: {', '.join(meta.get('tests') or [])}",
+                    f"  next_step: {meta.get('next_step') or ''}",
+                ]
+            )
+        )
+    return "\n".join(lines)
+
+
+def _evidence_roots(settings: Settings) -> list[Path]:
+    roots: list[Path] = [settings.evidence_dir]
+    workspace = os.getenv("AMO_WORKSPACE_CWD") or os.getcwd()
+    try:
+        spool = Path(workspace).expanduser().resolve() / ".amo-spool" / "evidence"
+        if spool != settings.evidence_dir and spool.exists():
+            roots.append(spool)
+    except OSError:
+        pass
+    return roots
+
+
 def _snake(value: str) -> str:
     value = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", value)
     return re.sub(r"[^a-zA-Z0-9]+", "_", value).strip("_").lower() or "message"
+
+
+def _elapsed_ms(start: float) -> int:
+    return int((time.monotonic() - start) * 1000)
