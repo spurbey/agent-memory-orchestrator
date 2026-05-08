@@ -109,13 +109,14 @@ def test_settings_loads_installer_runtime_config(tmp_path: Path, monkeypatch) ->
     assert settings.reranker_backend == "cross-encoder"
     assert settings.vector_backend == "faiss"
     assert settings.qwen_model == "qwen3:1.7b"
+    assert settings.qwen_timeout_seconds == 20.0
 
 
 def test_settings_loads_bom_prefixed_json_config(tmp_path: Path, monkeypatch) -> None:
     amo_home = tmp_path / "amo"
     amo_home.mkdir()
     (amo_home / "config.json").write_text(
-        "\ufeff" + json.dumps({"mcp_port": 18765, "qwen_model": "qwen3:1.7b"}),
+        "\ufeff" + json.dumps({"mcp_port": 18765, "qwen_model": "qwen3:1.7b", "qwen_timeout_seconds": 7}),
         encoding="utf-8",
     )
 
@@ -124,6 +125,7 @@ def test_settings_loads_bom_prefixed_json_config(tmp_path: Path, monkeypatch) ->
 
     assert settings.mcp_port == 18765
     assert settings.qwen_model == "qwen3:1.7b"
+    assert settings.qwen_timeout_seconds == 7.0
 
 
 def test_cli_install_dry_run_does_not_write(tmp_path: Path, capsys) -> None:

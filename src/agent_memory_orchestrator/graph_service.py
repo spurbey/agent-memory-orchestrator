@@ -41,7 +41,11 @@ class GraphRagService:
     ) -> None:
         self.settings = settings
         self.store = store or KuzuGraphStore(settings.graph_path)
-        self.planner = planner or OllamaQwenClient(endpoint=settings.qwen_endpoint, model=settings.qwen_model)
+        self.planner = planner or OllamaQwenClient(
+            endpoint=settings.qwen_endpoint,
+            model=settings.qwen_model,
+            timeout_seconds=settings.qwen_timeout_seconds,
+        )
         self.version_backend = version_backend or LocalGitBackend()
         self.evidence = evidence_store or RawEvidenceStore(settings.evidence_dir)
         self.store.init_schema()
@@ -165,7 +169,7 @@ class GraphRagService:
         nodes = [
             node
             for node in self.store.list_nodes(kinds=["ContextSnapshot"], session_id=session_id, limit=max(safe_limit * 5, 25))
-            if str(node.get("id") or "").startswith("context:")
+            if _is_clean_context_snapshot(node)
         ][:safe_limit]
         return {
             "ok": True,
@@ -426,7 +430,7 @@ def _filter_answer_grade_nodes(nodes: list[dict[str, Any]], *, include_raw: bool
     for node in nodes:
         if node.get("kind") in EVIDENCE_ONLY_KINDS:
             continue
-        if node.get("kind") == "ContextSnapshot" and not str(node.get("id") or "").startswith("context:"):
+        if node.get("kind") == "ContextSnapshot" and not _is_clean_context_snapshot(node):
             continue
         filtered.append(node)
     return filtered
@@ -467,6 +471,37 @@ def _context_from_snapshots(nodes: list[dict[str, Any]]) -> str:
             )
         )
     return "\n".join(lines)
+
+
+def _is_clean_context_snapshot(node: dict[str, Any]) -> bool:
+    if not str(node.get("id") or "").startswith("context:"):
+        return False
+    summary = str(node.get("summary") or "").strip().lower()
+    noisy_prefixes = (
+        '"continue":',
+        "{",
+        "stop:",
+        "from __future__",
+        "import ",
+        "class ",
+        "def ",
+    )
+    noisy_terms = (
+        "hook_event_name",
+        "manualsmoke",
+        "captureonly",
+        "status_porcelain",
+        "raw_",
+    )
+    if summary.startswith(noisy_prefixes):
+        return False
+    if any(term in summary for term in noisy_terms):
+        return False
+    meta = node.get("metadata") if isinstance(node.get("metadata"), dict) else {}
+    return any(
+        bool(meta.get(key))
+        for key in ("goal", "latest_decision", "changed_files", "tests", "blockers", "next_step")
+    ) or bool(summary)
 
 
 def _evidence_roots(settings: Settings) -> list[Path]:
