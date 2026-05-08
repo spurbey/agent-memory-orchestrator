@@ -85,7 +85,7 @@ class QwenGraphExtractor:
         self.client = OllamaQwenClient(
             endpoint=settings.qwen_endpoint,
             model=settings.qwen_model,
-            timeout_seconds=timeout_seconds,
+            timeout_seconds=min(timeout_seconds, settings.qwen_timeout_seconds),
         )
         self.fallback = fallback or DeterministicGraphExtractor()
 
@@ -411,7 +411,19 @@ def _node_kind_for_event(event_type: str) -> str:
 
 def _record_content(record: dict[str, Any]) -> str:
     payload = _payload(record)
-    for key in ("prompt", "content", "message", "tool_response"):
+    if payload.get("continue") is True and payload.get("captureOnly") is True:
+        return _trim(str(payload.get("note") or "AMO hook capture response"), 400)
+    if str(payload.get("hook_event_name") or "").lower() == "stop":
+        return _trim(str(payload.get("last_assistant_message") or "session stop"), 800)
+    tool_name = str(payload.get("tool_name") or payload.get("tool") or "")
+    tool_input = payload.get("tool_input")
+    if tool_name or isinstance(tool_input, dict):
+        command = ""
+        if isinstance(tool_input, dict):
+            command = str(tool_input.get("command") or tool_input.get("cmd") or "")
+        response = _tool_response_summary(str(payload.get("tool_response") or payload.get("content") or ""))
+        return _trim(f"tool={tool_name} command={command} response={response}", 1200)
+    for key in ("prompt", "content", "message"):
         value = payload.get(key)
         if isinstance(value, str) and value.strip():
             return value.strip()
@@ -472,6 +484,30 @@ def _extract_commit(records: list[dict[str, Any]]) -> str:
 def _looks_like_test(line: str) -> bool:
     lowered = line.lower()
     return any(term in lowered for term in ("pytest", "ruff check", "tests passed", "passed", "failed"))
+
+
+def _tool_response_summary(response: str) -> str:
+    lines = [" ".join(line.strip().split()) for line in response.splitlines() if line.strip()]
+    important = [
+        line
+        for line in lines
+        if any(
+            term in line.lower()
+            for term in (
+                "passed",
+                "failed",
+                "error",
+                "warning",
+                "all checks passed",
+                "files changed",
+                "commit",
+                "decision",
+                "fix",
+            )
+        )
+    ]
+    selected = important[:8] or lines[:4]
+    return _trim(" | ".join(selected), 800)
 
 
 def _snake(value: str) -> str:

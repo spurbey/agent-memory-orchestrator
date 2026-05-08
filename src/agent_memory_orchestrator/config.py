@@ -69,6 +69,7 @@ class Settings:
     qwen_runtime: str = "ollama"
     qwen_model: str = "qwen3:1.7b"
     qwen_endpoint: str = "http://127.0.0.1:11434"
+    qwen_timeout_seconds: float = 20.0
 
     @classmethod
     def load(cls) -> "Settings":
@@ -102,6 +103,7 @@ class Settings:
         qwen_runtime = str(_setting(config, "qwen_runtime", "ollama")).strip().lower()
         qwen_model = str(_setting(config, "qwen_model", "qwen3:1.7b")).strip()
         qwen_endpoint = str(_setting(config, "qwen_endpoint", "http://127.0.0.1:11434")).strip().rstrip("/")
+        qwen_timeout_seconds = float(_setting(config, "qwen_timeout_seconds", "20"))
 
         if not db_path.is_absolute():
             db_path = (home / db_path).resolve()
@@ -157,6 +159,8 @@ class Settings:
             raise ValueError("AMO_QWEN_MODEL is required")
         if not qwen_endpoint.startswith(("http://", "https://")):
             raise ValueError("AMO_QWEN_ENDPOINT must be an HTTP URL")
+        if qwen_timeout_seconds <= 0:
+            raise ValueError("AMO_QWEN_TIMEOUT_SECONDS must be positive")
 
         return cls(
             home=home,
@@ -188,4 +192,5 @@ class Settings:
             qwen_runtime=qwen_runtime,
             qwen_model=qwen_model,
             qwen_endpoint=qwen_endpoint,
+            qwen_timeout_seconds=qwen_timeout_seconds,
         )

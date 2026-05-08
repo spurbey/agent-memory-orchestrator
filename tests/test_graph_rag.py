@@ -167,6 +167,36 @@ def test_stop_events_do_not_become_current_context_snapshots(tmp_path: Path) -> 
     assert search["count"] == 0
 
 
+def test_current_context_filters_noisy_legacy_context_snapshots(tmp_path: Path) -> None:
+    store = InMemoryGraphStore()
+    store.upsert_node(
+        GraphNode(
+            id="context:s1:latest",
+            kind="ContextSnapshot",
+            label="latest context for s1",
+            summary='"continue": true, "manualSmoke": false, "captureOnly": true, raw_abc',
+            status="draft",
+            scope="session",
+            session_id="s1",
+            metadata={"changed_files": ["hook.py"], "next_step": "Review graph context."},
+        )
+    )
+    svc = GraphRagService(
+        make_settings(tmp_path),
+        store=store,
+        planner=DeterministicPlanner(),
+        version_backend=_StaticGitBackend(),
+    )
+    try:
+        context = svc.current_context(session_id="s1")
+        search = svc.graph_search(query="captureOnly context", limit=3)
+    finally:
+        svc.close()
+
+    assert context["count"] == 0
+    assert search["count"] == 0
+
+
 def test_commit_event_auto_links_session_to_git_commit(tmp_path: Path) -> None:
     git = GitSnapshot(
         available=True,

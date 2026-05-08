@@ -75,6 +75,7 @@ class AmoHandler(BaseHTTPRequestHandler):
                     "graph_path": str(self.settings.graph_path),
                     "qwen_runtime": self.settings.qwen_runtime,
                     "qwen_model": self.settings.qwen_model,
+                    "qwen_timeout_seconds": self.settings.qwen_timeout_seconds,
                 },
             )
             return
