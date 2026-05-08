@@ -104,6 +104,9 @@ class GraphStore(Protocol):
     def merge_status(self, *, session_id: str = "") -> dict[str, Any]:
         """Return merge/graph status."""
 
+    def set_node_status(self, node_id: str, status: str) -> bool:
+        """Update a node status."""
+
     def close(self) -> None:
         """Close backend resources."""
 
@@ -259,6 +262,14 @@ class KuzuGraphStore:
             counts[str(row[0])] = int(row[1])
         return {"backend": "kuzu", "graph_path": str(self.graph_path), "counts": counts}
 
+    def set_node_status(self, node_id: str, status: str) -> bool:
+        self._conn.execute(
+            "MATCH (n:GraphNode) "
+            f"WHERE n.id = {_q(node_id)} "
+            f"SET n.status = {_q(status)}, n.updated_at = {_q(_now())}"
+        )
+        return True
+
     def close(self) -> None:
         for attr in ("_conn", "_db"):
             obj = getattr(self, attr, None)
@@ -346,6 +357,13 @@ class InMemoryGraphStore:
                 continue
             counts[node.status] = counts.get(node.status, 0) + 1
         return {"backend": "memory", "counts": counts}
+
+    def set_node_status(self, node_id: str, status: str) -> bool:
+        node = self.nodes.get(node_id)
+        if node is None:
+            return False
+        self.nodes[node_id] = GraphNode(**{**node.as_dict(), "status": status, "updated_at": _now()})
+        return True
 
     def close(self) -> None:
         return

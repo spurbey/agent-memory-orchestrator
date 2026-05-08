@@ -124,6 +124,11 @@ def _build_parser() -> argparse.ArgumentParser:
     graph_drain.add_argument("--limit", type=int, default=500)
     graph_drain.add_argument("--offline", action="store_true", help="Open Kuzu directly for single-process maintenance.")
 
+    graph_cleanup = sub.add_parser("graph-cleanup-noisy", help="Find or abandon noisy draft graph answer nodes")
+    graph_cleanup.add_argument("--limit", type=int, default=500)
+    graph_cleanup.add_argument("--apply", action="store_true", help="Mark noisy nodes abandoned.")
+    graph_cleanup.add_argument("--offline", action="store_true", help="Open Kuzu directly for single-process maintenance.")
+
     debug = sub.add_parser("debug", help="Debug AMO hook, drain, Qwen, graph, and retrieval stages")
     debug_sub = debug.add_subparsers(dest="debug_command", required=True)
     debug_sub.add_parser("hooks", help="Check hook config, log, and latest evidence")
@@ -414,7 +419,7 @@ def main(argv: list[str] | None = None) -> int:
                 svc.close()
             return 0
 
-        if args.command in {"graph-search", "graph-status", "graph-drain"}:
+        if args.command in {"graph-search", "graph-status", "graph-drain", "graph-cleanup-noisy"}:
             settings = Settings.load()
             if args.offline:
                 graph = GraphRagService(settings)
@@ -428,6 +433,8 @@ def main(argv: list[str] | None = None) -> int:
                         )
                     elif args.command == "graph-drain":
                         result = graph.drain_evidence(limit=args.limit, session_id=args.session_id)
+                    elif args.command == "graph-cleanup-noisy":
+                        result = graph.cleanup_noisy_drafts(limit=args.limit, apply=args.apply)
                     else:
                         result = graph.merge_status(session_id=args.session_id)
                     _print(result)
@@ -449,6 +456,8 @@ def main(argv: list[str] | None = None) -> int:
                         )
                     elif args.command == "graph-drain":
                         result = client.post("/graph/drain", {"session_id": args.session_id, "limit": args.limit})
+                    elif args.command == "graph-cleanup-noisy":
+                        result = client.post("/graph/cleanup-noisy", {"limit": args.limit, "apply": args.apply})
                     else:
                         result = client.get("/api/graph/status", {"session_id": args.session_id})
                 except DaemonUnavailable as exc:
