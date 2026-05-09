@@ -70,6 +70,10 @@ class Settings:
     qwen_model: str = "qwen3:1.7b"
     qwen_endpoint: str = "http://127.0.0.1:11434"
     qwen_timeout_seconds: float = 20.0
+    qwen_planner_timeout_seconds: float = 8.0
+    qwen_extract_timeout_seconds: float = 25.0
+    qwen_compress_timeout_seconds: float = 12.0
+    qwen_num_ctx: int = 2048
 
     @classmethod
     def load(cls) -> "Settings":
@@ -104,6 +108,10 @@ class Settings:
         qwen_model = str(_setting(config, "qwen_model", "qwen3:1.7b")).strip()
         qwen_endpoint = str(_setting(config, "qwen_endpoint", "http://127.0.0.1:11434")).strip().rstrip("/")
         qwen_timeout_seconds = float(_setting(config, "qwen_timeout_seconds", "20"))
+        qwen_planner_timeout_seconds = float(_setting(config, "qwen_planner_timeout_seconds", "8"))
+        qwen_extract_timeout_seconds = float(_setting(config, "qwen_extract_timeout_seconds", "25"))
+        qwen_compress_timeout_seconds = float(_setting(config, "qwen_compress_timeout_seconds", "12"))
+        qwen_num_ctx = int(_setting(config, "qwen_num_ctx", "2048"))
 
         if not db_path.is_absolute():
             db_path = (home / db_path).resolve()
@@ -161,6 +169,10 @@ class Settings:
             raise ValueError("AMO_QWEN_ENDPOINT must be an HTTP URL")
         if qwen_timeout_seconds <= 0:
             raise ValueError("AMO_QWEN_TIMEOUT_SECONDS must be positive")
+        if min(qwen_planner_timeout_seconds, qwen_extract_timeout_seconds, qwen_compress_timeout_seconds) <= 0:
+            raise ValueError("AMO_QWEN_*_TIMEOUT_SECONDS must be positive")
+        if qwen_num_ctx <= 0:
+            raise ValueError("AMO_QWEN_NUM_CTX must be positive")
 
         return cls(
             home=home,
@@ -193,4 +205,8 @@ class Settings:
             qwen_model=qwen_model,
             qwen_endpoint=qwen_endpoint,
             qwen_timeout_seconds=qwen_timeout_seconds,
+            qwen_planner_timeout_seconds=qwen_planner_timeout_seconds,
+            qwen_extract_timeout_seconds=qwen_extract_timeout_seconds,
+            qwen_compress_timeout_seconds=qwen_compress_timeout_seconds,
+            qwen_num_ctx=qwen_num_ctx,
         )

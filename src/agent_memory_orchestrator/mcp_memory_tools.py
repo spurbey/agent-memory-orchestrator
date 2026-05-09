@@ -139,6 +139,10 @@ class MemoryMcpToolService:
             "qwen_model": self.settings.qwen_model,
             "qwen_endpoint": self.settings.qwen_endpoint,
             "qwen_timeout_seconds": self.settings.qwen_timeout_seconds,
+            "qwen_planner_timeout_seconds": self.settings.qwen_planner_timeout_seconds,
+            "qwen_extract_timeout_seconds": self.settings.qwen_extract_timeout_seconds,
+            "qwen_compress_timeout_seconds": self.settings.qwen_compress_timeout_seconds,
+            "qwen_num_ctx": self.settings.qwen_num_ctx,
         }
 
     def tool_contracts(self) -> dict[str, Any]:

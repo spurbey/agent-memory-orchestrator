@@ -230,6 +230,22 @@ amo-cli graph-cleanup-noisy --limit 500 --apply
 
 The first command is a dry run. The second marks noisy draft answer nodes as `abandoned`; raw evidence remains available through `amo_raw_evidence`.
 
+Classify graph knowledge into duplicate/refinement/supersession/contradiction edges and topic clusters:
+
+```bash
+amo-cli graph-consolidate --limit 500
+amo-cli graph-consolidate --limit 500 --apply
+```
+
+Rebuild the derived lexical retrieval cache after large drains or cleanup/consolidation runs:
+
+```bash
+amo-cli graph-cache-status
+amo-cli graph-rebuild-cache --limit 5000
+```
+
+The cache is derived from answer-grade Kuzu nodes. Kuzu remains the source of truth; deleting the cache only makes retrieval slower until the next rebuild.
+
 Import recent Codex sessions as a local memory dataset:
 
 ```bash

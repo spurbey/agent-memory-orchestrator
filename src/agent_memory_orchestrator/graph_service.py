@@ -13,6 +13,8 @@ from .config import Settings
 from .evidence_drain import EvidenceDrain
 from .evidence_drain import _read_jsonl_from
 from .evidence_window import clean_evidence_window
+from .graph_cache import GraphSearchCache
+from .graph_consolidation import DeterministicGraphConsolidator
 from .graph_store import GraphEdge, GraphNode, GraphStore, KuzuGraphStore
 from .graph_triggers import TriggerDecision, detect_trigger
 from .qwen_client import DeterministicPlanner, OllamaQwenClient, QueryPlan, QwenPlanner, QwenUnavailable
@@ -51,9 +53,13 @@ class GraphRagService:
             endpoint=settings.qwen_endpoint,
             model=settings.qwen_model,
             timeout_seconds=settings.qwen_timeout_seconds,
+            planner_timeout_seconds=min(settings.qwen_timeout_seconds, settings.qwen_planner_timeout_seconds),
+            compression_timeout_seconds=min(settings.qwen_timeout_seconds, settings.qwen_compress_timeout_seconds),
+            num_ctx=settings.qwen_num_ctx,
         )
         self.version_backend = version_backend or LocalGitBackend()
         self.evidence = evidence_store or RawEvidenceStore(settings.evidence_dir)
+        self.search_cache = GraphSearchCache(settings.home / ".cache" / "graph_nodes_bm25.json")
         self.store.init_schema()
 
     def close(self) -> None:
@@ -130,7 +136,9 @@ class GraphRagService:
         raw_requested = bool(plan.include_raw)
         kinds = _seed_kinds_for_retrieval(_kinds_for_intent(plan.intent), include_raw=raw_requested)
         search_started = time.monotonic()
-        seed_nodes = self.store.search_nodes(query, limit=max(limit * 12, 80), kinds=kinds)
+        search_limit = max(limit * 12, 80)
+        cache_nodes = [] if raw_requested else self.search_cache.search(query, limit=search_limit, kinds=kinds)
+        seed_nodes = _merge_seed_nodes(self.store.search_nodes(query, limit=search_limit, kinds=kinds), cache_nodes)
         expanded = _filter_answer_grade_nodes(_expand_nodes(seed_nodes, self.store), include_raw=raw_requested)
         candidates = _rank_nodes(query, expanded, include_historical=include_historical or plan.include_historical)
         if not candidates and not raw_requested:
@@ -384,6 +392,18 @@ class GraphRagService:
             "nodes": noisy[:50],
         }
 
+    def consolidate_graph(self, *, limit: int = 500, apply: bool = False) -> dict[str, Any]:
+        consolidator = DeterministicGraphConsolidator(self.store, project_id=self.settings.project_id)
+        return consolidator.consolidate(limit=limit, apply=apply).as_dict()
+
+    def rebuild_graph_cache(self, *, limit: int = 5000) -> dict[str, Any]:
+        nodes = self.store.list_nodes(kinds=ANSWER_SEED_KINDS, limit=max(1, min(20000, int(limit))))
+        answer_nodes = _filter_answer_grade_nodes(nodes, include_raw=False)
+        return self.search_cache.rebuild([_sanitize_output_node(node) for node in answer_nodes])
+
+    def graph_cache_status(self) -> dict[str, Any]:
+        return self.search_cache.status()
+
     def work_trace(self, *, commit: str = "HEAD", cwd: str | Path | None = None) -> dict[str, Any]:
         trace = WorkLedger(self.version_backend).trace_commit(commit=commit, cwd=cwd)
         return {"ok": trace.commit.available, "trace": trace.as_dict()}
@@ -616,6 +636,18 @@ def _expand_nodes(seed_nodes: list[dict[str, Any]], store: GraphStore) -> list[d
         for neighbor in store.neighbors(str(node["id"]), limit=4):
             seen.setdefault(str(neighbor["id"]), neighbor)
     return list(seen.values())
+
+
+def _merge_seed_nodes(primary: list[dict[str, Any]], secondary: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    merged: dict[str, dict[str, Any]] = {}
+    for node in primary + secondary:
+        node_id = str(node.get("id") or "")
+        if not node_id:
+            continue
+        existing = merged.get(node_id)
+        if existing is None or float(node.get("graph_score") or 0.0) > float(existing.get("graph_score") or 0.0):
+            merged[node_id] = node
+    return list(merged.values())
 
 
 def _filter_answer_grade_nodes(nodes: list[dict[str, Any]], *, include_raw: bool) -> list[dict[str, Any]]:
