@@ -114,6 +114,7 @@ def test_settings_loads_installer_runtime_config(tmp_path: Path, monkeypatch) ->
     assert settings.qwen_extract_timeout_seconds == 25.0
     assert settings.qwen_compress_timeout_seconds == 12.0
     assert settings.qwen_num_ctx == 2048
+    assert settings.drain_max_windows_per_run == 3
 
 
 def test_settings_loads_bom_prefixed_json_config(tmp_path: Path, monkeypatch) -> None:

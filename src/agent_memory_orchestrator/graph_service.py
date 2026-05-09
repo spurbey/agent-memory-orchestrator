@@ -216,9 +216,9 @@ class GraphRagService:
     def merge_status(self, *, session_id: str = "") -> dict[str, Any]:
         return {"ok": True, **self.store.merge_status(session_id=session_id)}
 
-    def drain_evidence(self, *, limit: int = 500, session_id: str = "") -> dict[str, Any]:
+    def drain_evidence(self, *, limit: int = 500, session_id: str = "", max_windows: int | None = None) -> dict[str, Any]:
         drain = self._new_drain()
-        return drain.drain(limit=max(1, int(limit)), session_id=session_id)
+        return drain.drain(limit=max(1, int(limit)), session_id=session_id, max_windows=max_windows)
 
     def pending_evidence(self, *, session_id: str = "") -> dict[str, Any]:
         drain = self._new_drain()

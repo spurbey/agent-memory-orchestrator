@@ -89,6 +89,7 @@ class AmoHandler(BaseHTTPRequestHandler):
                     "qwen_extract_timeout_seconds": self.settings.qwen_extract_timeout_seconds,
                     "qwen_compress_timeout_seconds": self.settings.qwen_compress_timeout_seconds,
                     "qwen_num_ctx": self.settings.qwen_num_ctx,
+                    "drain_max_windows_per_run": self.settings.drain_max_windows_per_run,
                 },
             )
             return
@@ -274,7 +275,17 @@ class AmoHandler(BaseHTTPRequestHandler):
                     graph = GraphRagService(self.settings)
                     try:
                         limit = _bounded_int(str(payload.get("limit") or ""), default=500, minimum=1, maximum=5000)
-                        result = graph.drain_evidence(limit=limit, session_id=str(payload.get("session_id") or ""))
+                        max_windows = _bounded_int(
+                            str(payload.get("max_windows") or ""),
+                            default=self.settings.drain_max_windows_per_run,
+                            minimum=1,
+                            maximum=25,
+                        )
+                        result = graph.drain_evidence(
+                            limit=limit,
+                            session_id=str(payload.get("session_id") or ""),
+                            max_windows=max_windows,
+                        )
                         self._write_json(200, result)
                     finally:
                         graph.close()

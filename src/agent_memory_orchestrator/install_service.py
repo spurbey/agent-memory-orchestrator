@@ -250,6 +250,7 @@ def _runtime_config_payload(resolved_models: dict[str, str]) -> dict[str, Any]:
         "qwen_extract_timeout_seconds": 25,
         "qwen_compress_timeout_seconds": 12,
         "qwen_num_ctx": 2048,
+        "drain_max_windows_per_run": 3,
         "approval_mode": "manual",
         "embedding_model": resolved_models["embedding_model"],
         "embedding_dims": 1024 if resolved_models["embedding_model"] == "BAAI/bge-m3" else 384,
