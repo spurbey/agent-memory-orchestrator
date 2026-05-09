@@ -165,6 +165,89 @@ AMO_MCP_HOST=127.0.0.1
 AMO_APPROVAL_MODE=manual
 ```
 
+## Slack Connector: local Socket Mode
+
+This connector is local-first. Slack delivers events through an outbound WebSocket opened by your machine, so AMO does not expose localhost to the internet and does not need a hosted relay.
+
+What it does:
+
+- Captures relevant sent Slack messages as append-only raw evidence under `AMO_HOME/.evidence`.
+- Groups Slack messages into AMO sessions by `team/channel/thread`.
+- Replies only when the bot is explicitly mentioned.
+- Writes a connector-finalize event when a Slack session should be summarized.
+- Lets normal `graph-drain` convert the cleaned Slack evidence window into graph nodes.
+
+What it does not do:
+
+- It cannot capture unsent typing drafts. Slack only emits messages after they are sent.
+- It does not store tokens in the repo.
+- It does not open a public webhook server.
+
+Generate the Slack app manifest:
+
+```powershell
+$env:AMO_HOME="$env:USERPROFILE\.agent-memory-orchestrator"
+python -m agent_memory_orchestrator.cli slack manifest --out .\slack-app-manifest.json
+```
+
+Create a Slack app from that manifest, then create:
+
+- Bot token: `xoxb-...`
+- App-level Socket Mode token: `xapp-...`
+
+Configure AMO without saving tokens:
+
+```powershell
+$env:AMO_SLACK_APP_TOKEN="xapp-..."
+$env:AMO_SLACK_BOT_TOKEN="xoxb-..."
+python -m agent_memory_orchestrator.cli slack setup `
+  --team-id T123 `
+  --bot-user-id B123 `
+  --capture-user-id U123 `
+  --skip-token-validation
+```
+
+Or save tokens locally under `AMO_HOME/.secrets/slack.json`:
+
+```powershell
+python -m agent_memory_orchestrator.cli slack setup `
+  --team-id T123 `
+  --bot-user-id B123 `
+  --capture-user-id U123 `
+  --app-token "xapp-..." `
+  --bot-token "xoxb-..." `
+  --save-tokens `
+  --skip-token-validation
+```
+
+Install the optional WebSocket runtime and run the connector:
+
+```powershell
+pip install -e ".[slack]"
+python -m agent_memory_orchestrator.cli slack run --reply-mode disabled
+```
+
+Finalize a Slack session and drain it into the graph:
+
+```powershell
+python -m agent_memory_orchestrator.cli slack finalize-session --session-id "slack:T123:C123:1710000000.000100"
+python -m agent_memory_orchestrator.cli graph-drain --session-id "slack:T123:C123:1710000000.000100" --limit 100
+```
+
+Module layout:
+
+```text
+src/agent_memory_orchestrator/connectors/
+  base.py                         # connector event contract
+  slack/
+    config.py                     # local config, env, token storage paths
+    manifest.py                   # Slack app manifest generator
+    client.py                     # minimal Slack Web API client
+    events.py                     # Socket Mode event normalization/routing rules
+    service.py                    # evidence capture, setup, status, finalize
+    socket_mode.py                # outbound WebSocket runner
+```
+
 ### 4) Optional: ingest transcripts
 
 ```bash

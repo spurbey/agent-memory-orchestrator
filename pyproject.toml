@@ -26,6 +26,9 @@ models = [
   "sentence-transformers>=3.0.0",
   "faiss-cpu>=1.8.0",
 ]
+slack = [
+  "websocket-client>=1.8.0",
+]
 
 [project.scripts]
 amo-cli = "agent_memory_orchestrator.cli:main"
