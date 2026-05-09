@@ -4,7 +4,7 @@ from pathlib import Path
 
 from agent_memory_orchestrator.config import Settings
 from agent_memory_orchestrator.graph_service import GraphRagService
-from agent_memory_orchestrator.graph_store import GraphNode, InMemoryGraphStore
+from agent_memory_orchestrator.graph_store import GraphEdge, GraphNode, InMemoryGraphStore
 from agent_memory_orchestrator.qwen_client import DeterministicPlanner
 from agent_memory_orchestrator.versioning import GitSnapshot
 
@@ -415,6 +415,56 @@ def test_graph_search_does_not_return_support_only_file_nodes_as_answers(tmp_pat
 
     assert search["count"] == 0
     assert search["nodes"] == []
+
+
+def test_graph_search_does_not_return_graph_delta_as_answer(tmp_path: Path) -> None:
+    store = InMemoryGraphStore()
+    store.upsert_node(
+        GraphNode(
+            id="delta:s1:raw_write",
+            kind="GraphDelta",
+            label="Clean raw artifacts before graph extraction",
+            summary="Clean raw artifacts before graph extraction",
+            status="draft",
+            scope="session",
+            session_id="s1",
+            evidence_id="raw_write",
+        )
+    )
+    store.upsert_node(
+        GraphNode(
+            id="context:s1:latest",
+            kind="ContextSnapshot",
+            label="latest context for s1",
+            summary="Clean raw artifacts before graph extraction",
+            status="draft",
+            scope="session",
+            session_id="s1",
+            evidence_id="raw_write",
+            metadata={"changed_files": ["src/agent_memory_orchestrator/evidence_window.py"]},
+        )
+    )
+    store.upsert_edge(
+        GraphEdge(
+            id="edge:delta-context",
+            source_id="delta:s1:raw_write",
+            target_id="context:s1:latest",
+            kind="CREATED",
+            evidence_id="raw_write",
+        )
+    )
+    svc = GraphRagService(
+        make_settings(tmp_path),
+        store=store,
+        planner=DeterministicPlanner(),
+        version_backend=_StaticGitBackend(),
+    )
+    try:
+        search = svc.graph_search(query="clean raw artifacts graph extraction", limit=5)
+    finally:
+        svc.close()
+
+    assert [node["id"] for node in search["nodes"]] == ["context:s1:latest"]
 
 
 def test_write_context_with_changed_files_is_answer_grade(tmp_path: Path) -> None:

@@ -25,7 +25,14 @@ class _FakeQwenClient:
     def __init__(self) -> None:
         self.prompt = ""
 
-    def _generate_json(self, prompt: str, *, num_predict: int, timeout_seconds: float | None = None) -> dict[str, Any]:
+    def _generate_json(
+        self,
+        prompt: str,
+        *,
+        num_predict: int,
+        timeout_seconds: float | None = None,
+        schema: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         self.prompt = prompt
         return {
             "summary": "Updated evidence window cleaning before Qwen graph extraction.",

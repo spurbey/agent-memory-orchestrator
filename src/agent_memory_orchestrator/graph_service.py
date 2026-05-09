@@ -27,7 +27,7 @@ from .work_ledger import WorkLedger
 HOOK_CONTEXT_EVENTS = {"session_start"}
 CAPTURE_ONLY_EVENTS = {"user_prompt_submit", "prompt", "post_tool_use", "tool_result", "stop", "session_stop"}
 EVIDENCE_ONLY_KINDS = {"RawEvidenceRef", "Prompt", "ToolUse", "ToolResult", "Turn", "Session", "App", "Repo", "Branch"}
-SUPPORT_ONLY_KINDS = {"File", "Symbol", "Topic"}
+SUPPORT_ONLY_KINDS = {"File", "Symbol", "Topic", "CleanedEvidenceWindow", "GraphDelta"}
 ANSWER_SEED_KINDS = ["ContextSnapshot", "WorkChange", "Decision", "Fix", "Bug", "Blocker", "TestRun", "GitCommit"]
 
 
