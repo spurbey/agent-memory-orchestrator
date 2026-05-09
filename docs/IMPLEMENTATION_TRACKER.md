@@ -139,6 +139,8 @@ Tasks:
 
 - [x] Add modular connector package layout under `src/agent_memory_orchestrator/connectors`.
 - [x] Add Slack app manifest generation for local Socket Mode.
+- [x] Add one-click Slack setup URL generation with manifest JSON prefilled.
+- [x] Add Slack App Manifest API bootstrap using a temporary app configuration token.
 - [x] Add local Slack config and optional token storage under `AMO_HOME/.secrets`.
 - [x] Add Slack message normalization and relevance gates.
 - [x] Capture Slack messages into append-only raw evidence with `source_app=slack`.

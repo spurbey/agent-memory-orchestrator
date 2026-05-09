@@ -16,7 +16,7 @@ from .events import (
     should_capture_message,
     should_reply_message,
 )
-from .manifest import build_slack_manifest, slack_manifest_json
+from .manifest import build_slack_manifest, slack_manifest_json, slack_manifest_setup_url
 
 
 class SlackConnectorError(RuntimeError):
@@ -44,6 +44,49 @@ class SlackConnectorService:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(slack_manifest_json(app_name=app_name), encoding="utf-8")
         return {"ok": True, "path": str(path.resolve())}
+
+    def setup_link(self, *, app_name: str = "Agent Memory Orchestrator") -> dict[str, Any]:
+        return {
+            "ok": True,
+            "url": slack_manifest_setup_url(app_name=app_name),
+            "next_steps": [
+                "Open the URL.",
+                "Select the Slack workspace.",
+                "Review and create the app.",
+                "Install the app to the workspace.",
+                "Copy the app-level xapp token and bot xoxb token into `amo-cli slack setup`.",
+            ],
+        }
+
+    def bootstrap_with_config_token(
+        self,
+        *,
+        config_token: str,
+        app_name: str = "Agent Memory Orchestrator",
+        team_id: str = "",
+    ) -> dict[str, Any]:
+        try:
+            result = self.client.create_app_from_manifest(
+                config_token=config_token,
+                manifest=build_slack_manifest(app_name=app_name),
+                team_id=team_id,
+            )
+        except SlackApiError as exc:
+            return {"ok": False, "error": str(exc)}
+        return {
+            "ok": True,
+            "app_id": result.get("app_id"),
+            "oauth_authorize_url": result.get("oauth_authorize_url"),
+            "credential_fields_returned": sorted((result.get("credentials") or {}).keys())
+            if isinstance(result.get("credentials"), dict)
+            else [],
+            "next_steps": [
+                "Open oauth_authorize_url and approve installation.",
+                "Copy the Bot User OAuth Token from OAuth & Permissions if Slack does not return it through OAuth.",
+                "Create or copy the app-level xapp token under Basic Information > App-Level Tokens.",
+                "Run `amo-cli slack setup --save-tokens ...` with the xapp and xoxb tokens.",
+            ],
+        }
 
     def setup(
         self,
