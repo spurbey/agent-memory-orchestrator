@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 import json
+from urllib.parse import parse_qs, urlparse
 
 from agent_memory_orchestrator.cli import main
 from agent_memory_orchestrator.config import Settings
 from agent_memory_orchestrator.connectors.slack import SlackConfig, SlackConnectorService
+from agent_memory_orchestrator.connectors.slack.client import SlackApiClient
 from agent_memory_orchestrator.connectors.slack.config import load_slack_config, slack_secret_path
 from agent_memory_orchestrator.connectors.slack.events import parse_message_envelope, should_reply_message
-from agent_memory_orchestrator.connectors.slack.manifest import build_slack_manifest
+from agent_memory_orchestrator.connectors.slack.manifest import build_slack_manifest, slack_manifest_setup_url
 from agent_memory_orchestrator.graph_triggers import detect_trigger
 
 
@@ -20,6 +22,50 @@ def test_slack_manifest_enables_socket_mode_and_message_scopes() -> None:
     assert "app_mentions:read" in scopes
     assert "chat:write" in scopes
     assert "message.channels" in manifest["settings"]["event_subscriptions"]["bot_events"]
+
+
+def test_slack_setup_link_prefills_manifest() -> None:
+    url = slack_manifest_setup_url(app_name="AMO Link")
+    parsed = urlparse(url)
+    query = parse_qs(parsed.query)
+
+    assert parsed.netloc == "api.slack.com"
+    assert query["new_app"] == ["1"]
+    manifest = json.loads(query["manifest_json"][0])
+    assert manifest["display_information"]["name"] == "AMO Link"
+    assert manifest["settings"]["socket_mode_enabled"] is True
+
+
+def test_slack_bootstrap_uses_manifest_api_without_printing_credentials(tmp_path) -> None:
+    calls: list[dict[str, object]] = []
+
+    def fake_transport(url: str, token: str, payload: dict[str, object], timeout: float) -> dict[str, object]:
+        calls.append({"url": url, "token": token, "payload": payload, "timeout": timeout})
+        return {
+            "ok": True,
+            "app_id": "A123",
+            "credentials": {"client_secret": "secret", "signing_secret": "secret"},
+            "oauth_authorize_url": "https://slack.com/oauth/v2/authorize?client_id=1",
+        }
+
+    service = SlackConnectorService(
+        _settings(tmp_path),
+        config=SlackConfig(enabled=True),
+        client=SlackApiClient(transport=fake_transport),
+    )
+
+    result = service.bootstrap_with_config_token(config_token="xoxe.xoxp-test", app_name="AMO Bootstrap")
+
+    assert result["ok"] is True
+    assert result["app_id"] == "A123"
+    assert "credentials" not in result
+    assert result["credential_fields_returned"] == ["client_secret", "signing_secret"]
+    assert calls[0]["url"] == "https://slack.com/api/apps.manifest.create"
+    assert calls[0]["token"] == "xoxe.xoxp-test"
+    payload = calls[0]["payload"]
+    assert isinstance(payload, dict)
+    manifest = json.loads(str(payload["manifest"]))
+    assert manifest["display_information"]["name"] == "AMO Bootstrap"
 
 
 def test_slack_setup_writes_config_without_leaking_tokens(monkeypatch, tmp_path) -> None:
@@ -140,6 +186,14 @@ def test_slack_cli_manifest_and_setup(monkeypatch, tmp_path, capsys) -> None:
     assert out["ok"] is True
     assert out["config"]["team_id"] == "T1"
     assert out["token_hint"]
+
+
+def test_slack_cli_setup_link_does_not_require_amo_home(capsys) -> None:
+    assert main(["slack", "setup-link", "--app-name", "AMO Link CLI"]) == 0
+    out = json.loads(capsys.readouterr().out)
+
+    assert out["ok"] is True
+    assert "manifest_json=" in out["url"]
 
 
 def test_slack_reply_rule_is_mention_only() -> None:

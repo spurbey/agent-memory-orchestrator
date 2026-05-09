@@ -183,10 +183,26 @@ What it does not do:
 - It does not store tokens in the repo.
 - It does not open a public webhook server.
 
-Generate the Slack app manifest:
+Lowest-friction setup:
 
 ```powershell
 $env:AMO_HOME="$env:USERPROFILE\.agent-memory-orchestrator"
+python -m agent_memory_orchestrator.cli slack setup-link
+```
+
+Open the printed URL. Slack opens the create-app flow with AMO's manifest prefilled, including Socket Mode, bot scopes, and event subscriptions. The user only selects the workspace, reviews, and creates the app.
+
+If the user generated a temporary Slack App Configuration Token from the Slack apps page, AMO can create the app through Slack's Manifest API:
+
+```powershell
+python -m agent_memory_orchestrator.cli slack bootstrap --config-token "xoxe..."
+```
+
+The command returns the new `app_id` and an `oauth_authorize_url` when Slack provides one. Open that URL to approve installation. Slack still controls final workspace approval and token issuance.
+
+Manual fallback: generate the Slack app manifest:
+
+```powershell
 python -m agent_memory_orchestrator.cli slack manifest --out .\slack-app-manifest.json
 ```
 

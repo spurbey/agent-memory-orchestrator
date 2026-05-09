@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from urllib.parse import quote
 from typing import Any
 
 
@@ -54,3 +55,8 @@ def build_slack_manifest(*, app_name: str = "Agent Memory Orchestrator") -> dict
 
 def slack_manifest_json(*, app_name: str = "Agent Memory Orchestrator") -> str:
     return json.dumps(build_slack_manifest(app_name=app_name), indent=2, sort_keys=True) + "\n"
+
+
+def slack_manifest_setup_url(*, app_name: str = "Agent Memory Orchestrator") -> str:
+    manifest = json.dumps(build_slack_manifest(app_name=app_name), ensure_ascii=False, sort_keys=True)
+    return f"https://api.slack.com/apps?new_app=1&manifest_json={quote(manifest, safe='')}"

@@ -9,7 +9,7 @@ from pathlib import Path
 
 from .config import Settings
 from .connectors.slack import SlackConnectorService
-from .connectors.slack.manifest import slack_manifest_json
+from .connectors.slack.manifest import slack_manifest_json, slack_manifest_setup_url
 from .connectors.slack.service import load_event_file
 from .connectors.slack.socket_mode import SlackSocketModeRunner
 from .daemon_client import DaemonClient, DaemonUnavailable
@@ -151,6 +151,12 @@ def _build_parser() -> argparse.ArgumentParser:
     slack_manifest = slack_sub.add_parser("manifest", help="Print or write a Slack app manifest for Socket Mode")
     slack_manifest.add_argument("--out", type=Path, help="Optional output path for manifest JSON")
     slack_manifest.add_argument("--app-name", default="Agent Memory Orchestrator")
+    slack_setup_link = slack_sub.add_parser("setup-link", help="Print a one-click Slack app creation URL with manifest prefilled")
+    slack_setup_link.add_argument("--app-name", default="Agent Memory Orchestrator")
+    slack_bootstrap = slack_sub.add_parser("bootstrap", help="Create the Slack app through the Manifest API using a config token")
+    slack_bootstrap.add_argument("--config-token", required=True, help="Temporary Slack app configuration token, usually xoxe...")
+    slack_bootstrap.add_argument("--team-id", default="", help="Optional Slack team id for org tokens")
+    slack_bootstrap.add_argument("--app-name", default="Agent Memory Orchestrator")
     slack_setup = slack_sub.add_parser("setup", help="Write local Slack connector config")
     slack_setup.add_argument("--team-id", default="")
     slack_setup.add_argument("--bot-user-id", default="")
@@ -383,8 +389,25 @@ def main(argv: list[str] | None = None) -> int:
                 else:
                     print(slack_manifest_json(app_name=args.app_name), end="")
                 return 0
+            if args.slack_command == "setup-link":
+                _print(
+                    {
+                        "ok": True,
+                        "url": slack_manifest_setup_url(app_name=args.app_name),
+                        "next_step": "Open this URL, select the workspace, review, and create the app.",
+                    }
+                )
+                return 0
             settings = Settings.load()
             svc = SlackConnectorService(settings)
+            if args.slack_command == "bootstrap":
+                result = svc.bootstrap_with_config_token(
+                    config_token=args.config_token,
+                    team_id=args.team_id,
+                    app_name=args.app_name,
+                )
+                _print(result)
+                return 0 if result.get("ok") else 1
             if args.slack_command == "setup":
                 result = svc.setup(
                     team_id=args.team_id,

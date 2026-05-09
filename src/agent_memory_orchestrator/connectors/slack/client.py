@@ -44,6 +44,20 @@ class SlackApiClient:
             raise SlackApiError("Slack apps.connections.open response did not include a websocket URL")
         return url
 
+    def create_app_from_manifest(
+        self,
+        *,
+        config_token: str,
+        manifest: dict[str, Any],
+        team_id: str = "",
+    ) -> dict[str, Any]:
+        if not config_token:
+            raise SlackApiError("Slack app configuration token is required")
+        payload: dict[str, Any] = {"manifest": json.dumps(manifest, ensure_ascii=False, sort_keys=True)}
+        if team_id:
+            payload["team_id"] = team_id
+        return self._post("apps.manifest.create", config_token, payload)
+
     def post_message(self, *, channel: str, text: str, thread_ts: str = "") -> dict[str, Any]:
         payload: dict[str, Any] = {"channel": channel, "text": text}
         if thread_ts:
