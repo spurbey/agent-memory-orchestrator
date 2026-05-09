@@ -11,7 +11,10 @@ from typing import Any
 from .adapters import normalize_adapter_event
 from .config import Settings
 from .evidence_drain import EvidenceDrain
+from .evidence_drain import _read_jsonl_from
+from .evidence_window import clean_evidence_window
 from .graph_store import GraphEdge, GraphNode, GraphStore, KuzuGraphStore
+from .graph_triggers import TriggerDecision, detect_trigger
 from .qwen_client import DeterministicPlanner, OllamaQwenClient, QueryPlan, QwenPlanner, QwenUnavailable
 from .raw_evidence import RawEvidenceRef, RawEvidenceStore
 from .session_graph import QwenGraphExtractor, SessionGraphBuilder
@@ -212,6 +215,139 @@ class GraphRagService:
     def pending_evidence(self, *, session_id: str = "") -> dict[str, Any]:
         drain = self._new_drain()
         return drain.pending(session_id=session_id)
+
+    def session_overview(self, *, limit: int = 25) -> dict[str, Any]:
+        safe_limit = max(1, min(100, int(limit)))
+        records = _load_evidence_records(_evidence_roots(self.settings), limit=5000)
+        sessions: dict[str, dict[str, Any]] = {}
+        for record in records:
+            session_id = str(record.get("session_id") or "default")
+            payload = record.get("payload") if isinstance(record.get("payload"), dict) else {}
+            row = sessions.setdefault(
+                session_id,
+                {
+                    "session_id": session_id,
+                    "source_apps": set(),
+                    "raw_events": 0,
+                    "event_counts": {},
+                    "latest_at": "",
+                    "first_at": "",
+                    "cwd": "",
+                    "repo": "",
+                    "branch": "",
+                    "latest_event": "",
+                },
+            )
+            row["raw_events"] += 1
+            row["source_apps"].add(str(record.get("source_app") or "unknown"))
+            event_name = str(record.get("event_name") or "message")
+            row["event_counts"][event_name] = int(row["event_counts"].get(event_name, 0)) + 1
+            created_at = str(record.get("created_at") or "")
+            if not row["first_at"] or created_at < row["first_at"]:
+                row["first_at"] = created_at
+            if not row["latest_at"] or created_at >= row["latest_at"]:
+                row["latest_at"] = created_at
+                row["latest_event"] = event_name
+                row["cwd"] = str(payload.get("cwd") or row.get("cwd") or "")
+                git = payload.get("git") if isinstance(payload.get("git"), dict) else {}
+                row["repo"] = str(git.get("repo_root") or payload.get("repo_root") or row.get("repo") or "")
+                row["branch"] = str(git.get("branch") or row.get("branch") or "")
+
+        contexts = {
+            str(node.get("session_id")): _sanitize_output_node(node)
+            for node in self.store.list_nodes(kinds=["ContextSnapshot"], limit=max(safe_limit * 4, 100))
+            if str(node.get("session_id") or "")
+        }
+        rows: list[dict[str, Any]] = []
+        for session_id, row in sessions.items():
+            context = contexts.get(session_id)
+            counts = self.store.merge_status(session_id=session_id).get("counts", {})
+            rows.append(
+                {
+                    **{key: value for key, value in row.items() if key != "source_apps"},
+                    "source_apps": sorted(row["source_apps"]),
+                    "graph_counts": counts,
+                    "latest_context": context,
+                }
+            )
+        rows.sort(key=lambda item: str(item.get("latest_at") or ""), reverse=True)
+        return {
+            "ok": True,
+            "graph_status": self.merge_status(),
+            "sessions": rows[:safe_limit],
+        }
+
+    def session_detail(self, *, session_id: str, limit: int = 120) -> dict[str, Any]:
+        session_id = str(session_id or "").strip()
+        if not session_id:
+            raise ValueError("session_id is required")
+        safe_limit = max(1, min(500, int(limit)))
+        records = _load_evidence_records(_evidence_roots(self.settings), session_id=session_id, limit=safe_limit)
+        nodes = [_sanitize_output_node(node) for node in self.store.list_nodes(session_id=session_id, limit=300)]
+        edges = self.store.list_edges(session_id=session_id, limit=500)
+        pending = self.pending_evidence(session_id=session_id)
+        windows = _reconstruct_clean_windows(records, nodes)
+        return {
+            "ok": True,
+            "session_id": session_id,
+            "timeline": [_timeline_row(record) for record in records],
+            "windows": windows,
+            "current_context": self.current_context(session_id=session_id, limit=5),
+            "merge_status": self.merge_status(session_id=session_id),
+            "pending": {"count": pending.get("count", 0), "cursor_path": pending.get("cursor_path")},
+            "graph": {
+                "nodes": nodes,
+                "edges": edges,
+            },
+            "central_graph": self.central_graph(limit=80),
+        }
+
+    def central_graph(self, *, limit: int = 100) -> dict[str, Any]:
+        safe_limit = max(1, min(500, int(limit)))
+        all_nodes = self.store.list_nodes(limit=safe_limit * 8)
+        pool = [
+            *self.store.list_nodes(status="committed", limit=safe_limit),
+            *self.store.list_nodes(status="active", limit=safe_limit),
+            *all_nodes,
+        ]
+        output_ids: set[str] = set()
+        nodes: list[dict[str, Any]] = []
+        for node in pool:
+            node_id = str(node.get("id") or "")
+            if node_id in output_ids:
+                continue
+            if node.get("scope") == "central" or node.get("status") in {"committed", "active"}:
+                nodes.append(_sanitize_output_node(node))
+                output_ids.add(node_id)
+            if len(nodes) >= safe_limit:
+                break
+        edges = self.store.list_edges(limit=safe_limit * 2)
+        central_ids = {str(node.get("id")) for node in nodes}
+        central_edges = [
+            edge
+            for edge in edges
+            if edge.get("source_id") in central_ids or edge.get("target_id") in central_ids
+        ][: safe_limit * 2]
+        node_by_id = {str(node.get("id") or ""): node for node in all_nodes + pool}
+        for edge in central_edges:
+            for endpoint_id in (str(edge.get("source_id") or ""), str(edge.get("target_id") or "")):
+                if not endpoint_id or endpoint_id in output_ids:
+                    continue
+                endpoint = node_by_id.get(endpoint_id)
+                if not endpoint:
+                    continue
+                nodes.append(_sanitize_output_node(endpoint))
+                output_ids.add(endpoint_id)
+                if len(nodes) >= safe_limit:
+                    break
+            if len(nodes) >= safe_limit:
+                break
+        return {
+            "ok": True,
+            "nodes": nodes,
+            "edges": central_edges,
+            "status": self.merge_status(),
+        }
 
     def cleanup_noisy_drafts(self, *, limit: int = 500, apply: bool = False) -> dict[str, Any]:
         candidates = self.store.list_nodes(
@@ -740,6 +876,118 @@ def _code_token_ratio(text: str) -> float:
         return 0.0
     code_like = sum(1 for token in tokens if any(mark in token for mark in ("::", "=>", "()", "=", "{", "}", ";")))
     return code_like / len(tokens)
+
+
+def _load_evidence_records(
+    roots: list[Path],
+    *,
+    session_id: str = "",
+    limit: int = 500,
+) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
+    for root in roots:
+        if not root.exists():
+            continue
+        for path in sorted(root.glob("*.jsonl")):
+            for _next_offset, record in _read_jsonl_from(path, 0):
+                if session_id and str(record.get("session_id") or "") != session_id:
+                    continue
+                records.append(record)
+    records.sort(key=lambda record: str(record.get("created_at") or ""))
+    return records[-max(1, int(limit)) :]
+
+
+def _timeline_row(record: dict[str, Any]) -> dict[str, Any]:
+    payload = record.get("payload") if isinstance(record.get("payload"), dict) else {}
+    tool_input = payload.get("tool_input") if isinstance(payload.get("tool_input"), dict) else {}
+    command = str(tool_input.get("command") or tool_input.get("cmd") or "")
+    text = (
+        str(payload.get("prompt") or "")
+        or str(payload.get("tool_response") or "")
+        or str(payload.get("last_assistant_message") or "")
+        or command
+    )
+    return {
+        "id": record.get("id"),
+        "created_at": record.get("created_at"),
+        "event_name": record.get("event_name"),
+        "source_app": record.get("source_app"),
+        "tool": payload.get("tool") or payload.get("tool_name") or "",
+        "command": _clip(command, 260),
+        "summary": _clip(text, 420),
+        "payload_keys": sorted(payload.keys()),
+        "raw_ref": {
+            "path": record.get("path"),
+            "offset": record.get("offset"),
+            "hash": record.get("hash"),
+        },
+    }
+
+
+def _reconstruct_clean_windows(records: list[dict[str, Any]], nodes: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    pending_records: list[dict[str, Any]] = []
+    pending_write = False
+    windows: list[dict[str, Any]] = []
+    for record in records:
+        decision = detect_trigger(record, pending_write=pending_write)
+        if decision.is_write:
+            pending_write = True
+        pending_records.append(record)
+        if decision.should_process:
+            windows.append(_window_row(len(windows) + 1, pending_records, decision, nodes))
+            pending_records = []
+            pending_write = False
+    if pending_records:
+        preview_trigger = TriggerDecision(False, "pending", "pending raw evidence window")
+        windows.append(
+            {
+                "index": len(windows) + 1,
+                "status": "pending",
+                "trigger": preview_trigger.as_dict(),
+                "evidence_ids": [str(record.get("id") or "") for record in pending_records if record.get("id")],
+                "cleaned_evidence": clean_evidence_window(pending_records, preview_trigger),
+                "graph_nodes": [],
+                "graph_edges": [],
+            }
+        )
+    return windows
+
+
+def _window_row(
+    index: int,
+    records: list[dict[str, Any]],
+    trigger: TriggerDecision,
+    nodes: list[dict[str, Any]],
+) -> dict[str, Any]:
+    evidence_ids = [str(record.get("id") or "") for record in records if record.get("id")]
+    graph_nodes = _nodes_for_evidence(nodes, evidence_ids)
+    return {
+        "index": index,
+        "status": "processed" if graph_nodes else "captured",
+        "trigger": trigger.as_dict(),
+        "evidence_ids": evidence_ids,
+        "cleaned_evidence": clean_evidence_window(records, trigger),
+        "graph_nodes": graph_nodes,
+    }
+
+
+def _nodes_for_evidence(nodes: list[dict[str, Any]], evidence_ids: list[str]) -> list[dict[str, Any]]:
+    evidence_set = set(evidence_ids)
+    matched: list[dict[str, Any]] = []
+    for node in nodes:
+        metadata = node.get("metadata") if isinstance(node.get("metadata"), dict) else {}
+        node_evidence = {str(node.get("evidence_id") or "")}
+        meta_evidence = metadata.get("evidence_ids")
+        if isinstance(meta_evidence, list):
+            node_evidence.update(str(item) for item in meta_evidence)
+        if evidence_set.intersection(node_evidence):
+            matched.append(node)
+    return matched[:25]
+
+
+def _clip(value: object, limit: int) -> str:
+    compact = " ".join(str(value or "").split())
+    return compact if len(compact) <= limit else compact[: limit - 3] + "..."
 
 
 def _evidence_roots(settings: Settings) -> list[Path]:
