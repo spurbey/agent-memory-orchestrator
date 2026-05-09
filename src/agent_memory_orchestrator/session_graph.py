@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from typing import Any, Protocol
 
 from .config import Settings
+from .evidence_window import clean_evidence_window
 from .graph_store import GraphEdge, GraphNode, GraphStore
 from .graph_triggers import TriggerDecision
 from .qwen_client import OllamaQwenClient, QwenUnavailable
@@ -53,16 +54,17 @@ class DeterministicGraphExtractor:
     """Small local fallback for tests and when Qwen is unavailable."""
 
     def extract(self, *, session_id: str, records: list[dict[str, Any]], trigger: TriggerDecision) -> GraphDelta:
-        text = "\n".join(_record_content(record) for record in records)
-        files = _extract_files(text)
+        clean_records = clean_evidence_window(records, trigger)
+        text = "\n".join(_clean_record_text(record) for record in clean_records)
+        files = _clean_changed_files(clean_records) or _extract_files(text)
         tests = [line for line in _important_lines(text) if _looks_like_test(line)]
         decisions = [line for line in _important_lines(text) if "decision" in line.lower() or "decide" in line.lower()]
         fixes = [line for line in _important_lines(text) if "fix" in line.lower() or "fixed" in line.lower()]
         bugs = [line for line in _important_lines(text) if "bug" in line.lower() or "error" in line.lower()]
-        summary = _trim(" ".join(_important_lines(text)) or f"{trigger.trigger_type} update in session {session_id}", 700)
+        summary = _trim(_clean_summary(clean_records) or f"{trigger.trigger_type} update in session {session_id}", 700)
         return GraphDelta(
             summary=summary,
-            goal=_trim(_first_prompt(records), 240),
+            goal=_trim(_first_clean_goal(clean_records) or _first_prompt(records), 240),
             latest_decision=_trim(decisions[-1], 280) if decisions else "",
             changed_files=files,
             tests=tests[:5],
@@ -90,6 +92,7 @@ class QwenGraphExtractor:
         self.fallback = fallback or DeterministicGraphExtractor()
 
     def extract(self, *, session_id: str, records: list[dict[str, Any]], trigger: TriggerDecision) -> GraphDelta:
+        cleaned_evidence = clean_evidence_window(records, trigger)
         prompt = (
             "/no_think\n"
             "Extract an AMO session GraphDelta from this bounded evidence window. "
@@ -99,21 +102,21 @@ class QwenGraphExtractor:
             "Only include durable work memory caused by this trigger; ignore ordinary read-only chat.\n"
             f"session_id={session_id}\n"
             f"trigger={json.dumps(trigger.as_dict(), ensure_ascii=False, sort_keys=True)}\n"
-            f"evidence={json.dumps(_records_for_qwen(records), ensure_ascii=False, indent=2)}"
+            f"evidence={json.dumps(cleaned_evidence, ensure_ascii=False, indent=2)}"
         )
         try:
             payload = self.client._generate_json(prompt, num_predict=900)  # noqa: SLF001 - package-local Ollama adapter.
         except QwenUnavailable:
             return self.fallback.extract(session_id=session_id, records=records, trigger=trigger)
         return GraphDelta(
-            summary=_trim(str(payload.get("summary") or ""), 700)
+            summary=_string_field(payload.get("summary"), limit=700)
             or self.fallback.extract(session_id=session_id, records=records, trigger=trigger).summary,
-            goal=_trim(str(payload.get("goal") or ""), 240),
-            latest_decision=_trim(str(payload.get("latest_decision") or ""), 280),
+            goal=_string_field(payload.get("goal"), limit=240),
+            latest_decision=_string_field(payload.get("latest_decision"), limit=280),
             changed_files=_string_list(payload.get("changed_files"), limit=20),
             tests=_string_list(payload.get("tests"), limit=8),
             blockers=_string_list(payload.get("blockers"), limit=8),
-            next_step=_trim(str(payload.get("next_step") or ""), 240),
+            next_step=_string_field(payload.get("next_step"), limit=240),
             decisions=_string_list(payload.get("decisions"), limit=8),
             fixes=_string_list(payload.get("fixes"), limit=8),
             bugs=_string_list(payload.get("bugs"), limit=8),
@@ -434,18 +437,50 @@ def _record_content(record: dict[str, Any]) -> str:
 
 
 def _records_for_qwen(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    compact: list[dict[str, Any]] = []
-    for record in records[-12:]:
-        compact.append(
-            {
-                "id": record.get("id"),
-                "session_id": record.get("session_id"),
-                "source_app": record.get("source_app"),
-                "event_name": record.get("event_name"),
-                "content": _trim(_record_content(record), 1200),
-            }
-        )
-    return compact
+    trigger = TriggerDecision(True, "manual_clean", "manual clean evidence window")
+    return clean_evidence_window(records, trigger)
+
+
+def _clean_record_text(record: dict[str, Any]) -> str:
+    parts: list[str] = [
+        str(record.get("kind") or ""),
+        str(record.get("summary") or ""),
+        str(record.get("command") or ""),
+    ]
+    for key in ("changed_files", "tests", "commits"):
+        value = record.get(key)
+        if isinstance(value, list):
+            parts.extend(str(item) for item in value)
+    return " ".join(part for part in parts if part)
+
+
+def _clean_changed_files(records: list[dict[str, Any]]) -> list[str]:
+    seen: list[str] = []
+    for record in records:
+        files = record.get("changed_files")
+        if not isinstance(files, list):
+            continue
+        for file_path in files:
+            text = str(file_path or "")
+            if text and text not in seen:
+                seen.append(text)
+    return seen[:20]
+
+
+def _clean_summary(records: list[dict[str, Any]]) -> str:
+    summaries = [
+        str(record.get("summary") or "")
+        for record in records
+        if record.get("kind") not in {"user_goal"} and record.get("summary")
+    ]
+    return " ".join(summaries)
+
+
+def _first_clean_goal(records: list[dict[str, Any]]) -> str:
+    for record in records:
+        if record.get("kind") == "user_goal" and record.get("summary"):
+            return str(record["summary"])
+    return ""
 
 
 def _first_prompt(records: list[dict[str, Any]]) -> str:
@@ -518,6 +553,16 @@ def _snake(value: str) -> str:
 def _trim(value: str, limit: int) -> str:
     compact = " ".join(str(value or "").split())
     return compact if len(compact) <= limit else compact[: limit - 3] + "..."
+
+
+def _string_field(value: Any, *, limit: int) -> str:
+    if isinstance(value, list):
+        text = " ".join(str(item or "").strip() for item in value if str(item or "").strip())
+    elif isinstance(value, dict):
+        text = json.dumps(value, ensure_ascii=False, sort_keys=True)
+    else:
+        text = str(value or "")
+    return _trim(text, limit)
 
 
 def _compact_git(git: dict[str, Any]) -> dict[str, Any]:

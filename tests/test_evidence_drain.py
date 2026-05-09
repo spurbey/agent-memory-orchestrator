@@ -158,6 +158,51 @@ def test_basic_event_git_metadata_is_compact(tmp_path: Path) -> None:
     assert "status_porcelain" not in git
 
 
+def test_session_filtered_drain_uses_session_cursor_and_matching_limit(tmp_path: Path) -> None:
+    settings = make_settings(tmp_path)
+    store = InMemoryGraphStore()
+    backend = _StaticGitBackend()
+    evidence = RawEvidenceStore(settings.evidence_dir)
+    for index in range(30):
+        evidence.append(
+            {"hook_event_name": "UserPromptSubmit", "session_id": f"other-{index}", "prompt": "read only"},
+            session_id=f"other-{index}",
+            source_app="codex",
+            event_name="user_prompt_submit",
+        )
+    evidence.append(
+        {"hook_event_name": "UserPromptSubmit", "session_id": "target", "prompt": "clean write window"},
+        session_id="target",
+        source_app="codex",
+        event_name="user_prompt_submit",
+    )
+    evidence.append(
+        {
+            "hook_event_name": "PostToolUse",
+            "session_id": "target",
+            "tool": "apply_patch",
+            "tool_response": json.dumps(
+                {
+                    "output": "Success. Updated the following files:\nM C:\\repo\\src\\agent_memory_orchestrator\\evidence_window.py\n",
+                    "metadata": {"exit_code": 0},
+                }
+            ),
+        },
+        session_id="target",
+        source_app="codex",
+        event_name="post_tool_use",
+    )
+
+    result = _drain(settings, store, backend).drain(session_id="target", limit=2)
+    cursors = json.loads((settings.home / ".state" / "evidence_cursors.json").read_text(encoding="utf-8"))
+
+    assert result["records_ingested"] == 2
+    assert result["windows_processed"] == 1
+    assert store.list_nodes(kinds=["ContextSnapshot"], session_id="target")
+    assert cursors
+    assert all("::session::target" in key for key in cursors)
+
+
 def _drain(settings: Settings, store: InMemoryGraphStore, backend: _StaticGitBackend) -> EvidenceDrain:
     return EvidenceDrain(
         settings,
