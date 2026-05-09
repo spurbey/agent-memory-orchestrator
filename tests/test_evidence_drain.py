@@ -96,11 +96,18 @@ def test_drain_write_window_builds_context_snapshot_and_work_change(tmp_path: Pa
     assert result["windows_processed"] == 1
     context = store.list_nodes(kinds=["ContextSnapshot"], session_id="s1")
     work = store.list_nodes(kinds=["WorkChange"], session_id="s1")
+    windows = store.list_nodes(kinds=["CleanedEvidenceWindow"], session_id="s1")
+    deltas = store.list_nodes(kinds=["GraphDelta"], session_id="s1")
     decisions = store.list_nodes(kinds=["Decision"], session_id="s1")
+    edges = store.list_edges(session_id="s1", limit=50)
     assert context
     assert work
+    assert windows
+    assert deltas
     assert decisions
     assert "hook.py" in json.dumps(context[0]["metadata"])
+    assert "cleaned_evidence" in windows[0]["metadata"]
+    assert {edge["kind"] for edge in edges} >= {"CLEANED_INTO", "EXTRACTED_AS", "CREATED", "MODIFIES", "IMPLEMENTS"}
 
 
 def test_drain_git_commit_links_work_change_to_commit_from_snapshot(tmp_path: Path) -> None:
