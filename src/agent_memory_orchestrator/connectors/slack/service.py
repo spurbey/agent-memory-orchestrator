@@ -153,7 +153,7 @@ class SlackConnectorService:
             return {"ok": False, "prefix": prefix_check, "network": None}
         if skip_network:
             return {"ok": True, "prefix": prefix_check, "network": "skipped"}
-        client = SlackApiClient(app_token=app_token, bot_token=bot_token)
+        client = SlackApiClient(app_token=app_token, bot_token=bot_token, transport=self.client.transport)
         try:
             auth = client.auth_test() if bot_token else {}
         except SlackApiError as exc:

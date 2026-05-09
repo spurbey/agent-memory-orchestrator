@@ -10,6 +10,7 @@ from agent_memory_orchestrator.connectors.slack.client import SlackApiClient
 from agent_memory_orchestrator.connectors.slack.config import load_slack_config, slack_secret_path
 from agent_memory_orchestrator.connectors.slack.events import parse_message_envelope, should_reply_message
 from agent_memory_orchestrator.connectors.slack.manifest import build_slack_manifest, slack_manifest_setup_url
+from agent_memory_orchestrator.connectors.slack.wizard import run_slack_setup_wizard
 from agent_memory_orchestrator.graph_triggers import detect_trigger
 
 
@@ -96,6 +97,59 @@ def test_slack_setup_writes_config_without_leaking_tokens(monkeypatch, tmp_path)
         "app_token": "xapp-test",
         "bot_token": "xoxb-test",
     }
+
+
+def test_slack_setup_wizard_derives_team_and_bot_user(tmp_path) -> None:
+    calls: list[dict[str, object]] = []
+
+    def fake_transport(url: str, token: str, payload: dict[str, object], timeout: float) -> dict[str, object]:
+        calls.append({"url": url, "token": token, "payload": payload, "timeout": timeout})
+        return {"ok": True, "team_id": "T123", "user_id": "B123", "bot_id": "BOT123"}
+
+    answers = iter(["", "", "", "U123,U456", "C123", ""])
+    secrets = iter(["xapp-wizard", "xoxb-wizard"])
+    outputs: list[str] = []
+    service = SlackConnectorService(
+        _settings(tmp_path),
+        client=SlackApiClient(transport=fake_transport),
+    )
+
+    result = run_slack_setup_wizard(
+        service,
+        input_fn=lambda prompt: next(answers),
+        secret_fn=lambda prompt: next(secrets),
+        output_fn=outputs.append,
+    )
+
+    assert result["ok"] is True
+    assert result["config"]["team_id"] == "T123"
+    assert result["config"]["bot_user_id"] == "B123"
+    assert result["wizard"]["derived_team_id"] is True
+    assert result["wizard"]["derived_bot_user_id"] is True
+    assert calls[0]["url"] == "https://slack.com/api/auth.test"
+    loaded = load_slack_config(service.settings)
+    assert loaded.capture_user_ids == ("U123", "U456")
+    assert loaded.allowed_channels == ("C123",)
+    assert json.loads(slack_secret_path(service.settings).read_text(encoding="utf-8")) == {
+        "app_token": "xapp-wizard",
+        "bot_token": "xoxb-wizard",
+    }
+
+
+def test_slack_setup_wizard_requires_bot_user_id_when_skip_validation(tmp_path) -> None:
+    answers = iter(["n", "", "", "", ""])
+    secrets = iter(["xapp-wizard", "xoxb-wizard"])
+    service = SlackConnectorService(_settings(tmp_path))
+
+    result = run_slack_setup_wizard(
+        service,
+        input_fn=lambda prompt: next(answers),
+        secret_fn=lambda prompt: next(secrets),
+        output_fn=lambda message: None,
+    )
+
+    assert result["ok"] is False
+    assert result["stage"] == "bot_user_id"
 
 
 def test_slack_message_capture_rules_for_user_and_bot_mention(tmp_path) -> None:
