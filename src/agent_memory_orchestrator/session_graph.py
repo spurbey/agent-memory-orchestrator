@@ -205,14 +205,54 @@ class SessionGraphBuilder:
     def process_window(self, *, session_id: str, records: list[dict[str, Any]], trigger: TriggerDecision) -> dict[str, Any]:
         if not records:
             return {"processed": False, "reason": "empty_window", "nodes": [], "edges": []}
+        cleaned_evidence = clean_evidence_window(records, trigger)
         delta = self.extractor.extract(session_id=session_id, records=records, trigger=trigger)
         evidence_ids = [str(record.get("id") or "") for record in records if record.get("id")]
         source_app = str(records[-1].get("source_app") or "unknown")
         trigger_evidence = evidence_ids[-1] if evidence_ids else ""
         now_id = uuid.uuid4().hex
+        window_id = f"window:{session_id}:{trigger_evidence or now_id}"
+        delta_id = f"delta:{session_id}:{trigger_evidence or now_id}"
         work_id = f"work:{session_id}:{now_id}"
         context_id = f"context:{session_id}:latest"
 
+        window_node = GraphNode(
+            id=window_id,
+            kind="CleanedEvidenceWindow",
+            label=f"{trigger.trigger_type} cleaned window",
+            summary=_trim(_cleaned_window_summary(cleaned_evidence) or f"Cleaned {trigger.trigger_type} evidence window", 700),
+            status="draft",
+            scope="session",
+            session_id=session_id,
+            project_id=self.settings.project_id,
+            source_app=source_app,
+            evidence_id=trigger_evidence,
+            metadata={
+                "trigger": trigger.as_dict(),
+                "evidence_ids": evidence_ids,
+                "cleaned_evidence": cleaned_evidence,
+                "record_count": len(records),
+                "cleaned_count": len(cleaned_evidence),
+            },
+        )
+        delta_node = GraphNode(
+            id=delta_id,
+            kind="GraphDelta",
+            label=_trim(delta.summary, 120) or f"{trigger.trigger_type} graph delta",
+            summary=delta.summary,
+            status="draft",
+            scope="session",
+            session_id=session_id,
+            project_id=self.settings.project_id,
+            source_app=source_app,
+            evidence_id=trigger_evidence,
+            metadata={
+                **delta.as_context_metadata(evidence_ids, trigger),
+                "decisions": delta.decisions,
+                "fixes": delta.fixes,
+                "bugs": delta.bugs,
+            },
+        )
         work_node = GraphNode(
             id=work_id,
             kind="WorkChange",
@@ -239,12 +279,21 @@ class SessionGraphBuilder:
             evidence_id=trigger_evidence,
             metadata=delta.as_context_metadata(evidence_ids, trigger),
         )
+        self.store.upsert_node(window_node)
+        self.store.upsert_node(delta_node)
         self.store.upsert_node(work_node)
         self.store.upsert_node(context_node)
+        self._edge(f"session:{session_id}", window_id, "HAS_WINDOW", trigger_evidence)
+        for evidence_id in evidence_ids:
+            self._edge(f"evidence:{evidence_id}", window_id, "CLEANED_INTO", evidence_id)
+            self._edge(f"event:{evidence_id}", window_id, "CLEANED_INTO", evidence_id)
+        self._edge(window_id, delta_id, "EXTRACTED_AS", trigger_evidence)
+        self._edge(delta_id, work_id, "CREATED", trigger_evidence)
+        self._edge(delta_id, context_id, "CREATED", trigger_evidence)
         self._edge(f"session:{session_id}", work_id, "PRODUCED", trigger_evidence)
         self._edge(work_id, context_id, "REFINES", trigger_evidence)
 
-        nodes = [work_node.as_dict(), context_node.as_dict()]
+        nodes = [window_node.as_dict(), delta_node.as_dict(), work_node.as_dict(), context_node.as_dict()]
         for file_path in delta.changed_files:
             file_node = GraphNode(
                 id=f"file:{file_path}",
@@ -257,26 +306,31 @@ class SessionGraphBuilder:
                 source_app=source_app,
             )
             self.store.upsert_node(file_node)
+            self._edge(delta_id, file_node.id, "CREATED", trigger_evidence)
             self._edge(work_id, file_node.id, "MODIFIES", trigger_evidence)
             nodes.append(file_node.as_dict())
         for text in delta.decisions or ([delta.latest_decision] if delta.latest_decision else []):
             node = self._answer_node("Decision", session_id, source_app, text, trigger_evidence)
             self.store.upsert_node(node)
+            self._edge(delta_id, node.id, "CREATED", trigger_evidence)
             self._edge(work_id, node.id, "IMPLEMENTS", trigger_evidence)
             nodes.append(node.as_dict())
         for text in delta.fixes:
             node = self._answer_node("Fix", session_id, source_app, text, trigger_evidence)
             self.store.upsert_node(node)
+            self._edge(delta_id, node.id, "CREATED", trigger_evidence)
             self._edge(work_id, node.id, "FIXES", trigger_evidence)
             nodes.append(node.as_dict())
         for text in delta.bugs:
             node = self._answer_node("Bug", session_id, source_app, text, trigger_evidence)
             self.store.upsert_node(node)
+            self._edge(delta_id, node.id, "CREATED", trigger_evidence)
             self._edge(work_id, node.id, "ABOUT", trigger_evidence)
             nodes.append(node.as_dict())
         for text in delta.tests:
             node = self._answer_node("TestRun", session_id, source_app, text, trigger_evidence)
             self.store.upsert_node(node)
+            self._edge(delta_id, node.id, "CREATED", trigger_evidence)
             self._edge(node.id, work_id, "VALIDATED_BY", trigger_evidence)
             nodes.append(node.as_dict())
 
@@ -474,6 +528,20 @@ def _clean_summary(records: list[dict[str, Any]]) -> str:
         if record.get("kind") not in {"user_goal"} and record.get("summary")
     ]
     return " ".join(summaries)
+
+
+def _cleaned_window_summary(records: list[dict[str, Any]]) -> str:
+    if not records:
+        return ""
+    parts: list[str] = []
+    for record in records:
+        kind = str(record.get("kind") or "")
+        summary = _trim(str(record.get("summary") or ""), 160)
+        if kind and summary:
+            parts.append(f"{kind}: {summary}")
+        elif summary:
+            parts.append(summary)
+    return _trim(" | ".join(parts), 700)
 
 
 def _first_clean_goal(records: list[dict[str, Any]]) -> str:

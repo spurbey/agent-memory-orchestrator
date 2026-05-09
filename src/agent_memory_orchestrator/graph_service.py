@@ -321,31 +321,46 @@ class GraphRagService:
                 output_ids.add(node_id)
             if len(nodes) >= safe_limit:
                 break
-        edges = self.store.list_edges(limit=safe_limit * 2)
-        central_ids = {str(node.get("id")) for node in nodes}
-        central_edges = [
-            edge
-            for edge in edges
-            if edge.get("source_id") in central_ids or edge.get("target_id") in central_ids
-        ][: safe_limit * 2]
         node_by_id = {str(node.get("id") or ""): node for node in all_nodes + pool}
-        for edge in central_edges:
-            for endpoint_id in (str(edge.get("source_id") or ""), str(edge.get("target_id") or "")):
-                if not endpoint_id or endpoint_id in output_ids:
+        all_edges = self.store.list_edges(limit=safe_limit * 8)
+        central_edges: list[dict[str, Any]] = []
+        edge_ids: set[str] = set()
+        frontier = set(output_ids)
+        for _depth in range(3):
+            if not frontier:
+                break
+            next_frontier: set[str] = set()
+            for edge in all_edges:
+                edge_id = str(edge.get("id") or "")
+                source_id = str(edge.get("source_id") or "")
+                target_id = str(edge.get("target_id") or "")
+                if not source_id or not target_id:
                     continue
-                endpoint = node_by_id.get(endpoint_id)
-                if not endpoint:
+                if source_id not in frontier and target_id not in frontier:
                     continue
-                nodes.append(_sanitize_output_node(endpoint))
-                output_ids.add(endpoint_id)
-                if len(nodes) >= safe_limit:
+                if edge_id not in edge_ids:
+                    central_edges.append(edge)
+                    edge_ids.add(edge_id)
+                for endpoint_id in (source_id, target_id):
+                    if endpoint_id in output_ids:
+                        continue
+                    endpoint = node_by_id.get(endpoint_id)
+                    if not endpoint:
+                        continue
+                    nodes.append(_sanitize_output_node(endpoint))
+                    output_ids.add(endpoint_id)
+                    next_frontier.add(endpoint_id)
+                    if len(nodes) >= safe_limit:
+                        break
+                if len(nodes) >= safe_limit or len(central_edges) >= safe_limit * 4:
                     break
-            if len(nodes) >= safe_limit:
+            frontier = next_frontier
+            if len(nodes) >= safe_limit or len(central_edges) >= safe_limit * 4:
                 break
         return {
             "ok": True,
             "nodes": nodes,
-            "edges": central_edges,
+            "edges": central_edges[: safe_limit * 4],
             "status": self.merge_status(),
         }
 

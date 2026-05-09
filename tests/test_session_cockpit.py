@@ -64,6 +64,28 @@ def test_central_graph_snapshot_lists_committed_nodes_and_edges(tmp_path: Path) 
     store = InMemoryGraphStore()
     store.upsert_node(
         GraphNode(
+            id="window:s1:raw1",
+            kind="CleanedEvidenceWindow",
+            label="write cleaned window",
+            summary="Cleaned raw write evidence.",
+            status="draft",
+            scope="session",
+            session_id="s1",
+        )
+    )
+    store.upsert_node(
+        GraphNode(
+            id="delta:s1:raw1",
+            kind="GraphDelta",
+            label="session graph delta",
+            summary="Created work from cleaned evidence.",
+            status="draft",
+            scope="session",
+            session_id="s1",
+        )
+    )
+    store.upsert_node(
+        GraphNode(
             id="work:s1:one",
             kind="WorkChange",
             label="session work",
@@ -87,6 +109,22 @@ def test_central_graph_snapshot_lists_committed_nodes_and_edges(tmp_path: Path) 
     )
     store.upsert_edge(
         GraphEdge(
+            id="edge:window-delta",
+            source_id="window:s1:raw1",
+            target_id="delta:s1:raw1",
+            kind="EXTRACTED_AS",
+        )
+    )
+    store.upsert_edge(
+        GraphEdge(
+            id="edge:delta-work",
+            source_id="delta:s1:raw1",
+            target_id="work:s1:one",
+            kind="CREATED",
+        )
+    )
+    store.upsert_edge(
+        GraphEdge(
             id="edge:commit",
             source_id="work:s1:one",
             target_id="commit:abc123",
@@ -104,8 +142,13 @@ def test_central_graph_snapshot_lists_committed_nodes_and_edges(tmp_path: Path) 
     finally:
         svc.close()
 
-    assert [node["id"] for node in central["nodes"]] == ["commit:abc123", "work:s1:one"]
-    assert central["edges"][0]["kind"] == "COMMITTED_AS"
+    assert [node["id"] for node in central["nodes"]] == [
+        "commit:abc123",
+        "work:s1:one",
+        "delta:s1:raw1",
+        "window:s1:raw1",
+    ]
+    assert {edge["kind"] for edge in central["edges"]} >= {"COMMITTED_AS", "CREATED", "EXTRACTED_AS"}
 
 
 def test_daemon_exposes_dependency_free_3d_graph_view() -> None:

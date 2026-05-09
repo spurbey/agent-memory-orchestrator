@@ -111,8 +111,10 @@ Tasks:
 - [x] Add bounded evidence-window cleaning before Qwen graph extraction.
 - [x] Add Qwen-backed GraphDelta extractor with deterministic fallback for tests/offline failure.
 - [x] Add latest per-session `ContextSnapshot` built only after trigger windows.
+- [x] Add provenance trace nodes/edges: `RawEvidenceRef -> CleanedEvidenceWindow -> GraphDelta -> WorkChange/Decision/File/TestRun`.
 - [x] Add answer-quality gates and noisy draft quarantine for early graph drain pollution.
 - [x] Add local Git commit metadata, changed files, diff stats, and patch-id support.
+- [x] Add session cockpit and dependency-free 3D central graph view for graph inspection.
 - [x] Add CLI debug commands for hooks, drain, Qwen, graph, and retrieval.
 - [x] Add unit tests for trigger detection, drain idempotency, session context build, daemon-required MCP behavior, and Git work ledger.
 
@@ -120,6 +122,7 @@ Acceptance:
 
 - Read-only prompts remain raw evidence only.
 - Write/test/git/finalize triggers create session graph nodes and a clean current context snapshot.
+- Each extracted knowledge node is traceable back to raw evidence refs, a cleaned evidence window, and the GraphDelta that created it.
 - MCP GraphRAG tools use daemon by default and fail clearly if daemon is down.
 - Git commit traces are available for linking work changes to code history.
 
@@ -184,7 +187,7 @@ Acceptance:
 - Kuzu GraphRAG retrieval currently has deterministic graph ranking plus Qwen planning/compression; BM25/FAISS/BGE cross-encoder derived caches are still pending.
 - Qwen extraction falls back deterministically when Ollama is unavailable; production installs should treat Qwen availability as required and monitor debug latency.
 - Central graph reclustering/consolidation is not implemented yet.
-- Commit auto-merge is foundation-level; deeper supersession/refinement classification still needs Qwen merge policy tests.
+- Commit auto-merge is foundation-level; provenance trace edges exist, but deeper supersession/refinement classification still needs Qwen merge policy tests.
 - Legacy SQLite tools remain present and can confuse operators if docs/CLI labels are ignored.
 
 ## Change Control
