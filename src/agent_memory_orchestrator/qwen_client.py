@@ -27,6 +27,38 @@ class QueryPlan:
         }
 
 
+QUERY_PLAN_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "intent": {
+            "type": "string",
+            "enum": [
+                "decision_lookup",
+                "work_history",
+                "bug_fix_trace",
+                "raw_evidence",
+                "project_summary",
+                "historical_versions",
+                "general",
+            ],
+        },
+        "entities": {"type": "array", "items": {"type": "string"}, "maxItems": 12},
+        "include_raw": {"type": "boolean"},
+        "include_historical": {"type": "boolean"},
+    },
+    "required": ["intent", "entities", "include_raw", "include_historical"],
+    "additionalProperties": False,
+}
+
+
+CONTEXT_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {"context": {"type": "string"}},
+    "required": ["context"],
+    "additionalProperties": False,
+}
+
+
 class QwenPlanner(Protocol):
     def plan_query(self, query: str) -> QueryPlan:
         """Classify the user/agent query before GraphRAG retrieval."""
@@ -60,16 +92,28 @@ class OllamaQwenClient:
             "intent, entities, include_raw, include_historical. "
             "entities must be an array of short strings, not objects. "
             "include_raw is true only when the query explicitly asks for raw evidence, transcript, or logs. "
+            "Do not set include_raw for implementation topics like cleaning raw artifacts. "
             "include_historical is true only when the query explicitly asks for historical, versions, superseded, or old decisions. "
             "Intent must be one of: decision_lookup, work_history, bug_fix_trace, "
             "raw_evidence, project_summary, historical_versions, general.\n"
             f"Query: {query}"
         )
-        payload = self._generate_json(prompt, num_predict=160, timeout_seconds=self.planner_timeout_seconds)
+        payload = self._generate_json(
+            prompt,
+            num_predict=180,
+            timeout_seconds=self.planner_timeout_seconds,
+            schema=QUERY_PLAN_SCHEMA,
+        )
+        intent = str(payload.get("intent") or "general")
+        include_raw = bool(payload.get("include_raw"))
+        if include_raw and not _is_explicit_raw_request(query):
+            include_raw = False
+        if intent == "raw_evidence" and not include_raw:
+            intent = "general"
         return QueryPlan(
-            intent=str(payload.get("intent") or "general"),
+            intent=intent,
             entities=_entity_strings(payload.get("entities", [])),
-            include_raw=bool(payload.get("include_raw")),
+            include_raw=include_raw,
             include_historical=bool(payload.get("include_historical")),
         )
 
@@ -83,19 +127,31 @@ class OllamaQwenClient:
             f"include_raw={include_raw}\nQuery: {query}\nNodes:\n"
             f"{json.dumps(nodes[:6], ensure_ascii=False, indent=2)}"
         )
-        payload = self._generate_json(prompt, num_predict=700, timeout_seconds=self.compression_timeout_seconds)
+        payload = self._generate_json(
+            prompt,
+            num_predict=700,
+            timeout_seconds=self.compression_timeout_seconds,
+            schema=CONTEXT_SCHEMA,
+        )
         text = str(payload.get("context") or "").strip()
         if not text:
             raise QwenUnavailable("ollama returned no context text")
         return text
 
-    def _generate_json(self, prompt: str, *, num_predict: int, timeout_seconds: float | None = None) -> dict[str, Any]:
+    def _generate_json(
+        self,
+        prompt: str,
+        *,
+        num_predict: int,
+        timeout_seconds: float | None = None,
+        schema: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         body = json.dumps(
             {
                 "model": self.model,
                 "prompt": prompt,
                 "stream": False,
-                "format": "json",
+                "format": schema or "json",
                 "options": {
                     "temperature": 0,
                     "num_predict": num_predict,
@@ -117,13 +173,64 @@ class OllamaQwenClient:
         text = str(raw.get("response") or "").strip()
         if not text:
             raise QwenUnavailable("qwen_ollama_empty_response")
+        return _parse_json_object(text)
+
+
+def _parse_json_object(text: str) -> dict[str, Any]:
+    stripped = str(text or "").strip()
+    if not stripped:
+        raise QwenUnavailable("qwen_ollama_empty_response")
+    first_error: json.JSONDecodeError | None = None
+    try:
+        parsed = json.loads(stripped)
+    except json.JSONDecodeError as exc:
+        first_error = exc
+    else:
+        if isinstance(parsed, dict):
+            return parsed
+        raise QwenUnavailable("qwen_ollama_json_must_be_object")
+
+    for candidate in _json_object_candidates(stripped):
         try:
-            parsed = json.loads(text)
-        except json.JSONDecodeError as exc:
-            raise QwenUnavailable(f"qwen_ollama_invalid_json:{exc}") from exc
-        if not isinstance(parsed, dict):
-            raise QwenUnavailable("qwen_ollama_json_must_be_object")
-        return parsed
+            parsed = json.loads(candidate)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(parsed, dict):
+            return parsed
+
+    raise QwenUnavailable(f"qwen_ollama_invalid_json:{first_error}") from first_error
+
+
+def _json_object_candidates(text: str) -> list[str]:
+    candidates: list[str] = []
+    start: int | None = None
+    depth = 0
+    in_string = False
+    escape = False
+    for index, char in enumerate(text):
+        if in_string:
+            if escape:
+                escape = False
+            elif char == "\\":
+                escape = True
+            elif char == '"':
+                in_string = False
+            continue
+        if char == '"':
+            in_string = True
+            continue
+        if char == "{":
+            if depth == 0:
+                start = index
+            depth += 1
+            continue
+        if char != "}" or depth == 0:
+            continue
+        depth -= 1
+        if depth == 0 and start is not None:
+            candidates.append(text[start : index + 1])
+            start = None
+    return candidates
 
 
 class DeterministicPlanner:
@@ -177,3 +284,29 @@ def _entity_strings(value: Any) -> list[str]:
         if text:
             entities.append(text)
     return entities[:12]
+
+
+def _is_explicit_raw_request(query: str) -> bool:
+    lowered = " ".join(str(query or "").lower().split())
+    raw_phrases = (
+        "include raw",
+        "show raw",
+        "raw evidence",
+        "raw payload",
+        "raw transcript",
+        "raw log",
+        "raw logs",
+        "raw jsonl",
+        "raw record",
+        "raw records",
+        "raw event",
+        "raw events",
+        "evidence payload",
+        "evidence ref",
+        "evidence refs",
+        "evidence record",
+        "evidence records",
+        "original payload",
+        "verbatim evidence",
+    )
+    return any(phrase in lowered for phrase in raw_phrases)

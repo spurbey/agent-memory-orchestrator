@@ -45,6 +45,36 @@ class GraphDelta:
         }
 
 
+GRAPH_DELTA_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "summary": {"type": "string"},
+        "goal": {"type": "string"},
+        "latest_decision": {"type": "string"},
+        "changed_files": {"type": "array", "items": {"type": "string"}, "maxItems": 20},
+        "tests": {"type": "array", "items": {"type": "string"}, "maxItems": 8},
+        "blockers": {"type": "array", "items": {"type": "string"}, "maxItems": 8},
+        "next_step": {"type": "string"},
+        "decisions": {"type": "array", "items": {"type": "string"}, "maxItems": 8},
+        "fixes": {"type": "array", "items": {"type": "string"}, "maxItems": 8},
+        "bugs": {"type": "array", "items": {"type": "string"}, "maxItems": 8},
+    },
+    "required": [
+        "summary",
+        "goal",
+        "latest_decision",
+        "changed_files",
+        "tests",
+        "blockers",
+        "next_step",
+        "decisions",
+        "fixes",
+        "bugs",
+    ],
+    "additionalProperties": False,
+}
+
+
 class GraphExtractor(Protocol):
     def extract(self, *, session_id: str, records: list[dict[str, Any]], trigger: TriggerDecision) -> GraphDelta:
         """Extract a session graph delta from a bounded evidence window."""
@@ -111,6 +141,7 @@ class QwenGraphExtractor:
                 prompt,
                 num_predict=700,
                 timeout_seconds=self.timeout_seconds,
+                schema=GRAPH_DELTA_SCHEMA,
             )
         except QwenUnavailable:
             return self.fallback.extract(session_id=session_id, records=records, trigger=trigger)
