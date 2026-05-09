@@ -36,10 +36,22 @@ class QwenPlanner(Protocol):
 
 
 class OllamaQwenClient:
-    def __init__(self, *, endpoint: str, model: str, timeout_seconds: float = 120.0) -> None:
+    def __init__(
+        self,
+        *,
+        endpoint: str,
+        model: str,
+        timeout_seconds: float = 120.0,
+        planner_timeout_seconds: float | None = None,
+        compression_timeout_seconds: float | None = None,
+        num_ctx: int = 2048,
+    ) -> None:
         self.endpoint = endpoint.rstrip("/")
         self.model = model
         self.timeout_seconds = timeout_seconds
+        self.planner_timeout_seconds = planner_timeout_seconds or timeout_seconds
+        self.compression_timeout_seconds = compression_timeout_seconds or timeout_seconds
+        self.num_ctx = max(512, int(num_ctx))
 
     def plan_query(self, query: str) -> QueryPlan:
         prompt = (
@@ -53,7 +65,7 @@ class OllamaQwenClient:
             "raw_evidence, project_summary, historical_versions, general.\n"
             f"Query: {query}"
         )
-        payload = self._generate_json(prompt, num_predict=160)
+        payload = self._generate_json(prompt, num_predict=160, timeout_seconds=self.planner_timeout_seconds)
         return QueryPlan(
             intent=str(payload.get("intent") or "general"),
             entities=_entity_strings(payload.get("entities", [])),
@@ -71,13 +83,13 @@ class OllamaQwenClient:
             f"include_raw={include_raw}\nQuery: {query}\nNodes:\n"
             f"{json.dumps(nodes[:6], ensure_ascii=False, indent=2)}"
         )
-        payload = self._generate_json(prompt, num_predict=900)
+        payload = self._generate_json(prompt, num_predict=700, timeout_seconds=self.compression_timeout_seconds)
         text = str(payload.get("context") or "").strip()
         if not text:
             raise QwenUnavailable("ollama returned no context text")
         return text
 
-    def _generate_json(self, prompt: str, *, num_predict: int) -> dict[str, Any]:
+    def _generate_json(self, prompt: str, *, num_predict: int, timeout_seconds: float | None = None) -> dict[str, Any]:
         body = json.dumps(
             {
                 "model": self.model,
@@ -87,7 +99,7 @@ class OllamaQwenClient:
                 "options": {
                     "temperature": 0,
                     "num_predict": num_predict,
-                    "num_ctx": 2048,
+                    "num_ctx": self.num_ctx,
                 },
             }
         ).encode("utf-8")
@@ -98,7 +110,7 @@ class OllamaQwenClient:
             method="POST",
         )
         try:
-            with urllib.request.urlopen(request, timeout=self.timeout_seconds) as response:  # noqa: S310
+            with urllib.request.urlopen(request, timeout=timeout_seconds or self.timeout_seconds) as response:  # noqa: S310
                 raw = json.loads(response.read().decode("utf-8"))
         except (OSError, urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
             raise QwenUnavailable(f"qwen_ollama_unavailable:{exc}") from exc

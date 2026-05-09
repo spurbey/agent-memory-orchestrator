@@ -84,10 +84,12 @@ class QwenGraphExtractor:
 
     def __init__(self, settings: Settings, *, fallback: GraphExtractor | None = None, timeout_seconds: float = 30.0) -> None:
         self.settings = settings
+        self.timeout_seconds = min(timeout_seconds, settings.qwen_timeout_seconds, settings.qwen_extract_timeout_seconds)
         self.client = OllamaQwenClient(
             endpoint=settings.qwen_endpoint,
             model=settings.qwen_model,
-            timeout_seconds=min(timeout_seconds, settings.qwen_timeout_seconds),
+            timeout_seconds=self.timeout_seconds,
+            num_ctx=settings.qwen_num_ctx,
         )
         self.fallback = fallback or DeterministicGraphExtractor()
 
@@ -105,7 +107,11 @@ class QwenGraphExtractor:
             f"evidence={json.dumps(cleaned_evidence, ensure_ascii=False, indent=2)}"
         )
         try:
-            payload = self.client._generate_json(prompt, num_predict=900)  # noqa: SLF001 - package-local Ollama adapter.
+            payload = self.client._generate_json(  # noqa: SLF001 - package-local Ollama adapter.
+                prompt,
+                num_predict=700,
+                timeout_seconds=self.timeout_seconds,
+            )
         except QwenUnavailable:
             return self.fallback.extract(session_id=session_id, records=records, trigger=trigger)
         return GraphDelta(

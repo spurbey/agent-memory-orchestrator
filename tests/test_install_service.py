@@ -110,6 +110,10 @@ def test_settings_loads_installer_runtime_config(tmp_path: Path, monkeypatch) ->
     assert settings.vector_backend == "faiss"
     assert settings.qwen_model == "qwen3:1.7b"
     assert settings.qwen_timeout_seconds == 20.0
+    assert settings.qwen_planner_timeout_seconds == 8.0
+    assert settings.qwen_extract_timeout_seconds == 25.0
+    assert settings.qwen_compress_timeout_seconds == 12.0
+    assert settings.qwen_num_ctx == 2048
 
 
 def test_settings_loads_bom_prefixed_json_config(tmp_path: Path, monkeypatch) -> None:
@@ -126,6 +130,7 @@ def test_settings_loads_bom_prefixed_json_config(tmp_path: Path, monkeypatch) ->
     assert settings.mcp_port == 18765
     assert settings.qwen_model == "qwen3:1.7b"
     assert settings.qwen_timeout_seconds == 7.0
+    assert settings.qwen_planner_timeout_seconds == 8.0
 
 
 def test_cli_install_dry_run_does_not_write(tmp_path: Path, capsys) -> None:

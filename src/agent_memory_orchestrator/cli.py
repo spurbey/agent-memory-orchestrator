@@ -129,6 +129,18 @@ def _build_parser() -> argparse.ArgumentParser:
     graph_cleanup.add_argument("--apply", action="store_true", help="Mark noisy nodes abandoned.")
     graph_cleanup.add_argument("--offline", action="store_true", help="Open Kuzu directly for single-process maintenance.")
 
+    graph_consolidate = sub.add_parser("graph-consolidate", help="Classify duplicate/refine/supersede/contradict graph edges")
+    graph_consolidate.add_argument("--limit", type=int, default=500)
+    graph_consolidate.add_argument("--apply", action="store_true", help="Write consolidation edges and topic cluster nodes.")
+    graph_consolidate.add_argument("--offline", action="store_true", help="Open Kuzu directly for single-process maintenance.")
+
+    graph_cache_status = sub.add_parser("graph-cache-status", help="Inspect derived GraphRAG retrieval cache status")
+    graph_cache_status.add_argument("--offline", action="store_true", help="Open Kuzu directly for single-process maintenance.")
+
+    graph_rebuild_cache = sub.add_parser("graph-rebuild-cache", help="Rebuild derived GraphRAG retrieval cache")
+    graph_rebuild_cache.add_argument("--limit", type=int, default=5000)
+    graph_rebuild_cache.add_argument("--offline", action="store_true", help="Open Kuzu directly for single-process maintenance.")
+
     debug = sub.add_parser("debug", help="Debug AMO hook, drain, Qwen, graph, and retrieval stages")
     debug_sub = debug.add_subparsers(dest="debug_command", required=True)
     debug_sub.add_parser("hooks", help="Check hook config, log, and latest evidence")
@@ -419,7 +431,15 @@ def main(argv: list[str] | None = None) -> int:
                 svc.close()
             return 0
 
-        if args.command in {"graph-search", "graph-status", "graph-drain", "graph-cleanup-noisy"}:
+        if args.command in {
+            "graph-search",
+            "graph-status",
+            "graph-drain",
+            "graph-cleanup-noisy",
+            "graph-consolidate",
+            "graph-cache-status",
+            "graph-rebuild-cache",
+        }:
             settings = Settings.load()
             if args.offline:
                 graph = GraphRagService(settings)
@@ -435,13 +455,19 @@ def main(argv: list[str] | None = None) -> int:
                         result = graph.drain_evidence(limit=args.limit, session_id=args.session_id)
                     elif args.command == "graph-cleanup-noisy":
                         result = graph.cleanup_noisy_drafts(limit=args.limit, apply=args.apply)
+                    elif args.command == "graph-consolidate":
+                        result = graph.consolidate_graph(limit=args.limit, apply=args.apply)
+                    elif args.command == "graph-cache-status":
+                        result = graph.graph_cache_status()
+                    elif args.command == "graph-rebuild-cache":
+                        result = graph.rebuild_graph_cache(limit=args.limit)
                     else:
                         result = graph.merge_status(session_id=args.session_id)
                     _print(result)
                 finally:
                     graph.close()
             else:
-                client_timeout = 300 if args.command == "graph-drain" else 60
+                client_timeout = 300 if args.command in {"graph-drain", "graph-consolidate", "graph-rebuild-cache"} else 60
                 client = DaemonClient.from_settings(settings, timeout_seconds=client_timeout)
                 try:
                     if args.command == "graph-search":
@@ -458,6 +484,12 @@ def main(argv: list[str] | None = None) -> int:
                         result = client.post("/graph/drain", {"session_id": args.session_id, "limit": args.limit})
                     elif args.command == "graph-cleanup-noisy":
                         result = client.post("/graph/cleanup-noisy", {"limit": args.limit, "apply": args.apply})
+                    elif args.command == "graph-consolidate":
+                        result = client.post("/graph/consolidate", {"limit": args.limit, "apply": args.apply})
+                    elif args.command == "graph-cache-status":
+                        result = client.get("/api/debug/graph-cache")
+                    elif args.command == "graph-rebuild-cache":
+                        result = client.post("/graph/rebuild-cache", {"limit": args.limit})
                     else:
                         result = client.get("/api/graph/status", {"session_id": args.session_id})
                 except DaemonUnavailable as exc:

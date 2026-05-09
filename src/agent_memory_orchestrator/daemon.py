@@ -85,6 +85,10 @@ class AmoHandler(BaseHTTPRequestHandler):
                     "qwen_runtime": self.settings.qwen_runtime,
                     "qwen_model": self.settings.qwen_model,
                     "qwen_timeout_seconds": self.settings.qwen_timeout_seconds,
+                    "qwen_planner_timeout_seconds": self.settings.qwen_planner_timeout_seconds,
+                    "qwen_extract_timeout_seconds": self.settings.qwen_extract_timeout_seconds,
+                    "qwen_compress_timeout_seconds": self.settings.qwen_compress_timeout_seconds,
+                    "qwen_num_ctx": self.settings.qwen_num_ctx,
                 },
             )
             return
@@ -144,6 +148,13 @@ class AmoHandler(BaseHTTPRequestHandler):
                         if path == "/api/debug/cleanup-noisy":
                             apply = (query.get("apply") or ["false"])[0].lower() == "true"
                             self._write_json(200, graph.cleanup_noisy_drafts(limit=limit, apply=apply))
+                            return
+                        if path == "/api/debug/consolidate":
+                            apply = (query.get("apply") or ["false"])[0].lower() == "true"
+                            self._write_json(200, graph.consolidate_graph(limit=limit, apply=apply))
+                            return
+                        if path == "/api/debug/graph-cache":
+                            self._write_json(200, graph.graph_cache_status())
                             return
                     finally:
                         graph.close()
@@ -286,6 +297,26 @@ class AmoHandler(BaseHTTPRequestHandler):
                     try:
                         limit = _bounded_int(str(payload.get("limit") or ""), default=500, minimum=1, maximum=5000)
                         result = graph.cleanup_noisy_drafts(limit=limit, apply=bool(payload.get("apply")))
+                        self._write_json(200, result)
+                    finally:
+                        graph.close()
+                return
+            if self.path == "/graph/consolidate":
+                with _GRAPH_LOCK:
+                    graph = GraphRagService(self.settings)
+                    try:
+                        limit = _bounded_int(str(payload.get("limit") or ""), default=500, minimum=1, maximum=5000)
+                        result = graph.consolidate_graph(limit=limit, apply=bool(payload.get("apply")))
+                        self._write_json(200, result)
+                    finally:
+                        graph.close()
+                return
+            if self.path == "/graph/rebuild-cache":
+                with _GRAPH_LOCK:
+                    graph = GraphRagService(self.settings)
+                    try:
+                        limit = _bounded_int(str(payload.get("limit") or ""), default=5000, minimum=1, maximum=20000)
+                        result = graph.rebuild_graph_cache(limit=limit)
                         self._write_json(200, result)
                     finally:
                         graph.close()

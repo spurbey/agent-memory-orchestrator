@@ -11,7 +11,7 @@ Baseline design: `docs/FINAL_DESIGN_V1.md`
 - Phase 3: Orchestrator workflow - Pending
 - Phase 4: Adapters (Claude/Codex/Omnara) - Implemented
 - Phase 5: Kuzu GraphRAG + session work ledger - Implemented foundation
-- Phase 6: Derived retrieval caches, reclustering, and release hardening - Pending
+- Phase 6: Derived retrieval caches, reclustering, and release hardening - In progress
 
 ## Milestones
 
@@ -113,6 +113,8 @@ Tasks:
 - [x] Add latest per-session `ContextSnapshot` built only after trigger windows.
 - [x] Add provenance trace nodes/edges: `RawEvidenceRef -> CleanedEvidenceWindow -> GraphDelta -> WorkChange/Decision/File/TestRun`.
 - [x] Add answer-quality gates and noisy draft quarantine for early graph drain pollution.
+- [x] Add deterministic graph consolidation edges for duplicate/refine/supersede/contradict candidates plus topic clusters.
+- [x] Add rebuildable lexical GraphRAG retrieval cache foundation for answer-grade graph nodes.
 - [x] Add local Git commit metadata, changed files, diff stats, and patch-id support.
 - [x] Add session cockpit and dependency-free 3D central graph view for graph inspection.
 - [x] Add CLI debug commands for hooks, drain, Qwen, graph, and retrieval.
@@ -184,10 +186,10 @@ Acceptance:
 
 ## Current Risks
 
-- Kuzu GraphRAG retrieval currently has deterministic graph ranking plus Qwen planning/compression; BM25/FAISS/BGE cross-encoder derived caches are still pending.
+- Kuzu GraphRAG retrieval currently has deterministic graph ranking, Qwen planning/compression, and a rebuildable lexical cache; FAISS/BGE cross-encoder graph-derived caches are still pending.
 - Qwen extraction falls back deterministically when Ollama is unavailable; production installs should treat Qwen availability as required and monitor debug latency.
-- Central graph reclustering/consolidation is not implemented yet.
-- Commit auto-merge is foundation-level; provenance trace edges exist, but deeper supersession/refinement classification still needs Qwen merge policy tests.
+- Central graph reclustering/consolidation has a deterministic foundation; Qwen-assisted merge policy and eval fixtures are still pending.
+- Commit auto-merge is foundation-level; provenance trace and consolidation edges exist, but deeper supersession/refinement classification still needs Qwen merge policy tests.
 - Legacy SQLite tools remain present and can confuse operators if docs/CLI labels are ignored.
 
 ## Change Control
