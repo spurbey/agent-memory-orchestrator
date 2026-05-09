@@ -8,6 +8,10 @@ from dataclasses import replace
 from pathlib import Path
 
 from .config import Settings
+from .connectors.slack import SlackConnectorService
+from .connectors.slack.manifest import slack_manifest_json
+from .connectors.slack.service import load_event_file
+from .connectors.slack.socket_mode import SlackSocketModeRunner
 from .daemon_client import DaemonClient, DaemonUnavailable
 from .graph_diagnostics import debug_hooks, debug_qwen
 from .graph_service import GraphRagService
@@ -141,6 +145,31 @@ def _build_parser() -> argparse.ArgumentParser:
     graph_rebuild_cache = sub.add_parser("graph-rebuild-cache", help="Rebuild derived GraphRAG retrieval cache")
     graph_rebuild_cache.add_argument("--limit", type=int, default=5000)
     graph_rebuild_cache.add_argument("--offline", action="store_true", help="Open Kuzu directly for single-process maintenance.")
+
+    slack = sub.add_parser("slack", help="Configure and run local Slack Socket Mode connector")
+    slack_sub = slack.add_subparsers(dest="slack_command", required=True)
+    slack_manifest = slack_sub.add_parser("manifest", help="Print or write a Slack app manifest for Socket Mode")
+    slack_manifest.add_argument("--out", type=Path, help="Optional output path for manifest JSON")
+    slack_manifest.add_argument("--app-name", default="Agent Memory Orchestrator")
+    slack_setup = slack_sub.add_parser("setup", help="Write local Slack connector config")
+    slack_setup.add_argument("--team-id", default="")
+    slack_setup.add_argument("--bot-user-id", default="")
+    slack_setup.add_argument("--capture-user-id", action="append", default=[])
+    slack_setup.add_argument("--allowed-channel", action="append", default=[])
+    slack_setup.add_argument("--session-idle-minutes", type=int, default=30)
+    slack_setup.add_argument("--app-token", default="")
+    slack_setup.add_argument("--bot-token", default="")
+    slack_setup.add_argument("--save-tokens", action="store_true", help="Store tokens under AMO_HOME/.secrets/slack.json")
+    slack_setup.add_argument("--skip-token-validation", action="store_true", help="Validate token shape only; do not call Slack API")
+    slack_sub.add_parser("status", help="Show local Slack connector config without printing token values")
+    slack_ingest = slack_sub.add_parser("ingest-event", help="Ingest one saved Slack Socket Mode event JSON file")
+    slack_ingest.add_argument("--file", required=True, type=Path)
+    slack_finalize = slack_sub.add_parser("finalize-session", help="Append a connector finalize event for graph-drain")
+    slack_finalize.add_argument("--session-id", required=True)
+    slack_finalize.add_argument("--reason", default="idle_timeout")
+    slack_finalize.add_argument("--message-count", type=int, default=0)
+    slack_run = slack_sub.add_parser("run", help="Run the local outbound Slack Socket Mode connector")
+    slack_run.add_argument("--reply-mode", choices=["disabled", "ack"], default="disabled")
 
     debug = sub.add_parser("debug", help="Debug AMO hook, drain, Qwen, graph, and retrieval stages")
     debug_sub = debug.add_subparsers(dest="debug_command", required=True)
@@ -344,6 +373,50 @@ def main(argv: list[str] | None = None) -> int:
                 _print({"ok": result["ok"], "result": result})
                 return 0 if result["ok"] else 1
             return 0
+
+        if args.command == "slack":
+            if args.slack_command == "manifest":
+                if args.out:
+                    args.out.parent.mkdir(parents=True, exist_ok=True)
+                    args.out.write_text(slack_manifest_json(app_name=args.app_name), encoding="utf-8")
+                    _print({"ok": True, "path": str(args.out.resolve())})
+                else:
+                    print(slack_manifest_json(app_name=args.app_name), end="")
+                return 0
+            settings = Settings.load()
+            svc = SlackConnectorService(settings)
+            if args.slack_command == "setup":
+                result = svc.setup(
+                    team_id=args.team_id,
+                    bot_user_id=args.bot_user_id,
+                    capture_user_ids=args.capture_user_id,
+                    allowed_channels=args.allowed_channel,
+                    session_idle_minutes=args.session_idle_minutes,
+                    app_token=args.app_token,
+                    bot_token=args.bot_token,
+                    save_tokens=args.save_tokens,
+                    skip_token_validation=args.skip_token_validation,
+                )
+                _print(result)
+                return 0 if result.get("ok") else 1
+            if args.slack_command == "status":
+                _print(svc.status())
+                return 0
+            if args.slack_command == "ingest-event":
+                _print(svc.handle_event_envelope(load_event_file(args.file)))
+                return 0
+            if args.slack_command == "finalize-session":
+                _print(
+                    svc.finalize_session(
+                        session_id=args.session_id,
+                        reason=args.reason,
+                        message_count=args.message_count,
+                    )
+                )
+                return 0
+            if args.slack_command == "run":
+                SlackSocketModeRunner(svc, reply_mode=args.reply_mode).run_forever()
+                return 0
 
         if args.command in {
             "ingest-transcript",

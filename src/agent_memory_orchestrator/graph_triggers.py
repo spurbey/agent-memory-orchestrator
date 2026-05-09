@@ -30,6 +30,7 @@ TEST_PATTERNS = (
 )
 GIT_PATTERNS = ("git status", "git diff", "git add", "git commit", "git show", "git log")
 FINALIZE_PATTERNS = ("remember this", "save this decision", "this is final", "final decision", "finalize")
+CONNECTOR_FINALIZE_EVENTS = {"connector_session_finalize", "slack_session_finalize"}
 
 
 @dataclass(slots=True, frozen=True)
@@ -68,6 +69,8 @@ def detect_trigger(record: dict[str, Any], *, pending_write: bool = False) -> Tr
         return TriggerDecision(True, "test", "test command after write detected", is_test=True)
     if event_name in {"stop", "session_stop"} and pending_write:
         return TriggerDecision(True, "stop_finalize", "session stopped with unsummarized writes")
+    if event_name in CONNECTOR_FINALIZE_EVENTS:
+        return TriggerDecision(True, "connector_finalize", "connector session finalized")
     if event_name in {"userpromptsubmit", "user_prompt_submit", "prompt"} and _contains_any(text, FINALIZE_PATTERNS):
         return TriggerDecision(True, "explicit_finalize", "explicit memory/finalize request")
     return TriggerDecision(False, "none", "raw evidence only")

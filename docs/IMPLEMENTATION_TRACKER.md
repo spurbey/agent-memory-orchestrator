@@ -12,6 +12,7 @@ Baseline design: `docs/FINAL_DESIGN_V1.md`
 - Phase 4: Adapters (Claude/Codex/Omnara) - Implemented
 - Phase 5: Kuzu GraphRAG + session work ledger - Implemented foundation
 - Phase 6: Derived retrieval caches, reclustering, and release hardening - In progress
+- Phase 7: External connectors - Slack Socket Mode foundation implemented; hosted OAuth/relay not included
 
 ## Milestones
 
@@ -127,6 +128,27 @@ Acceptance:
 - Each extracted knowledge node is traceable back to raw evidence refs, a cleaned evidence window, and the GraphDelta that created it.
 - MCP GraphRAG tools use daemon by default and fail clearly if daemon is down.
 - Git commit traces are available for linking work changes to code history.
+
+## M2.6: External Connector Foundation
+
+Goal:
+
+- Let local AMO capture external collaboration context without exposing local storage or local LLMs.
+
+Tasks:
+
+- [x] Add modular connector package layout under `src/agent_memory_orchestrator/connectors`.
+- [x] Add Slack app manifest generation for local Socket Mode.
+- [x] Add local Slack config and optional token storage under `AMO_HOME/.secrets`.
+- [x] Add Slack message normalization and relevance gates.
+- [x] Capture Slack messages into append-only raw evidence with `source_app=slack`.
+- [x] Enforce reply-only-when-mentioned behavior.
+- [x] Add connector finalize event so `graph-drain` can create cleaned windows and GraphDelta nodes.
+- [x] Add optional WebSocket runner behind the `slack` extra.
+
+Acceptance:
+
+- A user can bring Slack `xapp`/`xoxb` tokens, run AMO locally in Socket Mode, capture relevant sent Slack messages, finalize a Slack session, and drain it into the Kuzu graph without exposing localhost.
 
 ## M3: Orchestrator Core
 
