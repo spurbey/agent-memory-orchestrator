@@ -41,8 +41,9 @@ class EvidenceDrain:
         self.evidence_roots = evidence_roots or [settings.evidence_dir]
         self.builder = builder or SessionGraphBuilder(settings, store, version_backend)
 
-    def drain(self, *, limit: int = 500, session_id: str = "") -> dict[str, Any]:
+    def drain(self, *, limit: int = 500, session_id: str = "", max_windows: int | None = None) -> dict[str, Any]:
         start = time.monotonic()
+        safe_max_windows = max(1, int(max_windows or self.settings.drain_max_windows_per_run))
         cursors = self._load_cursors()
         session_filter = str(session_id or "")
         states: dict[str, DrainSessionState] = {}
@@ -91,6 +92,12 @@ class EvidenceDrain:
                             "latest_event": ingest,
                         }
                     )
+                    if stats["windows_processed"] >= safe_max_windows:
+                        self._save_cursors(cursors)
+                        stats["stopped_reason"] = "max_windows_reached"
+                        stats["max_windows"] = safe_max_windows
+                        stats["elapsed_ms"] = int((time.monotonic() - start) * 1000)
+                        return stats
                 else:
                     stats["skipped"].append(
                         {
@@ -101,9 +108,13 @@ class EvidenceDrain:
                     )
                 if stats["records_ingested"] >= max(1, int(limit)):
                     self._save_cursors(cursors)
+                    stats["stopped_reason"] = "record_limit_reached"
+                    stats["max_windows"] = safe_max_windows
                     stats["elapsed_ms"] = int((time.monotonic() - start) * 1000)
                     return stats
         self._save_cursors(cursors)
+        stats["stopped_reason"] = "evidence_exhausted"
+        stats["max_windows"] = safe_max_windows
         stats["elapsed_ms"] = int((time.monotonic() - start) * 1000)
         return stats
 

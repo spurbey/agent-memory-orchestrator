@@ -200,7 +200,7 @@ By default these graph commands call the daemon, because the daemon is the Kuzu 
 
 ```powershell
 python -m agent_memory_orchestrator.daemon --amo-home "$env:USERPROFILE\.agent-memory-orchestrator"
-python -m agent_memory_orchestrator.cli graph-drain --limit 500
+python -m agent_memory_orchestrator.cli graph-drain --limit 100 --max-windows 1
 python -m agent_memory_orchestrator.cli graph-search --query "why did this change?"
 ```
 
@@ -220,6 +220,14 @@ amo-cli debug qwen --sample "what did we decide about codex hooks"
 amo-cli debug graph --session-id SESSION_ID
 amo-cli debug retrieval --query "why did this change?"
 ```
+
+Drain in bounded Qwen windows so one request does not monopolize the daemon:
+
+```bash
+amo-cli graph-drain --limit 100 --max-windows 1
+```
+
+The default `drain_max_windows_per_run` is `3`; increase only when Qwen is warm and fast.
 
 If an early drain promoted raw hook/install/test payloads into draft answer nodes, quarantine them without deleting evidence:
 

@@ -143,6 +143,7 @@ class MemoryMcpToolService:
             "qwen_extract_timeout_seconds": self.settings.qwen_extract_timeout_seconds,
             "qwen_compress_timeout_seconds": self.settings.qwen_compress_timeout_seconds,
             "qwen_num_ctx": self.settings.qwen_num_ctx,
+            "drain_max_windows_per_run": self.settings.drain_max_windows_per_run,
         }
 
     def tool_contracts(self) -> dict[str, Any]:

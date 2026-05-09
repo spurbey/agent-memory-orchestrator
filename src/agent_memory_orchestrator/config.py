@@ -74,6 +74,7 @@ class Settings:
     qwen_extract_timeout_seconds: float = 25.0
     qwen_compress_timeout_seconds: float = 12.0
     qwen_num_ctx: int = 2048
+    drain_max_windows_per_run: int = 3
 
     @classmethod
     def load(cls) -> "Settings":
@@ -112,6 +113,7 @@ class Settings:
         qwen_extract_timeout_seconds = float(_setting(config, "qwen_extract_timeout_seconds", "25"))
         qwen_compress_timeout_seconds = float(_setting(config, "qwen_compress_timeout_seconds", "12"))
         qwen_num_ctx = int(_setting(config, "qwen_num_ctx", "2048"))
+        drain_max_windows_per_run = int(_setting(config, "drain_max_windows_per_run", "3"))
 
         if not db_path.is_absolute():
             db_path = (home / db_path).resolve()
@@ -173,6 +175,8 @@ class Settings:
             raise ValueError("AMO_QWEN_*_TIMEOUT_SECONDS must be positive")
         if qwen_num_ctx <= 0:
             raise ValueError("AMO_QWEN_NUM_CTX must be positive")
+        if drain_max_windows_per_run <= 0:
+            raise ValueError("AMO_DRAIN_MAX_WINDOWS_PER_RUN must be positive")
 
         return cls(
             home=home,
@@ -209,4 +213,5 @@ class Settings:
             qwen_extract_timeout_seconds=qwen_extract_timeout_seconds,
             qwen_compress_timeout_seconds=qwen_compress_timeout_seconds,
             qwen_num_ctx=qwen_num_ctx,
+            drain_max_windows_per_run=drain_max_windows_per_run,
         )

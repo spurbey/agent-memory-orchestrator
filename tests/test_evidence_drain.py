@@ -210,6 +210,44 @@ def test_session_filtered_drain_uses_session_cursor_and_matching_limit(tmp_path:
     assert all("::session::target" in key for key in cursors)
 
 
+def test_drain_stops_after_max_windows(tmp_path: Path) -> None:
+    settings = make_settings(tmp_path)
+    store = InMemoryGraphStore()
+    backend = _StaticGitBackend()
+    evidence = RawEvidenceStore(settings.evidence_dir)
+    for index in range(2):
+        evidence.append(
+            {"hook_event_name": "UserPromptSubmit", "session_id": "s1", "prompt": f"write window {index}"},
+            session_id="s1",
+            source_app="codex",
+            event_name="user_prompt_submit",
+        )
+        evidence.append(
+            {
+                "hook_event_name": "PostToolUse",
+                "session_id": "s1",
+                "tool": "apply_patch",
+                "tool_response": json.dumps(
+                    {
+                        "output": f"Success. Updated the following files:\nM C:\\repo\\src\\window_{index}.py\n",
+                        "metadata": {"exit_code": 0},
+                    }
+                ),
+            },
+            session_id="s1",
+            source_app="codex",
+            event_name="post_tool_use",
+        )
+
+    result = _drain(settings, store, backend).drain(limit=20, max_windows=1)
+    second = _drain(settings, store, backend).drain(limit=20, max_windows=1)
+
+    assert result["windows_processed"] == 1
+    assert result["stopped_reason"] == "max_windows_reached"
+    assert result["max_windows"] == 1
+    assert second["windows_processed"] == 1
+
+
 def _drain(settings: Settings, store: InMemoryGraphStore, backend: _StaticGitBackend) -> EvidenceDrain:
     return EvidenceDrain(
         settings,
