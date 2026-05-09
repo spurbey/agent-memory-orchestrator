@@ -12,6 +12,7 @@ from .connectors.slack import SlackConnectorService
 from .connectors.slack.manifest import slack_manifest_json, slack_manifest_setup_url
 from .connectors.slack.service import load_event_file
 from .connectors.slack.socket_mode import SlackSocketModeRunner
+from .connectors.slack.wizard import run_slack_setup_wizard
 from .daemon_client import DaemonClient, DaemonUnavailable
 from .graph_diagnostics import debug_hooks, debug_qwen
 from .graph_service import GraphRagService
@@ -167,6 +168,9 @@ def _build_parser() -> argparse.ArgumentParser:
     slack_setup.add_argument("--bot-token", default="")
     slack_setup.add_argument("--save-tokens", action="store_true", help="Store tokens under AMO_HOME/.secrets/slack.json")
     slack_setup.add_argument("--skip-token-validation", action="store_true", help="Validate token shape only; do not call Slack API")
+    slack_wizard = slack_sub.add_parser("setup-wizard", help="Interactively paste Slack tokens and write local config")
+    slack_wizard.add_argument("--skip-token-validation", action="store_true", help="Validate token shape only; do not call Slack API")
+    slack_wizard.add_argument("--no-save-tokens", action="store_true", help="Do not save tokens locally by default")
     slack_sub.add_parser("status", help="Show local Slack connector config without printing token values")
     slack_ingest = slack_sub.add_parser("ingest-event", help="Ingest one saved Slack Socket Mode event JSON file")
     slack_ingest.add_argument("--file", required=True, type=Path)
@@ -419,6 +423,14 @@ def main(argv: list[str] | None = None) -> int:
                     bot_token=args.bot_token,
                     save_tokens=args.save_tokens,
                     skip_token_validation=args.skip_token_validation,
+                )
+                _print(result)
+                return 0 if result.get("ok") else 1
+            if args.slack_command == "setup-wizard":
+                result = run_slack_setup_wizard(
+                    svc,
+                    default_save_tokens=not args.no_save_tokens,
+                    default_validate_tokens=not args.skip_token_validation,
                 )
                 _print(result)
                 return 0 if result.get("ok") else 1

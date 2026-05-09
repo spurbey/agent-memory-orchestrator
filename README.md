@@ -211,7 +211,15 @@ Create a Slack app from that manifest, then create:
 - Bot token: `xoxb-...`
 - App-level Socket Mode token: `xapp-...`
 
-Configure AMO without saving tokens:
+After you have both tokens, use the interactive local setup wizard:
+
+```powershell
+python -m agent_memory_orchestrator.cli slack setup-wizard
+```
+
+The wizard asks you to paste the `xapp` and `xoxb` tokens, validates them with Slack by default, derives `team_id` and `bot_user_id` when possible, and saves tokens locally under `AMO_HOME/.secrets/slack.json` unless you choose otherwise.
+
+Non-interactive fallback: configure AMO without saving tokens:
 
 ```powershell
 $env:AMO_SLACK_APP_TOKEN="xapp-..."
