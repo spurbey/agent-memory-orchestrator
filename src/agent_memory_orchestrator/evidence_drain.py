@@ -44,6 +44,7 @@ class EvidenceDrain:
     def drain(self, *, limit: int = 500, session_id: str = "") -> dict[str, Any]:
         start = time.monotonic()
         cursors = self._load_cursors()
+        session_filter = str(session_id or "")
         states: dict[str, DrainSessionState] = {}
         stats: dict[str, Any] = {
             "ok": True,
@@ -56,12 +57,12 @@ class EvidenceDrain:
             "cursor_path": str(self.cursor_path),
         }
         for path in self._evidence_files():
-            key = str(path.resolve())
+            key = _cursor_key(path, session_filter)
             offset = int(cursors.get(key, 0))
             for next_offset, record in _read_jsonl_from(path, offset):
                 cursors[key] = next_offset
                 stats["records_seen"] += 1
-                if session_id and str(record.get("session_id") or "") != session_id:
+                if session_filter and str(record.get("session_id") or "") != session_filter:
                     stats["records_skipped"] += 1
                     continue
                 current_session = str(record.get("session_id") or "default")
@@ -98,7 +99,7 @@ class EvidenceDrain:
                             "decision": decision.as_dict(),
                         }
                     )
-                if stats["records_seen"] >= max(1, int(limit)):
+                if stats["records_ingested"] >= max(1, int(limit)):
                     self._save_cursors(cursors)
                     stats["elapsed_ms"] = int((time.monotonic() - start) * 1000)
                     return stats
@@ -108,12 +109,13 @@ class EvidenceDrain:
 
     def pending(self, *, session_id: str = "") -> dict[str, Any]:
         cursors = self._load_cursors()
+        session_filter = str(session_id or "")
         rows: list[dict[str, Any]] = []
         for path in self._evidence_files():
-            key = str(path.resolve())
+            key = _cursor_key(path, session_filter)
             offset = int(cursors.get(key, 0))
             for next_offset, record in _read_jsonl_from(path, offset):
-                if session_id and str(record.get("session_id") or "") != session_id:
+                if session_filter and str(record.get("session_id") or "") != session_filter:
                     continue
                 rows.append(
                     {
@@ -170,6 +172,13 @@ def _read_jsonl_from(path: Path, offset: int) -> list[tuple[int, dict[str, Any]]
                 payload.setdefault("offset", start)
                 rows.append((next_offset, payload))
     return rows
+
+
+def _cursor_key(path: Path, session_id: str = "") -> str:
+    resolved = str(path.resolve())
+    if session_id:
+        return f"{resolved}::session::{session_id}"
+    return resolved
 
 
 def _compact_result(result: dict[str, Any]) -> dict[str, Any]:

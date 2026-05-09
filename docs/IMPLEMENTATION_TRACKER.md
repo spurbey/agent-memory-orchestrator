@@ -108,6 +108,7 @@ Tasks:
 - [x] Add daemon graph endpoints for drain, graph status, session context, raw evidence search, work trace, and debug checks.
 - [x] Add durable evidence cursors and idempotent evidence drain.
 - [x] Add trigger detection for write/edit, test after write, git operations, explicit finalize prompts, and stop-with-pending-write.
+- [x] Add bounded evidence-window cleaning before Qwen graph extraction.
 - [x] Add Qwen-backed GraphDelta extractor with deterministic fallback for tests/offline failure.
 - [x] Add latest per-session `ContextSnapshot` built only after trigger windows.
 - [x] Add answer-quality gates and noisy draft quarantine for early graph drain pollution.

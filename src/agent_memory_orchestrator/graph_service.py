@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import json
 import os
 import re
@@ -11,7 +12,7 @@ from .adapters import normalize_adapter_event
 from .config import Settings
 from .evidence_drain import EvidenceDrain
 from .graph_store import GraphEdge, GraphNode, GraphStore, KuzuGraphStore
-from .qwen_client import DeterministicPlanner, OllamaQwenClient, QwenPlanner, QwenUnavailable
+from .qwen_client import DeterministicPlanner, OllamaQwenClient, QueryPlan, QwenPlanner, QwenUnavailable
 from .raw_evidence import RawEvidenceRef, RawEvidenceStore
 from .session_graph import QwenGraphExtractor, SessionGraphBuilder
 from .versioning import LocalGitBackend, VersionBackend
@@ -21,6 +22,8 @@ from .work_ledger import WorkLedger
 HOOK_CONTEXT_EVENTS = {"session_start"}
 CAPTURE_ONLY_EVENTS = {"user_prompt_submit", "prompt", "post_tool_use", "tool_result", "stop", "session_stop"}
 EVIDENCE_ONLY_KINDS = {"RawEvidenceRef", "Prompt", "ToolUse", "ToolResult", "Turn", "Session", "App", "Repo", "Branch"}
+SUPPORT_ONLY_KINDS = {"File", "Symbol", "Topic"}
+ANSWER_SEED_KINDS = ["ContextSnapshot", "WorkChange", "Decision", "Fix", "Bug", "Blocker", "TestRun", "GitCommit"]
 
 
 class GraphRagService:
@@ -120,13 +123,24 @@ class GraphRagService:
             qwen_status["planner_fallback"] = True
             qwen_status["planner_error"] = str(exc)
             plan = DeterministicPlanner().plan_query(query)
-        kinds = _kinds_for_intent(plan.intent)
+        plan = _apply_retrieval_policy(query=query, plan=plan, include_raw=include_raw)
+        raw_requested = bool(plan.include_raw)
+        kinds = _seed_kinds_for_retrieval(_kinds_for_intent(plan.intent), include_raw=raw_requested)
         search_started = time.monotonic()
-        seed_nodes = self.store.search_nodes(query, limit=max(limit * 4, 20), kinds=kinds)
-        raw_requested = bool(include_raw or plan.include_raw)
+        seed_nodes = self.store.search_nodes(query, limit=max(limit * 12, 80), kinds=kinds)
         expanded = _filter_answer_grade_nodes(_expand_nodes(seed_nodes, self.store), include_raw=raw_requested)
         candidates = _rank_nodes(query, expanded, include_historical=include_historical or plan.include_historical)
-        selected = candidates[: max(1, min(50, int(limit)))]
+        if not candidates and not raw_requested:
+            fallback_nodes = self.store.list_nodes(kinds=kinds or ANSWER_SEED_KINDS, limit=max(limit * 20, 120))
+            fallback_filtered = _filter_answer_grade_nodes(fallback_nodes, include_raw=False)
+            candidates = _rank_nodes(
+                query,
+                fallback_filtered,
+                include_historical=include_historical or plan.include_historical,
+                require_lexical=True,
+            )
+        candidates = _trim_weak_tail_matches(candidates)
+        selected = [_sanitize_output_node(node) for node in candidates[: max(1, min(50, int(limit)))]]
         timings["retrieval_ms"] = _elapsed_ms(search_started)
         if selected:
             try:
@@ -167,7 +181,7 @@ class GraphRagService:
     def current_context(self, *, session_id: str = "", limit: int = 8) -> dict[str, Any]:
         safe_limit = max(1, min(25, int(limit)))
         nodes = [
-            node
+            _sanitize_output_node(node)
             for node in self.store.list_nodes(kinds=["ContextSnapshot"], session_id=session_id, limit=max(safe_limit * 5, 25))
             if _is_clean_context_snapshot(node)
         ][:safe_limit]
@@ -424,14 +438,24 @@ def _looks_like_commit_event(content: str, metadata: dict[str, Any]) -> bool:
 
 def _kinds_for_intent(intent: str) -> list[str] | None:
     if intent == "decision_lookup":
-        return ["Decision", "Fix", "WorkChange", "Prompt", "Response", "ToolResult"]
+        return ["Decision", "Fix", "WorkChange", "ContextSnapshot", "Prompt", "Response", "ToolResult"]
     if intent == "work_history":
-        return ["WorkChange", "GitCommit", "File", "Decision", "Fix", "ToolResult"]
+        return ["WorkChange", "ContextSnapshot", "GitCommit", "File", "Decision", "Fix", "ToolResult"]
     if intent == "bug_fix_trace":
-        return ["Bug", "Fix", "TestRun", "WorkChange", "GitCommit"]
+        return ["Bug", "Fix", "TestRun", "WorkChange", "ContextSnapshot", "GitCommit"]
     if intent == "historical_versions":
-        return ["Decision", "Fix", "WorkChange", "GitCommit"]
+        return ["Decision", "Fix", "WorkChange", "ContextSnapshot", "GitCommit"]
     return None
+
+
+def _seed_kinds_for_retrieval(kinds: list[str] | None, *, include_raw: bool) -> list[str] | None:
+    if include_raw:
+        return kinds
+    allowed = set(ANSWER_SEED_KINDS)
+    if kinds is None:
+        return ANSWER_SEED_KINDS
+    filtered = [kind for kind in kinds if kind in allowed]
+    return filtered or ANSWER_SEED_KINDS
 
 
 def _expand_nodes(seed_nodes: list[dict[str, Any]], store: GraphStore) -> list[dict[str, Any]]:
@@ -450,10 +474,111 @@ def _filter_answer_grade_nodes(nodes: list[dict[str, Any]], *, include_raw: bool
     for node in nodes:
         if node.get("kind") in EVIDENCE_ONLY_KINDS:
             continue
+        if node.get("kind") in SUPPORT_ONLY_KINDS:
+            continue
         if not _is_answer_quality_node(node):
             continue
         filtered.append(node)
     return filtered
+
+
+def _apply_retrieval_policy(*, query: str, plan: QueryPlan, include_raw: bool) -> QueryPlan:
+    raw_allowed = bool(include_raw or _is_explicit_raw_request(query))
+    include_raw_final = bool(plan.include_raw and raw_allowed) or bool(include_raw)
+    intent = plan.intent
+    if intent == "raw_evidence" and not include_raw_final:
+        intent = "general"
+    return QueryPlan(
+        intent=intent,
+        entities=plan.entities,
+        include_raw=include_raw_final,
+        include_historical=plan.include_historical,
+    )
+
+
+def _is_explicit_raw_request(query: str) -> bool:
+    lowered = re.sub(r"\s+", " ", str(query or "").lower()).strip()
+    raw_phrases = (
+        "include raw",
+        "show raw",
+        "raw evidence",
+        "raw payload",
+        "raw transcript",
+        "raw log",
+        "raw logs",
+        "raw jsonl",
+        "raw record",
+        "raw records",
+        "raw event",
+        "raw events",
+        "evidence payload",
+        "evidence ref",
+        "evidence refs",
+        "evidence record",
+        "evidence records",
+        "original payload",
+        "verbatim evidence",
+    )
+    return any(phrase in lowered for phrase in raw_phrases)
+
+
+def _sanitize_output_node(node: dict[str, Any]) -> dict[str, Any]:
+    metadata = node.get("metadata")
+    if not isinstance(metadata, dict):
+        return node
+    cleaned = dict(node)
+    cleaned["metadata"] = _sanitize_metadata(metadata)
+    return cleaned
+
+
+def _sanitize_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
+    cleaned = dict(metadata)
+    for key in ("goal", "latest_decision", "next_step"):
+        if key in cleaned:
+            cleaned[key] = _scalar_metadata_value(cleaned[key])
+    for key in ("changed_files", "tests", "blockers", "evidence_ids"):
+        if key in cleaned:
+            cleaned[key] = _list_metadata_value(cleaned[key])
+    return cleaned
+
+
+def _scalar_metadata_value(value: Any) -> str:
+    parsed = _parse_literal_list(value)
+    if parsed is not None:
+        value = parsed
+    if isinstance(value, list):
+        rows = [_scalar_metadata_value(item) for item in value]
+        return " ".join(row for row in rows if row)
+    if isinstance(value, dict):
+        return json.dumps(value, ensure_ascii=False, sort_keys=True)
+    return " ".join(str(value or "").split())
+
+
+def _list_metadata_value(value: Any) -> list[str]:
+    parsed = _parse_literal_list(value)
+    if parsed is not None:
+        value = parsed
+    if not isinstance(value, list):
+        return []
+    rows: list[str] = []
+    for item in value:
+        text = _scalar_metadata_value(item)
+        if text:
+            rows.append(text)
+    return rows
+
+
+def _parse_literal_list(value: Any) -> list[Any] | None:
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    if not (text.startswith("[") and text.endswith("]")):
+        return None
+    try:
+        parsed = ast.literal_eval(text)
+    except (SyntaxError, ValueError):
+        return None
+    return parsed if isinstance(parsed, list) else None
 
 
 def _is_answer_quality_node(node: dict[str, Any]) -> bool:
@@ -465,7 +590,13 @@ def _is_answer_quality_node(node: dict[str, Any]) -> bool:
     return True
 
 
-def _rank_nodes(query: str, nodes: list[dict[str, Any]], *, include_historical: bool) -> list[dict[str, Any]]:
+def _rank_nodes(
+    query: str,
+    nodes: list[dict[str, Any]],
+    *,
+    include_historical: bool,
+    require_lexical: bool = False,
+) -> list[dict[str, Any]]:
     terms = [term for term in re.sub(r"[^a-zA-Z0-9_. -]+", " ", query).lower().split() if len(term) > 2]
     ranked: list[tuple[float, dict[str, Any]]] = []
     for node in nodes:
@@ -473,11 +604,24 @@ def _rank_nodes(query: str, nodes: list[dict[str, Any]], *, include_historical: 
             continue
         text = f"{node.get('kind')} {node.get('label')} {node.get('summary')} {json.dumps(node.get('metadata', {}), sort_keys=True)}".lower()
         lexical = sum(1.0 for term in terms if term in text)
+        if require_lexical and terms and lexical <= 0:
+            continue
         status_bonus = 1.0 if node.get("status") in {"active", "committed"} else 0.25
         evidence_bonus = 0.5 if node.get("evidence_id") else 0.0
         ranked.append((lexical + status_bonus + evidence_bonus + float(node.get("graph_score") or 0.0), node))
     ranked.sort(key=lambda item: item[0], reverse=True)
     return [{**node, "score": round(score, 6)} for score, node in ranked]
+
+
+def _trim_weak_tail_matches(nodes: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    if not nodes:
+        return nodes
+    top_score = float(nodes[0].get("score") or 0.0)
+    if top_score < 4.0:
+        return nodes
+    floor = max(2.0, top_score - 3.0)
+    trimmed = [node for node in nodes if float(node.get("score") or 0.0) >= floor]
+    return trimmed or nodes[:1]
 
 
 def _context_from_snapshots(nodes: list[dict[str, Any]]) -> str:
@@ -549,6 +693,9 @@ def _is_clean_answer_summary(summary: str, metadata: object = None) -> bool:
         "import ",
         "class ",
         "def ",
+        "raise ",
+        "assert ",
+        "return ",
         "all checks passed!",
     )
     noisy_terms = (
@@ -570,6 +717,8 @@ def _is_clean_answer_summary(summary: str, metadata: object = None) -> bool:
     if len(text) > 240 and _code_token_ratio(text) > 0.18:
         return False
     meta = metadata if isinstance(metadata, dict) else {}
+    if meta.get("trigger", {}).get("trigger_type") == "write" and meta.get("changed_files"):
+        return True
     if meta.get("trigger", {}).get("trigger_type") == "write" and not any(
         term in lowered
         for term in ("changed", "implemented", "fixed", "decision", "added", "updated", "removed", "refactor", "test")
