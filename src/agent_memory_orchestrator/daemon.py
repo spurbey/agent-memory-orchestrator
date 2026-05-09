@@ -60,10 +60,19 @@ class AmoHandler(BaseHTTPRequestHandler):
         query = parse_qs(parsed.query)
 
         if path == "/":
+            self._write_html(200, SESSION_COCKPIT_HTML)
+            return
+        if path == "/dashboard":
             self._write_html(200, DASHBOARD_HTML)
+            return
+        if path == "/sessions":
+            self._write_html(200, SESSION_COCKPIT_HTML)
             return
         if path == "/graph":
             self._write_html(200, GRAPH_HTML)
+            return
+        if path == "/graph3d":
+            self._write_html(200, GRAPH3D_HTML)
             return
         if path == "/health":
             self._write_json(
@@ -116,6 +125,15 @@ class AmoHandler(BaseHTTPRequestHandler):
                             commit = (query.get("commit") or ["HEAD"])[0] or "HEAD"
                             cwd = (query.get("cwd") or [""])[0] or None
                             self._write_json(200, graph.work_trace(commit=commit, cwd=cwd))
+                            return
+                        if path == "/api/graph/sessions":
+                            self._write_json(200, graph.session_overview(limit=limit))
+                            return
+                        if path == "/api/graph/session-detail":
+                            self._write_json(200, graph.session_detail(session_id=session_id, limit=limit))
+                            return
+                        if path == "/api/graph/central":
+                            self._write_json(200, graph.central_graph(limit=limit))
                             return
                         if path == "/api/debug/drain":
                             self._write_json(200, debug_drain(graph._new_drain(), session_id=session_id))  # noqa: SLF001
@@ -296,6 +314,1121 @@ class AmoHandler(BaseHTTPRequestHandler):
 
     def log_message(self, format: str, *args: object) -> None:
         return
+
+
+SESSION_COCKPIT_HTML = r"""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>AMO Session Cockpit</title>
+  <style>
+    :root {
+      --bg: #0d1110;
+      --panel: #14201b;
+      --panel-2: #1b2c24;
+      --ink: #f1f8ef;
+      --muted: #9ab1a4;
+      --line: #2f463a;
+      --accent: #b9f66b;
+      --blue: #8ecae6;
+      --warn: #ffd166;
+      --bad: #ff6b6b;
+      --violet: #c8b6ff;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at 10% 0%, rgba(185, 246, 107, 0.16), transparent 34rem),
+        radial-gradient(circle at 86% 8%, rgba(142, 202, 230, 0.11), transparent 30rem),
+        linear-gradient(140deg, #0d1110 0%, #111c18 58%, #0a0e0d 100%);
+      font: 14px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+    }
+    header {
+      padding: 22px 28px 18px;
+      border-bottom: 1px solid var(--line);
+      display: flex;
+      justify-content: space-between;
+      gap: 18px;
+      align-items: flex-start;
+    }
+    h1 { margin: 0; font-size: 23px; letter-spacing: -0.04em; }
+    .subtitle { color: var(--muted); margin-top: 6px; max-width: 900px; }
+    .toolbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; justify-content: flex-end; }
+    button, input, select {
+      border: 1px solid var(--line);
+      background: var(--panel-2);
+      color: var(--ink);
+      border-radius: 11px;
+      padding: 9px 11px;
+      font: inherit;
+    }
+    button { cursor: pointer; color: var(--accent); }
+    button.secondary { color: var(--blue); }
+    input { min-width: 360px; }
+    main { padding: 20px 28px 42px; }
+    .grid { display: grid; grid-template-columns: repeat(12, 1fr); gap: 15px; align-items: start; }
+    .card {
+      background: rgba(20, 32, 27, 0.94);
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      padding: 15px;
+      min-width: 0;
+      box-shadow: 0 22px 70px rgba(0,0,0,0.24);
+    }
+    .span-3 { grid-column: span 3; }
+    .span-4 { grid-column: span 4; }
+    .span-5 { grid-column: span 5; }
+    .span-6 { grid-column: span 6; }
+    .span-7 { grid-column: span 7; }
+    .span-8 { grid-column: span 8; }
+    .span-12 { grid-column: span 12; }
+    h2 { font-size: 12px; text-transform: uppercase; color: var(--muted); letter-spacing: 0.12em; margin: 0 0 11px; }
+    h3 { font-size: 14px; margin: 0 0 8px; color: var(--accent); }
+    .metric { font-size: 26px; color: var(--accent); margin: 2px 0; }
+    .label { color: var(--muted); font-size: 12px; }
+    .item { padding: 10px 0; border-top: 1px solid rgba(47,70,58,0.72); }
+    .item:first-child { border-top: 0; padding-top: 0; }
+    .row { display: flex; gap: 8px; align-items: center; justify-content: space-between; }
+    .stack { display: flex; flex-direction: column; gap: 8px; }
+    .pill {
+      display: inline-block;
+      padding: 3px 8px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      color: var(--blue);
+      font-size: 12px;
+      white-space: nowrap;
+    }
+    .pill.good { color: var(--accent); }
+    .pill.warn { color: var(--warn); }
+    .pill.bad { color: var(--bad); }
+    .muted { color: var(--muted); }
+    .small { font-size: 12px; }
+    .clickable { cursor: pointer; }
+    .clickable:hover { color: var(--accent); }
+    .selected { outline: 1px solid var(--accent); border-radius: 12px; padding-inline: 8px; margin-inline: -8px; }
+    pre {
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      background: #09100d;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 11px;
+      max-height: 420px;
+      overflow: auto;
+    }
+    details { border: 1px solid rgba(47,70,58,0.7); border-radius: 13px; padding: 9px 11px; background: rgba(9,16,13,0.36); }
+    summary { cursor: pointer; color: var(--blue); }
+    .pipeline { display: grid; grid-template-columns: repeat(8, 1fr); gap: 8px; }
+    .stage { padding: 10px; border: 1px solid var(--line); border-radius: 13px; background: rgba(27,44,36,0.75); min-height: 74px; }
+    .stage .num { color: var(--accent); font-size: 18px; }
+    svg { width: 100%; min-height: 360px; background: #09100d; border: 1px solid var(--line); border-radius: 14px; }
+    .node-dot { stroke: #09100d; stroke-width: 2; }
+    @media (max-width: 1100px) {
+      .span-3, .span-4, .span-5, .span-6, .span-7, .span-8 { grid-column: span 12; }
+      .pipeline { grid-template-columns: repeat(2, 1fr); }
+      header { flex-direction: column; }
+      input { min-width: 0; width: 100%; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <h1>AMO Session Cockpit</h1>
+      <div class="subtitle">Session-first view over raw capture, cleaned evidence windows, Qwen extraction, Kuzu draft graph, central graph, and explicit retrieval. The daemon owns all graph/runtime state.</div>
+    </div>
+    <div class="toolbar">
+      <input id="query" placeholder="Ask graph memory, e.g. why did graph search return zero" />
+      <button onclick="runRetrieval()">Graph Search</button>
+      <button class="secondary" onclick="refreshAll()">Refresh</button>
+      <a href="/graph3d"><button class="secondary">3D Final Graph</button></a>
+      <a href="/graph"><button class="secondary">Legacy Graph</button></a>
+      <a href="/dashboard"><button class="secondary">Legacy Dashboard</button></a>
+    </div>
+  </header>
+  <main class="grid">
+    <section class="card span-12">
+      <h2>Pipeline</h2>
+      <div class="pipeline" id="pipeline"></div>
+    </section>
+    <section class="card span-4">
+      <div class="row"><h2>Captured Sessions</h2><button onclick="loadSessions()">Reload</button></div>
+      <div id="sessions" class="stack"></div>
+    </section>
+    <section class="card span-8">
+      <h2>Current Session Context</h2>
+      <div id="contextBox" class="muted">Select a session.</div>
+    </section>
+    <section class="card span-5">
+      <div class="row"><h2>Captured Timeline</h2><button onclick="drainSelected()">Drain 5</button></div>
+      <div id="timeline" class="stack"></div>
+    </section>
+    <section class="card span-7">
+      <h2>Cleaned Evidence Windows</h2>
+      <div id="windows" class="stack"></div>
+    </section>
+    <section class="card span-6">
+      <h2>Session Graph</h2>
+      <div id="sessionGraphStats" class="small muted"></div>
+      <svg id="sessionGraph"></svg>
+      <div id="sessionGraphList"></div>
+    </section>
+    <section class="card span-6">
+      <h2>Central / Final Graph</h2>
+      <div id="centralStats" class="small muted"></div>
+      <svg id="centralGraph"></svg>
+      <div id="centralList"></div>
+    </section>
+    <section class="card span-12">
+      <h2>Retrieval Output</h2>
+      <pre id="retrieval">Run a query to see planner, candidates, raw_included, timings, and returned context.</pre>
+    </section>
+  </main>
+  <script>
+    const esc = value => String(value ?? "").replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
+    const short = (value, n = 170) => {
+      const text = String(value ?? "").replace(/\s+/g, " ");
+      return text.length > n ? text.slice(0, n - 3) + "..." : text;
+    };
+    const pretty = value => JSON.stringify(value ?? {}, null, 2);
+    let selectedSession = "";
+
+    async function getJson(url, options) {
+      const res = await fetch(url, options);
+      const data = await res.json();
+      if (!res.ok || data.ok === false) throw new Error(data.error || res.statusText);
+      return data;
+    }
+
+    function renderPipeline() {
+      const stages = [
+        ["1", "Captured", "Hook appends raw JSONL evidence."],
+        ["2", "Pending Drain", "Cursor tracks unprocessed rows."],
+        ["3", "Triggered", "Write/test/git/finalize windows are selected."],
+        ["4", "Cleaned", "Noisy raw artifacts become bounded Qwen input."],
+        ["5", "Qwen Delta", "Goal, decision, files, tests, fixes are extracted."],
+        ["6", "Draft Graph", "Kuzu session nodes/edges are written."],
+        ["7", "Commit Link", "GitCommit, COMMITTED_AS, MERGED_INTO edges."],
+        ["8", "Searchable", "Explicit GraphRAG returns answer-grade context."]
+      ];
+      document.getElementById("pipeline").innerHTML = stages.map(([num, title, body]) => `
+        <div class="stage"><div class="num">${num}</div><strong>${esc(title)}</strong><div class="small muted">${esc(body)}</div></div>
+      `).join("");
+    }
+
+    async function loadSessions() {
+      const data = await getJson("/api/graph/sessions?limit=40");
+      const sessions = data.sessions || [];
+      document.getElementById("sessions").innerHTML = sessions.length ? sessions.map(row => {
+        const context = row.latest_context || {};
+        const counts = row.graph_counts || {};
+        const isSelected = row.session_id === selectedSession;
+        return `<div class="item clickable ${isSelected ? "selected" : ""}" onclick="selectSession('${esc(row.session_id)}')">
+          <div class="row"><strong>${esc(short(row.session_id, 34))}</strong><span class="pill">${esc(row.latest_event)}</span></div>
+          <div class="small muted">${esc((row.source_apps || []).join(", "))} | raw ${esc(row.raw_events)} | draft ${esc(counts.draft || 0)} | committed ${esc(counts.committed || 0)}</div>
+          <div class="small">${esc(short(context.summary || "No context snapshot yet", 115))}</div>
+          <div class="small muted">${esc(row.latest_at || "")}</div>
+        </div>`;
+      }).join("") : `<div class="muted">No captured sessions.</div>`;
+      if (!selectedSession && sessions[0]) await selectSession(sessions[0].session_id);
+    }
+
+    async function selectSession(sessionId) {
+      selectedSession = sessionId;
+      await loadDetail();
+      await loadSessions();
+    }
+
+    async function loadDetail() {
+      if (!selectedSession) return;
+      const data = await getJson("/api/graph/session-detail?session_id=" + encodeURIComponent(selectedSession) + "&limit=160");
+      renderContext(data.current_context || {});
+      renderTimeline(data.timeline || []);
+      renderWindows(data.windows || []);
+      renderGraph("sessionGraph", "sessionGraphStats", "sessionGraphList", data.graph || {});
+      renderGraph("centralGraph", "centralStats", "centralList", data.central_graph || {});
+    }
+
+    function renderContext(context) {
+      const node = (context.nodes || [])[0] || {};
+      const meta = node.metadata || {};
+      document.getElementById("contextBox").innerHTML = node.id ? `
+        <div class="row"><strong>${esc(node.id)}</strong><span class="pill good">${esc(node.status)}</span></div>
+        <pre>${esc(context.context || "")}</pre>
+        <div class="grid">
+          <div class="span-4"><div class="label">Changed Files</div><pre>${esc((meta.changed_files || []).join("\n"))}</pre></div>
+          <div class="span-4"><div class="label">Evidence Refs</div><pre>${esc((meta.evidence_ids || []).join("\n"))}</pre></div>
+          <div class="span-4"><div class="label">Trigger</div><pre>${esc(pretty(meta.trigger || {}))}</pre></div>
+        </div>
+      ` : `<div class="muted">No clean session context yet. Drain a write/test/git/finalize window.</div>`;
+    }
+
+    function renderTimeline(rows) {
+      document.getElementById("timeline").innerHTML = rows.length ? rows.slice().reverse().map(row => `
+        <details class="item">
+          <summary><span class="pill">${esc(row.event_name)}</span> ${esc(short(row.summary, 120))}</summary>
+          <div class="small muted">id=${esc(row.id)} at ${esc(row.created_at)}</div>
+          <div class="small">tool=${esc(row.tool || "")}</div>
+          <pre>${esc(pretty(row))}</pre>
+        </details>
+      `).join("") : `<div class="muted">No captured events for selected session.</div>`;
+    }
+
+    function renderWindows(rows) {
+      document.getElementById("windows").innerHTML = rows.length ? rows.map(row => `
+        <div class="item">
+          <div class="row">
+            <strong>Window #${esc(row.index)}</strong>
+            <span class="pill ${row.status === "processed" ? "good" : "warn"}">${esc(row.status)}</span>
+          </div>
+          <div class="small muted">trigger=${esc((row.trigger || {}).trigger_type)} | evidence=${esc((row.evidence_ids || []).join(", "))}</div>
+          <details open><summary>Cleaned evidence sent to Qwen</summary><pre>${esc(pretty(row.cleaned_evidence || []))}</pre></details>
+          <details><summary>Graph nodes created from this window (${(row.graph_nodes || []).length})</summary><pre>${esc(pretty(row.graph_nodes || []))}</pre></details>
+        </div>
+      `).join("") : `<div class="muted">No trigger windows reconstructed yet.</div>`;
+    }
+
+    function renderGraph(svgId, statsId, listId, graph) {
+      const nodes = graph.nodes || [];
+      const edges = graph.edges || [];
+      document.getElementById(statsId).textContent = `${nodes.length} nodes | ${edges.length} edges`;
+      drawGraph(svgId, nodes, edges);
+      document.getElementById(listId).innerHTML = nodes.slice(0, 16).map(node => `
+        <div class="item">
+          <div class="row"><strong>${esc(node.kind)}</strong><span class="pill">${esc(node.status)}</span></div>
+          <div class="small">${esc(short(node.summary || node.label, 150))}</div>
+          <div class="small muted">${esc(short(node.id, 110))}</div>
+        </div>
+      `).join("") || `<div class="muted">No graph nodes yet.</div>`;
+    }
+
+    function drawGraph(svgId, nodes, edges) {
+      const svg = document.getElementById(svgId);
+      const width = svg.clientWidth || 640;
+      const height = 360;
+      svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
+      const shown = nodes.slice(0, 28);
+      const centerX = width / 2;
+      const centerY = height / 2;
+      const radius = Math.max(90, Math.min(width, height) / 2 - 44);
+      const pos = new Map();
+      shown.forEach((node, i) => {
+        const angle = (Math.PI * 2 * i) / Math.max(1, shown.length);
+        pos.set(node.id, { x: centerX + Math.cos(angle) * radius, y: centerY + Math.sin(angle) * radius, node });
+      });
+      const color = kind => ({
+        ContextSnapshot: "#b9f66b", WorkChange: "#8ecae6", Decision: "#ffd166", Fix: "#72efdd",
+        Bug: "#ff6b6b", TestRun: "#c8b6ff", File: "#9ab1a4", GitCommit: "#f4a261", RawEvidenceRef: "#6c757d"
+      }[kind] || "#d8f3dc");
+      const lines = edges.filter(edge => pos.has(edge.source_id) && pos.has(edge.target_id)).map(edge => {
+        const a = pos.get(edge.source_id); const b = pos.get(edge.target_id);
+        return `<line x1="${a.x}" y1="${a.y}" x2="${b.x}" y2="${b.y}" stroke="#2f463a" stroke-width="1.3"><title>${esc(edge.kind)}</title></line>`;
+      }).join("");
+      const dots = shown.map(node => {
+        const p = pos.get(node.id);
+        return `<g><circle class="node-dot" cx="${p.x}" cy="${p.y}" r="8" fill="${color(node.kind)}"><title>${esc(node.kind + ": " + (node.summary || node.label))}</title></circle>
+        <text x="${p.x + 11}" y="${p.y + 4}" fill="#f1f8ef" font-size="10">${esc(short(node.kind, 16))}</text></g>`;
+      }).join("");
+      svg.innerHTML = lines + dots;
+    }
+
+    async function drainSelected() {
+      if (!selectedSession) return;
+      const data = await getJson("/graph/drain", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({session_id: selectedSession, limit: 5})
+      });
+      document.getElementById("retrieval").textContent = pretty(data);
+      await loadDetail();
+    }
+
+    async function runRetrieval() {
+      const query = document.getElementById("query").value.trim();
+      if (!query) return;
+      const data = await getJson("/graph/search", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({query, limit: 8})
+      });
+      document.getElementById("retrieval").textContent = pretty(data);
+    }
+
+    async function refreshAll() {
+      await loadSessions();
+      if (selectedSession) await loadDetail();
+    }
+
+    renderPipeline();
+    refreshAll().catch(err => { document.getElementById("contextBox").textContent = "Load error: " + err.message; });
+    setInterval(() => { if (selectedSession) loadDetail().catch(() => {}); }, 15000);
+  </script>
+</body>
+</html>
+"""
+
+
+GRAPH3D_HTML = r"""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>AMO 3D Final Graph</title>
+  <style>
+    :root {
+      --bg: #070b0a;
+      --panel: rgba(15, 24, 21, 0.91);
+      --panel-2: #16231d;
+      --ink: #eef8ec;
+      --muted: #9cb3a6;
+      --line: #2c4539;
+      --accent: #b9f66b;
+      --blue: #8ecae6;
+      --warn: #ffd166;
+      --bad: #ff6b6b;
+      --shadow: rgba(0, 0, 0, 0.46);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      overflow: hidden;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at 15% 12%, rgba(185, 246, 107, 0.18), transparent 30rem),
+        radial-gradient(circle at 82% 4%, rgba(142, 202, 230, 0.12), transparent 34rem),
+        linear-gradient(140deg, #070b0a 0%, #0d1512 54%, #070b0a 100%);
+      font: 13px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+    }
+    canvas {
+      width: 100vw;
+      height: 100vh;
+      display: block;
+      cursor: grab;
+    }
+    canvas.dragging { cursor: grabbing; }
+    .topbar {
+      position: fixed;
+      inset: 16px 16px auto 16px;
+      display: flex;
+      justify-content: space-between;
+      gap: 14px;
+      pointer-events: none;
+      z-index: 2;
+    }
+    .panel {
+      pointer-events: auto;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      box-shadow: 0 24px 80px var(--shadow);
+      backdrop-filter: blur(16px);
+    }
+    .brand { padding: 14px 16px; max-width: 760px; }
+    h1 { margin: 0; font-size: 20px; letter-spacing: -0.04em; }
+    .subtitle { color: var(--muted); margin-top: 5px; }
+    .controls {
+      padding: 12px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      justify-content: flex-end;
+      max-width: 720px;
+    }
+    button, input, select {
+      border: 1px solid var(--line);
+      background: var(--panel-2);
+      color: var(--ink);
+      border-radius: 11px;
+      padding: 8px 10px;
+      font: inherit;
+    }
+    button { cursor: pointer; color: var(--accent); }
+    button.secondary { color: var(--blue); }
+    input { min-width: 210px; }
+    label.check {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      border: 1px solid var(--line);
+      background: var(--panel-2);
+      border-radius: 11px;
+      padding: 8px 10px;
+      color: var(--ink);
+    }
+    label.check input { min-width: 0; width: auto; }
+    .side {
+      position: fixed;
+      top: 118px;
+      right: 16px;
+      bottom: 16px;
+      width: min(430px, calc(100vw - 32px));
+      padding: 14px;
+      overflow: auto;
+      z-index: 2;
+    }
+    .legend {
+      position: fixed;
+      left: 16px;
+      bottom: 16px;
+      width: min(520px, calc(100vw - 32px));
+      padding: 12px;
+      z-index: 2;
+    }
+    .explain {
+      position: fixed;
+      left: 16px;
+      top: 182px;
+      width: min(520px, calc(100vw - 32px));
+      padding: 12px;
+      z-index: 2;
+    }
+    .row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+    .pill {
+      display: inline-block;
+      padding: 3px 8px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      color: var(--blue);
+      font-size: 12px;
+      white-space: nowrap;
+    }
+    .dot {
+      width: 10px;
+      height: 10px;
+      display: inline-block;
+      border-radius: 50%;
+      margin-right: 7px;
+    }
+    .muted { color: var(--muted); }
+    .small { font-size: 12px; }
+    .warnbox {
+      border: 1px solid rgba(255, 209, 102, 0.42);
+      color: var(--warn);
+      border-radius: 12px;
+      padding: 9px 10px;
+      margin-top: 8px;
+      background: rgba(255, 209, 102, 0.07);
+    }
+    .kv {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 5px 10px;
+      margin-top: 8px;
+    }
+    .kv span:nth-child(even) { color: var(--accent); }
+    .meaning { color: var(--blue); margin-top: 8px; }
+    .item { border-top: 1px solid rgba(44, 69, 57, 0.72); padding: 10px 0; }
+    .item:first-child { border-top: 0; padding-top: 0; }
+    pre {
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      background: rgba(3, 7, 6, 0.74);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 10px;
+      max-height: 330px;
+      overflow: auto;
+    }
+    .hidden { display: none; }
+    @media (max-width: 980px) {
+      body { overflow: auto; }
+      canvas { height: 70vh; }
+      .topbar, .side, .legend, .explain { position: static; margin: 12px; width: auto; }
+      .topbar { flex-direction: column; }
+      input { min-width: 0; width: 100%; }
+    }
+  </style>
+</head>
+<body>
+  <canvas id="graphCanvas" aria-label="3D central AMO graph"></canvas>
+  <div class="topbar">
+    <div class="brand panel">
+      <h1>AMO 3D Final Graph</h1>
+      <div class="subtitle">Interactive spherical graph from <code>/api/graph/central</code>. Drag to rotate, Ctrl-drag to roll, Shift-drag/pan mode to move, wheel/buttons to zoom, click a node for its flow.</div>
+    </div>
+    <div class="controls panel">
+      <input id="search" placeholder="Filter node text, file, commit, session" />
+      <select id="kindFilter"><option value="">All kinds</option></select>
+      <select id="statusFilter">
+        <option value="">All status</option>
+        <option value="active">active</option>
+        <option value="committed">committed</option>
+        <option value="draft">draft</option>
+      </select>
+      <label class="check"><input id="connectedOnly" type="checkbox" checked /> connected only</label>
+      <label class="check"><input id="showLabels" type="checkbox" checked /> labels</label>
+      <label class="check"><input id="focusFlow" type="checkbox" checked /> highlight selected flow</label>
+      <label class="check"><input id="showSphere" type="checkbox" checked /> sphere</label>
+      <label class="check"><input id="panMode" type="checkbox" /> pan mode</label>
+      <input id="limit" type="number" min="10" max="500" value="300" title="Node limit" />
+      <button onclick="loadGraph()">Reload</button>
+      <button class="secondary" onclick="zoomBy(1.35)">Zoom In</button>
+      <button class="secondary" onclick="zoomBy(1 / 1.35)">Zoom Out</button>
+      <button class="secondary" onclick="resetCamera()">Reset View</button>
+      <a href="/sessions"><button class="secondary">Sessions</button></a>
+    </div>
+  </div>
+  <aside class="side panel">
+    <div class="row">
+      <strong>Selected Node</strong>
+      <span id="stats" class="pill">loading</span>
+    </div>
+    <div id="selected" class="item muted">Loading central graph...</div>
+    <div class="item">
+      <strong>Selected Flow Edges</strong>
+      <div id="edgeList" class="small muted"></div>
+    </div>
+  </aside>
+  <div class="explain panel">
+    <div class="row"><strong>What This View Means</strong><span class="pill">central graph</span></div>
+    <div class="small muted">Dots are graph nodes. Lines are graph edges. A useful memory graph should have meaningful lines like WorkChange -> GitCommit, WorkChange -> File, Decision -> WorkChange.</div>
+    <div id="graphHealth" class="small"></div>
+    <div id="kindStats" class="small"></div>
+  </div>
+  <div class="legend panel">
+    <div class="row"><strong>Controls</strong><span class="pill">local only</span></div>
+    <div class="small muted">Drag: rotate sphere | Ctrl-drag: roll | Shift-drag/pan mode: move | Wheel/buttons: zoom deep | Click: inspect flow | Labels appear as you zoom in</div>
+    <div id="legendKinds" class="small" style="margin-top:8px;"></div>
+  </div>
+  <script>
+    const canvas = document.getElementById("graphCanvas");
+    const ctx = canvas.getContext("2d");
+    const esc = value => String(value ?? "").replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
+    const short = (value, n = 150) => {
+      const text = String(value ?? "").replace(/\s+/g, " ");
+      return text.length > n ? text.slice(0, n - 3) + "..." : text;
+    };
+    const pretty = value => JSON.stringify(value ?? {}, null, 2);
+    const colors = {
+      ContextSnapshot: "#b9f66b",
+      WorkChange: "#8ecae6",
+      Decision: "#ffd166",
+      Fix: "#72efdd",
+      Bug: "#ff6b6b",
+      TestRun: "#c8b6ff",
+      File: "#9ab1a4",
+      Symbol: "#f4a261",
+      GitCommit: "#43aa8b",
+      Repo: "#90be6d",
+      Branch: "#577590",
+      RawEvidenceRef: "#6c757d"
+    };
+    const meanings = {
+      App: "Source application that produced captured evidence, for example Codex or Claude.",
+      Branch: "Git branch snapshot linked to captured work.",
+      Bug: "Problem extracted from a cleaned evidence window.",
+      ContextSnapshot: "Latest clean summary of one session: goal, decision, changed files, tests, blocker, next step.",
+      Decision: "A design or implementation decision extracted from cleaned session evidence.",
+      File: "File touched by work, commit metadata, or graph ledger evidence.",
+      Fix: "Fix extracted from evidence and linked to a bug or work change when available.",
+      GitCommit: "Real Git commit. This is the boundary where draft session work should merge into central memory.",
+      RawEvidenceRef: "Pointer to raw captured JSONL. This is provenance, not answer-grade memory by default.",
+      Repo: "Local Git repository root observed from captured work.",
+      Symbol: "Code symbol extracted from a file or work change.",
+      TestRun: "Test/check result extracted from cleaned evidence.",
+      WorkChange: "Summarized code or repo change extracted from a trigger window."
+    };
+    let rawNodes = [];
+    let rawEdges = [];
+    let nodes = [];
+    let edges = [];
+    let selected = null;
+    let hovered = null;
+    let dragging = false;
+    let dragMode = "rotate";
+    let dragDistance = 0;
+    let dragStart = {x: 0, y: 0};
+    let lastMouse = {x: 0, y: 0};
+    let camera = {rx: -0.62, ry: 0.78, rz: 0.18, zoom: 1.0, panX: 0, panY: 0};
+    let sphereRadius = 320;
+
+    function resize() {
+      const ratio = window.devicePixelRatio || 1;
+      canvas.width = Math.floor(canvas.clientWidth * ratio);
+      canvas.height = Math.floor(canvas.clientHeight * ratio);
+      ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+      draw();
+    }
+
+    function nodeText(node) {
+      return [node.id, node.kind, node.label, node.summary, node.status, node.session_id, node.commit_id, node.evidence_id].join(" ").toLowerCase();
+    }
+
+    function kindColor(kind) {
+      return colors[kind] || "#d8f3dc";
+    }
+
+    async function loadGraph() {
+      const limit = Math.max(10, Math.min(500, Number(document.getElementById("limit").value || 300)));
+      document.getElementById("stats").textContent = "loading";
+      const response = await fetch("/api/graph/central?limit=" + encodeURIComponent(limit));
+      const data = await response.json();
+      if (!response.ok || data.ok === false) throw new Error(data.error || response.statusText);
+      rawNodes = (data.nodes || []).map((node, index) => ({...node, _i: index}));
+      rawEdges = data.edges || [];
+      buildKindFilter();
+      applyFilters();
+    }
+
+    function buildKindFilter() {
+      const select = document.getElementById("kindFilter");
+      const current = select.value;
+      const kinds = [...new Set(rawNodes.map(node => node.kind).filter(Boolean))].sort();
+      select.innerHTML = '<option value="">All kinds</option>' + kinds.map(kind => `<option value="${esc(kind)}">${esc(kind)}</option>`).join("");
+      select.value = kinds.includes(current) ? current : "";
+      document.getElementById("legendKinds").innerHTML = kinds.map(kind => `<span style="margin-right:14px;"><span class="dot" style="background:${kindColor(kind)}"></span>${esc(kind)}</span>`).join("");
+    }
+
+    function applyFilters() {
+      const query = document.getElementById("search").value.trim().toLowerCase();
+      const kind = document.getElementById("kindFilter").value;
+      const status = document.getElementById("statusFilter").value;
+      const connectedOnly = document.getElementById("connectedOnly").checked;
+      const rawConnectedIds = new Set();
+      rawEdges.forEach(edge => {
+        rawConnectedIds.add(edge.source_id);
+        rawConnectedIds.add(edge.target_id);
+      });
+      nodes = rawNodes.filter(node => {
+        if (kind && node.kind !== kind) return false;
+        if (status && node.status !== status) return false;
+        if (query && !nodeText(node).includes(query)) return false;
+        if (connectedOnly && rawEdges.length && !rawConnectedIds.has(node.id)) return false;
+        return true;
+      });
+      const ids = new Set(nodes.map(node => node.id));
+      edges = rawEdges.filter(edge => ids.has(edge.source_id) && ids.has(edge.target_id));
+      renderHealth();
+      layout3d();
+      selected = nodes[0] || null;
+      renderSelected();
+      draw();
+    }
+
+    function countBy(rows, key) {
+      return rows.reduce((acc, row) => {
+        const value = row[key] || "unknown";
+        acc[value] = (acc[value] || 0) + 1;
+        return acc;
+      }, {});
+    }
+
+    function renderHealth() {
+      const connectedIds = new Set();
+      rawEdges.forEach(edge => {
+        connectedIds.add(edge.source_id);
+        connectedIds.add(edge.target_id);
+      });
+      const loadedIds = new Set(rawNodes.map(node => node.id));
+      const connected = rawNodes.filter(node => connectedIds.has(node.id)).length;
+      const isolated = rawNodes.filter(node => !connectedIds.has(node.id)).length;
+      const danglingEdges = rawEdges.filter(edge => !loadedIds.has(edge.source_id) || !loadedIds.has(edge.target_id)).length;
+      const edgeWarning = rawEdges.length < Math.max(3, Math.floor(rawNodes.length * 0.08));
+      document.getElementById("graphHealth").innerHTML = `
+        <div class="kv">
+          <span>Total loaded nodes</span><span>${esc(rawNodes.length)}</span>
+          <span>Total loaded edges</span><span>${esc(rawEdges.length)}</span>
+          <span>Connected nodes</span><span>${esc(connected)}</span>
+          <span>Isolated nodes</span><span>${esc(isolated)}</span>
+          <span>Edges missing endpoint nodes</span><span>${esc(danglingEdges)}</span>
+          <span>Visible after filters</span><span>${esc(nodes.length)} nodes / ${esc(edges.length)} edges</span>
+        </div>
+        ${edgeWarning ? `<div class="warnbox">This graph is sparse. The UI is not hiding meaning; the central graph currently has few relationships. More commit merge/work-ledger edges are needed for a rich graph.</div>` : ""}
+        ${danglingEdges ? `<div class="warnbox">Some edge endpoint nodes are outside this API page limit. Raise the limit or improve central graph endpoint expansion.</div>` : ""}
+      `;
+      const kinds = countBy(rawNodes, "kind");
+      document.getElementById("kindStats").innerHTML = Object.entries(kinds)
+        .sort((a, b) => b[1] - a[1])
+        .map(([kind, count]) => `<span style="margin-right:12px;"><span class="dot" style="background:${kindColor(kind)}"></span>${esc(kind)} ${esc(count)}</span>`)
+        .join("");
+    }
+
+    function layout3d() {
+      const map = new Map(nodes.map((node, index) => [node.id, index]));
+      const n = Math.max(1, nodes.length);
+      sphereRadius = 230 + 22 * Math.log2(n + 1);
+      nodes.forEach((node, i) => {
+        const theta = Math.acos(1 - 2 * (i + 0.5) / n);
+        const phi = i * Math.PI * (3 - Math.sqrt(5)) + (node.kind || "").length * 0.071;
+        node.x = Math.cos(phi) * Math.sin(theta) * sphereRadius;
+        node.y = Math.sin(phi) * Math.sin(theta) * sphereRadius;
+        node.z = Math.cos(theta) * sphereRadius;
+        node.vx = 0; node.vy = 0; node.vz = 0;
+        node.degree = 0;
+      });
+      edges.forEach(edge => {
+        const a = map.get(edge.source_id);
+        const b = map.get(edge.target_id);
+        if (a !== undefined && b !== undefined) {
+          nodes[a].degree += 1;
+          nodes[b].degree += 1;
+        }
+      });
+      const steps = Math.min(95, Math.max(28, Math.floor(5200 / Math.max(1, nodes.length))));
+      for (let step = 0; step < steps; step++) {
+        for (let i = 0; i < nodes.length; i++) {
+          for (let j = i + 1; j < nodes.length; j++) {
+            const a = nodes[i], b = nodes[j];
+            let dx = a.x - b.x, dy = a.y - b.y, dz = a.z - b.z;
+            let d2 = dx * dx + dy * dy + dz * dz + 50;
+            const force = 520 / d2;
+            a.vx += dx * force; a.vy += dy * force; a.vz += dz * force;
+            b.vx -= dx * force; b.vy -= dy * force; b.vz -= dz * force;
+          }
+        }
+        edges.forEach(edge => {
+          const a = nodes[map.get(edge.source_id)];
+          const b = nodes[map.get(edge.target_id)];
+          if (!a || !b) return;
+          const dx = b.x - a.x, dy = b.y - a.y, dz = b.z - a.z;
+          const dist = Math.sqrt(dx * dx + dy * dy + dz * dz) || 1;
+          const force = (dist - 150) * 0.0018;
+          a.vx += dx / dist * force; a.vy += dy / dist * force; a.vz += dz / dist * force;
+          b.vx -= dx / dist * force; b.vy -= dy / dist * force; b.vz -= dz / dist * force;
+        });
+        nodes.forEach(node => {
+          node.x += node.vx; node.y += node.vy; node.z += node.vz;
+          const length = Math.sqrt(node.x * node.x + node.y * node.y + node.z * node.z) || 1;
+          const shell = sphereRadius / length;
+          node.x = node.x * 0.82 + node.x * shell * 0.18;
+          node.y = node.y * 0.82 + node.y * shell * 0.18;
+          node.z = node.z * 0.82 + node.z * shell * 0.18;
+          node.vx *= 0.78; node.vy *= 0.78; node.vz *= 0.78;
+        });
+      }
+    }
+
+    function project(node) {
+      const sinY = Math.sin(camera.ry), cosY = Math.cos(camera.ry);
+      const sinX = Math.sin(camera.rx), cosX = Math.cos(camera.rx);
+      const sinZ = Math.sin(camera.rz), cosZ = Math.cos(camera.rz);
+      let x = node.x * cosY - node.z * sinY;
+      let z = node.x * sinY + node.z * cosY;
+      let y = node.y * cosX - z * sinX;
+      z = node.y * sinX + z * cosX;
+      const rolledX = x * cosZ - y * sinZ;
+      const rolledY = x * sinZ + y * cosZ;
+      x = rolledX;
+      y = rolledY;
+      const depth = 940;
+      const scale = camera.zoom * depth / (depth + z);
+      const depth01 = Math.max(0, Math.min(1, (sphereRadius - z) / (sphereRadius * 2 || 1)));
+      return {
+        x: canvas.clientWidth / 2 + camera.panX + x * scale,
+        y: canvas.clientHeight / 2 + camera.panY + y * scale,
+        z,
+        depth01,
+        scale,
+        r: Math.max(2.4, Math.min(19, (4.2 + Math.sqrt(node.degree || 0) * 2.0) * scale * (0.76 + depth01 * 0.55)))
+      };
+    }
+
+    function nodeName(node) {
+      const label = node.label || node.summary || node.id || "";
+      if (node.kind === "File") return label.split(/[\\/]/).pop() || "File";
+      if (node.kind === "GitCommit") return String(node.commit_id || label).slice(0, 9);
+      if (node.kind === "Repo") return label.split(/[\\/]/).pop() || "Repo";
+      if (node.kind === "Branch") return label || "Branch";
+      return short(label, 28);
+    }
+
+    function selectedFlow() {
+      const flowEdges = selected
+        ? edges.filter(edge => edge.source_id === selected.id || edge.target_id === selected.id)
+        : [];
+      const flowIds = new Set();
+      if (selected) flowIds.add(selected.id);
+      flowEdges.forEach(edge => {
+        flowIds.add(edge.source_id);
+        flowIds.add(edge.target_id);
+      });
+      return {edges: flowEdges, ids: flowIds};
+    }
+
+    function drawArrow(a, b, color, alpha) {
+      const angle = Math.atan2(b.y - a.y, b.x - a.x);
+      const size = Math.max(6, Math.min(13, 9 * ((a.scale + b.scale) / 2)));
+      const endX = b.x - Math.cos(angle) * 12;
+      const endY = b.y - Math.sin(angle) * 12;
+      ctx.fillStyle = color.replace("ALPHA", alpha);
+      ctx.beginPath();
+      ctx.moveTo(endX, endY);
+      ctx.lineTo(endX - Math.cos(angle - 0.45) * size, endY - Math.sin(angle - 0.45) * size);
+      ctx.lineTo(endX - Math.cos(angle + 0.45) * size, endY - Math.sin(angle + 0.45) * size);
+      ctx.closePath();
+      ctx.fill();
+    }
+
+    function drawSphereGuide() {
+      if (!document.getElementById("showSphere").checked || !nodes.length) return;
+      const rings = [];
+      for (let lat = -60; lat <= 60; lat += 30) {
+        const points = [];
+        const theta = lat * Math.PI / 180;
+        const r = Math.cos(theta) * sphereRadius;
+        const y = Math.sin(theta) * sphereRadius;
+        for (let i = 0; i <= 96; i++) {
+          const phi = (i / 96) * Math.PI * 2;
+          points.push(project({x: Math.cos(phi) * r, y, z: Math.sin(phi) * r}));
+        }
+        rings.push(points);
+      }
+      for (let lon = 0; lon < 180; lon += 30) {
+        const points = [];
+        const phi = lon * Math.PI / 180;
+        for (let i = 0; i <= 96; i++) {
+          const theta = ((i / 96) * Math.PI * 2) - Math.PI;
+          points.push(project({
+            x: Math.cos(phi) * Math.sin(theta) * sphereRadius,
+            y: Math.cos(theta) * sphereRadius,
+            z: Math.sin(phi) * Math.sin(theta) * sphereRadius
+          }));
+        }
+        rings.push(points);
+      }
+      ctx.save();
+      rings.forEach(points => {
+        ctx.beginPath();
+        points.forEach((p, index) => {
+          if (index === 0) ctx.moveTo(p.x, p.y);
+          else ctx.lineTo(p.x, p.y);
+        });
+        const frontness = points.reduce((sum, p) => sum + p.depth01, 0) / Math.max(1, points.length);
+        ctx.strokeStyle = `rgba(185, 246, 107, ${0.035 + frontness * 0.055})`;
+        ctx.lineWidth = 1;
+        ctx.stroke();
+      });
+      ctx.restore();
+    }
+
+    function draw() {
+      if (!ctx) return;
+      const w = canvas.clientWidth, h = canvas.clientHeight;
+      ctx.clearRect(0, 0, w, h);
+      ctx.fillStyle = "rgba(7, 11, 10, 0.82)";
+      ctx.fillRect(0, 0, w, h);
+      const projected = new Map(nodes.map(node => [node.id, project(node)]));
+      const flow = selectedFlow();
+      const focusFlow = document.getElementById("focusFlow").checked && selected;
+      drawSphereGuide();
+      ctx.lineWidth = 1;
+      edges.forEach(edge => {
+        const a = projected.get(edge.source_id);
+        const b = projected.get(edge.target_id);
+        if (!a || !b) return;
+        const isFlowEdge = flow.edges.includes(edge);
+        const depthAlpha = Math.max(0.12, Math.min(1, (a.depth01 + b.depth01) / 2));
+        const alpha = isFlowEdge
+          ? Math.max(0.76, Math.min(1, depthAlpha * 0.95))
+          : focusFlow
+            ? 0.13 + depthAlpha * 0.09
+            : 0.16 + depthAlpha * 0.22;
+        ctx.lineWidth = isFlowEdge ? 2.8 : 1;
+        ctx.strokeStyle = isFlowEdge ? `rgba(185, 246, 107, ${alpha})` : `rgba(120, 158, 139, ${alpha})`;
+        ctx.beginPath();
+        ctx.moveTo(a.x, a.y);
+        ctx.lineTo(b.x, b.y);
+        ctx.stroke();
+        if (isFlowEdge) drawArrow(a, b, "rgba(185, 246, 107, ALPHA)", alpha);
+        if ((isFlowEdge || camera.zoom >= 2.2) && edges.length <= 140 && document.getElementById("showLabels").checked) {
+          ctx.fillStyle = "rgba(238, 248, 236, 0.62)";
+          ctx.font = "10px ui-monospace, Menlo, Consolas, monospace";
+          ctx.fillText(short(edge.kind, 18), (a.x + b.x) / 2 + 5, (a.y + b.y) / 2 - 5);
+        }
+      });
+      const ordered = nodes.slice().sort((a, b) => project(a).z - project(b).z);
+      const showLabels = document.getElementById("showLabels").checked;
+      ordered.forEach(node => {
+        const p = projected.get(node.id);
+        const isSelected = selected && selected.id === node.id;
+        const isHovered = hovered && hovered.id === node.id;
+        const inFlow = flow.ids.has(node.id);
+        const nodeAlpha = focusFlow && !inFlow
+          ? 0.22 + p.depth01 * 0.22
+          : 0.42 + p.depth01 * 0.58;
+        ctx.beginPath();
+        ctx.fillStyle = kindColor(node.kind);
+        ctx.globalAlpha = nodeAlpha;
+        ctx.arc(p.x, p.y, p.r + (isSelected ? 4 : isHovered ? 2 : 0), 0, Math.PI * 2);
+        ctx.fill();
+        ctx.globalAlpha = 1;
+        ctx.strokeStyle = isSelected ? "#ffffff" : inFlow ? "#b9f66b" : "#07100d";
+        ctx.lineWidth = isSelected ? 2.5 : inFlow ? 2 : 1.5;
+        ctx.stroke();
+        const zoomLabel = camera.zoom >= 1.7 && (node.degree > 0 || nodes.length <= 45);
+        const deepZoomLabel = camera.zoom >= 2.7;
+        if (showLabels && (isSelected || isHovered || inFlow || zoomLabel || deepZoomLabel)) {
+          ctx.fillStyle = "#eef8ec";
+          ctx.font = "11px ui-monospace, Menlo, Consolas, monospace";
+          ctx.fillText(`${short(node.kind, 14)}: ${short(nodeName(node), 32)}`, p.x + p.r + 5, p.y + 4);
+        }
+      });
+      document.getElementById("stats").textContent = `${nodes.length} nodes | ${edges.length} edges`;
+    }
+
+    function hitTest(x, y) {
+      let best = null;
+      let bestDistance = Infinity;
+      nodes.forEach(node => {
+        const p = project(node);
+        const dx = p.x - x, dy = p.y - y;
+        const distance = Math.sqrt(dx * dx + dy * dy);
+        if (distance < p.r + 8 && distance < bestDistance) {
+          best = node;
+          bestDistance = distance;
+        }
+      });
+      return best;
+    }
+
+    function directionLabel(edge, node) {
+      if (edge.source_id === node.id) return `${short(node.id, 48)} --${edge.kind}--> ${short(edge.target_id, 48)}`;
+      return `${short(edge.source_id, 48)} --${edge.kind}--> ${short(node.id, 48)}`;
+    }
+
+    function traceForNode(node, linked) {
+      const evidenceIds = new Set();
+      if (node.evidence_id) evidenceIds.add(node.evidence_id);
+      (node.metadata && node.metadata.evidence_ids || []).forEach(id => evidenceIds.add(id));
+      linked.forEach(edge => {
+        if (edge.evidence_id) evidenceIds.add(edge.evidence_id);
+      });
+      const trigger = node.metadata && node.metadata.trigger || {};
+      const relationKinds = [...new Set(linked.map(edge => edge.kind))];
+      const connectedTo = linked.map(edge => edge.source_id === node.id ? edge.target_id : edge.source_id);
+      return `
+        <div class="item">
+          <strong>Knowledge Creation Trace</strong>
+          <div class="small muted">This is how to audit why this node exists and how it became connected.</div>
+          <div class="kv">
+            <span>1. Raw capture refs</span><span>${esc(evidenceIds.size ? [...evidenceIds].join(", ") : "none on node")}</span>
+            <span>2. Trigger window</span><span>${esc(trigger.trigger_type || "not recorded on node")}</span>
+            <span>3. Extracted node</span><span>${esc(node.kind)} / ${esc(node.scope || "unknown")} / ${esc(node.status || "unknown")}</span>
+            <span>4. Relation types</span><span>${esc(relationKinds.length ? relationKinds.join(", ") : "none visible")}</span>
+            <span>5. Connected nodes</span><span>${esc(connectedTo.length ? connectedTo.map(id => short(id, 44)).join(", ") : "none visible")}</span>
+            <span>6. Commit boundary</span><span>${esc(node.commit_id || "not linked on this node")}</span>
+          </div>
+        </div>
+      `;
+    }
+
+    function renderSelected() {
+      const box = document.getElementById("selected");
+      const edgeBox = document.getElementById("edgeList");
+      if (!selected) {
+        box.innerHTML = '<div class="muted">No node selected.</div>';
+        edgeBox.textContent = "";
+        return;
+      }
+      const linked = edges.filter(edge => edge.source_id === selected.id || edge.target_id === selected.id).slice(0, 18);
+      box.innerHTML = `
+        <div class="item">
+          <div class="row"><strong>${esc(selected.kind)}</strong><span class="pill">${esc(selected.status || "")}</span></div>
+          <div class="meaning">${esc(meanings[selected.kind] || "Graph node stored by AMO.")}</div>
+          <div>${esc(short(selected.summary || selected.label || selected.id, 260))}</div>
+          <div class="small muted">${esc(selected.id)}</div>
+        </div>
+        <div class="item small">
+          <div>session_id: ${esc(selected.session_id || "")}</div>
+          <div>commit_id: ${esc(selected.commit_id || "")}</div>
+          <div>evidence_id: ${esc(selected.evidence_id || "")}</div>
+        </div>
+        ${traceForNode(selected, linked)}
+        <details class="item" open><summary>Metadata</summary><pre>${esc(pretty(selected.metadata || {}))}</pre></details>
+      `;
+      edgeBox.innerHTML = linked.length ? linked.map(edge => `
+        <div class="item">
+          <span class="pill">${esc(edge.kind)}</span>
+          <div>${esc(directionLabel(edge, selected))}</div>
+          <div class="muted">evidence=${esc(edge.evidence_id || "")} confidence=${esc(edge.confidence ?? "")}</div>
+        </div>
+      `).join("") : '<div class="muted">No visible edges for selected node.</div>';
+    }
+
+    function resetCamera() {
+      camera = {rx: -0.62, ry: 0.78, rz: 0.18, zoom: 1.0, panX: 0, panY: 0};
+      draw();
+    }
+
+    function zoomBy(factor) {
+      camera.zoom *= factor;
+      camera.zoom = Math.max(0.04, Math.min(14, camera.zoom));
+      draw();
+    }
+
+    canvas.addEventListener("mousedown", event => {
+      event.preventDefault();
+      dragging = true;
+      dragMode = event.shiftKey || event.button === 1 || document.getElementById("panMode").checked
+        ? "pan"
+        : event.ctrlKey
+          ? "roll"
+          : "rotate";
+      dragDistance = 0;
+      canvas.classList.add("dragging");
+      dragStart = {x: event.clientX, y: event.clientY};
+      lastMouse = {x: event.clientX, y: event.clientY};
+    });
+    window.addEventListener("mouseup", event => {
+      if (!dragging) return;
+      dragging = false;
+      canvas.classList.remove("dragging");
+      const moved = Math.abs(event.clientX - dragStart.x) + Math.abs(event.clientY - dragStart.y) + dragDistance;
+      if (moved < 8) {
+        selected = hitTest(event.clientX, event.clientY) || selected;
+        renderSelected();
+        draw();
+      }
+    });
+    window.addEventListener("mousemove", event => {
+      if (dragging) {
+        const dx = event.clientX - lastMouse.x;
+        const dy = event.clientY - lastMouse.y;
+        dragDistance += Math.abs(dx) + Math.abs(dy);
+        if (dragMode === "pan") {
+          camera.panX += dx;
+          camera.panY += dy;
+        } else if (dragMode === "roll") {
+          camera.rz += dx * 0.008;
+        } else {
+          camera.ry += dx * 0.006;
+          camera.rx += dy * 0.006;
+          camera.rx = Math.max(-1.45, Math.min(1.45, camera.rx));
+        }
+        lastMouse = {x: event.clientX, y: event.clientY};
+        draw();
+      } else {
+        const next = hitTest(event.clientX, event.clientY);
+        if ((next && next.id) !== (hovered && hovered.id)) {
+          hovered = next;
+          draw();
+        }
+      }
+    });
+    canvas.addEventListener("wheel", event => {
+      event.preventDefault();
+      zoomBy(event.deltaY > 0 ? 0.86 : 1.16);
+    }, {passive: false});
+    document.getElementById("search").addEventListener("input", applyFilters);
+    document.getElementById("kindFilter").addEventListener("change", applyFilters);
+    document.getElementById("statusFilter").addEventListener("change", applyFilters);
+    document.getElementById("connectedOnly").addEventListener("change", applyFilters);
+    document.getElementById("showLabels").addEventListener("change", draw);
+    document.getElementById("focusFlow").addEventListener("change", draw);
+    window.addEventListener("resize", resize);
+    resize();
+    loadGraph().catch(err => {
+      document.getElementById("selected").innerHTML = `<div class="muted">Graph load error: ${esc(err.message)}</div>`;
+      document.getElementById("stats").textContent = "error";
+    });
+  </script>
+</body>
+</html>
+"""
 
 
 DASHBOARD_HTML = r"""<!doctype html>

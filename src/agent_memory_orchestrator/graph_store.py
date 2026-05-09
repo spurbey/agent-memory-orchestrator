@@ -101,6 +101,15 @@ class GraphStore(Protocol):
     def neighbors(self, node_id: str, *, limit: int = 25) -> list[dict[str, Any]]:
         """Return adjacent nodes."""
 
+    def list_edges(
+        self,
+        *,
+        limit: int = 100,
+        session_id: str = "",
+        kinds: list[str] | None = None,
+    ) -> list[dict[str, Any]]:
+        """List graph edges with simple filters."""
+
     def merge_status(self, *, session_id: str = "") -> dict[str, Any]:
         """Return merge/graph status."""
 
@@ -254,6 +263,27 @@ class KuzuGraphStore:
         )
         return [_row_to_node(row) for row in _rows(result)]
 
+    def list_edges(
+        self,
+        *,
+        limit: int = 100,
+        session_id: str = "",
+        kinds: list[str] | None = None,
+    ) -> list[dict[str, Any]]:
+        clauses: list[str] = []
+        if session_id:
+            clauses.append(f"(a.session_id = {_q(session_id)} OR b.session_id = {_q(session_id)})")
+        if kinds:
+            clauses.append("(" + " OR ".join(f"e.kind = {_q(kind)}" for kind in kinds) + ")")
+        where = "WHERE " + " AND ".join(clauses) if clauses else ""
+        result = self._conn.execute(
+            "MATCH (a:GraphNode)-[e:GraphEdge]->(b:GraphNode) "
+            f"{where} "
+            "RETURN e.id, a.id, b.id, e.kind, e.weight, e.confidence, e.evidence_id, e.created_at, e.metadata_json "
+            f"LIMIT {int(limit)}"
+        )
+        return [_row_to_edge(row) for row in _rows(result)]
+
     def merge_status(self, *, session_id: str = "") -> dict[str, Any]:
         where = f"WHERE n.session_id = {_q(session_id)} " if session_id else ""
         result = self._conn.execute(f"MATCH (n:GraphNode) {where}RETURN n.status, count(*)")
@@ -350,6 +380,28 @@ class InMemoryGraphStore:
                 found.append(self.nodes[edge.source_id])
         return [node.as_dict() for node in found[:limit]]
 
+    def list_edges(
+        self,
+        *,
+        limit: int = 100,
+        session_id: str = "",
+        kinds: list[str] | None = None,
+    ) -> list[dict[str, Any]]:
+        allowed = set(kinds or [])
+        rows: list[GraphEdge] = []
+        for edge in self.edges.values():
+            source = self.nodes.get(edge.source_id)
+            target = self.nodes.get(edge.target_id)
+            if allowed and edge.kind not in allowed:
+                continue
+            if session_id and not (
+                (source and source.session_id == session_id) or (target and target.session_id == session_id)
+            ):
+                continue
+            rows.append(edge)
+        rows.sort(key=lambda edge: edge.created_at, reverse=True)
+        return [edge.as_dict() for edge in rows[:limit]]
+
     def merge_status(self, *, session_id: str = "") -> dict[str, Any]:
         counts: dict[str, int] = {}
         for node in self.nodes.values():
@@ -439,6 +491,25 @@ def _row_to_node(row: list[Any]) -> dict[str, Any]:
         "commit_id": row[10],
         "created_at": row[11],
         "updated_at": row[12],
+        "metadata": metadata,
+    }
+
+
+def _row_to_edge(row: list[Any]) -> dict[str, Any]:
+    metadata_raw = row[8] if len(row) > 8 else "{}"
+    try:
+        metadata = json.loads(metadata_raw or "{}")
+    except json.JSONDecodeError:
+        metadata = {}
+    return {
+        "id": row[0],
+        "source_id": row[1],
+        "target_id": row[2],
+        "kind": row[3],
+        "weight": float(row[4] or 0.0),
+        "confidence": float(row[5] or 0.0),
+        "evidence_id": row[6],
+        "created_at": row[7],
         "metadata": metadata,
     }
 
