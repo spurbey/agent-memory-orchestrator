@@ -17,8 +17,7 @@ from ..evidence.raw_store import RawEvidenceRef, RawEvidenceStore
 from ..evidence.triggers import TriggerDecision, detect_trigger
 from ..evidence.window import clean_evidence_window
 from ..llm.qwen import DeterministicPlanner, OllamaQwenClient, QueryPlan, QwenPlanner, QwenUnavailable
-from ..versioning import LocalGitBackend, VersionBackend
-from ..work_ledger import WorkLedger
+from ..versioning import LocalGitBackend, VersionBackend, WorkLedger
 from .cache import GraphSearchCache
 from .consolidation import DeterministicGraphConsolidator
 from .merge import CommitMergeEngine, QwenMergeClassifier
