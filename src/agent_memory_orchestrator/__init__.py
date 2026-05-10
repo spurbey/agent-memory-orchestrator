@@ -2,6 +2,6 @@
 
 from .config import Settings
 from .memory_service import MemoryService
-from .orchestrator import OrchestratorService
+from .orchestration import OrchestratorService
 
 __all__ = ["Settings", "MemoryService", "OrchestratorService"]

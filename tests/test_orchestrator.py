@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 
 from agent_memory_orchestrator.config import Settings
-from agent_memory_orchestrator.orchestrator import OrchestratorService
+from agent_memory_orchestrator.orchestration import OrchestratorService
 
 
 def make_settings(tmp_path) -> Settings:
@@ -83,3 +83,9 @@ def test_orchestrator_rejects_invalid_decision_timing(tmp_path) -> None:
     with pytest.raises(ValueError, match="ready_for_user"):
         orch.user_decision("s2", "approved")
     orch.close()
+
+
+def test_legacy_orchestrator_module_keeps_public_exports() -> None:
+    from agent_memory_orchestrator import orchestrator as legacy_orchestrator
+
+    assert legacy_orchestrator.OrchestratorService is OrchestratorService

@@ -7,7 +7,7 @@ from pathlib import Path
 from mcp.server.fastmcp import FastMCP
 
 from ..config import Settings
-from ..orchestrator import OrchestratorService
+from ..orchestration import OrchestratorService
 from .tools import MemoryMcpToolService
 
 

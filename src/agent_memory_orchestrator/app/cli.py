@@ -22,7 +22,7 @@ from ..install.service import build_install_plan
 from ..install.service import doctor as install_doctor
 from ..install.service import uninstall as uninstall_targets
 from ..memory_service import MemoryService
-from ..orchestrator import OrchestratorService
+from ..orchestration import OrchestratorService
 from ..privacy import redact_secrets
 from ..llm.models import download_models, list_model_presets, model_status, preflight_models
 from ..llm.qwen import QwenUnavailable
