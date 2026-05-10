@@ -20,3 +20,8 @@ def stable_json(data: object) -> str:
 
 def elapsed_ms(started: float) -> int:
     return int((time.perf_counter() - started) * 1000)
+
+
+def preview(text: str, max_len: int) -> str:
+    clean = " ".join(str(text).split())
+    return clean if len(clean) <= max_len else clean[: max_len - 3] + "..."
