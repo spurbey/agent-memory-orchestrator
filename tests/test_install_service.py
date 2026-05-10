@@ -29,6 +29,7 @@ def test_codex_install_applies_managed_hooks_and_mcp(tmp_path: Path) -> None:
     assert "existing = true" in text
     assert "codex_hooks = true" in text
     assert "[mcp_servers.agent_memory_orchestrator]" in text
+    assert "agent_memory_orchestrator.mcp.server" in text
     assert "[[hooks.UserPromptSubmit]]" not in text
     assert "agent_memory_orchestrator.hook --agent codex" not in text
     assert str(amo_home.resolve()).replace("\\", "\\\\") in text

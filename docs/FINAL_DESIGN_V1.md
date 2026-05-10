@@ -156,8 +156,8 @@ Legacy compatibility tools:
 
 Implementation rule:
 
-- `mcp_server.py` registers thin wrappers.
-- `MemoryMcpToolService` implements contracts.
+- `mcp/server.py` registers thin wrappers.
+- `mcp/tools.py` implements `MemoryMcpToolService` contracts.
 - Graph tools call daemon by default and report daemon unavailability clearly.
 
 ## 9) Debuggability

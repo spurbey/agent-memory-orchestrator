@@ -351,7 +351,7 @@ def _claude_operation(*, settings_path: Path, amo_home: Path, python_command: st
     payload.setdefault("mcpServers", {})
     payload["mcpServers"][CLAUDE_MCP_NAME] = {
         "command": python_command,
-        "args": ["-m", "agent_memory_orchestrator.mcp_server", "--amo-home", str(amo_home)],
+        "args": ["-m", "agent_memory_orchestrator.mcp.server", "--amo-home", str(amo_home)],
     }
     hooks = payload.setdefault("hooks", {})
     for event, matcher, status in _hook_events():
@@ -381,7 +381,7 @@ def _claude_operation(*, settings_path: Path, amo_home: Path, python_command: st
 
 
 def _codex_managed_block(*, amo_home: Path, python_command: str) -> str:
-    mcp_args = ["-m", "agent_memory_orchestrator.mcp_server", "--amo-home", str(amo_home)]
+    mcp_args = ["-m", "agent_memory_orchestrator.mcp.server", "--amo-home", str(amo_home)]
     lines = [
         MANAGED_BEGIN,
         "# Managed by Agent Memory Orchestrator. Do not edit inside this block.",
