@@ -9,7 +9,7 @@ from ..config import Settings
 from ..app.client import DaemonClient, DaemonUnavailable
 from ..evidence.drain import EvidenceDrain
 from ..evidence.triggers import detect_trigger
-from ..qwen_client import OllamaQwenClient, QwenUnavailable
+from ..llm.qwen import OllamaQwenClient, QwenUnavailable
 from .merge import QwenMergeClassifier
 from .service import GraphRagService
 

@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from .model_manager import resolve_models
+from .llm.models import resolve_models
 
 
 MANAGED_BEGIN = "# BEGIN AMO MANAGED BLOCK"

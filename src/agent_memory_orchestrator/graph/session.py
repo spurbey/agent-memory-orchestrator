@@ -11,7 +11,7 @@ from ..config import Settings
 from ..evidence.raw_store import RawEvidenceRef
 from ..evidence.triggers import TriggerDecision
 from ..evidence.window import clean_evidence_window
-from ..qwen_client import OllamaQwenClient, QwenUnavailable
+from ..llm.qwen import OllamaQwenClient, QwenUnavailable
 from ..versioning import VersionBackend
 from .store import GraphEdge, GraphNode, GraphStore
 

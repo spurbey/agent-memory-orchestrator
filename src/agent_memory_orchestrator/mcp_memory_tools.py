@@ -9,7 +9,7 @@ from .app.client import DaemonClient, DaemonUnavailable
 from .graph.service import GraphRagService
 from .graph.store import GraphBackendUnavailable
 from .memory_service import MemoryService
-from .qwen_client import QwenUnavailable
+from .llm.qwen import QwenUnavailable
 
 
 AGENTS = {"claude", "codex", "user", "system"}

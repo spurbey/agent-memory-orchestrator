@@ -6,7 +6,7 @@ from agent_memory_orchestrator.config import Settings
 from agent_memory_orchestrator.app.daemon import GRAPH3D_HTML, SESSION_COCKPIT_HTML
 from agent_memory_orchestrator.graph.service import GraphRagService
 from agent_memory_orchestrator.graph.store import GraphEdge, GraphNode, InMemoryGraphStore
-from agent_memory_orchestrator.qwen_client import DeterministicPlanner
+from agent_memory_orchestrator.llm.qwen import DeterministicPlanner
 from agent_memory_orchestrator.versioning import GitSnapshot
 
 

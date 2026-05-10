@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from ..config import Settings
-from ..qwen_client import OllamaQwenClient, QwenUnavailable
+from ..llm.qwen import OllamaQwenClient, QwenUnavailable
 from ..versioning import GitCommitDetails, GitDiffSummary, VersionBackend
 from .store import GraphEdge, GraphNode, GraphStore
 

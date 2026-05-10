@@ -16,7 +16,7 @@ from ..evidence.drain import _read_jsonl_from
 from ..evidence.raw_store import RawEvidenceRef, RawEvidenceStore
 from ..evidence.triggers import TriggerDecision, detect_trigger
 from ..evidence.window import clean_evidence_window
-from ..qwen_client import DeterministicPlanner, OllamaQwenClient, QueryPlan, QwenPlanner, QwenUnavailable
+from ..llm.qwen import DeterministicPlanner, OllamaQwenClient, QueryPlan, QwenPlanner, QwenUnavailable
 from ..versioning import LocalGitBackend, VersionBackend
 from ..work_ledger import WorkLedger
 from .cache import GraphSearchCache

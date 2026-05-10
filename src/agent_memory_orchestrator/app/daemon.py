@@ -14,7 +14,7 @@ from ..graph.diagnostics import debug_drain, debug_graph, debug_hooks, debug_qwe
 from ..graph.service import GraphRagService
 from ..graph.store import GraphBackendUnavailable
 from ..memory_service import MemoryService
-from ..qwen_client import QwenUnavailable
+from ..llm.qwen import QwenUnavailable
 
 _CLIENT_ABORT_ERRORS = (BrokenPipeError, ConnectionAbortedError, ConnectionResetError)
 _GRAPH_LOCK = threading.RLock()
