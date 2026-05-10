@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
-from ..config import Settings
+from ..core.config import Settings
 from ..graph.diagnostics import debug_drain, debug_graph, debug_hooks, debug_qwen
 from ..graph.service import GraphRagService
 from ..graph.store import GraphBackendUnavailable
@@ -469,3 +469,4 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+

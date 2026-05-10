@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from ..integrations.adapters import normalize_adapter_event
-from ..config import Settings
+from ..core.config import Settings
 from ..evidence.drain import EvidenceDrain
 from ..evidence.drain import _read_jsonl_from
 from ..evidence.raw_store import RawEvidenceRef, RawEvidenceStore
@@ -1326,3 +1326,4 @@ def _compact_git(git: dict[str, Any]) -> dict[str, Any]:
 
 def _elapsed_ms(start: float) -> int:
     return int((time.monotonic() - start) * 1000)
+

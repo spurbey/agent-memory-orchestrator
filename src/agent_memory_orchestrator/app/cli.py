@@ -7,7 +7,7 @@ import sys
 from dataclasses import replace
 from pathlib import Path
 
-from ..config import Settings
+from ..core.config import Settings
 from ..integrations.connectors.slack import SlackConnectorService
 from ..integrations.connectors.slack.manifest import slack_manifest_json, slack_manifest_setup_url
 from ..integrations.connectors.slack.service import load_event_file
@@ -23,7 +23,7 @@ from ..install.service import doctor as install_doctor
 from ..install.service import uninstall as uninstall_targets
 from ..memory import MemoryService
 from ..orchestration import OrchestratorService
-from ..privacy import redact_secrets
+from ..core.privacy import redact_secrets
 from ..llm.models import download_models, list_model_presets, model_status, preflight_models
 from ..llm.qwen import QwenUnavailable
 from .client import DaemonClient, DaemonUnavailable
@@ -861,3 +861,4 @@ def _rebuild_clean_db(settings: Settings, out_path: Path, codex_root: Path, limi
 
 if __name__ == "__main__":
     raise SystemExit(main())
+

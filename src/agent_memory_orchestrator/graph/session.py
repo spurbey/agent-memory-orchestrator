@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Protocol
 
-from ..config import Settings
+from ..core.config import Settings
 from ..evidence.raw_store import RawEvidenceRef
 from ..evidence.triggers import TriggerDecision
 from ..evidence.window import clean_evidence_window
@@ -696,3 +696,4 @@ def _string_list(value: Any, *, limit: int) -> list[str]:
         if text:
             rows.append(text)
     return rows[:limit]
+

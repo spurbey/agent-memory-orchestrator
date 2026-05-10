@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Protocol
 
-from ..config import Settings
+from ..core.config import Settings
 from ..llm.qwen import OllamaQwenClient, QwenUnavailable
 from ..versioning import GitCommitDetails, GitDiffSummary, VersionBackend
 from .store import GraphEdge, GraphNode, GraphStore
@@ -704,3 +704,4 @@ def _float(value: Any, *, default: float) -> float:
         return float(value)
     except (TypeError, ValueError):
         return default
+

@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from ..config import Settings
+from ..core.config import Settings
 from ..graph.session import SessionGraphBuilder
 from ..graph.store import GraphStore
 from ..versioning import VersionBackend
@@ -200,3 +200,4 @@ def _compact_result(result: dict[str, Any]) -> dict[str, Any]:
         "node_count": len(result.get("nodes", [])) if isinstance(result.get("nodes"), list) else 0,
         "evidence_ids": result.get("evidence_ids", []),
     }
+

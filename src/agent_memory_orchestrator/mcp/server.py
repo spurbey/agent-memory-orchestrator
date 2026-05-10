@@ -6,7 +6,7 @@ from pathlib import Path
 
 from mcp.server.fastmcp import FastMCP
 
-from ..config import Settings
+from ..core.config import Settings
 from ..orchestration import OrchestratorService
 from .tools import MemoryMcpToolService
 
@@ -197,3 +197,4 @@ def main(argv: list[str] | None = None) -> None:
 
 if __name__ == "__main__":
     main()
+

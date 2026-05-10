@@ -7,7 +7,7 @@ import sqlite3
 from ..extraction import extract_tags, make_topic_key
 from ..llm.embeddings import cosine_similarity, embed_text_with_model
 from ..llm.vector_cache import VectorRow, build_faiss_cache
-from ..models import Memory, MemoryUnit
+from ..core.models import Memory, MemoryUnit
 from ..retrieval import lexical_rerank_score
 from .common import new_id as _id
 from .common import stable_json as _json
@@ -474,3 +474,4 @@ def _contradiction_signal(new_object: str, old_object: str) -> float:
     if (new_terms & positive and old_terms & negative) or (new_terms & negative and old_terms & positive):
         return 1.0
     return 0.0
+
