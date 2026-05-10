@@ -147,6 +147,22 @@ def _build_parser() -> argparse.ArgumentParser:
     graph_rebuild_cache.add_argument("--limit", type=int, default=5000)
     graph_rebuild_cache.add_argument("--offline", action="store_true", help="Open Kuzu directly for single-process maintenance.")
 
+    graph_finalize = sub.add_parser("graph-finalize-session", help="Promote one session's draft graph work into central graph")
+    graph_finalize.add_argument("--session-id", required=True)
+    graph_finalize.add_argument("--commit", default="HEAD")
+    graph_finalize.add_argument("--cwd", default="")
+    graph_finalize.add_argument("--limit", type=int, default=500)
+    graph_finalize.add_argument("--apply", action="store_true", help="Apply the merge plan. Omit for dry-run preview.")
+    graph_finalize.add_argument("--offline", action="store_true", help="Open Kuzu directly for single-process maintenance.")
+
+    graph_rebuild_central = sub.add_parser("graph-rebuild-central", help="Rebuild central graph from raw evidence")
+    graph_rebuild_central.add_argument("--from-evidence", action="store_true", help="Replay raw evidence into a fresh graph")
+    graph_rebuild_central.add_argument("--backup-current", action="store_true", help="Back up current active graph before swap")
+    graph_rebuild_central.add_argument("--apply", action="store_true", help="Apply backup/rebuild/swap. Omit for dry-run preview.")
+    graph_rebuild_central.add_argument("--limit", type=int, default=100000)
+    graph_rebuild_central.add_argument("--max-windows", type=int, default=None)
+    graph_rebuild_central.add_argument("--offline", action="store_true", help="Open Kuzu directly for single-process maintenance.")
+
     slack = sub.add_parser("slack", help="Configure and run local Slack Socket Mode connector")
     slack_sub = slack.add_subparsers(dest="slack_command", required=True)
     slack_manifest = slack_sub.add_parser("manifest", help="Print or write a Slack app manifest for Socket Mode")
@@ -548,6 +564,8 @@ def main(argv: list[str] | None = None) -> int:
             "graph-consolidate",
             "graph-cache-status",
             "graph-rebuild-cache",
+            "graph-finalize-session",
+            "graph-rebuild-central",
         }:
             settings = Settings.load()
             if args.offline:
@@ -570,13 +588,39 @@ def main(argv: list[str] | None = None) -> int:
                         result = graph.graph_cache_status()
                     elif args.command == "graph-rebuild-cache":
                         result = graph.rebuild_graph_cache(limit=args.limit)
+                    elif args.command == "graph-finalize-session":
+                        result = graph.finalize_session(
+                            session_id=args.session_id,
+                            commit=args.commit,
+                            apply=args.apply,
+                            limit=args.limit,
+                            cwd=args.cwd or None,
+                        )
+                    elif args.command == "graph-rebuild-central":
+                        result = graph.rebuild_central_from_evidence(
+                            apply=args.apply,
+                            backup_current=args.backup_current or args.apply,
+                            limit=args.limit,
+                            max_windows=args.max_windows,
+                        )
                     else:
                         result = graph.merge_status(session_id=args.session_id)
                     _print(result)
                 finally:
                     graph.close()
             else:
-                client_timeout = 300 if args.command in {"graph-drain", "graph-consolidate", "graph-rebuild-cache"} else 60
+                client_timeout = (
+                    300
+                    if args.command
+                    in {
+                        "graph-drain",
+                        "graph-consolidate",
+                        "graph-rebuild-cache",
+                        "graph-finalize-session",
+                        "graph-rebuild-central",
+                    }
+                    else 60
+                )
                 client = DaemonClient.from_settings(settings, timeout_seconds=client_timeout)
                 try:
                     if args.command == "graph-search":
@@ -602,6 +646,28 @@ def main(argv: list[str] | None = None) -> int:
                         result = client.get("/api/debug/graph-cache")
                     elif args.command == "graph-rebuild-cache":
                         result = client.post("/graph/rebuild-cache", {"limit": args.limit})
+                    elif args.command == "graph-finalize-session":
+                        result = client.post(
+                            "/graph/finalize-session",
+                            {
+                                "session_id": args.session_id,
+                                "commit": args.commit,
+                                "cwd": args.cwd or None,
+                                "limit": args.limit,
+                                "apply": args.apply,
+                            },
+                        )
+                    elif args.command == "graph-rebuild-central":
+                        result = client.post(
+                            "/graph/rebuild-central",
+                            {
+                                "from_evidence": args.from_evidence,
+                                "backup_current": args.backup_current or args.apply,
+                                "limit": args.limit,
+                                "max_windows": args.max_windows,
+                                "apply": args.apply,
+                            },
+                        )
                     else:
                         result = client.get("/api/graph/status", {"session_id": args.session_id})
                 except DaemonUnavailable as exc:

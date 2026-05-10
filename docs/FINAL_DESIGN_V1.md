@@ -1,7 +1,7 @@
 ﻿# Final Design v1
 
-Status: Kuzu GraphRAG architecture pivot in progress
-Date: 2026-05-09
+Status: GraphRAG V1 finalization in progress
+Date: 2026-05-10
 Owner: Agent Memory Orchestrator contributors
 
 ## 1) Objective
@@ -107,7 +107,16 @@ Statuses:
 
 4. Git commit happens.
 - Local Git backend reads commit metadata, diff summary, changed files, patch-id, branch, and repo.
-- Daemon links work graph to `GitCommit` and central graph using non-destructive merge edges.
+- Daemon runs `CommitMergeEngine` on the session draft graph.
+- Answer-grade draft nodes are promoted to central committed nodes.
+- Support/raw nodes stay as provenance and are never promoted as answer-grade memory.
+- Deterministic scoring classifies obvious duplicate/refine/supersede/contradict relations.
+- Ambiguous relations are sent to Qwen when available; low-confidence results are reported for review and do not mutate the central graph.
+- Versioning is stored as non-destructive edges: `COMMITTED_AS`, `REFINES`, `SUPERSEDES`, `DUPLICATE_OF`, `CONTRADICTS`, `VALIDATED_BY`, and `MODIFIES`.
+
+5. Rebuild/repair happens.
+- `graph-rebuild-central --from-evidence` previews all raw evidence roots and rebuild targets.
+- `graph-rebuild-central --from-evidence --backup-current --apply` rebuilds from raw evidence with current cleaning/extraction gates, consolidates the new graph, validates it, backs up the old graph, swaps the rebuilt graph into place, and rebuilds the retrieval cache.
 
 ## 7) Retrieval Contract
 
@@ -160,6 +169,10 @@ Every stage should be inspectable:
 - `amo-cli debug qwen`: local model JSON/latency check.
 - `amo-cli debug graph`: graph status and latest session context.
 - `amo-cli debug retrieval`: daemon retrieval output and timing.
+- `amo-cli graph-finalize-session --session-id <id> --commit <sha|HEAD>`: dry-run merge plan.
+- `amo-cli graph-finalize-session --session-id <id> --commit <sha|HEAD> --apply`: promote draft session work into the central graph.
+- `amo-cli graph-rebuild-central --from-evidence --backup-current`: dry-run rebuild plan.
+- `amo-cli graph-rebuild-central --from-evidence --backup-current --apply`: backup/replay/swap the active graph.
 
 Latency targets:
 
@@ -185,6 +198,8 @@ Latency targets:
 - Daemon drains evidence idempotently into Kuzu.
 - Read-only prompts do not trigger Qwen or context snapshots.
 - Write/test/git/finalize events produce session graph and `ContextSnapshot`.
-- Commit events link work changes to Git commits.
+- Commit/finalize events promote answer-grade session work into central committed graph nodes.
+- Version edges preserve duplicate/refine/supersede/contradict history without deleting old nodes.
+- Rebuild can replay raw evidence into a fresh graph and swap only after validation.
 - MCP GraphRAG tools retrieve from daemon and never silently fall back to legacy SQLite.
 - Debug commands identify hook, drain, Qwen, graph, retrieval, and latency failures.

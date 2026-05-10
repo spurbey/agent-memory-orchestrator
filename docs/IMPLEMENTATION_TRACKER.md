@@ -1,6 +1,6 @@
 # Implementation Tracker
 
-Last updated: 2026-05-09  
+Last updated: 2026-05-10  
 Baseline design: `docs/FINAL_DESIGN_V1.md`
 
 ## Phase Status
@@ -10,8 +10,8 @@ Baseline design: `docs/FINAL_DESIGN_V1.md`
 - Phase 2: MCP memory server - Implemented; GraphRAG tools delegate to daemon
 - Phase 3: Orchestrator workflow - Pending
 - Phase 4: Adapters (Claude/Codex/Omnara) - Implemented
-- Phase 5: Kuzu GraphRAG + session work ledger - Implemented foundation
-- Phase 6: Derived retrieval caches, reclustering, and release hardening - In progress
+- Phase 5: Kuzu GraphRAG + session work ledger - Implemented foundation plus commit merge engine
+- Phase 6: Derived retrieval caches, reclustering, and release hardening - In progress with rebuild/finalize commands
 - Phase 7: External connectors - Slack Socket Mode foundation implemented; hosted OAuth/relay not included
 
 ## Milestones
@@ -117,6 +117,12 @@ Tasks:
 - [x] Add deterministic graph consolidation edges for duplicate/refine/supersede/contradict candidates plus topic clusters.
 - [x] Add rebuildable lexical GraphRAG retrieval cache foundation for answer-grade graph nodes.
 - [x] Add local Git commit metadata, changed files, diff stats, and patch-id support.
+- [x] Add daemon-owned `CommitMergeEngine` for dry-run/apply session finalization into central committed nodes.
+- [x] Add hybrid deterministic/Qwen merge classification with low-confidence review candidates.
+- [x] Add non-destructive version edges for `COMMITTED_AS`, `DUPLICATE_OF`, `REFINES`, `SUPERSEDES`, `CONTRADICTS`, and `MODIFIES`.
+- [x] Keep raw/support nodes as provenance and exclude them from answer-grade promotion.
+- [x] Add `graph-finalize-session` CLI/API for manual repair and commit-bounded promotion.
+- [x] Add `graph-rebuild-central` CLI/API for dry-run and backup/replay/swap rebuilds from raw evidence.
 - [x] Add session cockpit and dependency-free 3D central graph view for graph inspection.
 - [x] Add CLI debug commands for hooks, drain, Qwen, graph, and retrieval.
 - [x] Add unit tests for trigger detection, drain idempotency, session context build, daemon-required MCP behavior, and Git work ledger.
@@ -128,6 +134,8 @@ Acceptance:
 - Each extracted knowledge node is traceable back to raw evidence refs, a cleaned evidence window, and the GraphDelta that created it.
 - MCP GraphRAG tools use daemon by default and fail clearly if daemon is down.
 - Git commit traces are available for linking work changes to code history.
+- Commit/finalize boundaries can promote draft answer-grade work into central committed graph memory with dry-run review.
+- Fresh central graph rebuilds can be planned and applied from raw evidence without using durable normal-drain cursors.
 
 ## M2.6: External Connector Foundation
 
@@ -211,10 +219,10 @@ Acceptance:
 
 ## Current Risks
 
-- Kuzu GraphRAG retrieval currently has deterministic graph ranking, Qwen planning/compression, and a rebuildable lexical cache; FAISS/BGE cross-encoder graph-derived caches are still pending.
+- Kuzu GraphRAG retrieval currently has deterministic graph ranking, Qwen planning/compression, commit merge promotion, and a rebuildable lexical cache; FAISS/BGE cross-encoder graph-derived caches are still pending.
 - Qwen extraction falls back deterministically when Ollama is unavailable; production installs should treat Qwen availability as required and monitor debug latency.
-- Central graph reclustering/consolidation has a deterministic foundation; Qwen-assisted merge policy and eval fixtures are still pending.
-- Commit auto-merge is foundation-level; provenance trace and consolidation edges exist, but deeper supersession/refinement classification still needs Qwen merge policy tests.
+- Central graph reclustering/consolidation has a deterministic foundation and now runs after finalize/rebuild; deeper graph-derived vector cache evaluation is still pending.
+- Qwen merge classification is wired for ambiguous relations; broader eval fixtures and model-latency budgets still need expansion.
 - Legacy SQLite tools remain present and can confuse operators if docs/CLI labels are ignored.
 
 ## Change Control
