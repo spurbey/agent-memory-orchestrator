@@ -8,11 +8,11 @@ from datetime import datetime, timezone
 from typing import Any, Protocol
 
 from .config import Settings
-from .evidence_window import clean_evidence_window
+from .evidence.raw_store import RawEvidenceRef
+from .evidence.triggers import TriggerDecision
+from .evidence.window import clean_evidence_window
 from .graph_store import GraphEdge, GraphNode, GraphStore
-from .graph_triggers import TriggerDecision
 from .qwen_client import OllamaQwenClient, QwenUnavailable
-from .raw_evidence import RawEvidenceRef
 from .versioning import VersionBackend
 
 

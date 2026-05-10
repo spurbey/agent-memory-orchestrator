@@ -7,10 +7,10 @@ from typing import Any
 
 from .config import Settings
 from .daemon_client import DaemonClient, DaemonUnavailable
-from .evidence_drain import EvidenceDrain
+from .evidence.drain import EvidenceDrain
+from .evidence.triggers import detect_trigger
 from .graph_merge import QwenMergeClassifier
 from .graph_service import GraphRagService
-from .graph_triggers import detect_trigger
 from .qwen_client import OllamaQwenClient, QwenUnavailable
 
 

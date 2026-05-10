@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from agent_memory_orchestrator.graph_triggers import detect_trigger
+from agent_memory_orchestrator.evidence.triggers import detect_trigger
 
 
 def test_read_only_prompt_does_not_trigger_graph_build() -> None:
