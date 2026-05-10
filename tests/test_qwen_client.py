@@ -4,7 +4,7 @@ import pytest
 
 from typing import Any
 
-from agent_memory_orchestrator.qwen_client import OllamaQwenClient, QwenUnavailable, _parse_json_object
+from agent_memory_orchestrator.llm.qwen import OllamaQwenClient, QwenUnavailable, _parse_json_object
 
 
 class _StaticQwenClient(OllamaQwenClient):

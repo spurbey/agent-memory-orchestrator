@@ -14,13 +14,13 @@ from .cleaning import clean_event_text
 from .config import Settings
 from .context_pack import build_context_pack_payload
 from .db import connect, init_schema
-from .embeddings import cosine_similarity, embed_text_with_model
+from .llm.embeddings import cosine_similarity, embed_text_with_model
 from .extraction import extract_memory_candidates, extract_tags, make_topic_key
 from .models import Chunk, Event, Memory, MemoryUnit
 from .privacy import redact_secrets
-from .rerankers import RerankCandidate, rerank_candidates
+from .llm.rerankers import RerankCandidate, rerank_candidates
 from .retrieval import lexical_rerank_score, reciprocal_rank_fusion, understand_query
-from .vector_cache import VectorRow, build_faiss_cache, search_faiss_cache
+from .llm.vector_cache import VectorRow, build_faiss_cache, search_faiss_cache
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()

@@ -22,10 +22,10 @@ from ..install_service import build_install_plan
 from ..install_service import doctor as install_doctor
 from ..install_service import uninstall as uninstall_targets
 from ..memory_service import MemoryService
-from ..model_manager import download_models, list_model_presets, model_status, preflight_models
 from ..orchestrator import OrchestratorService
 from ..privacy import redact_secrets
-from ..qwen_client import QwenUnavailable
+from ..llm.models import download_models, list_model_presets, model_status, preflight_models
+from ..llm.qwen import QwenUnavailable
 from .client import DaemonClient, DaemonUnavailable
 
 
