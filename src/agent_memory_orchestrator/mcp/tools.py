@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from ..app.client import DaemonClient, DaemonUnavailable
-from ..config import Settings
+from ..core.config import Settings
 from ..graph.service import GraphRagService
 from ..graph.store import GraphBackendUnavailable
 from ..llm.qwen import QwenUnavailable
@@ -396,3 +396,4 @@ def _bounded_limit(value: int, *, default: int, maximum: int) -> int:
     except (TypeError, ValueError):
         parsed = default
     return max(1, min(maximum, parsed))
+

@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import sqlite3
 
-from ..config import Settings
-from ..db import connect, init_schema
+from ..core.config import Settings
+from ..core.db import connect, init_schema
 from .hooks import MemoryHooksMixin
 from .ingest import MemoryIngestMixin
 from .pipeline import MemoryPipelineMixin
@@ -33,3 +33,4 @@ class MemoryService(
 
     def close(self) -> None:
         self.conn.close()
+

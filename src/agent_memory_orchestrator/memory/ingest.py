@@ -8,8 +8,8 @@ from ..chunker import chunk_text
 from ..cleaning import clean_event_text
 from ..extraction import extract_memory_candidates
 from ..integrations.adapters import infer_codex_session, normalize_adapter_event
-from ..models import Chunk, Event, MemoryUnit
-from ..privacy import redact_secrets
+from ..core.models import Chunk, Event, MemoryUnit
+from ..core.privacy import redact_secrets
 from .common import new_id as _id
 from .common import stable_json as _json
 from .common import utc_now as _utc_now
@@ -406,4 +406,5 @@ def _cleanup_reason_counts(chunks: list[Chunk]) -> dict[str, int]:
         if reason:
             counts[reason] = counts.get(reason, 0) + 1
     return counts
+
 

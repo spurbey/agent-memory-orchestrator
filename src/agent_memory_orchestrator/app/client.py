@@ -7,7 +7,7 @@ import urllib.request
 from dataclasses import dataclass
 from typing import Any
 
-from ..config import Settings
+from ..core.config import Settings
 
 
 class DaemonUnavailable(RuntimeError):
@@ -53,3 +53,4 @@ class DaemonClient:
         if not isinstance(payload, dict):
             raise DaemonUnavailable("daemon_response_must_be_object")
         return payload
+

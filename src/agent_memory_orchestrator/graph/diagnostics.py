@@ -5,7 +5,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from ..config import Settings
+from ..core.config import Settings
 from ..app.client import DaemonClient, DaemonUnavailable
 from ..evidence.drain import EvidenceDrain
 from ..evidence.triggers import detect_trigger
@@ -144,3 +144,4 @@ def _safe_read(path: Path) -> str:
 
 def _elapsed_ms(start: float) -> int:
     return int((time.monotonic() - start) * 1000)
+

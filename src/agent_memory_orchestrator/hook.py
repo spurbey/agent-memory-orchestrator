@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from .integrations.adapters import normalize_adapter_event
-from .config import Settings
+from .core.config import Settings
 from .evidence.raw_store import RawEvidenceRef
 from .evidence.raw_store import RawEvidenceStore
 
@@ -346,3 +346,4 @@ def _hook_log_candidates() -> list[Path]:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
