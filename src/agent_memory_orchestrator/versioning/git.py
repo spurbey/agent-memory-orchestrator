@@ -1,105 +1,16 @@
 from __future__ import annotations
 
 import subprocess
-from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Protocol
 
-
-@dataclass(slots=True, frozen=True)
-class GitSnapshot:
-    available: bool
-    repo_root: str = ""
-    branch: str = ""
-    head: str = ""
-    status_porcelain: str = ""
-    changed_files: list[str] = field(default_factory=list)
-    staged_files: list[str] = field(default_factory=list)
-    error: str = ""
-
-    @property
-    def is_dirty(self) -> bool:
-        return bool(self.status_porcelain.strip())
-
-    def as_dict(self) -> dict[str, object]:
-        return {
-            "available": self.available,
-            "repo_root": self.repo_root,
-            "branch": self.branch,
-            "head": self.head,
-            "status_porcelain": self.status_porcelain,
-            "changed_files": self.changed_files,
-            "staged_files": self.staged_files,
-            "dirty": self.is_dirty,
-            "error": self.error,
-        }
-
-
-@dataclass(slots=True, frozen=True)
-class GitCommitDetails:
-    available: bool
-    commit: str = ""
-    author: str = ""
-    authored_at: str = ""
-    subject: str = ""
-    body: str = ""
-    error: str = ""
-
-    def as_dict(self) -> dict[str, object]:
-        return {
-            "available": self.available,
-            "commit": self.commit,
-            "author": self.author,
-            "authored_at": self.authored_at,
-            "subject": self.subject,
-            "body": self.body,
-            "error": self.error,
-        }
-
-
-@dataclass(slots=True, frozen=True)
-class GitDiffSummary:
-    available: bool
-    base: str = ""
-    target: str = ""
-    changed_files: list[str] = field(default_factory=list)
-    insertions: int = 0
-    deletions: int = 0
-    summary: str = ""
-    error: str = ""
-
-    def as_dict(self) -> dict[str, object]:
-        return {
-            "available": self.available,
-            "base": self.base,
-            "target": self.target,
-            "changed_files": self.changed_files,
-            "insertions": self.insertions,
-            "deletions": self.deletions,
-            "summary": self.summary,
-            "error": self.error,
-        }
-
-
-class VersionBackend(Protocol):
-    def snapshot(self, cwd: str | Path | None = None) -> GitSnapshot:
-        """Return repository state for the current work context."""
-
-    def commit_details(self, commit: str = "HEAD", cwd: str | Path | None = None) -> GitCommitDetails:
-        """Return commit metadata."""
-
-    def diff_summary(self, commit: str = "HEAD", cwd: str | Path | None = None) -> GitDiffSummary:
-        """Return changed files and diff stats for a commit."""
-
-    def patch_id(self, commit: str = "HEAD", cwd: str | Path | None = None) -> str:
-        """Return Git patch-id for a commit when available."""
+from .models import GitCommitDetails, GitDiffSummary, GitSnapshot
 
 
 class LocalGitBackend:
-    """Local Git implementation for the version graph.
+    """Read-only local Git adapter for graph versioning.
 
-    This is intentionally read-only. Commit creation remains the user's/agent's
-    job; AMO only observes commits and links graph nodes to them.
+    Git remains the source of truth for code state. AMO observes commits and
+    diffs, then links graph nodes back to those stable Git facts.
     """
 
     def snapshot(self, cwd: str | Path | None = None) -> GitSnapshot:
@@ -150,7 +61,9 @@ class LocalGitBackend:
             root = Path(_git(["rev-parse", "--show-toplevel"], workdir))
             target = _git(["rev-parse", commit], root)
             base = _git(["rev-parse", f"{commit}^"], root, check=False)
-            files = _split_lines(_git(["diff-tree", "--root", "--no-commit-id", "--name-only", "-r", target], root, check=False))
+            files = _split_lines(
+                _git(["diff-tree", "--root", "--no-commit-id", "--name-only", "-r", target], root, check=False)
+            )
             stat = _git(["show", "--numstat", "--format=", "--no-renames", target], root, check=False)
             insertions = 0
             deletions = 0
