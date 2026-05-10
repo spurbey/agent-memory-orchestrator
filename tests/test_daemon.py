@@ -2,7 +2,13 @@ from __future__ import annotations
 
 import pytest
 
-from agent_memory_orchestrator.daemon import _bounded_int, _load_web_asset, _web_asset_bytes
+from agent_memory_orchestrator.app.daemon import _bounded_int, _load_web_asset, _web_asset_bytes
+
+
+def test_root_daemon_module_keeps_compatibility_exports() -> None:
+    from agent_memory_orchestrator import daemon as compat_daemon
+
+    assert compat_daemon._bounded_int("5", default=1, minimum=1, maximum=10) == 5
 
 
 def test_bounded_int_clamps_invalid_and_extreme_values() -> None:

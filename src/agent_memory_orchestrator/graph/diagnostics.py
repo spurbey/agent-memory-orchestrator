@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from ..config import Settings
-from ..daemon_client import DaemonClient, DaemonUnavailable
+from ..app.client import DaemonClient, DaemonUnavailable
 from ..evidence.drain import EvidenceDrain
 from ..evidence.triggers import detect_trigger
 from ..qwen_client import OllamaQwenClient, QwenUnavailable

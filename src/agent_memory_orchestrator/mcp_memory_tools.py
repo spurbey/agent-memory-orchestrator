@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from .config import Settings
-from .daemon_client import DaemonClient, DaemonUnavailable
+from .app.client import DaemonClient, DaemonUnavailable
 from .graph.service import GraphRagService
 from .graph.store import GraphBackendUnavailable
 from .memory_service import MemoryService

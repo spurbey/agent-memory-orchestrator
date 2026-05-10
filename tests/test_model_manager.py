@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from agent_memory_orchestrator import model_manager
-from agent_memory_orchestrator.cli import main
+from agent_memory_orchestrator.app.cli import main
 
 
 def test_model_presets_include_hardware_profiles() -> None:
@@ -72,12 +72,21 @@ def test_cli_models_list_outputs_presets(capsys: pytest.CaptureFixture[str]) -> 
     assert '"cpu-balanced"' in captured.out
 
 
+def test_root_cli_module_keeps_main_compatibility(capsys: pytest.CaptureFixture[str]) -> None:
+    from agent_memory_orchestrator import cli as compat_cli
+
+    exit_code = compat_cli.main(["models", "list"])
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert '"cpu-light"' in captured.out
+
+
 def test_cli_models_preflight_fails_when_local_models_missing(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     monkeypatch.setattr(
-        "agent_memory_orchestrator.cli.preflight_models",
+        "agent_memory_orchestrator.app.cli.preflight_models",
         lambda **kwargs: {"ok": False, "models": {}, "env": {}, "preset": kwargs["preset"]},
     )
     exit_code = main(["models", "preflight", "--preset", "cpu-balanced"])

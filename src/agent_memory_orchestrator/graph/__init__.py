@@ -1,39 +1,46 @@
 from __future__ import annotations
 
-from .cache import GraphSearchCache
-from .consolidation import ConsolidationCandidate, DeterministicGraphConsolidator, GraphConsolidationResult
-from .diagnostics import debug_drain, debug_graph, debug_hooks, debug_qwen, debug_retrieval, trigger_preview
-from .merge import CommitMergeEngine, MergeCandidate, MergeClassifier, QwenMergeClassifier
-from .service import GraphRagService, create_graph_service
-from .session import DeterministicGraphExtractor, GraphDelta, GraphExtractor, QwenGraphExtractor, SessionGraphBuilder
-from .store import GraphBackendUnavailable, GraphEdge, GraphNode, GraphStore, InMemoryGraphStore, KuzuGraphStore
+from importlib import import_module
+from typing import Any
 
-__all__ = [
-    "CommitMergeEngine",
-    "ConsolidationCandidate",
-    "DeterministicGraphConsolidator",
-    "DeterministicGraphExtractor",
-    "GraphBackendUnavailable",
-    "GraphConsolidationResult",
-    "GraphDelta",
-    "GraphEdge",
-    "GraphExtractor",
-    "GraphNode",
-    "GraphRagService",
-    "GraphSearchCache",
-    "GraphStore",
-    "InMemoryGraphStore",
-    "KuzuGraphStore",
-    "MergeCandidate",
-    "MergeClassifier",
-    "QwenGraphExtractor",
-    "QwenMergeClassifier",
-    "SessionGraphBuilder",
-    "create_graph_service",
-    "debug_drain",
-    "debug_graph",
-    "debug_hooks",
-    "debug_qwen",
-    "debug_retrieval",
-    "trigger_preview",
-]
+_EXPORTS = {
+    "CommitMergeEngine": ".merge",
+    "ConsolidationCandidate": ".consolidation",
+    "DeterministicGraphConsolidator": ".consolidation",
+    "DeterministicGraphExtractor": ".session",
+    "GraphBackendUnavailable": ".store",
+    "GraphConsolidationResult": ".consolidation",
+    "GraphDelta": ".session",
+    "GraphEdge": ".store",
+    "GraphExtractor": ".session",
+    "GraphNode": ".store",
+    "GraphRagService": ".service",
+    "GraphSearchCache": ".cache",
+    "GraphStore": ".store",
+    "InMemoryGraphStore": ".store",
+    "KuzuGraphStore": ".store",
+    "MergeCandidate": ".merge",
+    "MergeClassifier": ".merge",
+    "QwenGraphExtractor": ".session",
+    "QwenMergeClassifier": ".merge",
+    "SessionGraphBuilder": ".session",
+    "create_graph_service": ".service",
+    "debug_drain": ".diagnostics",
+    "debug_graph": ".diagnostics",
+    "debug_hooks": ".diagnostics",
+    "debug_qwen": ".diagnostics",
+    "debug_retrieval": ".diagnostics",
+    "trigger_preview": ".diagnostics",
+}
+
+__all__ = sorted(_EXPORTS)
+
+
+def __getattr__(name: str) -> Any:
+    module_name = _EXPORTS.get(name)
+    if module_name is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    module = import_module(module_name, __name__)
+    value = getattr(module, name)
+    globals()[name] = value
+    return value
