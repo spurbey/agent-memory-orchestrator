@@ -4,9 +4,9 @@ import json
 import time
 from pathlib import Path
 
-from ..chunker import chunk_text
-from ..cleaning import clean_event_text
-from ..extraction import extract_memory_candidates
+from .processing.chunker import chunk_text
+from .processing.cleaning import clean_event_text
+from .processing.extraction import extract_memory_candidates
 from ..integrations.adapters import infer_codex_session, normalize_adapter_event
 from ..core.models import Chunk, Event, MemoryUnit
 from ..core.privacy import redact_secrets

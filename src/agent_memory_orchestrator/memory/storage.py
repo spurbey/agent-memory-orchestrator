@@ -4,7 +4,7 @@ import json
 import re
 import sqlite3
 
-from ..extraction import extract_tags, make_topic_key
+from .processing.extraction import extract_tags, make_topic_key
 from ..llm.embeddings import cosine_similarity, embed_text_with_model
 from ..llm.vector_cache import VectorRow, build_faiss_cache
 from ..core.models import Memory, MemoryUnit
