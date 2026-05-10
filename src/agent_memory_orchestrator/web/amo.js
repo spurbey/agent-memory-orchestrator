@@ -1,0 +1,668 @@
+﻿
+const AMO = {
+  view: "dashboard",
+  sessions: [],
+  selectedSessionId: "",
+  selectedSession: null,
+  health: null,
+  centralGraph: { nodes: [], edges: [], warnings: [] },
+  graph: {
+    canvas: null,
+    ctx: null,
+    nodes: [],
+    edges: [],
+    positions: new Map(),
+    velocities: new Map(),
+    selectedId: "",
+    hoveredId: "",
+    scale: 1,
+    tx: 0,
+    ty: 0,
+    dragging: false,
+    dragStart: null,
+  },
+};
+
+const ANSWER_KINDS = new Set(["Decision", "WorkChange", "Fix", "Bug", "Blocker", "TestRun", "ContextSnapshot", "GitCommit", "Topic", "Cluster"]);
+const SUPPORT_KINDS = new Set(["RawEvidenceRef", "CleanedEvidenceWindow", "GraphDelta", "Session", "Repo", "Branch", "File", "App"]);
+const VERSION_EDGES = new Set(["COMMITTED_AS", "REFINES", "SUPERSEDES", "DUPLICATE_OF", "CONTRADICTS", "VALIDATED_BY", "MERGED_INTO"]);
+const PIPELINE = [
+  ["Raw", "Captured hook events", "raw"],
+  ["Clean", "Bounded evidence windows", "clean"],
+  ["Extract", "Qwen or deterministic GraphDelta", "delta"],
+  ["Draft", "Session graph nodes", "draft"],
+  ["Merge", "Commit/finalize promotion", "merge"],
+  ["Central", "Committed graph memory", "central"],
+  ["Cache", "Retrieval cache", "cache"],
+];
+
+function $(id) { return document.getElementById(id); }
+function qsa(sel) { return [...document.querySelectorAll(sel)]; }
+function text(value, fallback = "") { return String(value ?? fallback); }
+function truncate(value, len = 96) {
+  const raw = text(value).replace(/\s+/g, " ").trim();
+  return raw.length > len ? raw.slice(0, len - 1) + "..." : raw;
+}
+function escapeHtml(value) {
+  return text(value).replace(/[&<>"']/g, ch => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch]));
+}
+function formatJson(value) { return JSON.stringify(value ?? {}, null, 2); }
+function timeAgo(iso) {
+  if (!iso) return "unknown";
+  const then = new Date(iso).getTime();
+  if (!Number.isFinite(then)) return iso;
+  const diff = Math.max(0, Date.now() - then);
+  const seconds = Math.floor(diff / 1000);
+  if (seconds < 60) return `${seconds}s ago`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 48) return `${hours}h ago`;
+  return new Date(iso).toLocaleString();
+}
+function hashCode(str) {
+  let hash = 2166136261;
+  for (let i = 0; i < str.length; i += 1) {
+    hash ^= str.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return hash >>> 0;
+}
+function nodeId(node) { return text(node.id || node.node_id); }
+function edgeSource(edge) { return text(edge.source_id || edge.source || edge.from || edge.sourceId); }
+function edgeTarget(edge) { return text(edge.target_id || edge.target || edge.to || edge.targetId); }
+function edgeKind(edge) { return text(edge.kind || edge.relation || edge.label || "RELATED"); }
+function nodeLabel(node) { return text(node.label || node.summary || nodeId(node)); }
+function nodeKind(node) { return text(node.kind || node.type || "Node"); }
+function nodeStatus(node) { return text(node.status || "draft"); }
+function nodeSummary(node) { return text(node.summary || node.label || ""); }
+function metadata(node) { return node && typeof node.metadata === "object" && node.metadata ? node.metadata : {}; }
+function readableKind(kind) { return kind.replace(/([a-z])([A-Z])/g, "$1 $2"); }
+function isAnswerNode(node) {
+  const kind = nodeKind(node);
+  if (SUPPORT_KINDS.has(kind)) return false;
+  return ANSWER_KINDS.has(kind) || node.scope === "central" || node.status === "committed";
+}
+function nodeColor(kind, status) {
+  const color = {
+    Decision: "#80dec6", WorkChange: "#f2cf78", Fix: "#b7f56e", Bug: "#ff766f", Blocker: "#ff766f",
+    TestRun: "#8ab5ff", ContextSnapshot: "#d5f7df", GitCommit: "#ffffff", Topic: "#bda2ff", Cluster: "#bda2ff",
+    File: "#91a69b", Repo: "#91cf7b", Branch: "#8ab5ff", RawEvidenceRef: "#67786f", CleanedEvidenceWindow: "#a5d7c4", GraphDelta: "#80dec6",
+  }[kind] || "#9fb5aa";
+  return status === "superseded" ? "#5f6b65" : color;
+}
+async function apiGet(path) {
+  const response = await fetch(path, { headers: { Accept: "application/json" } });
+  if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
+  return response.json();
+}
+async function apiPost(path, payload) {
+  const response = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json", Accept: "application/json" }, body: JSON.stringify(payload || {}) });
+  if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
+  return response.json();
+}
+function empty(message) { return `<div class="empty-state"><div><h2>No data</h2><p>${escapeHtml(message)}</p></div></div>`; }
+function setDaemon(ok, label) {
+  const dot = $("daemonDot");
+  dot.classList.toggle("good", !!ok);
+  dot.classList.toggle("bad", !ok);
+  $("daemonText").textContent = label;
+}
+async function loadHealth() {
+  try {
+    AMO.health = await apiGet("/health");
+    setDaemon(true, `daemon on ${AMO.health.graph_backend || "graph"}`);
+    renderHealth();
+  } catch (error) {
+    setDaemon(false, "daemon unavailable");
+    $("healthPanel").innerHTML = `<div class="health-item"><strong>error</strong><span>${escapeHtml(error.message)}</span></div>`;
+  }
+}
+async function loadSessions() {
+  const data = await apiGet("/api/graph/sessions?limit=60");
+  AMO.sessions = data.sessions || [];
+  renderSessions();
+  renderDashboard();
+  if (!AMO.selectedSessionId && AMO.sessions[0]) await selectSession(AMO.sessions[0].session_id, { silent: true });
+}
+async function loadCentralGraph() {
+  const data = await apiGet("/api/graph/central?limit=360");
+  AMO.centralGraph = { nodes: data.nodes || [], edges: data.edges || [], warnings: data.warnings || [], status: data.status || {} };
+  setupGraphFilters();
+  buildGraph();
+  renderDashboard();
+}
+async function refreshAll() {
+  await Promise.allSettled([loadHealth(), loadSessions(), loadCentralGraph()]);
+  if (AMO.selectedSessionId) await selectSession(AMO.selectedSessionId, { silent: true });
+}
+function setView(view) {
+  AMO.view = view;
+  qsa(".view").forEach(el => el.classList.toggle("active", el.id === `${view}View`));
+  qsa(".nav-item").forEach(el => el.classList.toggle("active", el.dataset.view === view));
+  const copy = {
+    dashboard: ["Dashboard", "Watch sessions move from raw capture to durable central graph memory."],
+    sessions: ["Sessions", "Inspect exactly what was captured, cleaned, extracted, and promoted."],
+    graph: ["Knowledge Graph", "Explore committed memory first, then reveal provenance when needed."],
+    retrieval: ["Retrieval", "Inspect explicit GraphRAG query planning, candidates, timing, and Qwen fallback."],
+    admin: ["Admin", "Run local daemon graph jobs and inspect diagnostics."],
+  }[view] || ["AMO", "Local GraphRAG control room"];
+  $("pageTitle").textContent = copy[0];
+  $("pageSubtitle").textContent = copy[1];
+  if (view === "graph") requestAnimationFrame(resizeGraph);
+}
+function renderDashboard() {
+  const sessions = AMO.sessions || [];
+  const nodes = AMO.centralGraph.nodes || [];
+  const edges = AMO.centralGraph.edges || [];
+  const committed = nodes.filter(n => nodeStatus(n) === "committed").length;
+  const draft = nodes.filter(n => nodeStatus(n) === "draft").length;
+  const rawEvents = sessions.reduce((sum, row) => sum + Number(row.raw_events || 0), 0);
+  $("metricGrid").innerHTML = [
+    metric("Sessions", sessions.length, "tracked workstreams"),
+    metric("Raw events", rawEvents, "captured evidence records"),
+    metric("Graph nodes", nodes.length, `${committed} committed, ${draft} draft`),
+    metric("Edges", edges.length, "visible central relations"),
+  ].join("");
+  renderPipeline($("pipelineStrip"), { raw: rawEvents, clean: sessions.reduce((sum, s) => sum + Number(s.graph_counts?.draft || 0), 0), delta: nodes.filter(n => nodeKind(n) === "GraphDelta").length, draft, merge: edges.filter(e => VERSION_EDGES.has(edgeKind(e))).length, central: committed + nodes.filter(n => n.scope === "central").length, cache: nodes.length });
+  $("recentSessions").innerHTML = sessions.slice(0, 7).map(sessionCard).join("") || empty("No captured sessions yet.");
+}
+function metric(label, value, caption) { return `<div class="metric"><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong><span>${escapeHtml(caption)}</span></div>`; }
+function renderHealth() {
+  const h = AMO.health || {};
+  const rows = [["graph backend", h.graph_backend], ["graph path", h.graph_path], ["qwen model", h.qwen_model], ["qwen timeout", `${h.qwen_timeout_seconds || "?"}s`], ["extract timeout", `${h.qwen_extract_timeout_seconds || "?"}s`], ["drain windows", h.drain_max_windows_per_run]];
+  $("healthPanel").innerHTML = rows.map(([k, v]) => `<div class="health-item"><strong>${escapeHtml(v || "unknown")}</strong><span>${escapeHtml(k)}</span></div>`).join("");
+}
+function renderPipeline(target, counts) {
+  target.innerHTML = PIPELINE.map(([name, desc, key]) => `<div class="stage-card"><strong>${escapeHtml(name)}</strong><div class="count">${escapeHtml(counts[key] ?? 0)}</div><small>${escapeHtml(desc)}</small></div>`).join("");
+}
+function renderSessions() {
+  const html = (AMO.sessions || []).map(sessionCard).join("") || empty("No captured sessions yet.");
+  $("sessionList").innerHTML = html;
+  $("recentSessions").innerHTML = (AMO.sessions || []).slice(0, 7).map(sessionCard).join("") || empty("No captured sessions yet.");
+}
+function sessionCard(row) {
+  const id = text(row.session_id);
+  const selected = id === AMO.selectedSessionId ? " active" : "";
+  const counts = row.graph_counts || {};
+  const sources = (row.source_apps || []).join(", ") || "unknown";
+  return `<article class="session-card${selected}" data-session-id="${escapeHtml(id)}"><div class="id">${escapeHtml(id)}</div><div class="muted small">${escapeHtml(truncate(row.cwd || row.repo || "local session", 72))}</div><div class="session-meta"><span class="pill good">${Number(row.raw_events || 0)} raw</span><span class="pill blue">${escapeHtml(row.latest_event || "event")}</span><span class="pill">${escapeHtml(sources)}</span><span class="pill warn">${Number(counts.draft || 0)} draft</span><span class="pill good">${Number(counts.committed || 0)} committed</span><span class="pill">${escapeHtml(timeAgo(row.latest_at))}</span></div></article>`;
+}
+async function selectSession(sessionId, options = {}) {
+  AMO.selectedSessionId = sessionId;
+  renderSessions();
+  try {
+    const data = await apiGet(`/api/graph/session-detail?session_id=${encodeURIComponent(sessionId)}&limit=220`);
+    AMO.selectedSession = data;
+    renderSessionDetail(data);
+    if (!options.silent) setView("sessions");
+  } catch (error) {
+    AMO.selectedSession = null;
+    $("sessionContent").classList.add("hidden");
+    $("sessionEmpty").classList.remove("hidden");
+    $("sessionEmpty").innerHTML = `<h2>Session failed to load</h2><p>${escapeHtml(error.message)}</p>`;
+  }
+}
+function renderSessionDetail(data) {
+  $("sessionEmpty").classList.add("hidden");
+  $("sessionContent").classList.remove("hidden");
+  $("sessionTitle").textContent = data.session_id;
+  const timeline = data.timeline || [];
+  const nodes = data.graph?.nodes || [];
+  const edges = data.graph?.edges || [];
+  const contextNode = data.current_context?.nodes?.[0];
+  $("sessionSource").textContent = `Session ${timeline[0]?.source_app || "local"}`;
+  $("sessionSummary").textContent = contextNode?.summary || `${timeline.length} captured events, ${nodes.length} graph nodes, ${edges.length} graph edges.`;
+  const windows = data.windows || [];
+  const preview = data.merge_preview || {};
+  renderPipeline($("sessionPipeline"), { raw: timeline.length, clean: windows.length, delta: nodes.filter(n => nodeKind(n) === "GraphDelta").length, draft: nodes.filter(n => nodeStatus(n) === "draft").length, merge: (preview.promotions || []).length + (preview.version_edges || []).length, central: nodes.filter(n => nodeStatus(n) === "committed" || n.scope === "central").length, cache: data.pending?.count ? "pending" : "ready" });
+  $("timelineList").innerHTML = timeline.map(renderTimeline).join("") || empty("No raw evidence for this session.");
+  $("cleanedWindows").innerHTML = windows.map(renderWindow).join("") || empty("No cleaned evidence windows yet. A write/test/git/finalize trigger must be drained first.");
+  $("draftNodes").innerHTML = nodes.map(renderNodeCard).join("") || empty("No session graph nodes yet.");
+  $("mergePreview").innerHTML = renderMergePreview(preview);
+}
+function renderTimeline(row) {
+  return `<article class="timeline-item"><div class="panel-head"><strong>${escapeHtml(row.event_name || "event")}</strong><span class="pill">${escapeHtml(timeAgo(row.created_at))}</span></div><div class="muted small">evidence ${escapeHtml(row.evidence_id || row.id || "")}</div><pre class="code-block">${escapeHtml(formatJson(row.payload || row))}</pre></article>`;
+}
+function renderWindow(row, index) {
+  const trigger = row.trigger || {};
+  return `<article class="window-card"><div class="panel-head"><strong>Window ${index + 1}</strong><span class="pill good">${escapeHtml(trigger.trigger_type || "trigger")}</span></div><p class="muted">${escapeHtml(trigger.reason || "Cleaned bounded evidence prepared for graph extraction.")}</p><pre class="code-block">${escapeHtml(formatJson(row.cleaned_evidence || row))}</pre></article>`;
+}
+function renderNodeCard(node) {
+  const kind = nodeKind(node);
+  return `<article class="node-card" data-node-id="${escapeHtml(nodeId(node))}"><div class="panel-head"><strong>${escapeHtml(readableKind(kind))}</strong><span class="pill ${nodeStatus(node) === "committed" ? "good" : "warn"}">${escapeHtml(nodeStatus(node))}</span></div><p>${escapeHtml(truncate(nodeSummary(node), 180))}</p><div class="muted small">${escapeHtml(nodeId(node))}</div></article>`;
+}
+function renderMergePreview(preview) {
+  if (!preview || preview.ok === false) return empty(preview?.error || "No merge preview available.");
+  const promotions = preview.promotions || preview.promoted_nodes || [];
+  const edges = preview.version_edges || preview.edges || [];
+  const rows = [];
+  rows.push(`<div class="merge-card"><strong>${escapeHtml(preview.apply ? "Applied merge" : "Dry run merge plan")}</strong><p class="muted">${promotions.length} promotions, ${edges.length} version edges, ${Number(preview.review_candidates?.length || 0)} review candidates.</p></div>`);
+  promotions.slice(0, 12).forEach(item => rows.push(`<div class="merge-card"><span class="pill good">promote</span><p>${escapeHtml(truncate(item.summary || item.label || item.node_id || item.id, 180))}</p></div>`));
+  edges.slice(0, 12).forEach(edge => rows.push(`<div class="merge-card"><span class="pill blue">${escapeHtml(edge.kind || edge.relation || "edge")}</span><p class="muted small">${escapeHtml(edge.source_id || edge.source || "")} -> ${escapeHtml(edge.target_id || edge.target || "")}</p></div>`));
+  return rows.join("") || empty("No answer-grade draft nodes are ready to promote.");
+}
+async function drainSelected() {
+  if (!AMO.selectedSessionId) return;
+  const result = await apiPost("/graph/drain", { session_id: AMO.selectedSessionId, limit: 100, max_windows: 5 });
+  await selectSession(AMO.selectedSessionId, { silent: true });
+  await loadCentralGraph();
+  $("mergePreview").insertAdjacentHTML("afterbegin", `<div class="merge-card"><span class="pill good">drain</span><pre class="code-block">${escapeHtml(formatJson(result))}</pre></div>`);
+}
+async function previewFinalize() {
+  if (!AMO.selectedSessionId) return;
+  const result = await apiPost("/graph/finalize-session", { session_id: AMO.selectedSessionId, commit: "HEAD", apply: false, limit: 500 });
+  $("mergePreview").innerHTML = renderMergePreview(result);
+}
+async function runRetrieval() {
+  const query = $("retrievalQuery").value.trim() || $("globalSearch").value.trim();
+  if (!query) return;
+  $("retrievalResult").innerHTML = `<section class="panel"><p class="muted">Searching graph memory...</p></section>`;
+  setView("retrieval");
+  try {
+    const result = await apiPost("/graph/search", { query, limit: 10, include_raw: $("includeRaw").checked, include_historical: $("includeHistorical").checked });
+    renderRetrievalResult(result);
+  } catch (error) {
+    $("retrievalResult").innerHTML = `<section class="panel"><h2>Search failed</h2><p class="muted">${escapeHtml(error.message)}</p></section>`;
+  }
+}
+function renderRetrievalResult(result) {
+  const nodes = result.nodes || [];
+  $("retrievalResult").innerHTML = `<section class="panel"><div class="result-grid"><div><p class="eyebrow">Plan</p><h2>${escapeHtml(result.plan?.intent || "general")}</h2><p class="muted">${escapeHtml((result.plan?.entities || []).join(", ") || "No entities extracted")}</p><div class="session-meta"><span class="pill ${result.raw_included ? "warn" : "good"}">raw ${result.raw_included ? "included" : "hidden"}</span><span class="pill ${result.qwen?.compression_fallback ? "warn" : "good"}">qwen ${result.qwen?.compression_fallback ? "fallback" : "ok"}</span><span class="pill blue">${escapeHtml(result.timing?.total_ms || 0)} ms</span></div></div><pre class="code-block">${escapeHtml(result.context || "")}</pre></div></section><section class="panel"><div class="panel-head"><h2>Returned nodes</h2><span class="pill good">${nodes.length}</span></div><div class="node-list">${nodes.map(renderNodeCard).join("") || empty("No answer-grade graph memory matched.")}</div></section>`;
+}
+async function runAdminJob(kind) {
+  const output = $("adminOutput");
+  output.textContent = "Running...";
+  try {
+    let result;
+    if (kind === "consolidate") result = await apiPost("/graph/consolidate", { limit: 500, apply: false });
+    if (kind === "cache") result = await apiPost("/graph/rebuild-cache", { limit: 5000 });
+    if (kind === "debugGraph") result = await apiGet("/api/debug/graph?limit=50");
+    if (kind === "debugQwen") result = await apiGet("/api/debug/qwen?sample=classify%20latest%20graph%20work");
+    output.textContent = formatJson(result);
+  } catch (error) {
+    output.textContent = error.stack || error.message;
+  }
+}
+function setupGraphFilters() {
+  const nodes = AMO.centralGraph.nodes || [];
+  const kinds = [...new Set(nodes.map(nodeKind))].sort();
+  const statuses = [...new Set(nodes.map(nodeStatus))].sort();
+  $("kindFilter").innerHTML = `<option value="">All kinds</option>` + kinds.map(k => `<option>${escapeHtml(k)}</option>`).join("");
+  $("statusFilter").innerHTML = `<option value="">All status</option>` + statuses.map(s => `<option>${escapeHtml(s)}</option>`).join("");
+}
+function buildGraph() {
+  const query = $("graphFilter")?.value.trim().toLowerCase() || $("globalSearch")?.value.trim().toLowerCase() || "";
+  const kindFilter = $("kindFilter")?.value || "";
+  const statusFilter = $("statusFilter")?.value || "";
+  const showSupport = $("supportToggle")?.checked || false;
+  const nodes = (AMO.centralGraph.nodes || []).filter(node => {
+    if (!showSupport && !isAnswerNode(node)) return false;
+    if (kindFilter && nodeKind(node) !== kindFilter) return false;
+    if (statusFilter && nodeStatus(node) !== statusFilter) return false;
+    if (query) {
+      const hay = `${nodeKind(node)} ${nodeLabel(node)} ${nodeSummary(node)} ${nodeId(node)} ${formatJson(metadata(node))}`.toLowerCase();
+      if (!hay.includes(query)) return false;
+    }
+    return true;
+  });
+  const ids = new Set(nodes.map(nodeId));
+  const edges = (AMO.centralGraph.edges || []).filter(edge => ids.has(edgeSource(edge)) && ids.has(edgeTarget(edge)));
+  AMO.graph.nodes = nodes;
+  AMO.graph.edges = edges;
+  seedPositions(nodes);
+  simulateGraph(80);
+  drawGraph();
+  renderGraphMini();
+}
+function seedPositions(nodes) {
+  const g = AMO.graph;
+  nodes.forEach((node, index) => {
+    const id = nodeId(node);
+    if (!g.positions.has(id)) {
+      const h = hashCode(id);
+      const angle = ((h % 3600) / 3600) * Math.PI * 2;
+      const ring = 130 + (index % 7) * 36 + ((h >>> 8) % 70);
+      g.positions.set(id, { x: Math.cos(angle) * ring, y: Math.sin(angle) * ring });
+      g.velocities.set(id, { x: 0, y: 0 });
+    }
+  });
+}
+function simulateGraph(iterations = 1) {
+  const g = AMO.graph;
+  const nodes = g.nodes;
+  const edges = g.edges;
+  const idToNode = new Map(nodes.map(n => [nodeId(n), n]));
+  for (let step = 0; step < iterations; step += 1) {
+    for (let i = 0; i < nodes.length; i += 1) {
+      const a = nodes[i];
+      const pa = g.positions.get(nodeId(a));
+      const va = g.velocities.get(nodeId(a));
+      if (!pa || !va) continue;
+      for (let j = i + 1; j < nodes.length; j += 1) {
+        const b = nodes[j];
+        const pb = g.positions.get(nodeId(b));
+        const vb = g.velocities.get(nodeId(b));
+        if (!pb || !vb) continue;
+        let dx = pa.x - pb.x;
+        let dy = pa.y - pb.y;
+        const dist2 = dx * dx + dy * dy + 80;
+        const force = Math.min(3.2, 900 / dist2);
+        const dist = Math.sqrt(dist2);
+        dx /= dist;
+        dy /= dist;
+        va.x += dx * force;
+        va.y += dy * force;
+        vb.x -= dx * force;
+        vb.y -= dy * force;
+      }
+    }
+    edges.forEach(edge => {
+      const s = edgeSource(edge);
+      const t = edgeTarget(edge);
+      if (!idToNode.has(s) || !idToNode.has(t)) return;
+      const ps = g.positions.get(s);
+      const pt = g.positions.get(t);
+      const vs = g.velocities.get(s);
+      const vt = g.velocities.get(t);
+      if (!ps || !pt || !vs || !vt) return;
+      const dx = pt.x - ps.x;
+      const dy = pt.y - ps.y;
+      const dist = Math.sqrt(dx * dx + dy * dy) || 1;
+      const desired = VERSION_EDGES.has(edgeKind(edge)) ? 118 : 156;
+      const force = (dist - desired) * 0.012;
+      const fx = (dx / dist) * force;
+      const fy = (dy / dist) * force;
+      vs.x += fx; vs.y += fy; vt.x -= fx; vt.y -= fy;
+    });
+    nodes.forEach(node => {
+      const id = nodeId(node);
+      const p = g.positions.get(id);
+      const v = g.velocities.get(id);
+      if (!p || !v) return;
+      v.x += -p.x * 0.003;
+      v.y += -p.y * 0.003;
+      v.x *= 0.82;
+      v.y *= 0.82;
+      p.x += Math.max(-14, Math.min(14, v.x));
+      p.y += Math.max(-14, Math.min(14, v.y));
+    });
+  }
+}
+function setupGraphCanvas() {
+  const canvas = $("graphCanvas");
+  if (!canvas) return;
+  AMO.graph.canvas = canvas;
+  AMO.graph.ctx = canvas.getContext("2d");
+  resizeGraph();
+  canvas.addEventListener("wheel", onGraphWheel, { passive: false });
+  canvas.addEventListener("pointerdown", onGraphPointerDown);
+  canvas.addEventListener("pointermove", onGraphPointerMove);
+  canvas.addEventListener("pointerup", onGraphPointerUp);
+  canvas.addEventListener("pointerleave", onGraphPointerUp);
+  canvas.addEventListener("dblclick", () => focusSelectedNeighbors());
+  window.addEventListener("resize", resizeGraph);
+}
+function resizeGraph() {
+  const canvas = AMO.graph.canvas;
+  if (!canvas) return;
+  const rect = canvas.getBoundingClientRect();
+  const ratio = window.devicePixelRatio || 1;
+  canvas.width = Math.max(1, Math.floor(rect.width * ratio));
+  canvas.height = Math.max(1, Math.floor(rect.height * ratio));
+  AMO.graph.ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+  if (!AMO.graph.tx && !AMO.graph.ty) { AMO.graph.tx = rect.width / 2; AMO.graph.ty = rect.height / 2; }
+  drawGraph();
+}
+function worldToScreen(p) { const g = AMO.graph; return { x: p.x * g.scale + g.tx, y: p.y * g.scale + g.ty }; }
+function screenToWorld(x, y) { const g = AMO.graph; return { x: (x - g.tx) / g.scale, y: (y - g.ty) / g.scale }; }
+function graphPoint(event) { const rect = AMO.graph.canvas.getBoundingClientRect(); return { x: event.clientX - rect.left, y: event.clientY - rect.top }; }
+function hitNode(event) {
+  const point = graphPoint(event);
+  let best = null;
+  let bestDist = Infinity;
+  AMO.graph.nodes.forEach(node => {
+    const pos = AMO.graph.positions.get(nodeId(node));
+    if (!pos) return;
+    const sp = worldToScreen(pos);
+    const r = radiusForNode(node) + 8;
+    const dx = point.x - sp.x;
+    const dy = point.y - sp.y;
+    const d = Math.sqrt(dx * dx + dy * dy);
+    if (d < r && d < bestDist) { best = node; bestDist = d; }
+  });
+  return best;
+}
+function onGraphWheel(event) {
+  event.preventDefault();
+  const g = AMO.graph;
+  const p = graphPoint(event);
+  const before = screenToWorld(p.x, p.y);
+  const factor = event.deltaY > 0 ? 0.88 : 1.13;
+  g.scale = Math.max(0.08, Math.min(9, g.scale * factor));
+  g.tx = p.x - before.x * g.scale;
+  g.ty = p.y - before.y * g.scale;
+  drawGraph();
+}
+function onGraphPointerDown(event) {
+  const g = AMO.graph;
+  const hit = hitNode(event);
+  if (hit) selectGraphNode(nodeId(hit));
+  g.dragging = true;
+  g.dragStart = { x: event.clientX, y: event.clientY, tx: g.tx, ty: g.ty };
+  g.canvas.classList.add("dragging");
+  g.canvas.setPointerCapture(event.pointerId);
+}
+function onGraphPointerMove(event) {
+  const g = AMO.graph;
+  if (g.dragging && g.dragStart) {
+    g.tx = g.dragStart.tx + event.clientX - g.dragStart.x;
+    g.ty = g.dragStart.ty + event.clientY - g.dragStart.y;
+    drawGraph();
+    return;
+  }
+  const hit = hitNode(event);
+  const id = hit ? nodeId(hit) : "";
+  if (id !== g.hoveredId) { g.hoveredId = id; drawGraph(); }
+}
+function onGraphPointerUp(event) {
+  const g = AMO.graph;
+  g.dragging = false;
+  g.dragStart = null;
+  g.canvas?.classList.remove("dragging");
+  try { g.canvas?.releasePointerCapture(event.pointerId); } catch (_) {}
+}
+function drawGraph() {
+  const g = AMO.graph;
+  const canvas = g.canvas;
+  const ctx = g.ctx;
+  if (!canvas || !ctx) return;
+  const rect = canvas.getBoundingClientRect();
+  ctx.clearRect(0, 0, rect.width, rect.height);
+  ctx.save();
+  ctx.fillStyle = "#040907";
+  ctx.fillRect(0, 0, rect.width, rect.height);
+  const selectedNeighbors = neighborIds(g.selectedId);
+  const selectedEdges = selectedEdgeIds(g.selectedId);
+  ctx.lineCap = "round";
+  g.edges.forEach(edge => {
+    const ps = g.positions.get(edgeSource(edge));
+    const pt = g.positions.get(edgeTarget(edge));
+    if (!ps || !pt) return;
+    const a = worldToScreen(ps);
+    const b = worldToScreen(pt);
+    const kind = edgeKind(edge);
+    const highlighted = selectedEdges.has(text(edge.id)) || (g.selectedId && (edgeSource(edge) === g.selectedId || edgeTarget(edge) === g.selectedId));
+    const version = VERSION_EDGES.has(kind);
+    ctx.globalAlpha = g.selectedId ? (highlighted ? 0.88 : 0.10) : (version ? 0.44 : 0.22);
+    ctx.strokeStyle = version ? "#b7f56e" : "#668b7a";
+    ctx.lineWidth = highlighted ? 2.2 : 1;
+    ctx.beginPath();
+    ctx.moveTo(a.x, a.y);
+    ctx.lineTo(b.x, b.y);
+    ctx.stroke();
+    if (highlighted && g.scale > 0.45) {
+      ctx.globalAlpha = 0.86;
+      ctx.fillStyle = "#9fb5aa";
+      ctx.font = "11px ui-monospace, monospace";
+      ctx.fillText(kind, (a.x + b.x) / 2 + 6, (a.y + b.y) / 2 - 6);
+    }
+  });
+  g.nodes.forEach(node => {
+    const id = nodeId(node);
+    const pos = g.positions.get(id);
+    if (!pos) return;
+    const sp = worldToScreen(pos);
+    const selected = id === g.selectedId;
+    const neighbor = selectedNeighbors.has(id);
+    const hovered = id === g.hoveredId;
+    const alpha = g.selectedId ? (selected || neighbor ? 1 : 0.22) : 0.92;
+    const r = radiusForNode(node) * (selected ? 1.55 : hovered ? 1.28 : 1);
+    ctx.globalAlpha = alpha;
+    ctx.beginPath();
+    ctx.arc(sp.x, sp.y, r, 0, Math.PI * 2);
+    ctx.fillStyle = nodeColor(nodeKind(node), nodeStatus(node));
+    ctx.fill();
+    ctx.strokeStyle = selected ? "#ffffff" : nodeStatus(node) === "draft" ? "rgba(255,255,255,0.38)" : "rgba(4,9,7,0.9)";
+    ctx.lineWidth = selected ? 3 : 1.6;
+    ctx.stroke();
+    const showLabels = $("labelsToggle")?.checked && (selected || hovered || neighbor || g.scale > 0.82 || g.nodes.length < 44);
+    if (showLabels) {
+      ctx.globalAlpha = selected || hovered ? 1 : Math.min(0.88, alpha + 0.18);
+      ctx.font = `${selected ? 13 : 11}px ui-monospace, monospace`;
+      ctx.fillStyle = selected ? "#eff7ef" : "#c8d8d0";
+      ctx.fillText(`${nodeKind(node)}: ${truncate(nodeLabel(node), selected ? 46 : 28)}`, sp.x + r + 5, sp.y + 4);
+    }
+  });
+  ctx.restore();
+}
+function radiusForNode(node) {
+  const kind = nodeKind(node);
+  if (kind === "Topic" || kind === "Cluster") return 10;
+  if (kind === "GitCommit") return 7;
+  if (nodeStatus(node) === "committed") return 6.5;
+  if (SUPPORT_KINDS.has(kind)) return 4.4;
+  return 5.8;
+}
+function neighborIds(id) {
+  const ids = new Set();
+  if (!id) return ids;
+  ids.add(id);
+  AMO.graph.edges.forEach(edge => { if (edgeSource(edge) === id) ids.add(edgeTarget(edge)); if (edgeTarget(edge) === id) ids.add(edgeSource(edge)); });
+  return ids;
+}
+function selectedEdgeIds(id) {
+  const ids = new Set();
+  if (!id) return ids;
+  AMO.graph.edges.forEach(edge => { if (edgeSource(edge) === id || edgeTarget(edge) === id) ids.add(text(edge.id)); });
+  return ids;
+}
+function selectGraphNode(id) { AMO.graph.selectedId = id; renderNodeInspector(); renderLineageFlow(); drawGraph(); }
+function focusSelectedNeighbors() {
+  const id = AMO.graph.selectedId;
+  if (!id) return;
+  const ids = neighborIds(id);
+  const points = [...ids].map(nid => AMO.graph.positions.get(nid)).filter(Boolean);
+  if (!points.length) return;
+  const cx = points.reduce((sum, p) => sum + p.x, 0) / points.length;
+  const cy = points.reduce((sum, p) => sum + p.y, 0) / points.length;
+  const rect = AMO.graph.canvas.getBoundingClientRect();
+  AMO.graph.scale = Math.max(0.7, Math.min(2.4, AMO.graph.scale));
+  AMO.graph.tx = rect.width / 2 - cx * AMO.graph.scale;
+  AMO.graph.ty = rect.height / 2 - cy * AMO.graph.scale;
+  drawGraph();
+}
+function renderGraphMini() {
+  const n = AMO.graph.nodes.length;
+  const e = AMO.graph.edges.length;
+  const warnings = AMO.centralGraph.warnings || [];
+  $("graphMini").innerHTML = `${n} nodes | ${e} edges${warnings.length ? ` | ${warnings.length} warnings` : ""}`;
+}
+function renderNodeInspector() {
+  const id = AMO.graph.selectedId;
+  const node = AMO.graph.nodes.find(n => nodeId(n) === id) || (AMO.centralGraph.nodes || []).find(n => nodeId(n) === id);
+  if (!node) {
+    $("inspectorTitle").textContent = "No node selected";
+    $("inspectorKind").textContent = "Select a node to see provenance, version edges, and connected knowledge.";
+    $("nodeInspector").innerHTML = "";
+    return;
+  }
+  const edges = (AMO.centralGraph.edges || []).filter(e => edgeSource(e) === id || edgeTarget(e) === id);
+  $("inspectorTitle").textContent = truncate(nodeLabel(node), 64);
+  $("inspectorKind").textContent = `${nodeKind(node)} | ${nodeStatus(node)} | ${node.scope || "session"}`;
+  const meta = metadata(node);
+  $("nodeInspector").innerHTML = `<div class="meta-table">${metaRow("id", nodeId(node))}${metaRow("summary", nodeSummary(node))}${metaRow("session", node.session_id || "")}${metaRow("commit", node.commit_id || "")}${metaRow("evidence", node.evidence_id || "")}${metaRow("created", node.created_at || "")}</div><details open><summary>Visible edges (${edges.length})</summary><div class="edge-list">${edges.map(renderEdgeChip).join("") || `<p class="muted">No visible connected edges.</p>`}</div></details><details><summary>Metadata</summary><pre class="code-block">${escapeHtml(formatJson(meta))}</pre></details><div class="button-row"><button class="btn ghost" id="focusNodeBtn">Focus neighbors</button><button class="btn ghost" id="showProvenanceBtn">Show provenance</button></div>`;
+  $("focusNodeBtn")?.addEventListener("click", focusSelectedNeighbors);
+  $("showProvenanceBtn")?.addEventListener("click", () => { $("supportToggle").checked = true; buildGraph(); selectGraphNode(id); });
+}
+function metaRow(k, v) { return `<div class="meta-row"><span>${escapeHtml(k)}</span><span>${escapeHtml(v || "-")}</span></div>`; }
+function renderEdgeChip(edge) {
+  const dir = edgeSource(edge) === AMO.graph.selectedId ? "out" : "in";
+  const other = dir === "out" ? edgeTarget(edge) : edgeSource(edge);
+  return `<div class="edge-chip"><strong>${escapeHtml(edgeKind(edge))}</strong><br>${escapeHtml(dir)}: ${escapeHtml(other)}</div>`;
+}
+function renderLineageFlow() {
+  const id = AMO.graph.selectedId;
+  if (!id) {
+    $("lineageFlow").innerHTML = "Select a graph node to see upstream evidence and downstream commit/version edges.";
+    return;
+  }
+  const allNodes = AMO.centralGraph.nodes || [];
+  const byId = new Map(allNodes.map(n => [nodeId(n), n]));
+  const upstream = [];
+  const downstream = [];
+  (AMO.centralGraph.edges || []).forEach(edge => {
+    if (edgeTarget(edge) === id) upstream.push({ edge, node: byId.get(edgeSource(edge)) });
+    if (edgeSource(edge) === id) downstream.push({ edge, node: byId.get(edgeTarget(edge)) });
+  });
+  const current = byId.get(id) || AMO.graph.nodes.find(n => nodeId(n) === id);
+  const steps = [...upstream.slice(0, 4).map(item => lineageStep(item.node, edgeKind(item.edge), false)), lineageStep(current, "selected", true), ...downstream.slice(0, 4).map(item => lineageStep(item.node, edgeKind(item.edge), false))];
+  $("lineageFlow").innerHTML = steps.join("") || `<div class="muted">No visible lineage edges for this node.</div>`;
+}
+function lineageStep(node, edge, active) {
+  if (!node) return `<div class="lineage-step" data-edge="${escapeHtml(edge)}"><strong>Missing endpoint</strong><p class="muted">Edge endpoint is outside the current graph sample.</p></div>`;
+  return `<div class="lineage-step${active ? " active" : ""}" data-edge="${escapeHtml(edge)}"><strong>${escapeHtml(readableKind(nodeKind(node)))}</strong><p>${escapeHtml(truncate(nodeSummary(node) || nodeLabel(node), 120))}</p><span class="muted small">${escapeHtml(nodeStatus(node))}</span></div>`;
+}
+function bindEvents() {
+  qsa(".nav-item").forEach(btn => btn.addEventListener("click", () => setView(btn.dataset.view)));
+  qsa("[data-jump]").forEach(btn => btn.addEventListener("click", () => setView(btn.dataset.jump)));
+  $("refreshBtn").addEventListener("click", refreshAll);
+  $("runRetrievalBtn").addEventListener("click", runRetrieval);
+  $("retrievalQuery").addEventListener("keydown", event => { if (event.key === "Enter") runRetrieval(); });
+  $("globalSearch").addEventListener("keydown", event => { if (event.key === "Enter") { $("retrievalQuery").value = $("globalSearch").value; runRetrieval(); } });
+  $("globalSearch").addEventListener("input", () => { if (AMO.view === "graph") buildGraph(); });
+  $("graphFilter").addEventListener("input", buildGraph);
+  $("kindFilter").addEventListener("change", buildGraph);
+  $("statusFilter").addEventListener("change", buildGraph);
+  $("supportToggle").addEventListener("change", buildGraph);
+  $("labelsToggle").addEventListener("change", drawGraph);
+  $("drainSessionBtn").addEventListener("click", drainSelected);
+  $("finalizePreviewBtn").addEventListener("click", previewFinalize);
+  $("consolidateBtn").addEventListener("click", () => runAdminJob("consolidate"));
+  $("cacheBtn").addEventListener("click", () => runAdminJob("cache"));
+  $("debugGraphBtn").addEventListener("click", () => runAdminJob("debugGraph"));
+  $("debugQwenBtn").addEventListener("click", () => runAdminJob("debugQwen"));
+  document.body.addEventListener("click", event => {
+    const sessionEl = event.target.closest(".session-card");
+    if (sessionEl) selectSession(sessionEl.dataset.sessionId);
+    const nodeEl = event.target.closest(".node-card");
+    if (nodeEl && nodeEl.dataset.nodeId) {
+      setView("graph");
+      $("supportToggle").checked = true;
+      buildGraph();
+      selectGraphNode(nodeEl.dataset.nodeId);
+      focusSelectedNeighbors();
+    }
+  });
+}
+async function init() {
+  bindEvents();
+  setupGraphCanvas();
+  const path = window.location.pathname;
+  if (path.includes("graph")) setView("graph");
+  else if (path.includes("session")) setView("sessions");
+  else if (path.includes("dashboard")) setView("dashboard");
+  await refreshAll();
+  setInterval(() => { if (AMO.view === "dashboard" || AMO.view === "sessions") loadSessions().catch(() => {}); }, 15000);
+}
+init().catch(error => { setDaemon(false, "ui failed"); console.error(error); });
