@@ -16,11 +16,11 @@ from ..connectors.slack.wizard import run_slack_setup_wizard
 from ..graph.diagnostics import debug_hooks, debug_qwen
 from ..graph.service import GraphRagService
 from ..graph.store import GraphBackendUnavailable
-from ..install_service import InstallOptions
-from ..install_service import apply_install_plan
-from ..install_service import build_install_plan
-from ..install_service import doctor as install_doctor
-from ..install_service import uninstall as uninstall_targets
+from ..install.service import InstallOptions
+from ..install.service import apply_install_plan
+from ..install.service import build_install_plan
+from ..install.service import doctor as install_doctor
+from ..install.service import uninstall as uninstall_targets
 from ..memory_service import MemoryService
 from ..orchestrator import OrchestratorService
 from ..privacy import redact_secrets

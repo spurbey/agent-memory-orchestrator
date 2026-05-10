@@ -5,11 +5,18 @@ from pathlib import Path
 
 from agent_memory_orchestrator.app.cli import main
 from agent_memory_orchestrator.config import Settings
-from agent_memory_orchestrator.install_service import InstallOptions
-from agent_memory_orchestrator.install_service import apply_install_plan
-from agent_memory_orchestrator.install_service import build_install_plan
-from agent_memory_orchestrator.install_service import doctor
-from agent_memory_orchestrator.install_service import uninstall
+from agent_memory_orchestrator.install.service import InstallOptions
+from agent_memory_orchestrator.install.service import apply_install_plan
+from agent_memory_orchestrator.install.service import build_install_plan
+from agent_memory_orchestrator.install.service import doctor
+from agent_memory_orchestrator.install.service import uninstall
+
+
+def test_legacy_install_service_module_keeps_public_exports() -> None:
+    from agent_memory_orchestrator import install_service
+
+    assert install_service.InstallOptions is InstallOptions
+    assert install_service.build_install_plan is build_install_plan
 
 
 def test_codex_install_applies_managed_hooks_and_mcp(tmp_path: Path) -> None:
