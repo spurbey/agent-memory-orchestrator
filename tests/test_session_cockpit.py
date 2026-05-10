@@ -152,19 +152,15 @@ def test_central_graph_snapshot_lists_committed_nodes_and_edges(tmp_path: Path) 
 
 
 def test_daemon_exposes_dependency_free_3d_graph_view() -> None:
-    assert "/graph3d" in SESSION_COCKPIT_HTML
+    assert "AMO Control Room" in SESSION_COCKPIT_HTML
+    assert "/web/amo.css" in SESSION_COCKPIT_HTML
+    assert "/web/amo.js" in SESSION_COCKPIT_HTML
     assert '<canvas id="graphCanvas"' in GRAPH3D_HTML
-    assert "/api/graph/central?limit=" in GRAPH3D_HTML
-    assert "What This View Means" in GRAPH3D_HTML
-    assert "Knowledge Creation Trace" in GRAPH3D_HTML
-    assert "connected only" in GRAPH3D_HTML
-    assert "highlight selected flow" in GRAPH3D_HTML
-    assert "pan mode" in GRAPH3D_HTML
-    assert "showSphere" in GRAPH3D_HTML
-    assert "Ctrl-drag" in GRAPH3D_HTML
-    assert "Zoom In" in GRAPH3D_HTML
-    assert "Edges missing endpoint nodes" in GRAPH3D_HTML
-    assert "This graph is sparse" in GRAPH3D_HTML
+    assert "Obsidian style explorer" in GRAPH3D_HTML
+    assert "Knowledge creation flow" in GRAPH3D_HTML
+    assert "cleaned evidence sent to graph extraction" in GRAPH3D_HTML.lower()
+    assert "provenance" in GRAPH3D_HTML
+    assert "Graph query inspector" in GRAPH3D_HTML
     assert "3d-force-graph" not in GRAPH3D_HTML
 
 

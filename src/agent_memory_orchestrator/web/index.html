@@ -1,0 +1,226 @@
+﻿<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>AMO Control Room</title>
+  <link rel="stylesheet" href="/web/amo.css" />
+</head>
+<body>
+  <div class="shell">
+    <aside class="rail" aria-label="Primary navigation">
+      <div class="brand">
+        <span class="brand-mark">A</span>
+        <div>
+          <strong>AMO</strong>
+          <small>Control Room</small>
+        </div>
+      </div>
+      <nav class="nav-list">
+        <button class="nav-item active" data-view="dashboard">Dashboard</button>
+        <button class="nav-item" data-view="sessions">Sessions</button>
+        <button class="nav-item" data-view="graph">Graph</button>
+        <button class="nav-item" data-view="retrieval">Retrieval</button>
+        <button class="nav-item" data-view="admin">Admin</button>
+      </nav>
+      <div class="rail-footer">
+        <span class="status-dot" id="daemonDot"></span>
+        <span id="daemonText">checking daemon</span>
+      </div>
+    </aside>
+
+    <main class="workspace">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">Local first GraphRAG</p>
+          <h1 id="pageTitle">Dashboard</h1>
+          <p id="pageSubtitle" class="subtitle">Watch sessions move from raw capture to durable central graph memory.</p>
+        </div>
+        <div class="top-actions">
+          <input id="globalSearch" class="search" placeholder="Search sessions, nodes, files, commits" />
+          <button id="refreshBtn" class="btn primary">Refresh</button>
+        </div>
+      </header>
+
+      <section id="dashboardView" class="view active">
+        <div class="metric-grid" id="metricGrid"></div>
+        <section class="panel hero-panel">
+          <div>
+            <p class="eyebrow">GraphRAG pipeline</p>
+            <h2>From captured work to queryable memory</h2>
+            <p class="muted">The dashboard tracks what the hook captured, what was cleaned for Qwen, what became draft graph nodes, and what was promoted into the central graph.</p>
+          </div>
+          <div class="pipeline-strip" id="pipelineStrip"></div>
+        </section>
+        <div class="two-col">
+          <section class="panel">
+            <div class="panel-head">
+              <div>
+                <p class="eyebrow">Live sessions</p>
+                <h2>Recently captured</h2>
+              </div>
+              <button class="btn ghost" data-jump="sessions">Open Sessions</button>
+            </div>
+            <div id="recentSessions" class="session-list compact"></div>
+          </section>
+          <section class="panel">
+            <div class="panel-head">
+              <div>
+                <p class="eyebrow">Runtime</p>
+                <h2>Daemon and graph health</h2>
+              </div>
+            </div>
+            <div id="healthPanel" class="health-grid"></div>
+          </section>
+        </div>
+      </section>
+
+      <section id="sessionsView" class="view">
+        <div class="session-layout">
+          <aside class="panel session-sidebar">
+            <div class="panel-head stacked">
+              <p class="eyebrow">Sessions</p>
+              <h2>Captured workstreams</h2>
+              <p class="muted">Pick a session to inspect raw events, cleaned windows, draft graph, and merge plan.</p>
+            </div>
+            <div id="sessionList" class="session-list"></div>
+          </aside>
+          <section class="session-detail">
+            <div id="sessionEmpty" class="empty-state">
+              <h2>Select a session</h2>
+              <p>AMO will show the exact capture and processing path for that session.</p>
+            </div>
+            <div id="sessionContent" class="hidden">
+              <section class="panel session-hero">
+                <div>
+                  <p class="eyebrow" id="sessionSource">Session</p>
+                  <h2 id="sessionTitle">session</h2>
+                  <p class="muted" id="sessionSummary">Captured evidence and graph state.</p>
+                </div>
+                <div class="button-row">
+                  <button id="drainSessionBtn" class="btn primary">Drain Session</button>
+                  <button id="finalizePreviewBtn" class="btn ghost">Preview Merge</button>
+                </div>
+              </section>
+
+              <section class="panel">
+                <div class="panel-head">
+                  <div>
+                    <p class="eyebrow">Processing stages</p>
+                    <h2>Session pipeline</h2>
+                  </div>
+                </div>
+                <div id="sessionPipeline" class="pipeline-strip wide"></div>
+              </section>
+
+              <div class="two-col wide-left">
+                <section class="panel">
+                  <div class="panel-head"><h2>Raw capture timeline</h2></div>
+                  <div id="timelineList" class="timeline-list"></div>
+                </section>
+                <section class="panel">
+                  <div class="panel-head"><h2>Cleaned evidence sent to graph extraction</h2></div>
+                  <div id="cleanedWindows" class="window-list"></div>
+                </section>
+              </div>
+
+              <div class="two-col">
+                <section class="panel">
+                  <div class="panel-head"><h2>Draft graph nodes</h2></div>
+                  <div id="draftNodes" class="node-list"></div>
+                </section>
+                <section class="panel">
+                  <div class="panel-head"><h2>Merge preview</h2></div>
+                  <div id="mergePreview" class="merge-list"></div>
+                </section>
+              </div>
+            </div>
+          </section>
+        </div>
+      </section>
+
+      <section id="graphView" class="view">
+        <div class="graph-shell">
+          <section class="panel graph-panel">
+            <div class="graph-toolbar">
+              <div>
+                <p class="eyebrow">Central knowledge graph</p>
+                <h2>Obsidian style explorer</h2>
+              </div>
+              <div class="toolbar-fields">
+                <input id="graphFilter" class="search small" placeholder="Filter node text, file, commit" />
+                <select id="kindFilter"><option value="">All kinds</option></select>
+                <select id="statusFilter"><option value="">All status</option></select>
+                <label class="check"><input id="supportToggle" type="checkbox" /> provenance</label>
+                <label class="check"><input id="labelsToggle" type="checkbox" checked /> labels</label>
+              </div>
+            </div>
+            <div class="graph-stage">
+              <canvas id="graphCanvas" aria-label="AMO central graph"></canvas>
+              <div class="graph-help">Wheel zooms freely. Drag pans. Click selects. Double click focuses neighbors. Labels appear as you zoom.</div>
+              <div class="graph-mini" id="graphMini"></div>
+            </div>
+          </section>
+          <aside class="panel inspector">
+            <div class="panel-head stacked">
+              <p class="eyebrow">Inspector</p>
+              <h2 id="inspectorTitle">No node selected</h2>
+              <p id="inspectorKind" class="muted">Select a node to see provenance, version edges, and connected knowledge.</p>
+            </div>
+            <div id="nodeInspector" class="inspector-body"></div>
+          </aside>
+        </div>
+        <section class="panel lineage-panel">
+          <div class="panel-head">
+            <div>
+              <p class="eyebrow">Knowledge creation flow</p>
+              <h2>Lineage for selected node</h2>
+            </div>
+          </div>
+          <div id="lineageFlow" class="lineage-flow muted">Select a graph node to see upstream evidence and downstream commit/version edges.</div>
+        </section>
+      </section>
+
+      <section id="retrievalView" class="view">
+        <section class="panel retrieval-panel">
+          <div>
+            <p class="eyebrow">Graph query inspector</p>
+            <h2>See what retrieval actually returns</h2>
+            <p class="muted">Run the same explicit GraphRAG search used by MCP/CLI. The result shows planner intent, selected nodes, Qwen fallback state, and timing.</p>
+          </div>
+          <div class="retrieval-form">
+            <input id="retrievalQuery" class="search" placeholder="Ask AMO memory" />
+            <label class="check"><input id="includeHistorical" type="checkbox" /> historical</label>
+            <label class="check"><input id="includeRaw" type="checkbox" /> raw evidence</label>
+            <button id="runRetrievalBtn" class="btn primary">Run Search</button>
+          </div>
+        </section>
+        <div id="retrievalResult" class="retrieval-result"></div>
+      </section>
+
+      <section id="adminView" class="view">
+        <div class="two-col">
+          <section class="panel">
+            <p class="eyebrow">Graph jobs</p>
+            <h2>Manual repair actions</h2>
+            <p class="muted">These call daemon-owned graph jobs. Use when the graph has been drained or cleaned and the derived views need rebuilding.</p>
+            <div class="job-grid">
+              <button id="consolidateBtn" class="btn ghost">Consolidate dry run</button>
+              <button id="cacheBtn" class="btn ghost">Rebuild cache</button>
+              <button id="debugGraphBtn" class="btn ghost">Debug graph</button>
+              <button id="debugQwenBtn" class="btn ghost">Debug Qwen</button>
+            </div>
+          </section>
+          <section class="panel">
+            <p class="eyebrow">Job output</p>
+            <h2>Latest response</h2>
+            <pre id="adminOutput" class="code-block">No job run yet.</pre>
+          </section>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script src="/web/amo.js"></script>
+</body>
+</html>
