@@ -28,6 +28,7 @@ agent-memory-orchestrator/
 
 ## Current Migration Policy
 
+- Already extracted packages: `evidence/`, `graph/`.
 - Move one bounded subsystem per commit.
 - Keep compatibility shims at old import paths until a minor release boundary.
 - Run `ruff check src tests` and `python -m pytest -q` after each move.

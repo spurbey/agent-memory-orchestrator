@@ -7,8 +7,8 @@ from pathlib import Path
 from typing import Any
 
 from ..config import Settings
-from ..graph_store import GraphStore
-from ..session_graph import SessionGraphBuilder
+from ..graph.session import SessionGraphBuilder
+from ..graph.store import GraphStore
 from ..versioning import VersionBackend
 from .triggers import detect_trigger
 

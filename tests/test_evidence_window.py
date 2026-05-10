@@ -7,7 +7,7 @@ from typing import Any
 from agent_memory_orchestrator.config import Settings
 from agent_memory_orchestrator.evidence.triggers import TriggerDecision
 from agent_memory_orchestrator.evidence.window import MAX_QWEN_RECORDS, clean_evidence_window
-from agent_memory_orchestrator.session_graph import QwenGraphExtractor
+from agent_memory_orchestrator.graph.session import QwenGraphExtractor
 
 
 FORBIDDEN_QWEN_TERMS = (

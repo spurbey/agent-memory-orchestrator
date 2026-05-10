@@ -3,8 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 
 from agent_memory_orchestrator.config import Settings
-from agent_memory_orchestrator.graph_merge import CommitMergeEngine
-from agent_memory_orchestrator.graph_store import GraphNode, InMemoryGraphStore
+from agent_memory_orchestrator.graph.merge import CommitMergeEngine
+from agent_memory_orchestrator.graph.store import GraphNode, InMemoryGraphStore
 from agent_memory_orchestrator.versioning import GitCommitDetails, GitDiffSummary, GitSnapshot
 
 

@@ -5,9 +5,9 @@ from pathlib import Path
 
 from agent_memory_orchestrator.config import Settings
 from agent_memory_orchestrator.evidence.drain import EvidenceDrain
-from agent_memory_orchestrator.graph_store import InMemoryGraphStore
+from agent_memory_orchestrator.graph.store import InMemoryGraphStore
 from agent_memory_orchestrator.evidence.raw_store import RawEvidenceStore
-from agent_memory_orchestrator.session_graph import DeterministicGraphExtractor, SessionGraphBuilder
+from agent_memory_orchestrator.graph.session import DeterministicGraphExtractor, SessionGraphBuilder
 from agent_memory_orchestrator.versioning import GitSnapshot
 
 
