@@ -149,16 +149,26 @@ class CommitMergeEngine:
         patch_id = self._patch_id(commit, cwd)
         evidence_id = ""
 
+        draft_candidates = self.store.list_nodes(
+            kinds=sorted(ANSWER_GRADE_PROMOTION_KINDS),
+            session_id=session_id,
+            limit=safe_limit,
+        )
         draft_nodes = [
             node
-            for node in self.store.list_nodes(kinds=sorted(ANSWER_GRADE_PROMOTION_KINDS), session_id=session_id, limit=safe_limit)
-            if str(node.get("status") or "draft") == "draft" and _is_promotable(node)
+            for node in draft_candidates
+            if str(node.get("status") or "draft") == "draft"
+            and _is_promotable(node, diff_files=diff_info.changed_files, commit_subject=commit_info.subject)
+        ]
+        skipped_answer_nodes = [
+            node
+            for node in draft_candidates
+            if str(node.get("status") or "draft") == "draft" and node not in draft_nodes
         ]
         skipped_nodes = [
             node
             for node in self.store.list_nodes(session_id=session_id, limit=safe_limit)
             if str(node.get("kind") or "") in SUPPORT_ONLY_KINDS
-            or (str(node.get("kind") or "") in ANSWER_GRADE_PROMOTION_KINDS and not _is_promotable(node))
         ]
         if draft_nodes:
             evidence_id = str(draft_nodes[0].get("evidence_id") or "")
@@ -192,11 +202,12 @@ class CommitMergeEngine:
             "patch_id": patch_id,
             "draft_count": len(draft_nodes),
             "skipped_support_count": len(skipped_nodes),
+            "skipped_answer_count": len(skipped_answer_nodes),
             "promoted_count": len(planned_promotions) if apply else 0,
             "planned_promotions": [_node_summary(node) for node in planned_promotions],
             "relations": [relation.as_dict() for relation in relations],
             "review_candidates": [candidate.as_dict() for candidate in review],
-            "skipped": [_node_summary(node) for node in skipped_nodes[:50]],
+            "skipped": [_node_summary(node) for node in (skipped_nodes + skipped_answer_nodes)[:50]],
             "edges_written": 0,
             "statuses_updated": 0,
         }
@@ -433,7 +444,12 @@ def _is_existing_central_candidate(node: dict[str, Any], *, session_id: str) -> 
     }
 
 
-def _is_promotable(node: dict[str, Any]) -> bool:
+def _is_promotable(
+    node: dict[str, Any],
+    *,
+    diff_files: list[str] | None = None,
+    commit_subject: str = "",
+) -> bool:
     kind = str(node.get("kind") or "")
     if kind not in ANSWER_GRADE_PROMOTION_KINDS:
         return False
@@ -443,7 +459,95 @@ def _is_promotable(node: dict[str, Any]) -> bool:
     lowered = text.lower()
     noisy_prefixes = ('"continue":', "{", "[", "from __future__", "import ", "class ", "def ", "raise ", "assert ")
     noisy_terms = ("hook_event_name", "status_porcelain", "captureonly", "manualsmoke", "after_preview")
-    return not lowered.startswith(noisy_prefixes) and not any(term in lowered for term in noisy_terms)
+    if lowered.startswith(noisy_prefixes) or any(term in lowered for term in noisy_terms):
+        return False
+    if _is_noisy_answer_text(text, kind=kind):
+        return False
+    return _is_commit_relevant(node, diff_files=diff_files or [], commit_subject=commit_subject)
+
+
+def _is_noisy_answer_text(text: str, *, kind: str) -> bool:
+    compact = " ".join(str(text or "").split())
+    lowered = compact.lower()
+    generic_decisions = {
+        "apply patch",
+        "apply patch to graph_service.py",
+        "apply patch to test_graph_rag.py",
+        "apply code changes to the evidence window",
+    }
+    if lowered in generic_decisions:
+        return True
+    noisy_starts = (
+        "apply patch",
+        "codex has been instructed",
+        "commit message was set",
+        "code edit applied to:",
+        "git commit operation executed",
+        "git command executed:",
+        "git operation referenced",
+        "process git commit",
+        "work_note ",
+        "usage: ",
+        "user submitted a prompt",
+        "tool=",
+        "test_run ",
+    )
+    if lowered.startswith(noisy_starts):
+        return True
+    if "all checks passed" in lowered:
+        return True
+    if "evidence_cursors.json" in lowered:
+        return True
+    if re.search(r"\b[\w.-]+\.(py|md|js|ts|rs|go):\d+:", lowered) and "|" in compact:
+        return True
+    if len(compact) > 180 and _punctuation_ratio(compact) > 0.18:
+        return True
+    if len(compact) > 180 and _code_token_ratio(compact) > 0.16:
+        return True
+    return False
+
+
+def _is_commit_relevant(node: dict[str, Any], *, diff_files: list[str], commit_subject: str) -> bool:
+    if not diff_files:
+        return True
+    text = _normalize_text(_node_text(node))
+    node_files = set(_node_files(node))
+    diff_norm = {file.replace("\\", "/") for file in diff_files if str(file).strip()}
+    if node_files and node_files & diff_norm:
+        return True
+    file_terms = _diff_file_terms(diff_norm)
+    subject_terms = _terms(commit_subject)
+    if subject_terms and len(subject_terms & _terms(text)) >= 2:
+        return True
+    if file_terms and file_terms & _terms(text):
+        return True
+    durable_terms = {"merge", "finalize", "finalization", "version", "versioning", "rebuild", "central", "graph", "qwen"}
+    return bool((subject_terms | file_terms | durable_terms) & _terms(text)) and bool(subject_terms & _terms(text))
+
+
+def _diff_file_terms(files: set[str]) -> set[str]:
+    terms: set[str] = set()
+    for file in files:
+        path = Path(file)
+        terms.update(_terms(path.name))
+        terms.update(_terms(path.stem))
+        terms.update(_terms(str(path.parent)))
+    return {term for term in terms if len(term) > 2}
+
+
+def _punctuation_ratio(text: str) -> float:
+    if not text:
+        return 0.0
+    punctuation = sum(1 for char in text if char in "{}[]();=|\\")
+    return punctuation / max(1, len(text))
+
+
+def _code_token_ratio(text: str) -> float:
+    tokens = re.findall(r"[A-Za-z_][A-Za-z0-9_]*|[{}()[\];=|]", text)
+    if not tokens:
+        return 0.0
+    codeish = sum(1 for token in tokens if token in {"def", "class", "return", "import", "except", "assert", "raise"} or token in "{}()[ ];=|")
+    return codeish / max(1, len(tokens))
 
 
 def _candidate_score(draft: dict[str, Any], candidate: dict[str, Any]) -> dict[str, Any]:
