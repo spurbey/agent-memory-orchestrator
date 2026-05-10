@@ -78,7 +78,8 @@ class Settings:
 
     @classmethod
     def load(cls) -> "Settings":
-        home = Path(os.getenv("AMO_HOME", ".")).resolve()
+        default_home = Path.home() / ".agent-memory-orchestrator"
+        home = Path(os.getenv("AMO_HOME", str(default_home))).expanduser().resolve()
         config = _load_config_file(home)
         db_path = Path(str(_setting(config, "db_path", ".data/agent_memory.db")))
         export_dir = Path(str(_setting(config, "export_dir", "exports")))

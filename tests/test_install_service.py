@@ -49,6 +49,9 @@ def test_codex_install_applies_managed_hooks_and_mcp(tmp_path: Path) -> None:
     assert "amo_hook_launcher.py" in hook_command
     assert "--agent codex" in hook_command
     assert str(amo_home.resolve()) in hook_command
+    launcher_text = (amo_home / "bin" / "amo_hook_launcher.py").read_text(encoding="utf-8")
+    assert "IMPORT_ROOT" in launcher_text
+    assert "runpy.run_module('agent_memory_orchestrator.hook'" in launcher_text
 
     status = doctor(target="codex", user_home=user_home, amo_home=amo_home)
     assert status["ok"] is True
@@ -123,6 +126,17 @@ def test_settings_loads_installer_runtime_config(tmp_path: Path, monkeypatch) ->
     assert settings.qwen_compress_timeout_seconds == 12.0
     assert settings.qwen_num_ctx == 2048
     assert settings.drain_max_windows_per_run == 3
+
+
+def test_settings_default_home_is_user_amo_dir(tmp_path: Path, monkeypatch) -> None:
+    user_home = tmp_path / "user"
+    monkeypatch.delenv("AMO_HOME", raising=False)
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: user_home))
+
+    settings = Settings.load()
+
+    assert settings.home == user_home / ".agent-memory-orchestrator"
+    assert settings.graph_path == user_home / ".agent-memory-orchestrator" / ".graph" / "amo.kuzu"
 
 
 def test_settings_loads_bom_prefixed_json_config(tmp_path: Path, monkeypatch) -> None:

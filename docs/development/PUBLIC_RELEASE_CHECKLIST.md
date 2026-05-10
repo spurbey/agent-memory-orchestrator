@@ -18,7 +18,11 @@ Use this checklist before making the AMO repository public.
   - `pytest-cache-files-*/`
 - [ ] Run `ruff check src tests`.
 - [ ] Run `python -m pytest -q`.
+- [ ] Run `npm run check` in `npm/agent-memory-orchestrator-cli`.
+- [ ] Run `npm pack --dry-run` in `npm/agent-memory-orchestrator-cli`.
 - [ ] Build/package check includes `web/*.html`, `web/*.css`, and `web/*.js`.
+- [ ] Confirm Python and npm package versions match.
+- [ ] Run install dry-run with the public quickstart command.
 - [ ] Add or verify `SECURITY.md`.
 - [ ] Add or verify `CONTRIBUTING.md`.
 
