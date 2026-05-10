@@ -409,7 +409,7 @@ amo-cli export --out ./exports/memory_snapshot.jsonl
 Point Claude/Codex MCP configuration to run:
 
 ```bash
-python -m agent_memory_orchestrator.mcp_server
+python -m agent_memory_orchestrator.mcp.server
 ```
 
 Both agents then operate on the same local memory and orchestration state.
@@ -417,10 +417,10 @@ Both agents then operate on the same local memory and orchestration state.
 Phase 2 memory tools are implemented behind a testable service module:
 
 ```text
-agent_memory_orchestrator.mcp_memory_tools.MemoryMcpToolService
+agent_memory_orchestrator.mcp.tools.MemoryMcpToolService
 ```
 
-The FastMCP server only registers tool functions and delegates to that service. New GraphRAG tools are `amo_graph_search`, `amo_current_context`, `amo_decision_history`, `amo_work_history`, `amo_raw_evidence`, and `amo_merge_status`.
+The legacy `agent_memory_orchestrator.mcp_server` and `agent_memory_orchestrator.mcp_memory_tools` modules remain as compatibility shims. The FastMCP server only registers tool functions and delegates to that service. New GraphRAG tools are `amo_graph_search`, `amo_current_context`, `amo_decision_history`, `amo_work_history`, `amo_raw_evidence`, and `amo_merge_status`.
 
 ## Adapter Layer
 
