@@ -9,7 +9,7 @@ from ..config import Settings
 from ..graph.service import GraphRagService
 from ..graph.store import GraphBackendUnavailable
 from ..llm.qwen import QwenUnavailable
-from ..memory_service import MemoryService
+from ..memory import MemoryService
 
 
 AGENTS = {"claude", "codex", "user", "system"}

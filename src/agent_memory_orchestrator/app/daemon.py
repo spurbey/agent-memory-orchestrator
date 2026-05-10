@@ -13,7 +13,7 @@ from ..config import Settings
 from ..graph.diagnostics import debug_drain, debug_graph, debug_hooks, debug_qwen
 from ..graph.service import GraphRagService
 from ..graph.store import GraphBackendUnavailable
-from ..memory_service import MemoryService
+from ..memory import MemoryService
 from ..llm.qwen import QwenUnavailable
 
 _CLIENT_ABORT_ERRORS = (BrokenPipeError, ConnectionAbortedError, ConnectionResetError)

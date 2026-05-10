@@ -5,7 +5,7 @@ from pathlib import Path
 
 from agent_memory_orchestrator.integrations.adapters import infer_codex_session, normalize_adapter_event
 from agent_memory_orchestrator.config import Settings
-from agent_memory_orchestrator.memory_service import MemoryService
+from agent_memory_orchestrator.memory import MemoryService
 
 
 def test_legacy_adapters_package_keeps_public_exports() -> None:
