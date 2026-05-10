@@ -9,7 +9,7 @@ import pytest
 from agent_memory_orchestrator.app.cli import _rebuild_clean_db
 from agent_memory_orchestrator.config import Settings
 from agent_memory_orchestrator.context_pack import build_context_pack_payload
-from agent_memory_orchestrator.memory_service import MemoryService
+from agent_memory_orchestrator.memory import MemoryService
 
 
 def make_settings(tmp_path) -> Settings:
@@ -1212,3 +1212,9 @@ def test_rebuild_clean_db_refuses_overwrite_and_rebuilds_from_codex_rollout(tmp_
         assert hits
     finally:
         svc.close()
+
+
+def test_legacy_memory_service_module_keeps_public_exports() -> None:
+    from agent_memory_orchestrator import memory_service as legacy_memory_service
+
+    assert legacy_memory_service.MemoryService is MemoryService
