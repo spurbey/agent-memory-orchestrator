@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from ...config import Settings
-from ...raw_evidence import RawEvidenceStore
+from ...evidence.raw_store import RawEvidenceStore
 from .client import SlackApiClient, SlackApiError
 from .config import SlackConfig, load_slack_config, token_presence, validate_token_prefixes, write_slack_config
 from .events import (

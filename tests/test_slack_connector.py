@@ -11,7 +11,7 @@ from agent_memory_orchestrator.connectors.slack.config import load_slack_config,
 from agent_memory_orchestrator.connectors.slack.events import parse_message_envelope, should_reply_message
 from agent_memory_orchestrator.connectors.slack.manifest import build_slack_manifest, slack_manifest_setup_url
 from agent_memory_orchestrator.connectors.slack.wizard import run_slack_setup_wizard
-from agent_memory_orchestrator.graph_triggers import detect_trigger
+from agent_memory_orchestrator.evidence.triggers import detect_trigger
 
 
 def test_slack_manifest_enables_socket_mode_and_message_scopes() -> None:

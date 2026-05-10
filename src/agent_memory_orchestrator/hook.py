@@ -14,8 +14,8 @@ from typing import Any
 
 from .adapters import normalize_adapter_event
 from .config import Settings
-from .raw_evidence import RawEvidenceRef
-from .raw_evidence import RawEvidenceStore
+from .evidence.raw_store import RawEvidenceRef
+from .evidence.raw_store import RawEvidenceStore
 
 
 DEFAULT_STDIN_TIMEOUT_SECONDS = 2.0

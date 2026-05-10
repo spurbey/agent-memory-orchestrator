@@ -11,16 +11,16 @@ from typing import Any
 
 from .adapters import normalize_adapter_event
 from .config import Settings
-from .evidence_drain import EvidenceDrain
-from .evidence_drain import _read_jsonl_from
-from .evidence_window import clean_evidence_window
+from .evidence.drain import EvidenceDrain
+from .evidence.drain import _read_jsonl_from
+from .evidence.raw_store import RawEvidenceRef, RawEvidenceStore
+from .evidence.triggers import TriggerDecision, detect_trigger
+from .evidence.window import clean_evidence_window
 from .graph_cache import GraphSearchCache
 from .graph_consolidation import DeterministicGraphConsolidator
 from .graph_merge import CommitMergeEngine, QwenMergeClassifier
 from .graph_store import GraphEdge, GraphNode, GraphStore, KuzuGraphStore
-from .graph_triggers import TriggerDecision, detect_trigger
 from .qwen_client import DeterministicPlanner, OllamaQwenClient, QueryPlan, QwenPlanner, QwenUnavailable
-from .raw_evidence import RawEvidenceRef, RawEvidenceStore
 from .session_graph import QwenGraphExtractor, SessionGraphBuilder
 from .versioning import LocalGitBackend, VersionBackend
 from .work_ledger import WorkLedger
