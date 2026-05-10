@@ -8,6 +8,7 @@ from typing import Any
 from .config import Settings
 from .daemon_client import DaemonClient, DaemonUnavailable
 from .evidence_drain import EvidenceDrain
+from .graph_merge import QwenMergeClassifier
 from .graph_service import GraphRagService
 from .graph_triggers import detect_trigger
 from .qwen_client import OllamaQwenClient, QwenUnavailable
@@ -47,7 +48,32 @@ def debug_qwen(settings: Settings, *, sample: str = "Classify a decision lookup 
             planner_timeout_seconds=min(settings.qwen_timeout_seconds, settings.qwen_planner_timeout_seconds),
             num_ctx=settings.qwen_num_ctx,
         ).plan_query(sample)
-        return {"ok": True, "model": settings.qwen_model, "elapsed_ms": _elapsed_ms(start), "plan": plan.as_dict()}
+        merge_start = time.monotonic()
+        merge_classifier: dict[str, Any]
+        try:
+            merge_result = QwenMergeClassifier(settings).classify(
+                {
+                    "id": "draft:debug",
+                    "kind": "Decision",
+                    "summary": "Use commit merge engine for central graph versioning.",
+                },
+                {
+                    "id": "central:debug",
+                    "kind": "Decision",
+                    "summary": "Use deterministic central graph versioning.",
+                },
+                {"total": 0.58, "same_kind": True},
+            )
+            merge_classifier = {"ok": True, "elapsed_ms": _elapsed_ms(merge_start), "result": merge_result}
+        except QwenUnavailable as exc:
+            merge_classifier = {"ok": False, "elapsed_ms": _elapsed_ms(merge_start), "error": str(exc)}
+        return {
+            "ok": True,
+            "model": settings.qwen_model,
+            "elapsed_ms": _elapsed_ms(start),
+            "plan": plan.as_dict(),
+            "merge_classifier": merge_classifier,
+        }
     except QwenUnavailable as exc:
         return {"ok": False, "model": settings.qwen_model, "elapsed_ms": _elapsed_ms(start), "error": str(exc)}
 

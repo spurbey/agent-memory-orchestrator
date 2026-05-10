@@ -332,6 +332,43 @@ class AmoHandler(BaseHTTPRequestHandler):
                     finally:
                         graph.close()
                 return
+            if self.path == "/graph/finalize-session":
+                with _GRAPH_LOCK:
+                    graph = GraphRagService(self.settings)
+                    try:
+                        limit = _bounded_int(str(payload.get("limit") or ""), default=500, minimum=1, maximum=5000)
+                        result = graph.finalize_session(
+                            session_id=str(payload.get("session_id") or ""),
+                            commit=str(payload.get("commit") or "HEAD"),
+                            apply=bool(payload.get("apply")),
+                            limit=limit,
+                            cwd=payload.get("cwd") or None,
+                        )
+                        self._write_json(200, result)
+                    finally:
+                        graph.close()
+                return
+            if self.path == "/graph/rebuild-central":
+                with _GRAPH_LOCK:
+                    graph = GraphRagService(self.settings)
+                    try:
+                        limit = _bounded_int(str(payload.get("limit") or ""), default=100000, minimum=1, maximum=500000)
+                        max_windows = payload.get("max_windows")
+                        bounded_windows = (
+                            _bounded_int(str(max_windows), default=self.settings.drain_max_windows_per_run, minimum=1, maximum=1000)
+                            if max_windows
+                            else None
+                        )
+                        result = graph.rebuild_central_from_evidence(
+                            apply=bool(payload.get("apply")),
+                            backup_current=bool(payload.get("backup_current")) or bool(payload.get("apply")),
+                            limit=limit,
+                            max_windows=bounded_windows,
+                        )
+                        self._write_json(200, result)
+                    finally:
+                        graph.close()
+                return
             svc = MemoryService(self.settings)
             try:
                 svc.init_db()
@@ -513,6 +550,11 @@ SESSION_COCKPIT_HTML = r"""<!doctype html>
       <h2>Cleaned Evidence Windows</h2>
       <div id="windows" class="stack"></div>
     </section>
+    <section class="card span-12">
+      <h2>Merge Preview</h2>
+      <div class="subtitle">Dry-run view of answer-grade draft nodes that would promote on graph-finalize-session, plus version edges that would be created.</div>
+      <div id="mergePreview" class="stack"></div>
+    </section>
     <section class="card span-6">
       <h2>Session Graph</h2>
       <div id="sessionGraphStats" class="small muted"></div>
@@ -591,6 +633,7 @@ SESSION_COCKPIT_HTML = r"""<!doctype html>
       renderContext(data.current_context || {});
       renderTimeline(data.timeline || []);
       renderWindows(data.windows || []);
+      renderMergePreview(data.merge_preview || {});
       renderGraph("sessionGraph", "sessionGraphStats", "sessionGraphList", data.graph || {});
       renderGraph("centralGraph", "centralStats", "centralList", data.central_graph || {});
     }
@@ -632,6 +675,25 @@ SESSION_COCKPIT_HTML = r"""<!doctype html>
           <details><summary>Graph nodes created from this window (${(row.graph_nodes || []).length})</summary><pre>${esc(pretty(row.graph_nodes || []))}</pre></details>
         </div>
       `).join("") : `<div class="muted">No trigger windows reconstructed yet.</div>`;
+    }
+
+    function renderMergePreview(plan) {
+      const promotions = plan.planned_promotions || [];
+      const relations = plan.relations || [];
+      const review = plan.review_candidates || [];
+      document.getElementById("mergePreview").innerHTML = `
+        <div class="row">
+          <span class="pill">commit ${esc(short(plan.commit_id || "HEAD", 18))}</span>
+          <span class="pill">${esc(promotions.length)} promotions</span>
+          <span class="pill">${esc(relations.length)} version edges</span>
+          <span class="pill ${review.length ? "warn" : "good"}">${esc(review.length)} review candidates</span>
+        </div>
+        <div class="grid">
+          <div class="span-4"><div class="label">Promote</div><pre>${esc(pretty(promotions))}</pre></div>
+          <div class="span-4"><div class="label">Version Edges</div><pre>${esc(pretty(relations))}</pre></div>
+          <div class="span-4"><div class="label">Skipped Support / Review</div><pre>${esc(pretty({skipped: plan.skipped || [], review_candidates: review}))}</pre></div>
+        </div>
+      `;
     }
 
     function renderGraph(svgId, statsId, listId, graph) {

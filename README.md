@@ -336,6 +336,15 @@ amo-cli graph-drain --limit 100 --max-windows 1
 
 The default `drain_max_windows_per_run` is `3`; increase only when Qwen is warm and fast.
 
+Finalize a session into central committed graph memory:
+
+```bash
+amo-cli graph-finalize-session --session-id SESSION_ID --commit HEAD
+amo-cli graph-finalize-session --session-id SESSION_ID --commit HEAD --apply
+```
+
+The first command is a dry run. It shows which answer-grade draft nodes would promote and which version edges would be written. The apply command promotes only `Decision`, `WorkChange`, `Fix`, `Bug`, `Blocker`, `TestRun`, and selected `ContextSnapshot` nodes. Raw evidence, cleaned windows, graph deltas, sessions, repos, branches, files, and topics remain support/provenance nodes.
+
 If an early drain promoted raw hook/install/test payloads into draft answer nodes, quarantine them without deleting evidence:
 
 ```bash
@@ -360,6 +369,15 @@ amo-cli graph-rebuild-cache --limit 5000
 ```
 
 The cache is derived from answer-grade Kuzu nodes. Kuzu remains the source of truth; deleting the cache only makes retrieval slower until the next rebuild.
+
+Rebuild the central Kuzu graph from raw evidence when the graph needs a clean replay:
+
+```bash
+amo-cli graph-rebuild-central --from-evidence --backup-current
+amo-cli graph-rebuild-central --from-evidence --backup-current --apply
+```
+
+The dry run reports evidence roots, target rebuild path, and backup path. Apply drains raw evidence through the current cleaning/extraction gates, finalizes detected commit windows, consolidates clusters/version edges, smoke-checks the rebuilt graph, backs up the old graph, swaps the rebuilt graph into place, and rebuilds the cache.
 
 Import recent Codex sessions as a local memory dataset:
 
