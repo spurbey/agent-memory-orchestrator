@@ -8,7 +8,7 @@ This repository is organized as a local-first Python package plus a small npm in
 agent-memory-orchestrator/
   src/agent_memory_orchestrator/
     app/              # CLI, daemon routes, HTTP helpers
-    config/           # settings, env, path resolution
+    core/             # settings, database schema, data models, privacy helpers
     evidence/         # raw evidence, drain cursors, clean windows, triggers
     graph/            # Kuzu store, graph service, merge, cache, consolidation
     retrieval/        # lexical/vector/rerank/context-pack retrieval
@@ -18,7 +18,6 @@ agent-memory-orchestrator/
     install/          # hook/MCP installer logic
     orchestration/    # multi-agent review workflow
     versioning/       # Git/work-ledger integration
-    privacy/          # redaction and cleaning policy
     web/              # packaged daemon web assets
   tests/              # mirrors package areas where practical
   docs/               # architecture, runbooks, development docs
@@ -28,7 +27,7 @@ agent-memory-orchestrator/
 
 ## Current Migration Policy
 
-- Already extracted packages: `app/`, `evidence/`, `graph/`, `install/`, `integrations/`, `llm/`, `mcp/`, `memory/`, `orchestration/`, `retrieval/`, `versioning/`.
+- Already extracted packages: `app/`, `core/`, `evidence/`, `graph/`, `install/`, `integrations/`, `llm/`, `mcp/`, `memory/`, `orchestration/`, `retrieval/`, `versioning/`.
 - Move one bounded subsystem per commit.
 - Keep compatibility shims at old import paths until a minor release boundary.
 - Run `ruff check src tests` and `python -m pytest -q` after each move.

@@ -72,37 +72,40 @@ Canonical docs:
 
 ### One-command install (npx style)
 
-Install the Python runtime, write local AMO config, register Claude/Codex hooks + MCP, and initialize local stores:
+Install prerequisites first:
 
 ```bash
-npx agent-memory-orchestrator-cli install
+python --version   # 3.10+
+node --version     # 18+
+ollama pull qwen3:0.6b
 ```
 
-Target one agent if preferred:
+Then install the Python runtime, write local AMO config, register Codex hooks + MCP, and initialize local stores:
 
 ```bash
-npx agent-memory-orchestrator-cli install --target codex
-npx agent-memory-orchestrator-cli install --target claude
+npx agent-memory-orchestrator-cli install --target codex --preset cpu-light --qwen-model qwen3:0.6b
 ```
 
-Select local model profile during install:
+Install for Claude + Codex when both apps are used:
 
 ```bash
-npx agent-memory-orchestrator-cli install --preset cpu-balanced --download-models
+npx agent-memory-orchestrator-cli install --target all --preset cpu-light --qwen-model qwen3:0.6b
 ```
 
-The installer previews changes and backs up agent config files before writing. It configures capture-only hooks to call `amo-hook` and MCP to call `amo-mcp` through the selected AMO home directory.
+The installer uses `pipx`, creates `~/.agent-memory-orchestrator`, previews changes unless `--yes` is passed, backs up agent config files, and configures capture-only hooks plus MCP through the selected AMO home directory.
 
-Kuzu is embedded; no Neo4j/Docker/server process is required. Qwen runs through local Ollama:
+Optional runtimes are explicit:
 
 ```bash
-ollama pull qwen3:1.7b
+npx agent-memory-orchestrator-cli install --with-models --download-models --target codex --preset cpu-light --qwen-model qwen3:0.6b
+npx agent-memory-orchestrator-cli install --with-slack --target codex --preset cpu-light --qwen-model qwen3:0.6b
 ```
 
 Diagnostics:
 
 ```bash
-amo-cli doctor
+amo-cli doctor --target codex
+amo-cli debug qwen --sample "what changed in this session?"
 ```
 
 ### 1) Create environment
@@ -148,7 +151,7 @@ Graph visualization:
 http://127.0.0.1:8765/graph
 ```
 
-The legacy graph view still renders the old SQLite KG/debug data. The new Kuzu-backed graph APIs are exposed through MCP/daemon endpoints and will replace this UI surface.
+The graph view renders the local Kuzu graph and lets users inspect session evidence, cleaned windows, draft graph nodes, merge status, and central graph relationships.
 
 MCP server (stdio):
 
@@ -247,8 +250,8 @@ python -m agent_memory_orchestrator.cli slack setup `
 Install the optional WebSocket runtime and run the connector:
 
 ```powershell
-pip install -e ".[slack]"
-python -m agent_memory_orchestrator.cli slack run --reply-mode disabled
+npx agent-memory-orchestrator-cli install --with-slack --target codex --preset cpu-light --qwen-model qwen3:0.6b
+amo-cli slack run --reply-mode disabled
 ```
 
 Finalize a Slack session and drain it into the graph:
@@ -463,11 +466,13 @@ Qwen preset defaults:
 - `cpu-balanced`: `qwen3:1.7b`
 - `gpu-quality`: `qwen3:8b`
 
-If `qwen3:1.7b` cannot load on a very constrained machine, install with an explicit smaller override:
+For the smoothest first install on constrained machines, use the smaller smoke model:
 
 ```bash
-amo-cli install --target codex --preset cpu-light --qwen-model qwen3:0.6b --yes
+npx agent-memory-orchestrator-cli install --target codex --preset cpu-light --qwen-model qwen3:0.6b
 ```
+
+Move to `qwen3:1.7b` or larger once local Qwen diagnostics pass reliably.
 
 List hardware-oriented presets:
 
@@ -549,11 +554,7 @@ npm pack --dry-run
 
 ## Roadmap
 
-- Install optional local model backends:
-  - `pip install -e ".[models]"`
-  - defaults target `BAAI/bge-m3` and `BAAI/bge-reranker-base`
-  - if unavailable, deterministic hash/lexical fallbacks keep tests and offline operation working
-- Harden local model packaging and first-run model preflight UX.
+- Expand first-run model preflight UX after the low-resource `qwen3:0.6b` install path is validated across more machines.
 - Expand retrieval eval fixtures from real sessions before enabling broader auto-injection.
 - Add Phase 2 Git-like Work Ledger for AI-produced code changes.
 - Add app connectors and the private agent hub after the personal memory engine is stable.
