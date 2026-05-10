@@ -1,5 +1,5 @@
 from __future__ import annotations
 
-from .app.client import DaemonClient, DaemonUnavailable
+from .client import DaemonClient, DaemonUnavailable
 
 __all__ = ["DaemonClient", "DaemonUnavailable"]

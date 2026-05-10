@@ -31,9 +31,9 @@ slack = [
 ]
 
 [project.scripts]
-amo-cli = "agent_memory_orchestrator.cli:main"
+amo-cli = "agent_memory_orchestrator.app.cli:main"
 amo-mcp = "agent_memory_orchestrator.mcp_server:main"
-amo-daemon = "agent_memory_orchestrator.daemon:main"
+amo-daemon = "agent_memory_orchestrator.app.daemon:main"
 amo-hook = "agent_memory_orchestrator.hook:main"
 
 [tool.setuptools]

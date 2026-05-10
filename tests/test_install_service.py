@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from agent_memory_orchestrator.cli import main
+from agent_memory_orchestrator.app.cli import main
 from agent_memory_orchestrator.config import Settings
 from agent_memory_orchestrator.install_service import InstallOptions
 from agent_memory_orchestrator.install_service import apply_install_plan
