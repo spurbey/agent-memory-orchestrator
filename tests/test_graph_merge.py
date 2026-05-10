@@ -172,3 +172,53 @@ def test_commit_merge_supersedes_old_central_node_without_deleting_it(tmp_path: 
     assert store.nodes["decision:old"].status == "superseded"
     assert "decision:old" in store.nodes
     assert "edge:decision:s1:replace:SUPERSEDES:decision:old" in store.edges
+
+
+def test_commit_merge_skips_command_and_snippet_noise(tmp_path: Path) -> None:
+    store = InMemoryGraphStore()
+    noisy_rows = [
+        ("work:s1:git", "WorkChange", "Git command executed: git status --short"),
+        ("decision:s1:patch", "Decision", "Apply patch"),
+        ("test:s1:passed", "TestRun", 'test_run "all checks passed!", "all checks passed!",'),
+        (
+            "work:s1:passed-edit",
+            "WorkChange",
+            '"all checks passed!",; except OSError: Code edit applied to: src/agent_memory_orchestrator/evidence_window.py',
+        ),
+        (
+            "bug:s1:snippet",
+            "Bug",
+            'work_note timings["compression_ms"] = _elapsed_ms(compression_started) | qwen_status["compression_fallback"] = True',
+        ),
+    ]
+    for node_id, kind, summary in noisy_rows:
+        store.upsert_node(
+            GraphNode(
+                id=node_id,
+                kind=kind,
+                label=summary[:120],
+                summary=summary,
+                status="draft",
+                scope="session",
+                session_id="s1",
+                evidence_id="raw-noise",
+            )
+        )
+    store.upsert_node(
+        GraphNode(
+            id="decision:s1:durable",
+            kind="Decision",
+            label="Use commit merge finalization for central graph versioning",
+            summary="Use commit merge finalization for central graph versioning with non-destructive version edges.",
+            status="draft",
+            scope="session",
+            session_id="s1",
+            evidence_id="raw-good",
+        )
+    )
+    engine = CommitMergeEngine(make_settings(tmp_path), store, _StaticVersionBackend())
+
+    result = engine.finalize_session(session_id="s1", commit="HEAD", apply=False)
+
+    assert [node["id"] for node in result["planned_promotions"]] == ["decision:s1:durable"]
+    assert result["skipped_answer_count"] == 5
