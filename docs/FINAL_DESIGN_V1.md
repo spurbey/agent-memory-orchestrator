@@ -64,9 +64,9 @@ Out of scope for this phase:
 - Delegates GraphRAG calls to daemon by default.
 - If daemon is down, returns `requires_daemon=true` instead of opening Kuzu directly.
 
-4. Legacy SQLite pipeline
-- Remains available for compatibility/debugging.
-- Does not power capture hooks or new GraphRAG retrieval.
+4. Hybrid SQLite memory pipeline
+- Remains available as a BM25/vector/KG retrieval source.
+- Does not power capture hooks or automatic prompt injection.
 
 ## 5) Graph Model
 
@@ -145,7 +145,7 @@ GraphRAG tools:
 - `amo_raw_evidence`
 - `amo_merge_status`
 
-Legacy compatibility tools:
+Hybrid memory compatibility tools:
 
 - `memory_write`
 - `memory_search`

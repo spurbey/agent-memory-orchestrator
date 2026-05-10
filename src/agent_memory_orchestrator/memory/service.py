@@ -11,7 +11,7 @@ from uuid import uuid4
 from ..chunker import chunk_text
 from ..cleaning import clean_event_text
 from ..config import Settings
-from ..context_pack import build_context_pack_payload
+from ..retrieval import build_context_pack_payload
 from ..db import connect, init_schema
 from ..extraction import extract_memory_candidates, extract_tags, make_topic_key
 from ..integrations.adapters import infer_codex_session, normalize_adapter_event

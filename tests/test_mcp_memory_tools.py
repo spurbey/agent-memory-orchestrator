@@ -65,7 +65,7 @@ def test_mcp_memory_tool_contracts_are_explicit(tmp_path) -> None:
         svc.close()
 
 
-def test_mcp_graph_tools_are_explicit_and_do_not_use_legacy_context_pack(tmp_path) -> None:
+def test_mcp_graph_tools_are_explicit_and_do_not_use_hybrid_context_pack_injection(tmp_path) -> None:
     settings = make_settings(tmp_path)
     store = InMemoryGraphStore()
     store.upsert_node(
@@ -73,7 +73,7 @@ def test_mcp_graph_tools_are_explicit_and_do_not_use_legacy_context_pack(tmp_pat
             id="decision:mcp-graph-tools",
             kind="Decision",
             label="Explicit MCP GraphRAG tools",
-            summary="Use Kuzu GraphRAG through explicit MCP tools, not legacy context-pack injection.",
+            summary="Use Kuzu GraphRAG through explicit MCP tools, not hybrid context-pack injection.",
             status="committed",
             scope="central",
             source_app="codex",

@@ -6,7 +6,7 @@ Baseline design: `docs/FINAL_DESIGN_V1.md`
 ## Phase Status
 
 - Phase 0: Repo bootstrap - Completed
-- Phase 1: Legacy SQLite memory engine - Compatibility-only
+- Phase 1: Hybrid SQLite memory engine - Implemented as a separate retrieval source
 - Phase 2: MCP memory server - Implemented; GraphRAG tools delegate to daemon
 - Phase 3: Orchestrator workflow - Pending
 - Phase 4: Adapters (Claude/Codex/Omnara) - Implemented
@@ -223,7 +223,7 @@ Acceptance:
 - Qwen extraction falls back deterministically when Ollama is unavailable; production installs should treat Qwen availability as required and monitor debug latency.
 - Central graph reclustering/consolidation has a deterministic foundation and now runs after finalize/rebuild; deeper graph-derived vector cache evaluation is still pending.
 - Qwen merge classification is wired for ambiguous relations; broader eval fixtures and model-latency budgets still need expansion.
-- Legacy SQLite tools remain present and can confuse operators if docs/CLI labels are ignored.
+- Hybrid SQLite tools remain present and can confuse operators if docs/CLI labels imply they are the GraphRAG path.
 
 ## Change Control
 

@@ -17,7 +17,7 @@ When you run many parallel AI sessions, context gets fragmented and lost. This p
 - Per-session draft graph linked to repo, branch, prompts, responses, tool events, and raw evidence.
 - Local Git backend links work graph nodes to commits.
 - Qwen via Ollama is the required local LLM runtime for GraphRAG planning, extraction, merging, and context compression.
-- Legacy SQLite memory pipeline remains available for compatibility/debugging, but is not the new hook or GraphRAG path.
+- Hybrid SQLite/BM25/vector memory pipeline remains available as a separate retrieval source, but is not the hook hot path.
 - Local MCP server tools:
   - `amo_graph_search`
   - `amo_current_context`
@@ -25,12 +25,12 @@ When you run many parallel AI sessions, context gets fragmented and lost. This p
   - `amo_work_history`
   - `amo_raw_evidence`
   - `amo_merge_status`
-  - legacy: `memory_write`
-  - legacy: `memory_search`
-  - legacy: `memory_context_pack`
-  - legacy: `memory_timeline`
-  - legacy: `memory_export`
-  - legacy: `memory_import`
+  - hybrid memory: `memory_write`
+  - hybrid memory: `memory_search`
+  - hybrid memory: `memory_context_pack`
+  - hybrid memory: `memory_timeline`
+  - hybrid memory: `memory_export`
+  - hybrid memory: `memory_import`
 - Orchestrator state machine:
   - `draft -> review -> revise (loop) -> ready_for_user -> approved/rejected`
 - Transcript ingestion adapters for Claude/Codex JSONL.
@@ -38,9 +38,9 @@ When you run many parallel AI sessions, context gets fragmented and lost. This p
 - Modular adapter layer for Codex, Claude, and optional non-authoritative Omnara visibility events.
 - Export pipeline for backup and audit (JSONL snapshots).
 
-## Legacy SQLite tools
+## Hybrid SQLite Memory Tools
 
-The original Phase 1 memory tools are still present for compatibility:
+The SQLite/BM25/vector memory-unit tools are still present as a hybrid retrieval source:
 
   - `memory_write`
   - `memory_search`
@@ -49,7 +49,7 @@ The original Phase 1 memory tools are still present for compatibility:
   - `memory_export`
   - `memory_import`
 
-They should not power automatic prompt injection in the new architecture.
+They should not power automatic prompt injection. GraphRAG retrieval remains explicit, and future fusion should combine graph and hybrid candidates deliberately.
 
 ## Architecture (high level)
 
@@ -286,7 +286,7 @@ amo-hook --agent codex --file ./sample/codex-hook.json
 amo-cli ingest-hook --agent claude --file ./sample/claude-hook.json
 ```
 
-Legacy inspect/rebuild:
+Hybrid memory inspect/rebuild:
 
 ```bash
 amo-cli metrics
@@ -296,7 +296,7 @@ amo-cli search --query "why did retry logic change" --include-historical
 amo-cli context-pack --query "why did retry logic change" --format text
 ```
 
-Do not use legacy context-pack as automatic hook injection in the Kuzu architecture. Use explicit MCP GraphRAG tools instead:
+Do not use hybrid context-pack as automatic hook injection in the Kuzu architecture. Use explicit MCP GraphRAG tools instead:
 
 ```bash
 amo-cli graph-search --query "why did retry logic change"
