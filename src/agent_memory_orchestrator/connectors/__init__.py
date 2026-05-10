@@ -1,5 +1,3 @@
 from __future__ import annotations
 
-from .base import ConnectorEvent
-
-__all__ = ["ConnectorEvent"]
+from ..integrations.connectors import *  # noqa: F403

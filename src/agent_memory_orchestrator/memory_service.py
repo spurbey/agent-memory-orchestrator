@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
 
-from .adapters import infer_codex_session, normalize_adapter_event
+from .integrations.adapters import infer_codex_session, normalize_adapter_event
 from .chunker import chunk_text
 from .cleaning import clean_event_text
 from .config import Settings

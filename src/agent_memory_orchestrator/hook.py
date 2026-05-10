@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from .adapters import normalize_adapter_event
+from .integrations.adapters import normalize_adapter_event
 from .config import Settings
 from .evidence.raw_store import RawEvidenceRef
 from .evidence.raw_store import RawEvidenceStore

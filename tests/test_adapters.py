@@ -3,9 +3,16 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from agent_memory_orchestrator.adapters import infer_codex_session, normalize_adapter_event
+from agent_memory_orchestrator.integrations.adapters import infer_codex_session, normalize_adapter_event
 from agent_memory_orchestrator.config import Settings
 from agent_memory_orchestrator.memory_service import MemoryService
+
+
+def test_legacy_adapters_package_keeps_public_exports() -> None:
+    from agent_memory_orchestrator import adapters as legacy_adapters
+
+    assert legacy_adapters.normalize_adapter_event is normalize_adapter_event
+    assert legacy_adapters.infer_codex_session is infer_codex_session
 
 
 def make_settings(tmp_path: Path) -> Settings:
