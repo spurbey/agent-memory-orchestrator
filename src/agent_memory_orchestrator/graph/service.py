@@ -9,7 +9,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from ..adapters import normalize_adapter_event
+from ..integrations.adapters import normalize_adapter_event
 from ..config import Settings
 from ..evidence.drain import EvidenceDrain
 from ..evidence.drain import _read_jsonl_from

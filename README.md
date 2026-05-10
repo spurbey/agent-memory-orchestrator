@@ -427,7 +427,7 @@ The legacy `agent_memory_orchestrator.mcp_server` and `agent_memory_orchestrator
 Provider/app payloads are normalized before storage through:
 
 ```text
-agent_memory_orchestrator.adapters
+agent_memory_orchestrator.integrations.adapters
 ```
 
 Implemented adapters:

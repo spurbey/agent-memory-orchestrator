@@ -8,11 +8,11 @@ from dataclasses import replace
 from pathlib import Path
 
 from ..config import Settings
-from ..connectors.slack import SlackConnectorService
-from ..connectors.slack.manifest import slack_manifest_json, slack_manifest_setup_url
-from ..connectors.slack.service import load_event_file
-from ..connectors.slack.socket_mode import SlackSocketModeRunner
-from ..connectors.slack.wizard import run_slack_setup_wizard
+from ..integrations.connectors.slack import SlackConnectorService
+from ..integrations.connectors.slack.manifest import slack_manifest_json, slack_manifest_setup_url
+from ..integrations.connectors.slack.service import load_event_file
+from ..integrations.connectors.slack.socket_mode import SlackSocketModeRunner
+from ..integrations.connectors.slack.wizard import run_slack_setup_wizard
 from ..graph.diagnostics import debug_hooks, debug_qwen
 from ..graph.service import GraphRagService
 from ..graph.store import GraphBackendUnavailable
