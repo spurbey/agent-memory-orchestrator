@@ -3,9 +3,9 @@ from __future__ import annotations
 from pathlib import Path
 
 from agent_memory_orchestrator.config import Settings
-from agent_memory_orchestrator.graph_cache import GraphSearchCache
-from agent_memory_orchestrator.graph_service import GraphRagService
-from agent_memory_orchestrator.graph_store import GraphNode, InMemoryGraphStore
+from agent_memory_orchestrator.graph.cache import GraphSearchCache
+from agent_memory_orchestrator.graph.service import GraphRagService
+from agent_memory_orchestrator.graph.store import GraphNode, InMemoryGraphStore
 from agent_memory_orchestrator.qwen_client import DeterministicPlanner
 from agent_memory_orchestrator.versioning import GitSnapshot
 

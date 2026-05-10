@@ -6,8 +6,8 @@ from pathlib import Path
 import pytest
 
 from agent_memory_orchestrator.config import Settings
-from agent_memory_orchestrator.graph_service import GraphRagService
-from agent_memory_orchestrator.graph_store import GraphNode, InMemoryGraphStore
+from agent_memory_orchestrator.graph.service import GraphRagService
+from agent_memory_orchestrator.graph.store import GraphNode, InMemoryGraphStore
 from agent_memory_orchestrator.mcp_memory_tools import MCP_MEMORY_TOOL_CONTRACTS, MemoryMcpToolService
 from agent_memory_orchestrator.qwen_client import DeterministicPlanner
 

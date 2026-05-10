@@ -10,9 +10,9 @@ from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 from .config import Settings
-from .graph_diagnostics import debug_drain, debug_graph, debug_hooks, debug_qwen
-from .graph_service import GraphRagService
-from .graph_store import GraphBackendUnavailable
+from .graph.diagnostics import debug_drain, debug_graph, debug_hooks, debug_qwen
+from .graph.service import GraphRagService
+from .graph.store import GraphBackendUnavailable
 from .memory_service import MemoryService
 from .qwen_client import QwenUnavailable
 

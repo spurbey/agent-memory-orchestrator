@@ -14,9 +14,9 @@ from .connectors.slack.service import load_event_file
 from .connectors.slack.socket_mode import SlackSocketModeRunner
 from .connectors.slack.wizard import run_slack_setup_wizard
 from .daemon_client import DaemonClient, DaemonUnavailable
-from .graph_diagnostics import debug_hooks, debug_qwen
-from .graph_service import GraphRagService
-from .graph_store import GraphBackendUnavailable
+from .graph.diagnostics import debug_hooks, debug_qwen
+from .graph.service import GraphRagService
+from .graph.store import GraphBackendUnavailable
 from .install_service import InstallOptions
 from .install_service import apply_install_plan
 from .install_service import build_install_plan

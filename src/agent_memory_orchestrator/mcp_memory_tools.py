@@ -6,8 +6,8 @@ from typing import Any
 
 from .config import Settings
 from .daemon_client import DaemonClient, DaemonUnavailable
-from .graph_service import GraphRagService
-from .graph_store import GraphBackendUnavailable
+from .graph.service import GraphRagService
+from .graph.store import GraphBackendUnavailable
 from .memory_service import MemoryService
 from .qwen_client import QwenUnavailable
 
