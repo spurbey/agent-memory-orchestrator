@@ -46,7 +46,7 @@ def produced_change_edges(
     edges: list[ReasoningEdge] = []
     for decision in decisions:
         for code_node in code_nodes:
-            if thread_files and _norm(code_node.file_path) not in thread_files:
+            if thread_files and not any(_same_path(path, code_node.file_path) for path in thread_files):
                 continue
             evidence_ids = _dedupe((*decision.evidence_ids, *code_node.evidence_ids))
             edges.append(
@@ -108,7 +108,13 @@ def validation_edges_for_test(
 
 
 def _norm(value: str) -> str:
-    return value.replace("\\", "/").strip().lower()
+    return value.replace("\\", "/").strip().strip('"').lower()
+
+
+def _same_path(left: str, right: str) -> bool:
+    left_norm = _norm(left)
+    right_norm = _norm(right)
+    return left_norm == right_norm or left_norm.endswith(f"/{right_norm}") or right_norm.endswith(f"/{left_norm}")
 
 
 def _dedupe(values: tuple[str, ...]) -> tuple[str, ...]:

@@ -762,6 +762,29 @@ def test_produced_change_edges_link_decision_to_code_by_thread_file() -> None:
     assert edges[0].evidence_ids == ("raw-decision", "raw1")
 
 
+def test_produced_change_edges_match_repo_prefixed_thread_paths() -> None:
+    decision = DecisionUnit(
+        id="decision:s1:repo-prefixed",
+        session_id="s1",
+        extraction_run_id="run1",
+        summary="Fixed installer hook",
+        evidence_ids=("raw-decision",),
+        kind="Fix",
+    )
+    code = _code_node("code:s1:repo-relative", "def hook(): pass")
+    thread = _thread(
+        "thread-repo-prefixed",
+        "install service hook",
+        files=("agent-memory-orchestrator/src/agent_memory_orchestrator/install_service.py",),
+    )
+
+    edges = produced_change_edges(decisions=[decision], code_nodes=[code], thread=thread)
+
+    assert len(edges) == 1
+    assert edges[0].kind == "PRODUCED_CHANGE_IN"
+    assert edges[0].target_id == code.id
+
+
 def test_passing_test_after_write_creates_validated_by_and_bumps_once() -> None:
     decision = DecisionUnit(
         id="decision:s1:1",
