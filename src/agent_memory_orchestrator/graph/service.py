@@ -30,6 +30,23 @@ CAPTURE_ONLY_EVENTS = {"user_prompt_submit", "prompt", "post_tool_use", "tool_re
 EVIDENCE_ONLY_KINDS = {"RawEvidenceRef", "Prompt", "ToolUse", "ToolResult", "Turn", "Session", "App", "Repo", "Branch"}
 SUPPORT_ONLY_KINDS = {"File", "Symbol", "Topic", "CleanedEvidenceWindow", "GraphDelta"}
 ANSWER_SEED_KINDS = ["ContextSnapshot", "WorkChange", "Decision", "Fix", "Bug", "Blocker", "TestRun", "GitCommit"]
+VERSION_FLOW_EDGE_KINDS = {
+    "COMMITTED_AS",
+    "REFINES",
+    "SUPERSEDES",
+    "DUPLICATE_OF",
+    "CONTRADICTS",
+    "VALIDATED_BY",
+    "MODIFIES",
+    "MERGED_INTO",
+    "EVIDENCED_BY",
+    "CLEANED_INTO",
+    "EXTRACTED_AS",
+    "CREATED",
+    "PRODUCED",
+    "HAS_WINDOW",
+}
+VERSION_RELATION_EDGE_KINDS = {"REFINES", "SUPERSEDES", "DUPLICATE_OF", "CONTRADICTS"}
 
 
 class GraphRagService:
@@ -557,6 +574,55 @@ class GraphRagService:
             "edges": central_edges[: safe_limit * 4],
             "status": self.merge_status(),
             "warnings": _central_graph_warnings(nodes, central_edges),
+        }
+
+    def version_flow(self, *, commit: str = "", session_id: str = "", limit: int = 100) -> dict[str, Any]:
+        """Return commit-centric provenance and versioning flow for the web UI.
+
+        This is intentionally graph-derived. It does not infer from raw logs;
+        it shows what AMO has actually promoted into central graph memory.
+        """
+
+        safe_limit = max(1, min(500, int(limit)))
+        node_limit = max(1000, safe_limit * 16)
+        edge_limit = max(2000, safe_limit * 32)
+        nodes = [_sanitize_output_node(node) for node in self.store.list_nodes(limit=node_limit)]
+        edges = self.store.list_edges(limit=edge_limit)
+        node_by_id = {str(node.get("id") or ""): node for node in nodes}
+        commit_nodes = [
+            node
+            for node in nodes
+            if str(node.get("kind") or "") == "GitCommit"
+            and _matches_version_flow_filter(node, commit=commit, session_id=session_id)
+        ][:safe_limit]
+        if commit and not commit_nodes:
+            commit_nodes = [
+                node
+                for node in nodes
+                if str(node.get("kind") or "") == "GitCommit" and _matches_commit(node, commit)
+            ][:safe_limit]
+
+        flows = [
+            _build_version_flow(commit_node=commit_node, nodes=nodes, edges=edges, node_by_id=node_by_id)
+            for commit_node in commit_nodes
+        ]
+        visible_node_ids: set[str] = set()
+        visible_edge_ids: set[str] = set()
+        for flow in flows:
+            visible_node_ids.update(str(node.get("id") or "") for node in flow.get("nodes", []))
+            visible_edge_ids.update(str(edge.get("id") or "") for edge in flow.get("edges", []))
+
+        visible_nodes = [node for node in nodes if str(node.get("id") or "") in visible_node_ids]
+        visible_edges = [edge for edge in edges if str(edge.get("id") or "") in visible_edge_ids]
+        return {
+            "ok": True,
+            "commit": commit,
+            "session_id": session_id,
+            "count": len(flows),
+            "flows": flows,
+            "nodes": visible_nodes,
+            "edges": visible_edges,
+            "warnings": _version_flow_warnings(flows),
         }
 
     def cleanup_noisy_drafts(self, *, limit: int = 500, apply: bool = False) -> dict[str, Any]:
@@ -1232,6 +1298,190 @@ def _nodes_for_evidence(nodes: list[dict[str, Any]], evidence_ids: list[str]) ->
         if evidence_set.intersection(node_evidence):
             matched.append(node)
     return matched[:25]
+
+
+def _matches_version_flow_filter(node: dict[str, Any], *, commit: str, session_id: str) -> bool:
+    if session_id and str(node.get("session_id") or "") != session_id:
+        return False
+    if commit and commit.upper() != "HEAD" and not _matches_commit(node, commit):
+        return False
+    return True
+
+
+def _matches_commit(node: dict[str, Any], commit: str) -> bool:
+    needle = str(commit or "").strip().lower()
+    if not needle:
+        return True
+    values = [
+        str(node.get("id") or ""),
+        str(node.get("label") or ""),
+        str(node.get("commit_id") or ""),
+    ]
+    meta = node.get("metadata") if isinstance(node.get("metadata"), dict) else {}
+    commit_meta = meta.get("commit") if isinstance(meta.get("commit"), dict) else {}
+    values.append(str(commit_meta.get("commit") or ""))
+    return any(value.lower().startswith(needle) or needle in value.lower() for value in values if value)
+
+
+def _build_version_flow(
+    *,
+    commit_node: dict[str, Any],
+    nodes: list[dict[str, Any]],
+    edges: list[dict[str, Any]],
+    node_by_id: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    commit_node_id = str(commit_node.get("id") or "")
+    commit_id = str(commit_node.get("commit_id") or "")
+    related_edges = [
+        edge
+        for edge in edges
+        if edge.get("kind") in VERSION_FLOW_EDGE_KINDS
+        and _edge_mentions_commit(edge, commit_node_id=commit_node_id, commit_id=commit_id)
+    ]
+    work_ids = {
+        str(edge.get("source_id") or "")
+        for edge in related_edges
+        if edge.get("kind") == "COMMITTED_AS" and str(edge.get("target_id") or "") == commit_node_id
+    }
+    work_ids.update(
+        str(node.get("id") or "")
+        for node in nodes
+        if str(node.get("commit_id") or "") == commit_id and str(node.get("kind") or "") in ANSWER_SEED_KINDS
+    )
+    work_ids.discard(commit_node_id)
+
+    flow_edge_ids = {str(edge.get("id") or "") for edge in related_edges}
+    frontier = set(work_ids) | {commit_node_id}
+    for edge in edges:
+        kind = str(edge.get("kind") or "")
+        source = str(edge.get("source_id") or "")
+        target = str(edge.get("target_id") or "")
+        if kind not in VERSION_FLOW_EDGE_KINDS:
+            continue
+        if source in frontier or target in frontier:
+            flow_edge_ids.add(str(edge.get("id") or ""))
+            if kind in {"MODIFIES", "VALIDATED_BY", *VERSION_RELATION_EDGE_KINDS, "MERGED_INTO"}:
+                frontier.update([source, target])
+
+    flow_edges = [edge for edge in edges if str(edge.get("id") or "") in flow_edge_ids]
+    flow_node_ids = {commit_node_id}
+    for edge in flow_edges:
+        flow_node_ids.add(str(edge.get("source_id") or ""))
+        flow_node_ids.add(str(edge.get("target_id") or ""))
+    flow_node_ids.update(work_ids)
+    flow_nodes = [node_by_id[node_id] for node_id in flow_node_ids if node_id in node_by_id]
+    work_nodes = [node_by_id[node_id] for node_id in work_ids if node_id in node_by_id]
+    files = _flow_nodes_for_edges(flow_edges, node_by_id, kind="MODIFIES", endpoint="target")
+    tests = _flow_nodes_for_edges(flow_edges, node_by_id, kind="VALIDATED_BY", endpoint="source")
+    evidence_ids = sorted(
+        {
+            str(value)
+            for value in [
+                commit_node.get("evidence_id"),
+                *(node.get("evidence_id") for node in work_nodes),
+                *(edge.get("evidence_id") for edge in flow_edges),
+            ]
+            if value
+        }
+    )
+    version_edges = [
+        edge
+        for edge in flow_edges
+        if _is_version_relation_edge(edge) and _has_durable_relation_endpoints(edge, node_by_id)
+    ]
+    return {
+        "commit_node": commit_node,
+        "commit_id": commit_id,
+        "summary": _version_flow_summary(commit_node, work_nodes, files),
+        "counts": {
+            "work_nodes": len(work_nodes),
+            "files": len(files),
+            "tests": len(tests),
+            "version_edges": len(version_edges),
+            "evidence_refs": len(evidence_ids),
+        },
+        "work_nodes": work_nodes,
+        "files": files,
+        "tests": tests,
+        "evidence_ids": evidence_ids,
+        "version_edges": version_edges,
+        "edges": flow_edges,
+        "nodes": flow_nodes,
+    }
+
+
+def _edge_mentions_commit(edge: dict[str, Any], *, commit_node_id: str, commit_id: str) -> bool:
+    if str(edge.get("source_id") or "") == commit_node_id or str(edge.get("target_id") or "") == commit_node_id:
+        return True
+    metadata = edge.get("metadata") if isinstance(edge.get("metadata"), dict) else {}
+    edge_commit = str(metadata.get("commit_id") or metadata.get("commit") or "")
+    return bool(commit_id and edge_commit == commit_id)
+
+
+def _flow_nodes_for_edges(
+    edges: list[dict[str, Any]],
+    node_by_id: dict[str, dict[str, Any]],
+    *,
+    kind: str,
+    endpoint: str,
+) -> list[dict[str, Any]]:
+    seen: set[str] = set()
+    rows: list[dict[str, Any]] = []
+    for edge in edges:
+        if str(edge.get("kind") or "") != kind:
+            continue
+        node_id = str(edge.get("target_id" if endpoint == "target" else "source_id") or "")
+        if node_id in seen or node_id not in node_by_id:
+            continue
+        seen.add(node_id)
+        rows.append(node_by_id[node_id])
+    return rows
+
+
+def _is_version_relation_edge(edge: dict[str, Any]) -> bool:
+    kind = str(edge.get("kind") or "")
+    if kind in {"DUPLICATE_OF", "SUPERSEDES", "CONTRADICTS"}:
+        return True
+    if kind != "REFINES":
+        return False
+    metadata = edge.get("metadata") if isinstance(edge.get("metadata"), dict) else {}
+    return any(key in metadata for key in ("reason", "source", "score", "commit_id"))
+
+
+def _has_durable_relation_endpoints(edge: dict[str, Any], node_by_id: dict[str, dict[str, Any]]) -> bool:
+    source = node_by_id.get(str(edge.get("source_id") or ""))
+    target = node_by_id.get(str(edge.get("target_id") or ""))
+    if not source or not target:
+        return False
+    return all(
+        str(node.get("status") or "") in {"committed", "active", "superseded"}
+        or str(node.get("scope") or "") == "central"
+        for node in (source, target)
+    )
+
+
+def _version_flow_summary(commit_node: dict[str, Any], work_nodes: list[dict[str, Any]], files: list[dict[str, Any]]) -> str:
+    subject = str(commit_node.get("summary") or commit_node.get("label") or "Commit")
+    work = "; ".join(_clip(node.get("summary") or node.get("label"), 90) for node in work_nodes[:3] if node)
+    file_text = ", ".join(str(node.get("label") or "") for node in files[:5] if node.get("label"))
+    parts = [subject]
+    if work:
+        parts.append(f"promoted: {work}")
+    if file_text:
+        parts.append(f"files: {file_text}")
+    return _clip(" | ".join(parts), 520)
+
+
+def _version_flow_warnings(flows: list[dict[str, Any]]) -> list[str]:
+    warnings: list[str] = []
+    if not flows:
+        warnings.append("no_committed_version_flows_found")
+        return warnings
+    if not any(flow.get("counts", {}).get("work_nodes") for flow in flows):
+        warnings.append("version_flows_have_no_promoted_work_nodes")
+    if not any(flow.get("counts", {}).get("version_edges") for flow in flows):
+        warnings.append("version_flows_have_no_refine_supersede_duplicate_edges")
+    return warnings
 
 
 def _clip(value: object, limit: int) -> str:

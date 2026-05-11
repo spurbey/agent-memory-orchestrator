@@ -19,6 +19,7 @@
       <nav class="nav-list">
         <button class="nav-item active" data-view="dashboard">Dashboard</button>
         <button class="nav-item" data-view="sessions">Sessions</button>
+        <button class="nav-item" data-view="versions">Versions</button>
         <button class="nav-item" data-view="graph">Graph</button>
         <button class="nav-item" data-view="retrieval">Retrieval</button>
         <button class="nav-item" data-view="admin">Admin</button>
@@ -137,6 +138,23 @@
             </div>
           </section>
         </div>
+      </section>
+
+      <section id="versionsView" class="view">
+        <section class="panel hero-panel version-hero">
+          <div>
+            <p class="eyebrow">Versioning</p>
+            <h2>Commit centered memory flow</h2>
+            <p class="muted">Each flow starts at a real Git commit, then shows the AMO session work promoted into central memory, files modified by that work, evidence refs, and version edges such as REFINE, SUPERSEDE, DUPLICATE, or CONTRADICT.</p>
+          </div>
+          <div class="version-filter">
+            <input id="versionCommitFilter" class="search" placeholder="Commit SHA or prefix, optional" />
+            <input id="versionSessionFilter" class="search" placeholder="Session id, optional" />
+            <button id="loadVersionsBtn" class="btn primary">Load Version Flow</button>
+          </div>
+        </section>
+        <div id="versionWarnings" class="warning-list"></div>
+        <div id="versionFlowList" class="version-flow-list"></div>
       </section>
 
       <section id="graphView" class="view">
