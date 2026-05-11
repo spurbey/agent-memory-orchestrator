@@ -20,10 +20,12 @@ from agent_memory_orchestrator.reasoning_graph import TimelineEvent
 from agent_memory_orchestrator.reasoning_graph import build_timeline
 from agent_memory_orchestrator.reasoning_graph import build_decision_threads
 from agent_memory_orchestrator.reasoning_graph import load_codex_transcript_events
+from agent_memory_orchestrator.reasoning_graph import code_node_provenance_edges
 from agent_memory_orchestrator.reasoning_graph import code_nodes_from_hunks
 from agent_memory_orchestrator.reasoning_graph import extract_code_nodes_from_commit
 from agent_memory_orchestrator.reasoning_graph import parse_unified_zero_hunks
 from agent_memory_orchestrator.reasoning_graph import produced_change_edges
+from agent_memory_orchestrator.reasoning_graph import python_ast_expander
 from agent_memory_orchestrator.reasoning_graph import resolve_code_node_version
 from agent_memory_orchestrator.reasoning_graph import semantic_drift_boundary
 from agent_memory_orchestrator.reasoning_graph import should_accept_ast_parent
@@ -488,6 +490,40 @@ def test_missing_tree_sitter_expander_creates_unparsed_code_node() -> None:
     assert nodes[0].content == "new = 1"
 
 
+def test_python_ast_expander_creates_structural_code_node_with_previous_content() -> None:
+    diff = """diff --git a/src/example.py b/src/example.py
+--- a/src/example.py
++++ b/src/example.py
+@@ -3 +3 @@
+-    return \"old\"
++    return \"new\"
+"""
+    hunks = parse_unified_zero_hunks(
+        diff,
+        session_id="s1",
+        extraction_run_id="run1",
+        commit_id="abc123",
+        evidence_ids=("raw1",),
+    )
+    before = "def launcher():\n    setup()\n    return \"old\"\n"
+    after = "def launcher():\n    setup()\n    return \"new\"\n"
+
+    nodes = code_nodes_from_hunks(
+        hunks,
+        file_contents={"src/example.py": after},
+        old_file_contents={"src/example.py": before},
+        ast_expander=python_ast_expander,
+    )
+
+    assert len(nodes) == 1
+    assert nodes[0].ast_status == "parsed"
+    assert nodes[0].ast_type == "Return"
+    assert nodes[0].content == 'return "new"'
+    assert nodes[0].prev_content == 'return "old"'
+    assert nodes[0].metadata["language"] == "python"
+    assert nodes[0].metadata["structural_id"]
+
+
 def test_real_commit_produces_code_hunks_and_nodes_without_whole_file_blobs() -> None:
     repo_root = Path(__file__).resolve().parents[1]
     verify = subprocess.run(
@@ -517,8 +553,10 @@ def test_real_commit_produces_code_hunks_and_nodes_without_whole_file_blobs() ->
     hunk_by_id = {hunk.id: hunk for hunk in hunks}
     for node in nodes:
         hunk = hunk_by_id[str(node.metadata["hunk_id"])]
-        assert len(node.content.splitlines()) <= max(1, hunk.new_count)
+        assert len(node.content.splitlines()) <= max(1, hunk.new_count) * 3
         assert len(node.content.splitlines()) < 150
+        assert node.metadata["language"] == "python"
+    assert any(node.ast_status == "parsed" for node in nodes)
 
 
 def test_same_ast_same_topic_creates_code_version_edge() -> None:
@@ -783,6 +821,50 @@ def test_produced_change_edges_match_repo_prefixed_thread_paths() -> None:
     assert len(edges) == 1
     assert edges[0].kind == "PRODUCED_CHANGE_IN"
     assert edges[0].target_id == code.id
+
+
+def test_produced_change_edges_prefers_symbol_and_ast_matches() -> None:
+    decision = DecisionUnit(
+        id="decision:s1:ranked",
+        session_id="s1",
+        extraction_run_id="run1",
+        summary="Fixed hook launcher execution",
+        evidence_ids=("raw-decision",),
+        kind="Fix",
+    )
+    good = _code_node("code:s1:good", "def hook_launcher():\n    return True", line_start=10, line_end=11)
+    good = CodeNode(
+        **{
+            **good.as_dict(),
+            "ast_status": "parsed",
+            "metadata": {"symbol_name": "hook_launcher", "structural_id": "src/install_service.py::FunctionDef:hook_launcher"},
+        }
+    )
+    weak = _code_node("code:s1:weak", "settings = read_config()", line_start=90, line_end=90)
+    thread = _thread("thread-ranked", "install service hook", files=(good.file_path,))
+
+    edges = produced_change_edges(
+        decisions=[decision],
+        code_nodes=[weak, good],
+        thread=thread,
+        max_edges_per_decision=1,
+    )
+
+    assert len(edges) == 1
+    assert edges[0].target_id == good.id
+    assert "symbol_match" in edges[0].metadata["link_reasons"]
+
+
+def test_code_node_provenance_edges_keep_code_search_explainable() -> None:
+    code = _code_node("code:s1:provenance", "def hook(): pass")
+
+    edges = code_node_provenance_edges(extraction_run_id="run1", code_nodes=[code])
+
+    assert len(edges) == 1
+    assert edges[0].source_id == "run1"
+    assert edges[0].target_id == code.id
+    assert edges[0].kind == "CREATED_CODE_NODE"
+    assert edges[0].metadata["file_path"] == code.file_path
 
 
 def test_passing_test_after_write_creates_validated_by_and_bumps_once() -> None:

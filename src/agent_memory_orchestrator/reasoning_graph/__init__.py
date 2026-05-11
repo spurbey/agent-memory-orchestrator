@@ -13,9 +13,12 @@ from .chunking import HashEmbeddingProvider
 from .chunking import build_decision_threads
 from .chunking import cosine_similarity
 from .chunking import semantic_drift_boundary
+from .code_analysis import AstExpansion
 from .code_analysis import code_nodes_from_hunks
+from .code_analysis import default_ast_expander
 from .code_analysis import extract_code_nodes_from_commit
 from .code_analysis import parse_unified_zero_hunks
+from .code_analysis import python_ast_expander
 from .code_analysis import should_accept_ast_parent
 from .code_versioning import CodeVersionPlan
 from .code_versioning import CodeVersionRelation
@@ -24,6 +27,7 @@ from .decision_extraction import DecisionExtractionResult
 from .decision_extraction import extract_decisions
 from .relationships import ReasoningEdge
 from .relationships import ValidationLinkResult
+from .relationships import code_node_provenance_edges
 from .relationships import produced_change_edges
 from .relationships import validation_edges_for_test
 from .timeline import TimelineEdge
@@ -42,6 +46,7 @@ __all__ = [
     "CodeVersionPlan",
     "CodeVersionRelation",
     "ChunkingConfig",
+    "AstExpansion",
     "DecisionThread",
     "DecisionExtractionResult",
     "DecisionUnit",
@@ -59,13 +64,16 @@ __all__ = [
     "build_timeline",
     "build_decision_threads",
     "code_nodes_from_hunks",
+    "code_node_provenance_edges",
     "cosine_similarity",
+    "default_ast_expander",
     "extract_code_nodes_from_commit",
     "extract_decisions",
     "load_amo_evidence_events",
     "load_codex_transcript_events",
     "parse_unified_zero_hunks",
     "produced_change_edges",
+    "python_ast_expander",
     "resolve_code_node_version",
     "semantic_drift_boundary",
     "validation_edges_for_test",
