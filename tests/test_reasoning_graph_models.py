@@ -7,17 +7,43 @@ from pathlib import Path
 import pytest
 
 from agent_memory_orchestrator.reasoning_graph import CodeNode
+from agent_memory_orchestrator.reasoning_graph import ChunkingConfig
 from agent_memory_orchestrator.reasoning_graph import DecisionUnit
 from agent_memory_orchestrator.reasoning_graph import ExtractionRun
+from agent_memory_orchestrator.reasoning_graph import HashEmbeddingProvider
+from agent_memory_orchestrator.reasoning_graph import TimelineGraph
 from agent_memory_orchestrator.reasoning_graph import TimelineEvent
 from agent_memory_orchestrator.reasoning_graph import build_timeline
+from agent_memory_orchestrator.reasoning_graph import build_decision_threads
 from agent_memory_orchestrator.reasoning_graph import load_codex_transcript_events
+from agent_memory_orchestrator.reasoning_graph import semantic_drift_boundary
 from agent_memory_orchestrator.reasoning_graph import validate_graph_object
 from agent_memory_orchestrator.reasoning_graph import validate_status_transition
 
 
 def _codes(report) -> set[str]:
     return {issue.code for issue in report.issues}
+
+
+class _KeywordEmbedder:
+    def embed(self, text: str) -> list[float]:
+        lowered = text.lower()
+        if "dashboard" in lowered or "css" in lowered:
+            return [0.0, 1.0]
+        if "api" in lowered or "client" in lowered:
+            return [0.2, 0.8]
+        return [1.0, 0.0]
+
+
+def _event(event_id: str, event_type: str, content: str, *, files: tuple[str, ...] = ()) -> TimelineEvent:
+    return TimelineEvent(
+        id=event_id,
+        session_id="s1",
+        event_type=event_type,
+        timestamp=f"2026-05-08T00:00:0{event_id[-1]}.000Z",
+        content=content,
+        files=files,
+    )
 
 
 def test_rejects_answer_grade_node_without_evidence_ids() -> None:
@@ -246,3 +272,113 @@ def test_real_session_timeline_contains_messages_tools_and_stop_events() -> None
     assert "stop" in event_types
     assert len(timeline.edges) == max(0, len(timeline.events) - 1)
     assert any("install_service.py" in "\n".join(event.files) for event in timeline.events)
+
+
+def test_chunking_creates_boundary_on_file_switch() -> None:
+    timeline = TimelineGraph(
+        session_id="s1",
+        events=(
+            _event("e1", "tool_result", "updated installer", files=("src/install_service.py",)),
+            _event("e2", "tool_result", "updated hook", files=("src/hook.py",)),
+        ),
+        edges=(),
+    )
+    run = ExtractionRun.create(session_id="s1", evidence_ids=("raw1",))
+
+    result = build_decision_threads(timeline, extraction_run=run, embedder=_KeywordEmbedder())
+
+    assert len(result.chunks) == 2
+    assert result.chunks[0].diagnostics == ("file_switch",)
+
+
+def test_chunking_creates_boundary_on_explicit_transition_phrase() -> None:
+    timeline = TimelineGraph(
+        session_id="s1",
+        events=(
+            _event("e1", "agent_message", "I fixed the installer path."),
+            _event("e2", "agent_message", "Now let me check the dashboard CSS."),
+        ),
+        edges=(),
+    )
+    run = ExtractionRun.create(session_id="s1", evidence_ids=("raw1",))
+
+    result = build_decision_threads(timeline, extraction_run=run, embedder=_KeywordEmbedder())
+
+    assert len(result.chunks) == 2
+    assert "explicit_transition" in result.chunks[0].diagnostics
+
+
+def test_semantic_drift_threshold_creates_boundary_below_065() -> None:
+    drift, score, reason = semantic_drift_boundary(
+        ["installer hook", "install service", "capture hook"],
+        "dashboard css layout",
+        embedder=_KeywordEmbedder(),
+        config=ChunkingConfig(semantic_drift_threshold=0.65),
+    )
+
+    assert drift is True
+    assert score == 0.0
+    assert reason == "semantic_drift"
+
+
+def test_revisit_threshold_merges_same_file_topic() -> None:
+    timeline = TimelineGraph(
+        session_id="s1",
+        events=(
+            _event("e1", "agent_message", "installer capture hook", files=("src/install_service.py",)),
+            _event("e2", "agent_message", "dashboard css", files=("src/web/amo.css",)),
+            _event("e3", "agent_message", "back to install service hook", files=("src/install_service.py",)),
+        ),
+        edges=(),
+    )
+    run = ExtractionRun.create(session_id="s1", evidence_ids=("raw1",))
+
+    result = build_decision_threads(timeline, extraction_run=run, embedder=_KeywordEmbedder())
+
+    assert len(result.chunks) == 3
+    assert len(result.threads) == 2
+    assert result.threads[0].metadata["continued_chunk_count"] == 1
+
+
+def test_missing_embeddings_record_fallback_without_semantic_boundary() -> None:
+    drift, score, reason = semantic_drift_boundary(
+        ["installer hook", "install service", "capture hook"],
+        "dashboard css layout",
+        embedder=None,
+    )
+
+    assert drift is False
+    assert score is None
+    assert reason == "embedding_status=missing"
+
+
+def test_real_session_builds_decision_threads_from_selected_evidence() -> None:
+    home = Path(os.environ.get("USERPROFILE", ""))
+    evidence_path = home / ".agent-memory-orchestrator" / ".evidence" / "2026-05-08.jsonl"
+    transcript_path = (
+        home
+        / ".codex"
+        / "sessions"
+        / "2026"
+        / "05"
+        / "09"
+        / "rollout-2026-05-09T00-33-35-019e08eb-8f1f-7381-8f25-59344c4ac8a9.jsonl"
+    )
+    if not evidence_path.exists() or not transcript_path.exists():
+        pytest.skip("selected real AMO evidence/transcript is not available in this environment")
+    timeline = build_timeline(
+        session_id="019e08eb-8f1f-7381-8f25-59344c4ac8a9",
+        evidence_paths=[evidence_path],
+        transcript_paths=[transcript_path],
+    )
+    run = ExtractionRun.create(
+        session_id="019e08eb-8f1f-7381-8f25-59344c4ac8a9",
+        evidence_ids=("raw_639e2963e72e4e3bb063042eeb221afd",),
+        transcript_paths=(str(transcript_path),),
+    )
+
+    result = build_decision_threads(timeline, extraction_run=run, embedder=HashEmbeddingProvider(dims=64))
+
+    assert result.threads
+    assert any("install_service.py" in "\n".join(thread.file_paths) for thread in result.threads)
+    assert all(thread.extraction_run_id == run.id for thread in result.threads)
