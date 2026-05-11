@@ -9,6 +9,7 @@ import pytest
 
 from agent_memory_orchestrator.reasoning_graph import CodeNode
 from agent_memory_orchestrator.reasoning_graph import ChunkingConfig
+from agent_memory_orchestrator.reasoning_graph import DecisionThread
 from agent_memory_orchestrator.reasoning_graph import DecisionUnit
 from agent_memory_orchestrator.reasoning_graph import ExtractionRun
 from agent_memory_orchestrator.reasoning_graph import HashEmbeddingProvider
@@ -20,6 +21,7 @@ from agent_memory_orchestrator.reasoning_graph import load_codex_transcript_even
 from agent_memory_orchestrator.reasoning_graph import code_nodes_from_hunks
 from agent_memory_orchestrator.reasoning_graph import extract_code_nodes_from_commit
 from agent_memory_orchestrator.reasoning_graph import parse_unified_zero_hunks
+from agent_memory_orchestrator.reasoning_graph import resolve_code_node_version
 from agent_memory_orchestrator.reasoning_graph import semantic_drift_boundary
 from agent_memory_orchestrator.reasoning_graph import should_accept_ast_parent
 from agent_memory_orchestrator.reasoning_graph import validate_graph_object
@@ -48,6 +50,33 @@ def _event(event_id: str, event_type: str, content: str, *, files: tuple[str, ..
         timestamp=f"2026-05-08T00:00:0{event_id[-1]}.000Z",
         content=content,
         files=files,
+    )
+
+
+def _thread(thread_id: str, topic: str, *, files: tuple[str, ...]) -> DecisionThread:
+    return DecisionThread(
+        id=thread_id,
+        session_id="s1",
+        extraction_run_id="run1",
+        event_ids=(f"event:{thread_id}",),
+        topic=topic,
+        file_paths=files,
+        evidence_ids=("raw1",),
+    )
+
+
+def _code_node(node_id: str, content: str, *, line_start: int = 10, line_end: int = 12) -> CodeNode:
+    return CodeNode(
+        id=node_id,
+        session_id="s1",
+        extraction_run_id="run1",
+        file_path="src/agent_memory_orchestrator/install_service.py",
+        ast_type="function_definition",
+        line_start=line_start,
+        line_end=line_end,
+        content=content,
+        commit_id="c5326f8",
+        evidence_ids=("raw1",),
     )
 
 
@@ -477,3 +506,104 @@ def test_real_commit_produces_code_hunks_and_nodes_without_whole_file_blobs() ->
         hunk = hunk_by_id[str(node.metadata["hunk_id"])]
         assert len(node.content.splitlines()) <= max(1, hunk.new_count)
         assert len(node.content.splitlines()) < 150
+
+
+def test_same_ast_same_topic_creates_code_version_edge() -> None:
+    old = _code_node("code:old", "return old_launcher")
+    new = _code_node("code:new", "return launcher_hardened")
+    old_thread = _thread("old", "install service hook", files=(old.file_path,))
+    new_thread = _thread("new", "install service hook", files=(new.file_path,))
+
+    plan = resolve_code_node_version(
+        new_node=new,
+        new_thread=new_thread,
+        candidates=[old],
+        candidate_threads={old.id: old_thread},
+        embedder=_KeywordEmbedder(),
+    )
+
+    assert len(plan.relations) == 1
+    assert plan.relations[0].kind == "SUPERSEDED_BY"
+    assert plan.relations[0].source_id == old.id
+    assert plan.relations[0].target_id == new.id
+    assert plan.new_node.prev_content == old.content
+
+
+def test_same_file_different_topic_does_not_create_code_version_edge() -> None:
+    old = _code_node("code:old", "return launcher")
+    new = _code_node("code:new", "return launcher_hardened")
+    old_thread = _thread("old", "dashboard css", files=(old.file_path,))
+    new_thread = _thread("new", "install service hook", files=(new.file_path,))
+
+    plan = resolve_code_node_version(
+        new_node=new,
+        new_thread=new_thread,
+        candidates=[old],
+        candidate_threads={old.id: old_thread},
+        embedder=_KeywordEmbedder(),
+    )
+
+    assert plan.relations == ()
+    assert any(item.startswith("unrelated_same_file") for item in plan.diagnostics)
+
+
+def test_revert_signal_creates_reverts_relation_and_prev_content() -> None:
+    old = _code_node("code:old", "return launcher")
+    new = _code_node("code:new", "return original_launcher")
+    old_thread = _thread("old", "install service hook", files=(old.file_path,))
+    new_thread = _thread("new", "revert install service hook", files=(new.file_path,))
+
+    plan = resolve_code_node_version(
+        new_node=new,
+        new_thread=new_thread,
+        candidates=[old],
+        candidate_threads={old.id: old_thread},
+        embedder=_KeywordEmbedder(),
+    )
+
+    assert len(plan.relations) == 1
+    assert plan.relations[0].kind == "REVERTS"
+    assert plan.relations[0].source_id == new.id
+    assert plan.relations[0].target_id == old.id
+    assert plan.relations[0].old_status == "superseded"
+    assert plan.new_node.prev_content == old.content
+
+
+def test_real_repeated_same_file_evidence_can_drive_version_resolution() -> None:
+    home = Path(os.environ.get("USERPROFILE", ""))
+    evidence_path = home / ".agent-memory-orchestrator" / ".evidence" / "2026-05-08.jsonl"
+    if not evidence_path.exists():
+        pytest.skip("selected real AMO evidence is not available in this environment")
+    wanted = {
+        "raw_3ce293ed37ce4d7ebabae7c1116bdd69",
+        "raw_850a43197504432bafb15e01f384af28",
+    }
+    payloads: dict[str, str] = {}
+    with evidence_path.open("r", encoding="utf-8", errors="replace") as handle:
+        for line in handle:
+            item = json.loads(line)
+            if item.get("id") not in wanted:
+                continue
+            payload = item.get("payload") if isinstance(item.get("payload"), dict) else {}
+            tool_input = payload.get("tool_input") if isinstance(payload.get("tool_input"), dict) else {}
+            command = str(tool_input.get("command") or "")
+            payloads[str(item["id"])] = command
+    if set(payloads) != wanted:
+        pytest.skip("selected repeated same-file evidence ids are not all available")
+
+    assert all("install_service.py" in command for command in payloads.values())
+    old = _code_node("code:real-old", payloads["raw_3ce293ed37ce4d7ebabae7c1116bdd69"][:600])
+    new = _code_node("code:real-new", payloads["raw_850a43197504432bafb15e01f384af28"][:600])
+    old_thread = _thread("real-old", "install service hook launcher", files=(old.file_path,))
+    new_thread = _thread("real-new", "install service hook launcher", files=(new.file_path,))
+
+    plan = resolve_code_node_version(
+        new_node=new,
+        new_thread=new_thread,
+        candidates=[old],
+        candidate_threads={old.id: old_thread},
+        embedder=_KeywordEmbedder(),
+    )
+
+    assert plan.relations
+    assert plan.new_node.prev_content == old.content
