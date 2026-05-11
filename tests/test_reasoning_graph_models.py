@@ -10,6 +10,8 @@ from agent_memory_orchestrator.reasoning_graph import CodeNode
 from agent_memory_orchestrator.reasoning_graph import DecisionUnit
 from agent_memory_orchestrator.reasoning_graph import ExtractionRun
 from agent_memory_orchestrator.reasoning_graph import TimelineEvent
+from agent_memory_orchestrator.reasoning_graph import build_timeline
+from agent_memory_orchestrator.reasoning_graph import load_codex_transcript_events
 from agent_memory_orchestrator.reasoning_graph import validate_graph_object
 from agent_memory_orchestrator.reasoning_graph import validate_status_transition
 
@@ -130,3 +132,117 @@ def test_real_evidence_record_builds_timeline_event_without_graph_mutation() -> 
     assert event.tool_name == "apply_patch"
     assert "install_service.py" in "\n".join(event.files)
     assert event.transcript_path.endswith("019e08eb-8f1f-7381-8f25-59344c4ac8a9.jsonl")
+
+
+def test_transcript_imports_assistant_message(tmp_path: Path) -> None:
+    transcript = tmp_path / "rollout.jsonl"
+    transcript.write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "timestamp": "2026-05-08T00:00:00.000Z",
+                        "type": "session_meta",
+                        "payload": {"id": "s1", "cwd": "repo"},
+                    }
+                ),
+                json.dumps(
+                    {
+                        "timestamp": "2026-05-08T00:00:01.000Z",
+                        "type": "response_item",
+                        "payload": {
+                            "type": "message",
+                            "role": "assistant",
+                            "content": [{"type": "output_text", "text": "I found the issue in install_service.py."}],
+                        },
+                    }
+                ),
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    events = load_codex_transcript_events(transcript, session_id="s1")
+
+    assert [event.event_type for event in events] == ["session_start", "agent_message"]
+    assert events[1].content == "I found the issue in install_service.py."
+
+
+def test_timeline_orders_and_dedupes_by_call_id(tmp_path: Path) -> None:
+    transcript = tmp_path / "rollout.jsonl"
+    transcript.write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "timestamp": "2026-05-08T00:00:03.000Z",
+                        "type": "response_item",
+                        "payload": {"type": "function_call_output", "call_id": "call1", "output": "ok"},
+                    }
+                ),
+                json.dumps(
+                    {
+                        "timestamp": "2026-05-08T00:00:01.000Z",
+                        "type": "response_item",
+                        "payload": {
+                            "type": "function_call",
+                            "call_id": "call1",
+                            "name": "shell_command",
+                            "arguments": "{\"command\":\"echo ok\"}",
+                        },
+                    }
+                ),
+                json.dumps(
+                    {
+                        "timestamp": "2026-05-08T00:00:02.000Z",
+                        "type": "response_item",
+                        "payload": {
+                            "type": "function_call",
+                            "call_id": "call1",
+                            "name": "shell_command",
+                            "arguments": "{\"command\":\"echo ok duplicate\"}",
+                        },
+                    }
+                ),
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    timeline = build_timeline(session_id="s1", transcript_paths=[transcript])
+
+    assert [event.event_type for event in timeline.events] == ["tool_use", "tool_result"]
+    assert len(timeline.edges) == 1
+    assert timeline.edges[0].kind == "FOLLOWED_BY"
+
+
+def test_real_session_timeline_contains_messages_tools_and_stop_events() -> None:
+    home = Path(os.environ.get("USERPROFILE", ""))
+    evidence_path = home / ".agent-memory-orchestrator" / ".evidence" / "2026-05-08.jsonl"
+    transcript_path = (
+        home
+        / ".codex"
+        / "sessions"
+        / "2026"
+        / "05"
+        / "09"
+        / "rollout-2026-05-09T00-33-35-019e08eb-8f1f-7381-8f25-59344c4ac8a9.jsonl"
+    )
+    if not evidence_path.exists() or not transcript_path.exists():
+        pytest.skip("selected real AMO evidence/transcript is not available in this environment")
+
+    timeline = build_timeline(
+        session_id="019e08eb-8f1f-7381-8f25-59344c4ac8a9",
+        evidence_paths=[evidence_path],
+        transcript_paths=[transcript_path],
+    )
+
+    event_types = timeline.event_types()
+    assert "user_message" in event_types
+    assert "agent_message" in event_types
+    assert "tool_use" in event_types
+    assert "tool_result" in event_types
+    assert "post_tool_use" in event_types
+    assert "stop" in event_types
+    assert len(timeline.edges) == max(0, len(timeline.events) - 1)
+    assert any("install_service.py" in "\n".join(event.files) for event in timeline.events)
