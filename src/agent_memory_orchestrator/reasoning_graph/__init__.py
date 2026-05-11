@@ -17,6 +17,9 @@ from .code_analysis import code_nodes_from_hunks
 from .code_analysis import extract_code_nodes_from_commit
 from .code_analysis import parse_unified_zero_hunks
 from .code_analysis import should_accept_ast_parent
+from .code_versioning import CodeVersionPlan
+from .code_versioning import CodeVersionRelation
+from .code_versioning import resolve_code_node_version
 from .timeline import TimelineEdge
 from .timeline import TimelineGraph
 from .timeline import build_timeline
@@ -30,6 +33,8 @@ from .validation import validate_status_transition
 __all__ = [
     "CodeHunk",
     "CodeNode",
+    "CodeVersionPlan",
+    "CodeVersionRelation",
     "ChunkingConfig",
     "DecisionThread",
     "DecisionUnit",
@@ -50,6 +55,7 @@ __all__ = [
     "load_amo_evidence_events",
     "load_codex_transcript_events",
     "parse_unified_zero_hunks",
+    "resolve_code_node_version",
     "semantic_drift_boundary",
     "should_accept_ast_parent",
     "validate_graph_object",
