@@ -541,3 +541,80 @@ def test_commit_event_auto_links_session_to_git_commit(tmp_path: Path) -> None:
     assert result["merge"]["merged"] is True
     assert result["merge"]["commit"] == "abcdef1234567890"
     assert status["counts"]["committed"] == 1
+
+
+def test_version_flow_returns_commit_promotions_files_and_evidence_refs(tmp_path: Path) -> None:
+    store = InMemoryGraphStore()
+    store.upsert_node(
+        GraphNode(
+            id="commit:abc123",
+            kind="GitCommit",
+            label="abc123",
+            summary="Git commit abc123 promoted AMO session work: fix graph cleaning",
+            status="committed",
+            scope="central",
+            session_id="s1",
+            commit_id="abc123",
+            evidence_id="raw2",
+        )
+    )
+    store.upsert_node(
+        GraphNode(
+            id="work:s1:1",
+            kind="WorkChange",
+            label="Clean evidence windows before extraction",
+            summary="Clean evidence windows before graph extraction and version finalization.",
+            status="committed",
+            scope="central",
+            session_id="s1",
+            commit_id="abc123",
+            evidence_id="raw2",
+        )
+    )
+    store.upsert_node(
+        GraphNode(
+            id="file:src/agent_memory_orchestrator/session_graph.py",
+            kind="File",
+            label="src/agent_memory_orchestrator/session_graph.py",
+            summary="File touched by AMO work ledger: src/agent_memory_orchestrator/session_graph.py",
+            status="active",
+            scope="central",
+        )
+    )
+    store.upsert_edge(
+        GraphEdge(
+            id="edge:work:s1:1:COMMITTED_AS:commit:abc123",
+            source_id="work:s1:1",
+            target_id="commit:abc123",
+            kind="COMMITTED_AS",
+            evidence_id="raw2",
+        )
+    )
+    store.upsert_edge(
+        GraphEdge(
+            id="edge:work:s1:1:MODIFIES:file:src/agent_memory_orchestrator/session_graph.py",
+            source_id="work:s1:1",
+            target_id="file:src/agent_memory_orchestrator/session_graph.py",
+            kind="MODIFIES",
+            evidence_id="raw2",
+            metadata={"commit_id": "abc123"},
+        )
+    )
+    svc = GraphRagService(
+        make_settings(tmp_path),
+        store=store,
+        planner=DeterministicPlanner(),
+        version_backend=_StaticGitBackend(),
+    )
+    try:
+        result = svc.version_flow(commit="abc123")
+    finally:
+        svc.close()
+
+    assert result["ok"] is True
+    assert result["count"] == 1
+    flow = result["flows"][0]
+    assert flow["commit_id"] == "abc123"
+    assert [node["id"] for node in flow["work_nodes"]] == ["work:s1:1"]
+    assert [node["id"] for node in flow["files"]] == ["file:src/agent_memory_orchestrator/session_graph.py"]
+    assert flow["evidence_ids"] == ["raw2"]

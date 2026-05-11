@@ -163,6 +163,12 @@ def _build_parser() -> argparse.ArgumentParser:
     graph_rebuild_central.add_argument("--max-windows", type=int, default=None)
     graph_rebuild_central.add_argument("--offline", action="store_true", help="Open Kuzu directly for single-process maintenance.")
 
+    graph_version_flow = sub.add_parser("graph-version-flow", help="Show commit-centric graph versioning flow")
+    graph_version_flow.add_argument("--commit", default="", help="Commit SHA/prefix to inspect. Omit to list recent flows.")
+    graph_version_flow.add_argument("--session-id", default="", help="Restrict version flow to one AMO session.")
+    graph_version_flow.add_argument("--limit", type=int, default=100)
+    graph_version_flow.add_argument("--offline", action="store_true", help="Open Kuzu directly for single-process maintenance.")
+
     slack = sub.add_parser("slack", help="Configure and run local Slack Socket Mode connector")
     slack_sub = slack.add_subparsers(dest="slack_command", required=True)
     slack_manifest = slack_sub.add_parser("manifest", help="Print or write a Slack app manifest for Socket Mode")
@@ -566,6 +572,7 @@ def main(argv: list[str] | None = None) -> int:
             "graph-rebuild-cache",
             "graph-finalize-session",
             "graph-rebuild-central",
+            "graph-version-flow",
         }:
             settings = Settings.load()
             if args.offline:
@@ -603,6 +610,8 @@ def main(argv: list[str] | None = None) -> int:
                             limit=args.limit,
                             max_windows=args.max_windows,
                         )
+                    elif args.command == "graph-version-flow":
+                        result = graph.version_flow(commit=args.commit, session_id=args.session_id, limit=args.limit)
                     else:
                         result = graph.merge_status(session_id=args.session_id)
                     _print(result)
@@ -618,6 +627,7 @@ def main(argv: list[str] | None = None) -> int:
                         "graph-rebuild-cache",
                         "graph-finalize-session",
                         "graph-rebuild-central",
+                        "graph-version-flow",
                     }
                     else 60
                 )
@@ -667,6 +677,11 @@ def main(argv: list[str] | None = None) -> int:
                                 "max_windows": args.max_windows,
                                 "apply": args.apply,
                             },
+                        )
+                    elif args.command == "graph-version-flow":
+                        result = client.post(
+                            "/graph/version-flow",
+                            {"commit": args.commit, "session_id": args.session_id, "limit": args.limit},
                         )
                     else:
                         result = client.get("/api/graph/status", {"session_id": args.session_id})

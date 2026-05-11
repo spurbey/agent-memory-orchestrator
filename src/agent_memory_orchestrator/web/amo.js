@@ -6,6 +6,7 @@ const AMO = {
   selectedSession: null,
   health: null,
   centralGraph: { nodes: [], edges: [], warnings: [] },
+  versionFlow: { flows: [], nodes: [], edges: [], warnings: [] },
   graph: {
     canvas: null,
     ctx: null,
@@ -132,8 +133,18 @@ async function loadCentralGraph() {
   buildGraph();
   renderDashboard();
 }
+async function loadVersionFlow() {
+  const commit = $("versionCommitFilter")?.value.trim() || "";
+  const sessionId = $("versionSessionFilter")?.value.trim() || "";
+  const params = new URLSearchParams({ limit: "120" });
+  if (commit) params.set("commit", commit);
+  if (sessionId) params.set("session_id", sessionId);
+  const data = await apiGet(`/api/graph/version-flow?${params.toString()}`);
+  AMO.versionFlow = { flows: data.flows || [], nodes: data.nodes || [], edges: data.edges || [], warnings: data.warnings || [] };
+  renderVersionFlow();
+}
 async function refreshAll() {
-  await Promise.allSettled([loadHealth(), loadSessions(), loadCentralGraph()]);
+  await Promise.allSettled([loadHealth(), loadSessions(), loadCentralGraph(), loadVersionFlow()]);
   if (AMO.selectedSessionId) await selectSession(AMO.selectedSessionId, { silent: true });
 }
 function setView(view) {
@@ -143,6 +154,7 @@ function setView(view) {
   const copy = {
     dashboard: ["Dashboard", "Watch sessions move from raw capture to durable central graph memory."],
     sessions: ["Sessions", "Inspect exactly what was captured, cleaned, extracted, and promoted."],
+    versions: ["Version Flow", "Inspect how session work became durable Git-backed graph memory."],
     graph: ["Knowledge Graph", "Explore committed memory first, then reveal provenance when needed."],
     retrieval: ["Retrieval", "Inspect explicit GraphRAG query planning, candidates, timing, and Qwen fallback."],
     admin: ["Admin", "Run local daemon graph jobs and inspect diagnostics."],
@@ -150,6 +162,7 @@ function setView(view) {
   $("pageTitle").textContent = copy[0];
   $("pageSubtitle").textContent = copy[1];
   if (view === "graph") requestAnimationFrame(resizeGraph);
+  if (view === "versions") renderVersionFlow();
 }
 function renderDashboard() {
   const sessions = AMO.sessions || [];
@@ -234,13 +247,69 @@ function renderNodeCard(node) {
 }
 function renderMergePreview(preview) {
   if (!preview || preview.ok === false) return empty(preview?.error || "No merge preview available.");
-  const promotions = preview.promotions || preview.promoted_nodes || [];
-  const edges = preview.version_edges || preview.edges || [];
+  const promotions = preview.promotions || preview.promoted_nodes || preview.planned_promotions || [];
+  const edges = preview.version_edges || preview.edges || preview.relations || [];
   const rows = [];
   rows.push(`<div class="merge-card"><strong>${escapeHtml(preview.apply ? "Applied merge" : "Dry run merge plan")}</strong><p class="muted">${promotions.length} promotions, ${edges.length} version edges, ${Number(preview.review_candidates?.length || 0)} review candidates.</p></div>`);
   promotions.slice(0, 12).forEach(item => rows.push(`<div class="merge-card"><span class="pill good">promote</span><p>${escapeHtml(truncate(item.summary || item.label || item.node_id || item.id, 180))}</p></div>`));
   edges.slice(0, 12).forEach(edge => rows.push(`<div class="merge-card"><span class="pill blue">${escapeHtml(edge.kind || edge.relation || "edge")}</span><p class="muted small">${escapeHtml(edge.source_id || edge.source || "")} -> ${escapeHtml(edge.target_id || edge.target || "")}</p></div>`));
   return rows.join("") || empty("No answer-grade draft nodes are ready to promote.");
+}
+function renderVersionFlow() {
+  const flows = AMO.versionFlow?.flows || [];
+  const warnings = AMO.versionFlow?.warnings || [];
+  const warningTarget = $("versionWarnings");
+  const listTarget = $("versionFlowList");
+  if (!warningTarget || !listTarget) return;
+  warningTarget.innerHTML = warnings.map(w => `<div class="warning-card">${escapeHtml(w)}</div>`).join("");
+  listTarget.innerHTML = flows.map(renderVersionFlowCard).join("") || empty("No committed version flows found yet. Drain a write session, finalize it to a commit, then reload this page.");
+}
+function renderVersionFlowCard(flow) {
+  const commit = flow.commit_node || {};
+  const counts = flow.counts || {};
+  const work = flow.work_nodes || [];
+  const files = flow.files || [];
+  const tests = flow.tests || [];
+  const versionEdges = flow.version_edges || [];
+  const evidence = flow.evidence_ids || [];
+  return `<article class="version-card" data-commit-id="${escapeHtml(flow.commit_id || commit.commit_id || "")}">
+    <div class="version-card-head">
+      <div>
+        <p class="eyebrow">Commit</p>
+        <h2>${escapeHtml(commit.label || truncate(flow.commit_id || "commit", 16))}</h2>
+        <p class="muted">${escapeHtml(truncate(commit.summary || flow.summary || "", 220))}</p>
+      </div>
+      <div class="version-counts">
+        <span class="pill good">${Number(counts.work_nodes || 0)} promoted</span>
+        <span class="pill blue">${Number(counts.files || 0)} files</span>
+        <span class="pill warn">${Number(counts.version_edges || 0)} version edges</span>
+        <span class="pill">${Number(counts.evidence_refs || 0)} evidence refs</span>
+      </div>
+    </div>
+    <div class="version-lanes">
+      ${versionLane("Promoted Memory", work.map(renderVersionNode).join("") || "<p class='muted'>No promoted answer nodes visible.</p>")}
+      ${versionLane("Modified Files", files.map(renderVersionNode).join("") || "<p class='muted'>No modified files linked.</p>")}
+      ${versionLane("Validation", tests.map(renderVersionNode).join("") || "<p class='muted'>No test nodes linked.</p>")}
+      ${versionLane("Version Edges", versionEdges.map(renderVersionEdge).join("") || "<p class='muted'>No refine/supersede/duplicate edges yet.</p>")}
+      ${versionLane("Evidence Refs", evidence.map(id => `<div class="evidence-chip">${escapeHtml(id)}</div>`).join("") || "<p class='muted'>No evidence refs linked.</p>")}
+    </div>
+  </article>`;
+}
+function versionLane(title, body) {
+  return `<section class="version-lane"><h3>${escapeHtml(title)}</h3>${body}</section>`;
+}
+function renderVersionNode(node) {
+  return `<div class="version-node" data-node-id="${escapeHtml(nodeId(node))}">
+    <span class="pill ${nodeStatus(node) === "committed" ? "good" : "warn"}">${escapeHtml(nodeKind(node))}</span>
+    <strong>${escapeHtml(truncate(nodeLabel(node), 84))}</strong>
+    <p>${escapeHtml(truncate(nodeSummary(node), 160))}</p>
+  </div>`;
+}
+function renderVersionEdge(edge) {
+  return `<div class="version-edge">
+    <span class="pill blue">${escapeHtml(edgeKind(edge))}</span>
+    <p class="muted small">${escapeHtml(edgeSource(edge))} -> ${escapeHtml(edgeTarget(edge))}</p>
+  </div>`;
 }
 async function drainSelected() {
   if (!AMO.selectedSessionId) return;
@@ -638,6 +707,9 @@ function bindEvents() {
   $("labelsToggle").addEventListener("change", drawGraph);
   $("drainSessionBtn").addEventListener("click", drainSelected);
   $("finalizePreviewBtn").addEventListener("click", previewFinalize);
+  $("loadVersionsBtn").addEventListener("click", loadVersionFlow);
+  $("versionCommitFilter").addEventListener("keydown", event => { if (event.key === "Enter") loadVersionFlow(); });
+  $("versionSessionFilter").addEventListener("keydown", event => { if (event.key === "Enter") loadVersionFlow(); });
   $("consolidateBtn").addEventListener("click", () => runAdminJob("consolidate"));
   $("cacheBtn").addEventListener("click", () => runAdminJob("cache"));
   $("debugGraphBtn").addEventListener("click", () => runAdminJob("debugGraph"));
@@ -653,13 +725,22 @@ function bindEvents() {
       selectGraphNode(nodeEl.dataset.nodeId);
       focusSelectedNeighbors();
     }
+    const versionNode = event.target.closest(".version-node");
+    if (versionNode && versionNode.dataset.nodeId) {
+      setView("graph");
+      $("supportToggle").checked = true;
+      buildGraph();
+      selectGraphNode(versionNode.dataset.nodeId);
+      focusSelectedNeighbors();
+    }
   });
 }
 async function init() {
   bindEvents();
   setupGraphCanvas();
   const path = window.location.pathname;
-  if (path.includes("graph")) setView("graph");
+  if (path.includes("version")) setView("versions");
+  else if (path.includes("graph")) setView("graph");
   else if (path.includes("session")) setView("sessions");
   else if (path.includes("dashboard")) setView("dashboard");
   await refreshAll();

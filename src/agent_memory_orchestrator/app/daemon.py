@@ -99,6 +99,9 @@ class AmoHandler(BaseHTTPRequestHandler):
                 return
             self._write_bytes(200, body, content_type)
             return
+        if path == "/favicon.ico":
+            self._write_bytes(204, b"", "image/x-icon")
+            return
         if path == "/":
             self._write_html(200, SESSION_COCKPIT_HTML)
             return
@@ -106,6 +109,9 @@ class AmoHandler(BaseHTTPRequestHandler):
             self._write_html(200, DASHBOARD_HTML)
             return
         if path == "/sessions":
+            self._write_html(200, SESSION_COCKPIT_HTML)
+            return
+        if path == "/versions":
             self._write_html(200, SESSION_COCKPIT_HTML)
             return
         if path == "/graph":
@@ -179,6 +185,13 @@ class AmoHandler(BaseHTTPRequestHandler):
                             return
                         if path == "/api/graph/central":
                             self._write_json(200, graph.central_graph(limit=limit))
+                            return
+                        if path == "/api/graph/version-flow":
+                            commit = (query.get("commit") or [""])[0]
+                            self._write_json(
+                                200,
+                                graph.version_flow(commit=commit, session_id=session_id, limit=limit),
+                            )
                             return
                         if path == "/api/debug/drain":
                             self._write_json(200, debug_drain(graph._new_drain(), session_id=session_id))  # noqa: SLF001
@@ -404,6 +417,20 @@ class AmoHandler(BaseHTTPRequestHandler):
                             backup_current=bool(payload.get("backup_current")) or bool(payload.get("apply")),
                             limit=limit,
                             max_windows=bounded_windows,
+                        )
+                        self._write_json(200, result)
+                    finally:
+                        graph.close()
+                return
+            if self.path == "/graph/version-flow":
+                with _GRAPH_LOCK:
+                    graph = GraphRagService(self.settings)
+                    try:
+                        limit = _bounded_int(str(payload.get("limit") or ""), default=100, minimum=1, maximum=500)
+                        result = graph.version_flow(
+                            commit=str(payload.get("commit") or ""),
+                            session_id=str(payload.get("session_id") or ""),
+                            limit=limit,
                         )
                         self._write_json(200, result)
                     finally:
