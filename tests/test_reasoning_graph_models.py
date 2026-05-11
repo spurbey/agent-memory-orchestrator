@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -16,7 +17,11 @@ from agent_memory_orchestrator.reasoning_graph import TimelineEvent
 from agent_memory_orchestrator.reasoning_graph import build_timeline
 from agent_memory_orchestrator.reasoning_graph import build_decision_threads
 from agent_memory_orchestrator.reasoning_graph import load_codex_transcript_events
+from agent_memory_orchestrator.reasoning_graph import code_nodes_from_hunks
+from agent_memory_orchestrator.reasoning_graph import extract_code_nodes_from_commit
+from agent_memory_orchestrator.reasoning_graph import parse_unified_zero_hunks
 from agent_memory_orchestrator.reasoning_graph import semantic_drift_boundary
+from agent_memory_orchestrator.reasoning_graph import should_accept_ast_parent
 from agent_memory_orchestrator.reasoning_graph import validate_graph_object
 from agent_memory_orchestrator.reasoning_graph import validate_status_transition
 
@@ -382,3 +387,93 @@ def test_real_session_builds_decision_threads_from_selected_evidence() -> None:
     assert result.threads
     assert any("install_service.py" in "\n".join(thread.file_paths) for thread in result.threads)
     assert all(thread.extraction_run_id == run.id for thread in result.threads)
+
+
+def test_unified_zero_hunk_parser_extracts_atomic_hunks() -> None:
+    diff = """diff --git a/src/example.py b/src/example.py
+--- a/src/example.py
++++ b/src/example.py
+@@ -2 +2 @@
+-old = 1
++new = 1
+@@ -10,0 +11,2 @@
++added = True
++print(added)
+"""
+
+    hunks = parse_unified_zero_hunks(
+        diff,
+        session_id="s1",
+        extraction_run_id="run1",
+        commit_id="abc123",
+        evidence_ids=("raw1",),
+    )
+
+    assert len(hunks) == 2
+    assert hunks[0].file_path == "src/example.py"
+    assert hunks[0].old_start == 2
+    assert hunks[0].new_start == 2
+    assert hunks[1].old_count == 0
+    assert hunks[1].new_count == 2
+
+
+def test_ast_parent_stop_rule_is_three_times_hunk_size() -> None:
+    assert should_accept_ast_parent(2, 6) is True
+    assert should_accept_ast_parent(2, 7) is False
+
+
+def test_missing_tree_sitter_expander_creates_unparsed_code_node() -> None:
+    diff = """diff --git a/src/example.py b/src/example.py
+--- a/src/example.py
++++ b/src/example.py
+@@ -2 +2 @@
+-old = 1
++new = 1
+"""
+    hunks = parse_unified_zero_hunks(
+        diff,
+        session_id="s1",
+        extraction_run_id="run1",
+        commit_id="abc123",
+        evidence_ids=("raw1",),
+    )
+
+    nodes = code_nodes_from_hunks(hunks, file_contents={"src/example.py": "a = 0\nnew = 1\n"})
+
+    assert len(nodes) == 1
+    assert nodes[0].file_path == "src/example.py"
+    assert nodes[0].ast_status == "unparsed"
+    assert nodes[0].content == "new = 1"
+
+
+def test_real_commit_produces_code_hunks_and_nodes_without_whole_file_blobs() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    verify = subprocess.run(
+        ["git", "rev-parse", "--verify", "c5326f8^{commit}"],
+        cwd=repo_root,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if verify.returncode != 0:
+        pytest.skip("selected real commit c5326f8 is not available")
+
+    hunks, nodes = extract_code_nodes_from_commit(
+        repo_root=repo_root,
+        commit="c5326f8",
+        session_id="019e08eb-8f1f-7381-8f25-59344c4ac8a9",
+        extraction_run_id="extraction_run:019e08eb-8f1f-7381-8f25-59344c4ac8a9:raw_639e",
+        evidence_ids=("raw_639e2963e72e4e3bb063042eeb221afd",),
+        file_path="src/agent_memory_orchestrator/install_service.py",
+    )
+
+    assert hunks
+    assert nodes
+    assert {hunk.file_path for hunk in hunks} == {"src/agent_memory_orchestrator/install_service.py"}
+    assert all(node.commit_id == "c5326f8" for node in nodes)
+    assert all(node.evidence_ids for node in nodes)
+    hunk_by_id = {hunk.id: hunk for hunk in hunks}
+    for node in nodes:
+        hunk = hunk_by_id[str(node.metadata["hunk_id"])]
+        assert len(node.content.splitlines()) <= max(1, hunk.new_count)
+        assert len(node.content.splitlines()) < 150
