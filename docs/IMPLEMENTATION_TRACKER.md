@@ -13,8 +13,30 @@ Baseline design: `docs/FINAL_DESIGN_V1.md`
 - Phase 5: Kuzu GraphRAG + session work ledger - Implemented foundation plus commit merge engine
 - Phase 6: Derived retrieval caches, reclustering, and release hardening - In progress with rebuild/finalize commands
 - Phase 7: External connectors - Slack Socket Mode foundation implemented; hosted OAuth/relay not included
+- Phase 8: Reasoning Graph V1 detailed docs - In progress; code implementation is blocked until `docs/reasoning_graph/` is reviewed and accepted
 
 ## Milestones
+
+## M2.7: Reasoning Graph V1 Documentation System
+
+Goal:
+
+- Normalize `docs/claude_handbook.md` into detailed implementation-ready specs before any further graph rewrite.
+
+Tasks:
+
+- [x] Add `docs/reasoning_graph/` folder structure.
+- [x] Add architecture docs with failure/safety model written early.
+- [x] Add strict Qwen API contract docs.
+- [x] Add graph model docs for nodes, edges, statuses, extraction runs, central versioning, and provenance.
+- [x] Add algorithm docs for chunking, semantic drift, Git hunks, Tree-sitter, code nodes, decisions, relationships, entity resolution, dedupe, dependency propagation, and Leiden.
+- [x] Add module docs and implementation phase docs with real-data gates.
+- [x] Add examples for NDK changes, same-file chunks, reverts, contested decisions, and code-query flow.
+
+Acceptance:
+
+- Code implementation of the full Reasoning Graph V1 rewrite must not start until the docs under `docs/reasoning_graph/` are reviewed and accepted.
+- Every reasoning graph doc must include populated `Depends on`, `Used by`, and `Related docs` sections.
 
 ## M0: Bootstrap and Contracts
 

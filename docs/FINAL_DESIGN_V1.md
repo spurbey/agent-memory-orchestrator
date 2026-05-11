@@ -4,6 +4,13 @@ Status: GraphRAG V1 finalization in progress
 Date: 2026-05-10
 Owner: Agent Memory Orchestrator contributors
 
+## Canonical Detailed Spec
+
+The detailed implementation authority for Reasoning Graph V1 is
+`docs/reasoning_graph/`. This file remains the high-level design index. If this
+file conflicts with the detailed module, algorithm, graph-model, or phase docs
+under `docs/reasoning_graph/`, follow the detailed docs and update this index.
+
 ## 1) Objective
 
 Build a local-first memory brain for Claude, Codex, and future apps where:
