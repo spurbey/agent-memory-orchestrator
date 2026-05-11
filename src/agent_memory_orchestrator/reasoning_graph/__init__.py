@@ -20,6 +20,8 @@ from .code_analysis import should_accept_ast_parent
 from .code_versioning import CodeVersionPlan
 from .code_versioning import CodeVersionRelation
 from .code_versioning import resolve_code_node_version
+from .decision_extraction import DecisionExtractionResult
+from .decision_extraction import extract_decisions
 from .timeline import TimelineEdge
 from .timeline import TimelineGraph
 from .timeline import build_timeline
@@ -37,6 +39,7 @@ __all__ = [
     "CodeVersionRelation",
     "ChunkingConfig",
     "DecisionThread",
+    "DecisionExtractionResult",
     "DecisionUnit",
     "ExtractionRun",
     "HashEmbeddingProvider",
@@ -52,6 +55,7 @@ __all__ = [
     "code_nodes_from_hunks",
     "cosine_similarity",
     "extract_code_nodes_from_commit",
+    "extract_decisions",
     "load_amo_evidence_events",
     "load_codex_transcript_events",
     "parse_unified_zero_hunks",
