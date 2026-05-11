@@ -176,7 +176,7 @@ What it does:
 
 - Captures relevant sent Slack messages as append-only raw evidence under `AMO_HOME/.evidence`.
 - Groups Slack messages into AMO sessions by `team/channel/thread`.
-- Replies only when the bot is explicitly mentioned.
+- Answers with local GraphRAG memory only when the bot is explicitly mentioned.
 - Writes a connector-finalize event when a Slack session should be summarized.
 - Lets normal `graph-drain` convert the cleaned Slack evidence window into graph nodes.
 
@@ -251,8 +251,10 @@ Install the optional WebSocket runtime and run the connector:
 
 ```powershell
 npx agent-memory-orchestrator-cli install --with-slack --target codex --preset cpu-light --qwen-model qwen3:0.6b
-amo-cli slack run --reply-mode disabled
+amo-cli slack run --reply-mode answer
 ```
+
+`answer` mode is mention-only. Normal channel messages can still be captured if they match configured capture users, but AMO posts a reply only for tagged bot mentions such as `<@AMO> why was session_graph changed?`.
 
 Finalize a Slack session and drain it into the graph:
 

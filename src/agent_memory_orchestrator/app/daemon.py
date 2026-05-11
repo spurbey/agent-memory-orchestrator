@@ -13,6 +13,7 @@ from ..core.config import Settings
 from ..graph.diagnostics import debug_drain, debug_graph, debug_hooks, debug_qwen
 from ..graph.service import GraphRagService
 from ..graph.store import GraphBackendUnavailable
+from ..integrations.connectors.slack import SlackConnectorService
 from ..memory import MemoryService
 from ..llm.qwen import QwenUnavailable
 
@@ -114,6 +115,9 @@ class AmoHandler(BaseHTTPRequestHandler):
         if path == "/versions":
             self._write_html(200, SESSION_COCKPIT_HTML)
             return
+        if path == "/connectors":
+            self._write_html(200, SESSION_COCKPIT_HTML)
+            return
         if path == "/graph":
             self._write_html(200, GRAPH_HTML)
             return
@@ -146,6 +150,21 @@ class AmoHandler(BaseHTTPRequestHandler):
                 self._write_json(200, svc.inspect_metrics())
             finally:
                 svc.close()
+            return
+        if path == "/api/connectors/slack/status":
+            try:
+                svc = SlackConnectorService(self.settings)
+                self._write_json(
+                    200,
+                    {
+                        "ok": True,
+                        "slack": svc.status(),
+                        "run_command": "amo-cli slack run --reply-mode answer",
+                        "behavior": "Answers only when the AMO bot is tagged in a channel or thread.",
+                    },
+                )
+            except Exception as exc:
+                self._write_json(500, {"ok": False, "error": str(exc)})
             return
         if path.startswith("/api/graph/") or path.startswith("/api/debug/") or path == "/api/graph-merge-status":
             try:

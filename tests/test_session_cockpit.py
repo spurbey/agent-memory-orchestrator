@@ -159,6 +159,8 @@ def test_daemon_exposes_dependency_free_3d_graph_view() -> None:
     assert "Obsidian style explorer" in GRAPH3D_HTML
     assert "Knowledge creation flow" in GRAPH3D_HTML
     assert "cleaned evidence sent to graph extraction" in GRAPH3D_HTML.lower()
+    assert "Connectors" in GRAPH3D_HTML
+    assert "Slack mention answers" in GRAPH3D_HTML
     assert "provenance" in GRAPH3D_HTML
     assert "Graph query inspector" in GRAPH3D_HTML
     assert "3d-force-graph" not in GRAPH3D_HTML

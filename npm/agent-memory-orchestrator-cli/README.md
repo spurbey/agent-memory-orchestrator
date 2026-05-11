@@ -39,5 +39,5 @@ Slack is optional:
 ```bash
 npx agent-memory-orchestrator-cli install --target codex --preset cpu-light --qwen-model qwen3:0.6b --with-slack
 amo-cli slack setup-wizard
-amo-cli slack run
+amo-cli slack run --reply-mode answer
 ```

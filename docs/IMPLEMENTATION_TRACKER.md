@@ -154,12 +154,13 @@ Tasks:
 - [x] Add Slack message normalization and relevance gates.
 - [x] Capture Slack messages into append-only raw evidence with `source_app=slack`.
 - [x] Enforce reply-only-when-mentioned behavior.
+- [x] Add tagged Slack answer mode that queries local GraphRAG and posts compact node/evidence/commit refs.
 - [x] Add connector finalize event so `graph-drain` can create cleaned windows and GraphDelta nodes.
 - [x] Add optional WebSocket runner behind the `slack` extra.
 
 Acceptance:
 
-- A user can bring Slack `xapp`/`xoxb` tokens, run AMO locally in Socket Mode, capture relevant sent Slack messages, finalize a Slack session, and drain it into the Kuzu graph without exposing localhost.
+- A user can bring Slack `xapp`/`xoxb` tokens, run AMO locally in Socket Mode, capture relevant sent Slack messages, answer tagged channel mentions through GraphRAG, finalize a Slack session, and drain it into the Kuzu graph without exposing localhost.
 
 ## M3: Orchestrator Core
 
