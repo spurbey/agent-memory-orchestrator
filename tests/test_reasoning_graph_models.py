@@ -10,6 +10,7 @@ import pytest
 from agent_memory_orchestrator.reasoning_graph import CodeNode
 from agent_memory_orchestrator.reasoning_graph import ChunkingConfig
 from agent_memory_orchestrator.reasoning_graph import DecisionThread
+from agent_memory_orchestrator.reasoning_graph import extract_decisions
 from agent_memory_orchestrator.reasoning_graph import DecisionUnit
 from agent_memory_orchestrator.reasoning_graph import ExtractionRun
 from agent_memory_orchestrator.reasoning_graph import HashEmbeddingProvider
@@ -42,6 +43,15 @@ class _KeywordEmbedder:
         return [1.0, 0.0]
 
 
+class _QwenDecisionStub:
+    def __init__(self, payload):
+        self.payload = payload
+
+    def extract(self, payload):
+        self.last_input = payload
+        return self.payload
+
+
 def _event(event_id: str, event_type: str, content: str, *, files: tuple[str, ...] = ()) -> TimelineEvent:
     return TimelineEvent(
         id=event_id,
@@ -53,12 +63,12 @@ def _event(event_id: str, event_type: str, content: str, *, files: tuple[str, ..
     )
 
 
-def _thread(thread_id: str, topic: str, *, files: tuple[str, ...]) -> DecisionThread:
+def _thread(thread_id: str, topic: str, *, files: tuple[str, ...], event_ids: tuple[str, ...] | None = None) -> DecisionThread:
     return DecisionThread(
         id=thread_id,
         session_id="s1",
         extraction_run_id="run1",
-        event_ids=(f"event:{thread_id}",),
+        event_ids=event_ids or (f"event:{thread_id}",),
         topic=topic,
         file_paths=files,
         evidence_ids=("raw1",),
@@ -607,3 +617,122 @@ def test_real_repeated_same_file_evidence_can_drive_version_resolution() -> None
 
     assert plan.relations
     assert plan.new_node.prev_content == old.content
+
+
+def test_deterministic_decision_patterns_create_expected_nodes() -> None:
+    thread = _thread("decision-thread", "install service hook", files=("src/install_service.py",), event_ids=("e1",))
+    event = _event("e1", "agent_message", "I'll harden the hook launcher because SystemExit should not break capture.")
+    run = ExtractionRun.create(session_id="s1", evidence_ids=("raw1",))
+
+    result = extract_decisions(thread=thread, events=[event], extraction_run=run)
+
+    assert len(result.decisions) == 1
+    decision = result.decisions[0]
+    assert decision.kind == "Decision"
+    assert decision.confidence == 0.60
+    assert decision.evidence_ids == ("raw1",)
+    assert decision.metadata["decision_type"] == "planned_action"
+
+
+def test_qwen_invalid_schema_becomes_diagnostic_only() -> None:
+    thread = _thread("qwen-thread", "install service hook", files=("src/install_service.py",))
+    event = _event("e1", "agent_message", "The hook launcher needs cleanup.")
+    run = ExtractionRun.create(session_id="s1", evidence_ids=("raw1",))
+
+    result = extract_decisions(thread=thread, events=[event], extraction_run=run, qwen=_QwenDecisionStub({"bad": []}))
+
+    assert result.decisions == ()
+    assert result.review_candidates == ()
+    assert result.diagnostics[0]["error_type"] == "schema_mismatch"
+
+
+def test_qwen_low_confidence_becomes_review_candidate() -> None:
+    thread = _thread("qwen-thread", "install service hook", files=("src/install_service.py",))
+    event = _event("e1", "tool_result", "patched install_service.py", files=("src/install_service.py",))
+    run = ExtractionRun.create(session_id="s1", evidence_ids=("raw1",))
+    qwen = _QwenDecisionStub(
+        {
+            "decisions": [
+                {
+                    "decision_type": "completed_fix",
+                    "subject": "hook launcher",
+                    "predicate": "hardened",
+                    "object": "SystemExit handling",
+                    "reason": "capture should continue",
+                    "confidence": 0.2,
+                    "evidence_event_ids": ["raw1"],
+                }
+            ]
+        }
+    )
+
+    result = extract_decisions(thread=thread, events=[event], extraction_run=run, qwen=qwen)
+
+    assert result.decisions == ()
+    assert result.review_candidates[0]["reason"] == "low_confidence"
+
+
+def test_qwen_valid_output_creates_extraction_run_scoped_decision() -> None:
+    thread = _thread("qwen-thread", "install service hook", files=("src/install_service.py",))
+    event = _event("e1", "tool_result", "patched install_service.py", files=("src/install_service.py",))
+    run = ExtractionRun.create(session_id="s1", evidence_ids=("raw1",))
+    qwen = _QwenDecisionStub(
+        {
+            "decisions": [
+                {
+                    "decision_type": "completed_fix",
+                    "subject": "hook launcher",
+                    "predicate": "handles",
+                    "object": "SystemExit",
+                    "reason": "capture should fail open",
+                    "confidence": 0.82,
+                    "evidence_event_ids": ["raw1"],
+                }
+            ]
+        }
+    )
+
+    result = extract_decisions(thread=thread, events=[event], extraction_run=run, qwen=qwen)
+
+    assert len(result.decisions) == 1
+    assert result.decisions[0].kind == "Fix"
+    assert result.decisions[0].source == "qwen"
+    assert result.decisions[0].qwen_call == "decision_extraction_fallback"
+    assert result.decisions[0].extraction_run_id == run.id
+
+
+def test_real_session_extracts_evidence_backed_decisions_from_threads() -> None:
+    home = Path(os.environ.get("USERPROFILE", ""))
+    evidence_path = home / ".agent-memory-orchestrator" / ".evidence" / "2026-05-08.jsonl"
+    transcript_path = (
+        home
+        / ".codex"
+        / "sessions"
+        / "2026"
+        / "05"
+        / "09"
+        / "rollout-2026-05-09T00-33-35-019e08eb-8f1f-7381-8f25-59344c4ac8a9.jsonl"
+    )
+    if not evidence_path.exists() or not transcript_path.exists():
+        pytest.skip("selected real AMO evidence/transcript is not available in this environment")
+    timeline = build_timeline(
+        session_id="019e08eb-8f1f-7381-8f25-59344c4ac8a9",
+        evidence_paths=[evidence_path],
+        transcript_paths=[transcript_path],
+    )
+    run = ExtractionRun.create(
+        session_id="019e08eb-8f1f-7381-8f25-59344c4ac8a9",
+        evidence_ids=("raw_639e2963e72e4e3bb063042eeb221afd",),
+        transcript_paths=(str(transcript_path),),
+    )
+    built = build_decision_threads(timeline, extraction_run=run, embedder=HashEmbeddingProvider(dims=64))
+
+    extracted = [
+        decision
+        for thread in built.threads
+        for decision in extract_decisions(thread=thread, events=list(timeline.events), extraction_run=run).decisions
+    ]
+
+    assert extracted
+    assert all(decision.evidence_ids for decision in extracted)
+    assert all(decision.extraction_run_id == run.id for decision in extracted)
