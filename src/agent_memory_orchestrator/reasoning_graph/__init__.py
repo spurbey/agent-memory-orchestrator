@@ -22,6 +22,10 @@ from .code_versioning import CodeVersionRelation
 from .code_versioning import resolve_code_node_version
 from .decision_extraction import DecisionExtractionResult
 from .decision_extraction import extract_decisions
+from .relationships import ReasoningEdge
+from .relationships import ValidationLinkResult
+from .relationships import produced_change_edges
+from .relationships import validation_edges_for_test
 from .timeline import TimelineEdge
 from .timeline import TimelineGraph
 from .timeline import build_timeline
@@ -44,11 +48,13 @@ __all__ = [
     "ExtractionRun",
     "HashEmbeddingProvider",
     "MergePlan",
+    "ReasoningEdge",
     "TestRun",
     "TimelineEvent",
     "TimelineEdge",
     "TimelineGraph",
     "ValidationIssue",
+    "ValidationLinkResult",
     "ValidationReport",
     "build_timeline",
     "build_decision_threads",
@@ -59,8 +65,10 @@ __all__ = [
     "load_amo_evidence_events",
     "load_codex_transcript_events",
     "parse_unified_zero_hunks",
+    "produced_change_edges",
     "resolve_code_node_version",
     "semantic_drift_boundary",
+    "validation_edges_for_test",
     "should_accept_ast_parent",
     "validate_graph_object",
     "validate_status_transition",

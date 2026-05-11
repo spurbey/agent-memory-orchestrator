@@ -14,6 +14,7 @@ from agent_memory_orchestrator.reasoning_graph import extract_decisions
 from agent_memory_orchestrator.reasoning_graph import DecisionUnit
 from agent_memory_orchestrator.reasoning_graph import ExtractionRun
 from agent_memory_orchestrator.reasoning_graph import HashEmbeddingProvider
+from agent_memory_orchestrator.reasoning_graph import TestRun as GraphTestRun
 from agent_memory_orchestrator.reasoning_graph import TimelineGraph
 from agent_memory_orchestrator.reasoning_graph import TimelineEvent
 from agent_memory_orchestrator.reasoning_graph import build_timeline
@@ -22,9 +23,11 @@ from agent_memory_orchestrator.reasoning_graph import load_codex_transcript_even
 from agent_memory_orchestrator.reasoning_graph import code_nodes_from_hunks
 from agent_memory_orchestrator.reasoning_graph import extract_code_nodes_from_commit
 from agent_memory_orchestrator.reasoning_graph import parse_unified_zero_hunks
+from agent_memory_orchestrator.reasoning_graph import produced_change_edges
 from agent_memory_orchestrator.reasoning_graph import resolve_code_node_version
 from agent_memory_orchestrator.reasoning_graph import semantic_drift_boundary
 from agent_memory_orchestrator.reasoning_graph import should_accept_ast_parent
+from agent_memory_orchestrator.reasoning_graph import validation_edges_for_test
 from agent_memory_orchestrator.reasoning_graph import validate_graph_object
 from agent_memory_orchestrator.reasoning_graph import validate_status_transition
 
@@ -736,3 +739,165 @@ def test_real_session_extracts_evidence_backed_decisions_from_threads() -> None:
     assert extracted
     assert all(decision.evidence_ids for decision in extracted)
     assert all(decision.extraction_run_id == run.id for decision in extracted)
+
+
+def test_produced_change_edges_link_decision_to_code_by_thread_file() -> None:
+    decision = DecisionUnit(
+        id="decision:s1:1",
+        session_id="s1",
+        extraction_run_id="run1",
+        summary="Fixed installer hook",
+        evidence_ids=("raw-decision",),
+        kind="Fix",
+    )
+    code = _code_node("code:s1:1", "def hook(): pass")
+    thread = _thread("thread1", "install service hook", files=(code.file_path,))
+
+    edges = produced_change_edges(decisions=[decision], code_nodes=[code], thread=thread)
+
+    assert len(edges) == 1
+    assert edges[0].kind == "PRODUCED_CHANGE_IN"
+    assert edges[0].source_id == decision.id
+    assert edges[0].target_id == code.id
+    assert edges[0].evidence_ids == ("raw-decision", "raw1")
+
+
+def test_passing_test_after_write_creates_validated_by_and_bumps_once() -> None:
+    decision = DecisionUnit(
+        id="decision:s1:1",
+        session_id="s1",
+        extraction_run_id="run1",
+        summary="Fixed installer hook",
+        evidence_ids=("raw-decision",),
+        kind="Fix",
+        confidence=0.8,
+    )
+    test = GraphTestRun(
+        id="test:s1:1",
+        session_id="s1",
+        extraction_run_id="run1",
+        command="pytest tests/test_hook_cli.py",
+        result="pass",
+        evidence_ids=("raw-test",),
+        metadata={"event_id": "test-event"},
+    )
+
+    result = validation_edges_for_test(
+        decision=decision,
+        test_run=test,
+        event_order={"write-event": 10, "test-event": 20},
+        write_event_ids=("write-event",),
+    )
+
+    assert len(result.edges) == 1
+    assert result.edges[0].kind == "VALIDATED_BY"
+    assert result.decision.confidence == 0.9
+
+
+def test_passing_test_before_write_does_not_validate() -> None:
+    decision = DecisionUnit(
+        id="decision:s1:1",
+        session_id="s1",
+        extraction_run_id="run1",
+        summary="Fixed installer hook",
+        evidence_ids=("raw-decision",),
+        kind="Fix",
+        confidence=0.8,
+    )
+    test = GraphTestRun(
+        id="test:s1:1",
+        session_id="s1",
+        extraction_run_id="run1",
+        command="pytest",
+        result="pass",
+        evidence_ids=("raw-test",),
+        metadata={"event_id": "test-event"},
+    )
+
+    result = validation_edges_for_test(
+        decision=decision,
+        test_run=test,
+        event_order={"test-event": 5, "write-event": 10},
+        write_event_ids=("write-event",),
+    )
+
+    assert result.edges == ()
+    assert result.diagnostics == ("test_before_write",)
+    assert result.decision.confidence == 0.8
+
+
+def test_failed_test_after_write_creates_failed_validation_without_bump() -> None:
+    decision = DecisionUnit(
+        id="decision:s1:1",
+        session_id="s1",
+        extraction_run_id="run1",
+        summary="Fixed installer hook",
+        evidence_ids=("raw-decision",),
+        kind="Fix",
+        confidence=0.8,
+    )
+    test = GraphTestRun(
+        id="test:s1:1",
+        session_id="s1",
+        extraction_run_id="run1",
+        command="pytest",
+        result="fail",
+        evidence_ids=("raw-test",),
+        metadata={"event_id": "test-event"},
+    )
+
+    result = validation_edges_for_test(
+        decision=decision,
+        test_run=test,
+        event_order={"write-event": 10, "test-event": 20},
+        write_event_ids=("write-event",),
+    )
+
+    assert len(result.edges) == 1
+    assert result.edges[0].kind == "FAILED_VALIDATION"
+    assert result.decision.confidence == 0.8
+
+
+def test_real_session_decision_links_to_real_commit_code_node() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    verify = subprocess.run(
+        ["git", "rev-parse", "--verify", "c5326f8^{commit}"],
+        cwd=repo_root,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if verify.returncode != 0:
+        pytest.skip("selected real commit c5326f8 is not available")
+    hunks, code_nodes = extract_code_nodes_from_commit(
+        repo_root=repo_root,
+        commit="c5326f8",
+        session_id="019e08eb-8f1f-7381-8f25-59344c4ac8a9",
+        extraction_run_id="run-real",
+        evidence_ids=("raw_639e2963e72e4e3bb063042eeb221afd",),
+        file_path="src/agent_memory_orchestrator/install_service.py",
+    )
+    if not hunks or not code_nodes:
+        pytest.skip("selected real commit did not produce install_service.py code nodes")
+    decision = DecisionUnit(
+        id="decision:real:1",
+        session_id="019e08eb-8f1f-7381-8f25-59344c4ac8a9",
+        extraction_run_id="run-real",
+        summary="Fixed installer hook",
+        evidence_ids=("raw_639e2963e72e4e3bb063042eeb221afd",),
+        kind="Fix",
+    )
+    thread = DecisionThread(
+        id="thread:real:1",
+        session_id=decision.session_id,
+        extraction_run_id="run-real",
+        event_ids=("event:raw_639e2963e72e4e3bb063042eeb221afd",),
+        topic="install service hook",
+        file_paths=("src/agent_memory_orchestrator/install_service.py",),
+        evidence_ids=decision.evidence_ids,
+    )
+
+    edges = produced_change_edges(decisions=[decision], code_nodes=code_nodes, thread=thread)
+
+    assert edges
+    assert all(edge.kind == "PRODUCED_CHANGE_IN" for edge in edges)
