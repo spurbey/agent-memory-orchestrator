@@ -5,6 +5,7 @@ const AMO = {
   selectedSessionId: "",
   selectedSession: null,
   health: null,
+  connectors: { slack: null },
   centralGraph: { nodes: [], edges: [], warnings: [] },
   versionFlow: { flows: [], nodes: [], edges: [], warnings: [] },
   graph: {
@@ -143,8 +144,17 @@ async function loadVersionFlow() {
   AMO.versionFlow = { flows: data.flows || [], nodes: data.nodes || [], edges: data.edges || [], warnings: data.warnings || [] };
   renderVersionFlow();
 }
+async function loadConnectorStatus() {
+  try {
+    const data = await apiGet("/api/connectors/slack/status");
+    AMO.connectors.slack = data;
+  } catch (error) {
+    AMO.connectors.slack = { ok: false, error: error.message };
+  }
+  renderConnectorStatus();
+}
 async function refreshAll() {
-  await Promise.allSettled([loadHealth(), loadSessions(), loadCentralGraph(), loadVersionFlow()]);
+  await Promise.allSettled([loadHealth(), loadSessions(), loadCentralGraph(), loadVersionFlow(), loadConnectorStatus()]);
   if (AMO.selectedSessionId) await selectSession(AMO.selectedSessionId, { silent: true });
 }
 function setView(view) {
@@ -157,12 +167,14 @@ function setView(view) {
     versions: ["Version Flow", "Inspect how session work became durable Git-backed graph memory."],
     graph: ["Knowledge Graph", "Explore committed memory first, then reveal provenance when needed."],
     retrieval: ["Retrieval", "Inspect explicit GraphRAG query planning, candidates, timing, and Qwen fallback."],
+    connectors: ["Connectors", "Check local connector readiness and how external messages enter GraphRAG."],
     admin: ["Admin", "Run local daemon graph jobs and inspect diagnostics."],
   }[view] || ["AMO", "Local GraphRAG control room"];
   $("pageTitle").textContent = copy[0];
   $("pageSubtitle").textContent = copy[1];
   if (view === "graph") requestAnimationFrame(resizeGraph);
   if (view === "versions") renderVersionFlow();
+  if (view === "connectors") renderConnectorStatus();
 }
 function renderDashboard() {
   const sessions = AMO.sessions || [];
@@ -185,6 +197,40 @@ function renderHealth() {
   const h = AMO.health || {};
   const rows = [["graph backend", h.graph_backend], ["graph path", h.graph_path], ["qwen model", h.qwen_model], ["qwen timeout", `${h.qwen_timeout_seconds || "?"}s`], ["extract timeout", `${h.qwen_extract_timeout_seconds || "?"}s`], ["drain windows", h.drain_max_windows_per_run]];
   $("healthPanel").innerHTML = rows.map(([k, v]) => `<div class="health-item"><strong>${escapeHtml(v || "unknown")}</strong><span>${escapeHtml(k)}</span></div>`).join("");
+}
+function renderConnectorStatus() {
+  const target = $("slackStatusPanel");
+  if (!target) return;
+  const data = AMO.connectors.slack;
+  if (!data) {
+    target.innerHTML = `<div class="connector-card"><span class="pill warn">checking</span><strong>Slack status loading</strong><p class="muted">Waiting for daemon status.</p></div>`;
+    return;
+  }
+  if (!data.ok) {
+    target.innerHTML = `<div class="connector-card"><span class="pill bad">error</span><strong>Slack status unavailable</strong><p class="muted">${escapeHtml(data.error || "Unknown connector error")}</p></div>`;
+    return;
+  }
+  const slack = data.slack || {};
+  const config = slack.config || {};
+  const tokens = slack.tokens || {};
+  const prefix = slack.prefix_check || {};
+  const rows = [
+    ["enabled", config.enabled ? "yes" : "no", config.enabled ? "good" : "warn"],
+    ["mode", config.mode || "socket_mode", "blue"],
+    ["team", config.team_id || "not set", config.team_id ? "good" : "warn"],
+    ["bot user", config.bot_user_id || "not set", config.bot_user_id ? "good" : "warn"],
+    ["app token", tokens.app_token ? "present" : "missing", tokens.app_token ? "good" : "bad"],
+    ["bot token", tokens.bot_token ? "present" : "missing", tokens.bot_token ? "good" : "bad"],
+    ["prefixes", prefix.ok ? "valid" : "check", prefix.ok ? "good" : "warn"],
+    ["reply mode", "tagged answer", "good"],
+  ];
+  target.innerHTML = `<div class="connector-card">
+    <div class="panel-head"><div><span class="pill ${config.enabled ? "good" : "warn"}">Slack</span><h3>Local Socket Mode</h3></div><span class="pill blue">mention-only</span></div>
+    <div class="connector-grid">${rows.map(([label, value, tone]) => `<div class="connector-kv"><span>${escapeHtml(label)}</span><strong class="${escapeHtml(tone)}">${escapeHtml(value)}</strong></div>`).join("")}</div>
+    <p class="muted">${escapeHtml(data.behavior || "Answers only when tagged.")}</p>
+  </div>`;
+  const command = $("slackCommandPanel");
+  if (command) command.textContent = data.run_command ? `amo-cli slack setup-wizard\n${data.run_command}` : command.textContent;
 }
 function renderPipeline(target, counts) {
   target.innerHTML = PIPELINE.map(([name, desc, key]) => `<div class="stage-card"><strong>${escapeHtml(name)}</strong><div class="count">${escapeHtml(counts[key] ?? 0)}</div><small>${escapeHtml(desc)}</small></div>`).join("");
@@ -740,6 +786,7 @@ async function init() {
   setupGraphCanvas();
   const path = window.location.pathname;
   if (path.includes("version")) setView("versions");
+  else if (path.includes("connector")) setView("connectors");
   else if (path.includes("graph")) setView("graph");
   else if (path.includes("session")) setView("sessions");
   else if (path.includes("dashboard")) setView("dashboard");

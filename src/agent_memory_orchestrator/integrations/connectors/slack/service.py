@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -10,6 +11,7 @@ from ....evidence.raw_store import RawEvidenceStore
 from .client import SlackApiClient, SlackApiError
 from .config import SlackConfig, load_slack_config, token_presence, validate_token_prefixes, write_slack_config
 from .events import (
+    SlackMessage,
     finalize_connector_event,
     message_to_connector_event,
     parse_message_envelope,
@@ -21,6 +23,9 @@ from .manifest import build_slack_manifest, slack_manifest_json, slack_manifest_
 
 class SlackConnectorError(RuntimeError):
     pass
+
+
+SLACK_REPLY_CHAR_LIMIT = 2800
 
 
 class SlackConnectorService:
@@ -213,6 +218,28 @@ class SlackConnectorService:
         text = "AMO captured this mention locally. I will answer only on tagged Slack messages."
         return self.client.post_message(channel=channel, text=text, thread_ts=thread_ts)
 
+    def post_answer_reply(self, *, message: SlackMessage, search_result: dict[str, Any] | None = None) -> dict[str, Any]:
+        result = search_result if search_result is not None else self._search_graph_for_message(message)
+        text = build_slack_answer_text(
+            query=slack_query_from_text(message.text, self.config.bot_user_id),
+            search_result=result,
+        )
+        return self.client.post_message(channel=message.channel_id, text=text, thread_ts=message.thread_ts or message.ts)
+
+    def _search_graph_for_message(self, message: SlackMessage) -> dict[str, Any]:
+        query = slack_query_from_text(message.text, self.config.bot_user_id)
+        if not query:
+            return {"ok": False, "error": "empty_mention_query"}
+        from ....graph.service import GraphRagService
+
+        graph = GraphRagService(self.settings)
+        try:
+            return graph.graph_search(query=query, limit=6, include_historical=True)
+        except Exception as exc:  # Slack should receive a safe failure instead of dropping the mention.
+            return {"ok": False, "error": str(exc)}
+        finally:
+            graph.close()
+
 
 def config_from_args(
     base: SlackConfig,
@@ -240,6 +267,46 @@ def load_event_file(path: Path) -> dict[str, Any]:
     return payload
 
 
+def slack_query_from_text(text: str, bot_user_id: str) -> str:
+    raw = str(text or "")
+    if bot_user_id:
+        raw = re.sub(rf"<@{re.escape(bot_user_id)}>\s*", "", raw)
+    return re.sub(r"\s+", " ", raw).strip()
+
+
+def build_slack_answer_text(*, query: str, search_result: dict[str, Any]) -> str:
+    if not query:
+        return "Ask a question after tagging AMO, for example: `<@AMO> why was session_graph changed?`"
+    if not search_result.get("ok"):
+        error = str(search_result.get("error") or "unknown error")
+        return _slack_trim(f"AMO captured the mention, but could not query graph memory for: {query}\n\nError: {error}")
+
+    context = str(search_result.get("context") or "").strip()
+    nodes = search_result.get("nodes") if isinstance(search_result.get("nodes"), list) else []
+    if not nodes:
+        return _slack_trim(
+            "AMO captured the mention, but no answer-grade graph memory matched this question yet.\n\n"
+            f"Query: {query}\n"
+            "Next: drain/finalize the relevant session or ask with `raw evidence` if you need provenance records."
+        )
+
+    refs = []
+    for node in nodes[:3]:
+        if not isinstance(node, dict):
+            continue
+        node_id = str(node.get("id") or node.get("node_id") or "")
+        evidence_id = str(node.get("evidence_id") or "")
+        commit_id = str(node.get("commit_id") or "")
+        parts = [part for part in [f"node={node_id}" if node_id else "", f"evidence={evidence_id}" if evidence_id else "", f"commit={commit_id[:12]}" if commit_id else ""] if part]
+        if parts:
+            refs.append("; ".join(parts))
+    refs_text = "\n".join(f"- {ref}" for ref in refs)
+    body = context or "AMO found graph memory, but the compressed context was empty."
+    if refs_text:
+        body = f"{body}\n\nRefs:\n{refs_text}"
+    return _slack_trim(f"AMO memory answer for: {query}\n\n{body}")
+
+
 def _safe_auth_test(payload: dict[str, Any]) -> dict[str, Any]:
     return {
         "team": payload.get("team"),
@@ -248,3 +315,10 @@ def _safe_auth_test(payload: dict[str, Any]) -> dict[str, Any]:
         "bot_id": payload.get("bot_id"),
         "url": payload.get("url"),
     }
+
+
+def _slack_trim(text: str, limit: int = SLACK_REPLY_CHAR_LIMIT) -> str:
+    clean = str(text or "").strip()
+    if len(clean) <= limit:
+        return clean
+    return clean[: max(0, limit - 22)].rstrip() + "\n...[truncated]"

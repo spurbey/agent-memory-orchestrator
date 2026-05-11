@@ -10,6 +10,8 @@ from agent_memory_orchestrator.integrations.connectors.slack.client import Slack
 from agent_memory_orchestrator.integrations.connectors.slack.config import load_slack_config, slack_secret_path
 from agent_memory_orchestrator.integrations.connectors.slack.events import parse_message_envelope, should_reply_message
 from agent_memory_orchestrator.integrations.connectors.slack.manifest import build_slack_manifest, slack_manifest_setup_url
+from agent_memory_orchestrator.integrations.connectors.slack.service import build_slack_answer_text, slack_query_from_text
+from agent_memory_orchestrator.integrations.connectors.slack.socket_mode import SlackSocketModeRunner
 from agent_memory_orchestrator.integrations.connectors.slack.wizard import run_slack_setup_wizard
 from agent_memory_orchestrator.evidence.triggers import detect_trigger
 
@@ -265,6 +267,51 @@ def test_slack_reply_rule_is_mention_only() -> None:
     assert mentioned is not None
     assert should_reply_message(direct_message, config) is False
     assert should_reply_message(mentioned, config) is True
+
+
+def test_slack_answer_reply_uses_graphrag_context_and_refs(tmp_path) -> None:
+    posts: list[dict[str, object]] = []
+
+    def fake_transport(url: str, token: str, payload: dict[str, object], timeout: float) -> dict[str, object]:
+        posts.append({"url": url, "token": token, "payload": payload, "timeout": timeout})
+        return {"ok": True, "ts": "222.333"}
+
+    config = SlackConfig(enabled=True, team_id="T1", bot_user_id="B1", bot_token="xoxb-test")
+    svc = SlackConnectorService(
+        _settings(tmp_path),
+        config=config,
+        client=SlackApiClient(bot_token="xoxb-test", transport=fake_transport),
+    )
+    message = parse_message_envelope(_message_envelope(user="U1", text="<@B1> why was session_graph changed?"))
+    assert message is not None
+
+    result = svc.post_answer_reply(
+        message=message,
+        search_result={
+            "ok": True,
+            "context": "It was changed to clean raw artifacts before graph extraction.",
+            "nodes": [{"id": "fix:1", "evidence_id": "raw_1", "commit_id": "abcdef1234567890"}],
+        },
+    )
+
+    assert result["ok"] is True
+    posted = posts[0]["payload"]
+    assert isinstance(posted, dict)
+    assert posted["channel"] == "C1"
+    assert posted["thread_ts"] == "111.222"
+    assert "why was session_graph changed?" in str(posted["text"])
+    assert "clean raw artifacts" in str(posted["text"])
+    assert "node=fix:1" in str(posted["text"])
+    assert "evidence=raw_1" in str(posted["text"])
+
+
+def test_slack_answer_mode_is_supported_and_query_strips_bot_mention(tmp_path) -> None:
+    runner = SlackSocketModeRunner(SlackConnectorService(_settings(tmp_path), config=SlackConfig(enabled=True)), reply_mode="answer")
+
+    assert runner.reply_mode == "answer"
+    assert slack_query_from_text("<@B1> why was versioning changed?", "B1") == "why was versioning changed?"
+    text = build_slack_answer_text(query="", search_result={"ok": True})
+    assert "Ask a question" in text
 
 
 def _settings(tmp_path) -> Settings:

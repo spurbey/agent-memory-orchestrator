@@ -201,7 +201,7 @@ def _build_parser() -> argparse.ArgumentParser:
     slack_finalize.add_argument("--reason", default="idle_timeout")
     slack_finalize.add_argument("--message-count", type=int, default=0)
     slack_run = slack_sub.add_parser("run", help="Run the local outbound Slack Socket Mode connector")
-    slack_run.add_argument("--reply-mode", choices=["disabled", "ack"], default="disabled")
+    slack_run.add_argument("--reply-mode", choices=["disabled", "ack", "answer"], default="answer")
 
     debug = sub.add_parser("debug", help="Debug AMO hook, drain, Qwen, graph, and retrieval stages")
     debug_sub = debug.add_subparsers(dest="debug_command", required=True)

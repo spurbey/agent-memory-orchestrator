@@ -22,6 +22,7 @@
         <button class="nav-item" data-view="versions">Versions</button>
         <button class="nav-item" data-view="graph">Graph</button>
         <button class="nav-item" data-view="retrieval">Retrieval</button>
+        <button class="nav-item" data-view="connectors">Connectors</button>
         <button class="nav-item" data-view="admin">Admin</button>
       </nav>
       <div class="rail-footer">
@@ -214,6 +215,41 @@
           </div>
         </section>
         <div id="retrievalResult" class="retrieval-result"></div>
+      </section>
+
+      <section id="connectorsView" class="view">
+        <section class="panel hero-panel connector-hero">
+          <div>
+            <p class="eyebrow">Connectors</p>
+            <h2>Slack mention answers without a public webhook</h2>
+            <p class="muted">AMO runs Slack in local Socket Mode. The bot captures relevant channel messages as raw evidence, and when the bot is tagged it queries GraphRAG and replies in the same Slack thread.</p>
+          </div>
+          <div id="slackStatusPanel" class="connector-status"></div>
+        </section>
+        <div class="two-col">
+          <section class="panel">
+            <div class="panel-head stacked">
+              <p class="eyebrow">Slack flow</p>
+              <h2>Tagged-channel answer path</h2>
+              <p class="muted">The answer mode is intentionally narrow: no response to normal channel chatter, only tagged bot mentions.</p>
+            </div>
+            <div class="connector-flow">
+              <div class="connector-step"><strong>1. Mention</strong><span>&lt;@AMO&gt; asks a memory question in a channel or thread.</span></div>
+              <div class="connector-step"><strong>2. Capture</strong><span>The message is appended to local raw evidence with source_app=slack.</span></div>
+              <div class="connector-step"><strong>3. Retrieve</strong><span>AMO runs GraphRAG over committed central memory and selected historical context.</span></div>
+              <div class="connector-step"><strong>4. Reply</strong><span>The bot posts a compact answer with node/evidence/commit refs.</span></div>
+            </div>
+          </section>
+          <section class="panel">
+            <div class="panel-head stacked">
+              <p class="eyebrow">Operator commands</p>
+              <h2>Run locally</h2>
+              <p class="muted">Slack tokens stay local. The web UI only displays status; the connector process runs from the terminal.</p>
+            </div>
+            <pre id="slackCommandPanel" class="code-block">amo-cli slack setup-wizard
+amo-cli slack run --reply-mode answer</pre>
+          </section>
+        </div>
       </section>
 
       <section id="adminView" class="view">

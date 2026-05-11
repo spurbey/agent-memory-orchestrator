@@ -16,9 +16,9 @@ class SlackSocketModeRunner:
     local and no public webhook URL is required.
     """
 
-    def __init__(self, service: SlackConnectorService, *, reply_mode: str = "disabled") -> None:
-        if reply_mode not in {"disabled", "ack"}:
-            raise ValueError("reply_mode must be one of: disabled, ack")
+    def __init__(self, service: SlackConnectorService, *, reply_mode: str = "answer") -> None:
+        if reply_mode not in {"disabled", "ack", "answer"}:
+            raise ValueError("reply_mode must be one of: disabled, ack, answer")
         self.service = service
         self.reply_mode = reply_mode
 
@@ -44,10 +44,13 @@ class SlackSocketModeRunner:
                 if envelope_id:
                     ws.send(json.dumps({"envelope_id": envelope_id}))
                 result = self.service.handle_event_envelope(envelope)
-                if self.reply_mode == "ack" and result.get("reply_required"):
+                if self.reply_mode != "disabled" and result.get("reply_required"):
                     message = parse_message_envelope(envelope)
                     if message is not None:
-                        self.service.post_ack_reply(channel=message.channel_id, thread_ts=message.thread_ts or message.ts)
+                        if self.reply_mode == "ack":
+                            self.service.post_ack_reply(channel=message.channel_id, thread_ts=message.thread_ts or message.ts)
+                        else:
+                            self.service.post_answer_reply(message=message)
         finally:
             ws.close()
 
