@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -117,7 +118,7 @@ class TimelineEvent:
             content=content,
             tool_name=tool_name,
             files=files,
-            metadata={"raw_event_name": event_type},
+            metadata={"raw_event_name": event_type, "tool_input_text": _tool_input_text(payload)},
         )
 
     def as_dict(self) -> dict[str, Any]:
@@ -262,6 +263,22 @@ def _event_content(raw: dict[str, Any], payload: dict[str, Any]) -> str:
         command = tool_input.get("command")
         if isinstance(command, str):
             return command.strip()
+    return ""
+
+
+def _tool_input_text(payload: dict[str, Any]) -> str:
+    tool_input = payload.get("tool_input")
+    if isinstance(tool_input, str):
+        return tool_input.strip()
+    if isinstance(tool_input, dict):
+        for key in ("command", "cmd", "input"):
+            value = tool_input.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        try:
+            return json.dumps(tool_input, sort_keys=True)
+        except TypeError:
+            return str(tool_input)
     return ""
 
 
