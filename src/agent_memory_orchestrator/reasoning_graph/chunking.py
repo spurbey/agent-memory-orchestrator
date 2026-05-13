@@ -49,7 +49,15 @@ class Chunk:
 
     @property
     def text(self) -> str:
-        values = [event.content for event in self.events if event.content and event.event_type in {"agent_message", "user_message"}]
+        values: list[str] = []
+        for event in self.events:
+            if not event.content:
+                continue
+            if event.event_type in {"agent_message", "user_message"}:
+                values.append(event.content)
+                continue
+            if event.metadata.get("tool_fact"):
+                values.append(event.content)
         if values:
             return "\n".join(values)
         return "\n".join(event.content for event in self.events if event.content)
@@ -72,7 +80,9 @@ def build_decision_threads(
 ) -> DecisionThreadBuild:
     cfg = config or ChunkingConfig()
     diagnostics: list[str] = []
+    _prewarm_embeddings(embedder, _semantic_window_texts(timeline.events, cfg))
     chunks = _build_chunks(timeline.events, embedder=embedder, config=cfg, diagnostics=diagnostics)
+    _prewarm_embeddings(embedder, [text for chunk in chunks for text in (chunk.text, _topic_label(chunk)) if text])
     threads = _chunks_to_threads(
         chunks,
         session_id=timeline.session_id,
@@ -224,6 +234,30 @@ def _topic_similarity(left: str, right: str, embedder: EmbeddingProvider | None)
     return cosine_similarity(embedder.embed(left), embedder.embed(right))
 
 
+def _prewarm_embeddings(embedder: EmbeddingProvider | None, texts: list[str]) -> None:
+    if embedder is None:
+        return
+    embed_many = getattr(embedder, "embed_many", None)
+    if not callable(embed_many):
+        return
+    unique = list(dict.fromkeys(text for text in texts if text))
+    if unique:
+        embed_many(unique)
+
+
+def _semantic_window_texts(events: tuple[TimelineEvent, ...], config: ChunkingConfig) -> list[str]:
+    assistant_messages: list[str] = []
+    windows: list[str] = []
+    for event in events:
+        if event.event_type != "agent_message" or not event.content:
+            continue
+        if len(assistant_messages) >= config.semantic_window_size:
+            windows.append("\n".join(assistant_messages[-config.semantic_window_size :]))
+            windows.append("\n".join([*assistant_messages[-(config.semantic_window_size - 1) :], event.content]))
+        assistant_messages.append(event.content)
+    return windows
+
+
 def _make_chunk(index: int, events: list[TimelineEvent], files: set[str], *, diagnostics: list[str] | tuple[str, ...]) -> Chunk:
     return Chunk(
         id=f"chunk:{index + 1}",
@@ -234,13 +268,25 @@ def _make_chunk(index: int, events: list[TimelineEvent], files: set[str], *, dia
 
 
 def _is_file_switch(current_files: set[str], event_files: tuple[str, ...]) -> bool:
-    return bool(current_files and event_files and current_files.isdisjoint(event_files))
+    if not current_files or not event_files:
+        return False
+    current = {_compare_path(path) for path in current_files if _compare_path(path)}
+    incoming = {_compare_path(path) for path in event_files if _compare_path(path)}
+    if not current or not incoming:
+        return False
+    if current.intersection(incoming):
+        return False
+    for left in current:
+        for right in incoming:
+            if _related_paths(left, right) or _same_parent(left, right):
+                return False
+    return True
 
 
 def _meaningful_files(files: tuple[str, ...]) -> tuple[str, ...]:
     out: list[str] = []
     for file_path in files:
-        normalized = file_path.replace("\\", "/").strip().strip('"')
+        normalized = _display_path(file_path)
         if not normalized or normalized.lower() in {"c:", "m", "a"}:
             continue
         if len(normalized) <= 2 and normalized.endswith(":"):
@@ -261,3 +307,39 @@ def _topic_label(chunk: Chunk) -> str:
         if event.event_type in {"agent_message", "user_message"} and event.content:
             return event.content.strip().replace("\n", " ")[:120]
     return chunk.id
+
+
+def _display_path(value: str) -> str:
+    normalized = value.replace("\\", "/").strip().strip('"')
+    normalized = re.sub(r"/+", "/", normalized)
+    return normalized
+
+
+def _compare_path(value: str) -> str:
+    normalized = _display_path(value).lower().rstrip("/")
+    marker = "/agent-memory-orchestrator/"
+    if marker in normalized:
+        return "agent-memory-orchestrator/" + normalized.split(marker, 1)[1]
+    if normalized.endswith("/agent-memory-orchestrator"):
+        return "agent-memory-orchestrator"
+    return normalized
+
+
+def _related_paths(left: str, right: str) -> bool:
+    return left == right or left.startswith(f"{right}/") or right.startswith(f"{left}/")
+
+
+def _same_parent(left: str, right: str) -> bool:
+    left_path = left.rsplit("/", 1)
+    right_path = right.rsplit("/", 1)
+    if len(left_path) != 2 or len(right_path) != 2:
+        return False
+    left_parent, left_name = left_path
+    right_parent, right_name = right_path
+    if left_parent != right_parent or left_name == right_name:
+        return False
+    if left_parent in {"", ".", "agent-memory-orchestrator"}:
+        return False
+    if "agent_memory_orchestrator" not in left_parent:
+        return False
+    return "." in left_name and "." in right_name
