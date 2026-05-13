@@ -25,6 +25,12 @@ from .code_versioning import CodeVersionRelation
 from .code_versioning import resolve_code_node_version
 from .decision_extraction import DecisionExtractionResult
 from .decision_extraction import extract_decisions
+from .embedding_store import GraphEmbeddingHit
+from .embedding_store import GraphEmbeddingRecord
+from .embedding_store import GraphEmbeddingStore
+from .embedding_store import GraphFaissBuildResult
+from .embedding_store import hash_content
+from .embedding_store import make_embedding_id
 from .relationships import ReasoningEdge
 from .relationships import ValidationLinkResult
 from .relationships import code_node_provenance_edges
@@ -51,6 +57,10 @@ __all__ = [
     "DecisionExtractionResult",
     "DecisionUnit",
     "ExtractionRun",
+    "GraphEmbeddingHit",
+    "GraphEmbeddingRecord",
+    "GraphEmbeddingStore",
+    "GraphFaissBuildResult",
     "HashEmbeddingProvider",
     "MergePlan",
     "ReasoningEdge",
@@ -69,8 +79,10 @@ __all__ = [
     "default_ast_expander",
     "extract_code_nodes_from_commit",
     "extract_decisions",
+    "hash_content",
     "load_amo_evidence_events",
     "load_codex_transcript_events",
+    "make_embedding_id",
     "parse_unified_zero_hunks",
     "produced_change_edges",
     "python_ast_expander",
