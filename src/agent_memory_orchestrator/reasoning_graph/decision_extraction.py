@@ -8,6 +8,7 @@ from .models import DecisionThread
 from .models import DecisionUnit
 from .models import ExtractionRun
 from .models import TimelineEvent
+from .decision_quality import validate_qwen_decision_quality
 from .validation import validate_graph_object
 
 
@@ -188,6 +189,8 @@ def _qwen_fallback(
     decisions: list[DecisionUnit] = []
     review: list[dict[str, Any]] = []
     diagnostics: list[dict[str, Any]] = []
+    event_by_id = {event.id: event for event in thread_events}
+    seen_fingerprints: set[str] = set()
     for index, item in enumerate(raw["decisions"], start=1):
         if not isinstance(item, dict):
             diagnostics.append({"call": "decision_extraction_fallback", "error_type": "schema_mismatch", "index": index})
@@ -207,6 +210,11 @@ def _qwen_fallback(
         if confidence < QWEN_DECISION_THRESHOLD:
             review.append({"reason": "low_confidence", "candidate": item, "threshold": QWEN_DECISION_THRESHOLD})
             continue
+        quality = validate_qwen_decision_quality(item, event_by_id=event_by_id, seen_fingerprints=seen_fingerprints)
+        if not quality.ok:
+            review.append({"reason": quality.reason, "candidate": item, "fingerprint": quality.fingerprint})
+            continue
+        seen_fingerprints.add(quality.fingerprint)
         kind = _kind_for_qwen_type(str(item.get("decision_type") or ""))
         decision = DecisionUnit(
             id=f"decision:{thread.id}:qwen:{index}",
