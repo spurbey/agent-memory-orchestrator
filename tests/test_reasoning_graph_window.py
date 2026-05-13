@@ -48,6 +48,34 @@ def test_tool_fact_extracts_git_status_changed_files() -> None:
     assert "src/agent_memory_orchestrator/reasoning_graph/session_runtime.py" in fact.changed_files
 
 
+def test_timeline_event_preserves_dict_tool_response_text() -> None:
+    event = TimelineEvent.from_raw_evidence(
+        {
+            "id": "raw_browser_snapshot",
+            "created_at": "2026-05-11T10:07:02+00:00",
+            "event_name": "post_tool_use",
+            "session_id": "session-1",
+            "source_app": "codex",
+            "payload": {
+                "tool": "mcp__chrome_devtools__take_snapshot",
+                "tool_input": {"verbose": False},
+                "tool_response": {
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": '## Latest page snapshot\nRootWebArea "AMO Control Room"',
+                        }
+                    ]
+                },
+            },
+        }
+    )
+
+    assert event.tool_name == "mcp__chrome_devtools__take_snapshot"
+    assert event.metadata["tool_input_text"] == '{"verbose": false}'
+    assert 'RootWebArea "AMO Control Room"' in event.content
+
+
 def test_tool_fact_classifies_git_dash_c_status() -> None:
     event = _event(
         "1",
