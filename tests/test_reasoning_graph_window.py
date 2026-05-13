@@ -4,6 +4,7 @@ from agent_memory_orchestrator.reasoning_graph.extraction_window import build_cl
 from agent_memory_orchestrator.reasoning_graph.models import TimelineEvent
 from agent_memory_orchestrator.reasoning_graph.timeline import TimelineGraph
 from agent_memory_orchestrator.reasoning_graph.tool_facts import tool_fact_from_event
+from agent_memory_orchestrator.reasoning_graph.tool_facts import tool_facts_from_events
 
 
 def _event(
@@ -92,6 +93,53 @@ def test_tool_fact_classifies_git_dash_c_status() -> None:
     assert fact.changed_files == ("src/agent_memory_orchestrator/install_service.py",)
 
 
+def test_tool_facts_pair_transcript_tool_use_and_result() -> None:
+    tool_use = TimelineEvent(
+        id="transcript:session-1:tool_use:call_1",
+        session_id="session-1",
+        event_type="tool_use",
+        timestamp="1",
+        source_app="codex_transcript",
+        content='{"command":"Get-Content src/agent_memory_orchestrator/config.py"}',
+        tool_name="shell_command",
+        files=("src/agent_memory_orchestrator/config.py",),
+        metadata={"call_id": "call_1"},
+    )
+    tool_result = TimelineEvent(
+        id="transcript:session-1:tool_result:call_1",
+        session_id="session-1",
+        event_type="tool_result",
+        timestamp="2",
+        source_app="codex_transcript",
+        content="class Settings:\n    pass",
+        files=("src/agent_memory_orchestrator/config.py",),
+        metadata={"call_id": "call_1"},
+    )
+
+    facts = tool_facts_from_events((tool_use, tool_result))
+
+    assert len(facts) == 1
+    assert facts[0].tool_kind == "read_or_search"
+    assert facts[0].command_preview
+    assert "class Settings" in facts[0].output_preview
+    assert facts[0].metadata["paired_result_event_id"] == tool_result.id
+
+
+def test_tool_fact_classifies_filesystem_setup() -> None:
+    event = _event(
+        "1",
+        "tool_use",
+        'New-Item -ItemType Directory -Force -Path "C:\\repo\\agent-memory-orchestrator\\tests"',
+        tool_name="shell_command",
+    )
+
+    fact = tool_fact_from_event(event)
+
+    assert fact is not None
+    assert fact.tool_kind == "filesystem_write"
+    assert fact.semantic_payload is True
+
+
 def test_tool_fact_keeps_large_output_raw_only() -> None:
     event = _event(
         "1",
@@ -109,6 +157,23 @@ def test_tool_fact_keeps_large_output_raw_only() -> None:
     assert fact.semantic_payload is False
     assert fact.tool_kind == "read_or_search"
     assert "full_output_kept_in_raw_evidence_only" in fact.diagnostics
+
+
+def test_tool_fact_raw_only_overrides_semantic_payload() -> None:
+    event = _event(
+        "1",
+        "post_tool_use",
+        "Success. Updated the following files:\nM src/agent_memory_orchestrator/huge.py\n" + ("x" * 13_000),
+        tool_name="apply_patch",
+        command="*** Begin Patch\n*** Update File: src/agent_memory_orchestrator/huge.py",
+    )
+
+    fact = tool_fact_from_event(event)
+
+    assert fact is not None
+    assert fact.tool_kind == "write_patch"
+    assert fact.raw_only is True
+    assert fact.semantic_payload is False
 
 
 def test_cleaned_window_keeps_target_write_context_and_test() -> None:
