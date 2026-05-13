@@ -230,3 +230,108 @@ def test_cleaned_window_matches_absolute_path_to_repo_relative_target() -> None:
 
     assert window.kept_event_count == 1
     assert window.window_events[0].keep_reasons[0] == "target_file_changed"
+
+
+def test_cleaned_window_keeps_setup_context_for_target_cluster() -> None:
+    events = (
+        _event(
+            "1",
+            "user_message",
+            "# Context from my IDE setup:\n\n"
+            "## Active file: temp_repo_arena/README.md\n\n"
+            "## Open tabs:\n"
+            "- README.md\n\n"
+            "## My request for Codex:\n"
+            "so, then don't put it under dora/temp_repo_arena.\n\n"
+            "make a new repo under dora/",
+        ),
+        _event(
+            "2",
+            "tool_use",
+            "agent-memory-orchestrator\ntemp_repo_arena",
+            tool_name="shell_command",
+            command='Get-ChildItem -Name -Path "C:\\repo"',
+        ),
+        _event(
+            "3",
+            "tool_use",
+            "Exit code: 0",
+            tool_name="shell_command",
+            command='New-Item -ItemType Directory -Force -Path "C:\\repo\\agent-memory-orchestrator\\src\\agent_memory_orchestrator"',
+        ),
+        _event(
+            "4",
+            "tool_use",
+            "Success. Updated the following files:\nA C:\\repo\\agent-memory-orchestrator\\src\\agent_memory_orchestrator\\config.py",
+            tool_name="apply_patch",
+            command="*** Begin Patch\n*** Add File: C:\\repo\\agent-memory-orchestrator\\src\\agent_memory_orchestrator\\config.py",
+        ),
+    )
+    timeline = TimelineGraph(session_id="session-1", events=events, edges=())
+
+    window = build_cleaned_evidence_window(
+        timeline,
+        target_files=("agent-memory-orchestrator/src/agent_memory_orchestrator/config.py",),
+    )
+
+    kinds = [event.tool_fact.tool_kind for event in window.window_events if event.tool_fact]
+    assert "read_or_search" in kinds
+    assert "filesystem_write" in kinds
+    assert "write_patch" in kinds
+    assert "make a new repo under dora/" in window.chunk_input_text()
+    assert "## Open tabs:" not in window.chunk_input_text()
+
+
+def test_cleaned_window_skips_turn_aborted_context() -> None:
+    events = (
+        _event("1", "user_message", "<turn_aborted>\nThe user interrupted the previous turn.\n</turn_aborted>"),
+        _event(
+            "2",
+            "tool_use",
+            "Success. Updated the following files:\nA src/agent_memory_orchestrator/config.py",
+            tool_name="apply_patch",
+            command="*** Begin Patch\n*** Add File: src/agent_memory_orchestrator/config.py",
+        ),
+    )
+    timeline = TimelineGraph(session_id="session-1", events=events, edges=())
+
+    window = build_cleaned_evidence_window(
+        timeline,
+        target_files=("src/agent_memory_orchestrator/config.py",),
+    )
+
+    assert "<turn_aborted>" not in window.chunk_input_text()
+
+
+def test_cleaned_window_uses_first_target_cluster_only() -> None:
+    filler = tuple(
+        _event(str(index), "agent_message", f"unrelated later topic {index}")
+        for index in range(4, 130)
+    )
+    events = (
+        _event(
+            "1",
+            "tool_use",
+            "Success. Updated the following files:\nA src/agent_memory_orchestrator/config.py",
+            tool_name="apply_patch",
+            command="*** Begin Patch\n*** Add File: src/agent_memory_orchestrator/config.py",
+        ),
+        *filler,
+        _event(
+            "130",
+            "tool_use",
+            "Success. Updated the following files:\nM src/agent_memory_orchestrator/config.py",
+            tool_name="apply_patch",
+            command="*** Begin Patch\n*** Update File: src/agent_memory_orchestrator/config.py",
+        ),
+    )
+    timeline = TimelineGraph(session_id="session-1", events=events, edges=())
+
+    window = build_cleaned_evidence_window(
+        timeline,
+        target_files=("src/agent_memory_orchestrator/config.py",),
+    )
+
+    kept_ids = {event.event_id for event in window.window_events}
+    assert "1" in kept_ids
+    assert "130" not in kept_ids

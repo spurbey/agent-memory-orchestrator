@@ -11,6 +11,9 @@ from .tool_facts import ToolFact, tool_facts_from_events
 
 MESSAGE_CHARS = 2_000
 CONTEXT_RADIUS = 2
+FOCUS_PRE_EVENTS = 30
+FOCUS_POST_EVENTS = 50
+TARGET_CLUSTER_GAP_EVENTS = 120
 
 
 @dataclass(slots=True, frozen=True)
@@ -80,17 +83,18 @@ def build_cleaned_evidence_window(
     targets = _target_set(target_files)
     all_tool_facts = tool_facts_from_events(events)
     fact_by_event = {fact.event_id: fact for fact in all_tool_facts}
+    focus = _focus_window(events, fact_by_event, targets)
 
     keep_reasons: dict[str, list[str]] = {}
     drop_reasons: dict[str, str] = {}
 
-    for event in events:
+    for index, event in enumerate(events):
         fact = fact_by_event.get(event.id)
-        reasons = _direct_keep_reasons(event, fact, targets)
+        reasons = _direct_keep_reasons(event, fact, targets, index=index, focus=focus)
         if reasons:
             keep_reasons[event.id] = reasons
         else:
-            drop_reasons[event.id] = _drop_reason(event, fact, targets)
+            drop_reasons[event.id] = _drop_reason(event, fact, targets, index=index, focus=focus)
 
     _add_context_neighbors(events, keep_reasons, radius=context_radius)
     window_events: list[WindowEvent] = []
@@ -125,8 +129,32 @@ def build_cleaned_evidence_window(
     )
 
 
-def _direct_keep_reasons(event: TimelineEvent, fact: ToolFact | None, targets: set[str]) -> list[str]:
+@dataclass(slots=True, frozen=True)
+class _FocusWindow:
+    start: int = 0
+    end: int = 0
+    first_anchor: int = 0
+    last_anchor: int = 0
+    active: bool = False
+
+    def contains(self, index: int) -> bool:
+        return not self.active or self.start <= index <= self.end
+
+    def is_pre_anchor_context(self, index: int) -> bool:
+        return self.active and self.start <= index < self.first_anchor
+
+
+def _direct_keep_reasons(
+    event: TimelineEvent,
+    fact: ToolFact | None,
+    targets: set[str],
+    *,
+    index: int,
+    focus: _FocusWindow,
+) -> list[str]:
     reasons: list[str] = []
+    if targets and not focus.contains(index):
+        return reasons
     if fact is not None:
         fact_paths = (*fact.paths, *fact.changed_files, *fact.inspected_files)
         target_hit = _paths_match_targets(fact_paths, targets)
@@ -136,11 +164,13 @@ def _direct_keep_reasons(event: TimelineEvent, fact: ToolFact | None, targets: s
             reasons.append("target_file_inspected")
         elif target_hit:
             reasons.append("target_file_mentioned")
-        if fact.tool_kind in {"write_patch", "git_status", "git_diff_or_show", "git_commit_or_ref"} and (
-            target_hit or not targets
-        ):
+        if fact.tool_kind in {"write_patch", "git_status", "git_diff_or_show", "git_commit_or_ref"} and (target_hit or not targets):
             reasons.append(f"tool_fact:{fact.tool_kind}")
-        if fact.tool_kind == "test_or_lint" and fact.test_result:
+        if fact.tool_kind == "filesystem_write" and (target_hit or (focus.is_pre_anchor_context(index) and fact.semantic_payload)):
+            reasons.append("tool_fact:filesystem_write")
+        if fact.tool_kind == "read_or_search" and focus.is_pre_anchor_context(index) and fact.semantic_payload and not fact.raw_only:
+            reasons.append("pre_target_context")
+        if fact.tool_kind == "test_or_lint" and fact.test_result and (not targets or focus.contains(index)):
             reasons.append(f"test_or_lint:{fact.test_result}")
         if fact.raw_only and target_hit:
             reasons.append("large_target_tool_output_compacted")
@@ -164,6 +194,8 @@ def _add_context_neighbors(events: list[TimelineEvent], keep_reasons: dict[str, 
             if neighbor.id in keep_reasons:
                 continue
             if neighbor.event_type in {"user_message", "user_prompt_submit", "agent_message", "stop"}:
+                if _is_low_value_context_message(neighbor.content):
+                    continue
                 keep_reasons[neighbor.id] = ["context_neighbor"]
 
 
@@ -191,7 +223,16 @@ def _window_event(event: TimelineEvent, fact: ToolFact | None, keep_reasons: tup
     )
 
 
-def _drop_reason(event: TimelineEvent, fact: ToolFact | None, targets: set[str]) -> str:
+def _drop_reason(
+    event: TimelineEvent,
+    fact: ToolFact | None,
+    targets: set[str],
+    *,
+    index: int,
+    focus: _FocusWindow,
+) -> str:
+    if targets and not focus.contains(index):
+        return "outside_focused_target_cluster"
     if fact is not None:
         if fact.raw_only:
             return "raw_only_unrelated_tool_output"
@@ -243,21 +284,87 @@ def _paths_match_targets(paths: Iterable[str], targets: set[str]) -> bool:
 def _path_matches_target(path: str, target: str) -> bool:
     if not path or not target:
         return False
-    if path == target:
+    clean_path = path.rstrip("/")
+    clean_target = target.rstrip("/")
+    if clean_path == clean_target:
         return True
-    return path.endswith(f"/{target}") or target.endswith(f"/{path}")
+    if clean_path.endswith(f"/{clean_target}") or clean_target.endswith(f"/{clean_path}"):
+        return True
+    if not _is_directory_like(clean_path):
+        return False
+    if clean_target.startswith(f"{clean_path}/"):
+        return True
+    target_parent = clean_target.rsplit("/", 1)[0] if "/" in clean_target else ""
+    return bool(target_parent and clean_path.endswith(f"/{target_parent}"))
 
 
 def _target_set(target_files: Iterable[str]) -> set[str]:
     return {_norm(path) for path in target_files if str(path).strip()}
 
 
+def _focus_window(events: list[TimelineEvent], fact_by_event: dict[str, ToolFact], targets: set[str]) -> _FocusWindow:
+    if not targets:
+        return _FocusWindow(end=max(0, len(events) - 1), active=False)
+    anchors: list[int] = []
+    fallback: list[int] = []
+    for index, event in enumerate(events):
+        fact = fact_by_event.get(event.id)
+        if fact is not None:
+            fact_paths = (*fact.paths, *fact.changed_files, *fact.inspected_files)
+            if _paths_match_targets(fact_paths, targets):
+                fallback.append(index)
+                if fact.changed_files:
+                    anchors.append(index)
+            continue
+        if event.files and _paths_match_targets(event.files, targets):
+            fallback.append(index)
+    selected = _first_cluster(anchors or fallback)
+    if not selected:
+        return _FocusWindow(end=max(0, len(events) - 1), active=True)
+    first = min(selected)
+    last = max(selected)
+    return _FocusWindow(
+        start=max(0, first - FOCUS_PRE_EVENTS),
+        end=min(len(events) - 1, last + FOCUS_POST_EVENTS),
+        first_anchor=first,
+        last_anchor=last,
+        active=True,
+    )
+
+
+def _first_cluster(indexes: list[int]) -> list[int]:
+    if not indexes:
+        return []
+    ordered = sorted(set(indexes))
+    clusters: list[list[int]] = [[ordered[0]]]
+    for index in ordered[1:]:
+        if index - clusters[-1][-1] <= TARGET_CLUSTER_GAP_EVENTS:
+            clusters[-1].append(index)
+        else:
+            clusters.append([index])
+    return clusters[0]
+
+
 def _clean_message(text: str) -> str:
+    raw = str(text or "").replace("\r", "")
+    marker = "## My request for Codex:"
+    if marker in raw:
+        raw = raw.split(marker, 1)[1]
     cleaned_lines: list[str] = []
-    for line in str(text or "").replace("\r", "").splitlines():
+    skip_open_tabs = False
+    for line in raw.splitlines():
         stripped = line.strip()
+        if stripped.startswith("## My request for Codex:"):
+            skip_open_tabs = False
+            continue
         if stripped.startswith("## Open tabs:"):
-            break
+            skip_open_tabs = True
+            continue
+        if skip_open_tabs:
+            if stripped.startswith("## "):
+                skip_open_tabs = False
+            else:
+                continue
         if stripped.startswith("# Context from my IDE setup:"):
             continue
         if stripped.startswith("## Active file:"):
@@ -266,6 +373,11 @@ def _clean_message(text: str) -> str:
     cleaned = "\n".join(cleaned_lines).strip()
     cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
     return cleaned
+
+
+def _is_low_value_context_message(text: str) -> bool:
+    cleaned = str(text or "").strip().lower()
+    return cleaned in {"task_complete", "turn_aborted"} or "<turn_aborted>" in cleaned
 
 
 def _dedupe(values: Iterable[str]) -> tuple[str, ...]:
@@ -285,3 +397,8 @@ def _dedupe(values: Iterable[str]) -> tuple[str, ...]:
 
 def _norm(value: str) -> str:
     return str(value or "").replace("\\", "/").strip().strip('"').strip("'").lower()
+
+
+def _is_directory_like(path: str) -> bool:
+    name = path.rsplit("/", 1)[-1]
+    return "." not in name
