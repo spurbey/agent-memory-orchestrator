@@ -103,7 +103,7 @@ class TimelineEvent:
         evidence_id = str(raw.get("id") or raw.get("evidence_id") or "").strip()
         session_id = str(raw.get("session_id") or payload.get("session_id") or "").strip()
         timestamp = str(raw.get("created_at") or payload.get("timestamp") or "").strip()
-        tool_name = str(payload.get("tool_name") or raw.get("tool_name") or "").strip()
+        tool_name = str(payload.get("tool_name") or payload.get("tool") or raw.get("tool_name") or raw.get("tool") or "").strip()
         content = _event_content(raw, payload)
         transcript_path = str(payload.get("transcript_path") or raw.get("transcript_path") or "").strip()
         files = tuple(_extract_files(raw, payload))
@@ -256,13 +256,41 @@ def _asdict(obj: Any) -> dict[str, Any]:
 def _event_content(raw: dict[str, Any], payload: dict[str, Any]) -> str:
     for key in ("prompt", "message", "content", "tool_response", "last_assistant_message"):
         value = payload.get(key, raw.get(key))
-        if isinstance(value, str) and value.strip():
-            return value.strip()
+        text = _payload_text(value)
+        if text:
+            return text
     tool_input = payload.get("tool_input")
     if isinstance(tool_input, dict):
         command = tool_input.get("command")
         if isinstance(command, str):
             return command.strip()
+    return ""
+
+
+def _payload_text(value: Any) -> str:
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, list):
+        parts = [_payload_text(item) for item in value]
+        return "\n".join(part for part in parts if part)
+    if isinstance(value, dict):
+        content = value.get("content")
+        if isinstance(content, list):
+            parts = [_payload_text(item) for item in content]
+            text = "\n".join(part for part in parts if part)
+            if text:
+                return text
+        for key in ("text", "output", "message", "content"):
+            nested = value.get(key)
+            if nested is value:
+                continue
+            text = _payload_text(nested)
+            if text:
+                return text
+        try:
+            return json.dumps(value, ensure_ascii=False, sort_keys=True)
+        except TypeError:
+            return str(value)
     return ""
 
 
