@@ -389,6 +389,47 @@ def test_revisit_threshold_merges_same_file_topic() -> None:
     assert result.threads[0].metadata["continued_chunk_count"] == 1
 
 
+def test_chunking_keeps_focused_same_package_writes_together() -> None:
+    timeline = TimelineGraph(
+        session_id="s1",
+        events=(
+            _event("e1", "user_message", "make a new repo under dora/"),
+            _event(
+                "e2",
+                "tool_use",
+                "ToolFact: filesystem_write | created agent-memory-orchestrator/src/agent_memory_orchestrator",
+                files=("c:/Users/sumit/Downloads/Dora/agent-memory-orchestrator/src/agent_memory_orchestrator/",),
+            ),
+            _event(
+                "e3",
+                "tool_use",
+                "ToolFact: write_patch | Add File: config.py | class Settings",
+                files=("agent-memory-orchestrator/src/agent_memory_orchestrator/config.py",),
+            ),
+            _event(
+                "e4",
+                "tool_use",
+                "ToolFact: write_patch | Add File: db.py | CREATE TABLE sessions",
+                files=("c:/Users/sumit/Downloads/Dora/agent-memory-orchestrator/src/agent_memory_orchestrator/db.py",),
+            ),
+        ),
+        edges=(),
+    )
+    events = tuple(
+        event if event.event_type == "user_message" else TimelineEvent(**{**event.as_dict(), "metadata": {"tool_fact": True}})
+        for event in timeline.events
+    )
+    timeline = TimelineGraph(session_id="s1", events=events, edges=())
+    run = ExtractionRun.create(session_id="s1", evidence_ids=("raw1",))
+
+    result = build_decision_threads(timeline, extraction_run=run, embedder=_KeywordEmbedder())
+
+    assert len(result.chunks) == 1
+    assert len(result.threads) == 1
+    assert "config.py" in result.chunks[0].text
+    assert "db.py" in result.chunks[0].text
+
+
 def test_missing_embeddings_record_fallback_without_semantic_boundary() -> None:
     drift, score, reason = semantic_drift_boundary(
         ["installer hook", "install service", "capture hook"],
