@@ -5,7 +5,11 @@ from typing import Any
 
 
 DECISION_PACKET_SCHEMA_VERSION = "decision-packet-v1"
-DEFAULT_CHUNK_TEXT_LIMIT = 3000
+DEFAULT_CHUNK_TEXT_LIMIT = 1200
+DEFAULT_MAX_PACKET_CHUNKS = 2
+DEFAULT_MAX_ALLOWED_EVENT_IDS = 40
+DEFAULT_MAX_CHUNK_FIELD_EVENT_IDS = 8
+DEFAULT_MAX_CHUNK_SUPPORT_EVENT_IDS = 8
 
 
 @dataclass(slots=True, frozen=True)
@@ -26,6 +30,8 @@ def build_decision_packet(
     chunks: list[dict[str, Any]],
     extraction_run_id: str,
     chunk_text_limit: int = DEFAULT_CHUNK_TEXT_LIMIT,
+    max_chunks: int = DEFAULT_MAX_PACKET_CHUNKS,
+    max_allowed_event_ids: int = DEFAULT_MAX_ALLOWED_EVENT_IDS,
 ) -> DecisionPacket:
     """Build the structured input packet for Qwen decision enrichment.
 
@@ -37,8 +43,8 @@ def build_decision_packet(
     commit_id = str(commit_window.get("commit_id") or work_change.get("metadata", {}).get("commit_id") or "").strip()
     session_id = str(commit_window.get("session_id") or work_change.get("session_id") or "").strip()
     window_id = str(commit_window.get("window_id") or work_change.get("metadata", {}).get("window_id") or "").strip()
-    scoped_chunks = [chunk for chunk in chunks if str(chunk.get("commit_id") or "") == commit_id]
-    allowed_event_ids = _allowed_event_ids(scoped_chunks, commit_window)
+    scoped_chunks = _rank_chunks([chunk for chunk in chunks if str(chunk.get("commit_id") or "") == commit_id])[:max_chunks]
+    allowed_event_ids = _allowed_event_ids(scoped_chunks, commit_window)[:max_allowed_event_ids]
     payload = {
         "schema_version": DECISION_PACKET_SCHEMA_VERSION,
         "session_id": session_id,
@@ -98,6 +104,8 @@ def build_decision_packets(
     chunks: list[dict[str, Any]],
     extraction_run_id: str,
     chunk_text_limit: int = DEFAULT_CHUNK_TEXT_LIMIT,
+    max_chunks: int = DEFAULT_MAX_PACKET_CHUNKS,
+    max_allowed_event_ids: int = DEFAULT_MAX_ALLOWED_EVENT_IDS,
 ) -> tuple[DecisionPacket, ...]:
     work_by_commit = {
         str(item.get("metadata", {}).get("commit_id") or "").strip(): item
@@ -116,9 +124,27 @@ def build_decision_packets(
                 chunks=chunks,
                 extraction_run_id=extraction_run_id,
                 chunk_text_limit=chunk_text_limit,
+                max_chunks=max_chunks,
+                max_allowed_event_ids=max_allowed_event_ids,
             )
         )
     return tuple(packets)
+
+
+def _rank_chunks(chunks: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    def score(chunk: dict[str, Any]) -> tuple[int, int, str]:
+        chunk_type = str(chunk.get("chunk_type") or "")
+        message_count = len(_strings(chunk.get("message_event_ids")))
+        write_count = len(_strings(chunk.get("write_fact_event_ids")))
+        if chunk_type == "code_context":
+            priority = 0
+        elif chunk_type == "validation_context":
+            priority = 1
+        else:
+            priority = 2
+        return (priority, -(message_count + write_count), str(chunk.get("chunk_id") or ""))
+
+    return sorted(chunks, key=score)
 
 
 def _packet_chunk(chunk: dict[str, Any], *, chunk_text_limit: int) -> dict[str, Any]:
@@ -128,11 +154,11 @@ def _packet_chunk(chunk: dict[str, Any], *, chunk_text_limit: int) -> dict[str, 
         "chunk_type": str(chunk.get("chunk_type") or ""),
         "group_key": str(chunk.get("group_key") or ""),
         "git_changed_files": _strings(chunk.get("git_changed_files")),
-        "message_event_ids": _strings(chunk.get("message_event_ids")),
-        "read_fact_event_ids": _strings(chunk.get("read_fact_event_ids")),
-        "write_fact_event_ids": _strings(chunk.get("write_fact_event_ids")),
-        "validation_event_ids": _strings(chunk.get("validation_event_ids")),
-        "support_event_ids": _strings(chunk.get("support_event_ids"))[:50],
+        "message_event_ids": _strings(chunk.get("message_event_ids"))[:DEFAULT_MAX_CHUNK_FIELD_EVENT_IDS],
+        "read_fact_event_ids": _strings(chunk.get("read_fact_event_ids"))[:DEFAULT_MAX_CHUNK_FIELD_EVENT_IDS],
+        "write_fact_event_ids": _strings(chunk.get("write_fact_event_ids"))[:DEFAULT_MAX_CHUNK_FIELD_EVENT_IDS],
+        "validation_event_ids": _strings(chunk.get("validation_event_ids"))[:DEFAULT_MAX_CHUNK_FIELD_EVENT_IDS],
+        "support_event_ids": _strings(chunk.get("support_event_ids"))[:DEFAULT_MAX_CHUNK_SUPPORT_EVENT_IDS],
         "embedding_text_excerpt": text[:chunk_text_limit],
         "text_truncated": len(text) > chunk_text_limit,
     }

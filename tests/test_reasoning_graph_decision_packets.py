@@ -4,6 +4,10 @@ import json
 from pathlib import Path
 
 from agent_memory_orchestrator.reasoning_graph.decision_packets import DECISION_PACKET_SCHEMA_VERSION
+from agent_memory_orchestrator.reasoning_graph.decision_packets import DEFAULT_CHUNK_TEXT_LIMIT
+from agent_memory_orchestrator.reasoning_graph.decision_packets import DEFAULT_MAX_ALLOWED_EVENT_IDS
+from agent_memory_orchestrator.reasoning_graph.decision_packets import DEFAULT_MAX_CHUNK_FIELD_EVENT_IDS
+from agent_memory_orchestrator.reasoning_graph.decision_packets import DEFAULT_MAX_PACKET_CHUNKS
 from agent_memory_orchestrator.reasoning_graph.decision_packets import build_decision_packet
 from agent_memory_orchestrator.reasoning_graph.decision_packets import build_decision_packets
 
@@ -87,6 +91,26 @@ def test_decision_packet_caps_chunk_text_but_preserves_event_ids() -> None:
     assert packet["chunks"][0]["embedding_text_excerpt"] == "x" * 10
     assert packet["chunks"][0]["text_truncated"] is True
     assert packet["chunks"][0]["message_event_ids"] == ["assistant:1", "user:1"]
+
+
+def test_decision_packet_defaults_are_colab_safe() -> None:
+    chunks = [
+        _chunk("abc123", text="x" * (DEFAULT_CHUNK_TEXT_LIMIT + 100)),
+        {**_chunk("abc123", text="y" * (DEFAULT_CHUNK_TEXT_LIMIT + 100)), "chunk_id": "chunk:abc123:2"},
+        {**_chunk("abc123", text="z" * (DEFAULT_CHUNK_TEXT_LIMIT + 100)), "chunk_id": "chunk:abc123:validation", "chunk_type": "validation_context"},
+    ]
+
+    packet = build_decision_packet(
+        commit_window=_window(),
+        work_change=_work_change(),
+        chunks=chunks,
+        extraction_run_id="run1",
+    ).as_dict()
+
+    assert len(packet["chunks"]) == DEFAULT_MAX_PACKET_CHUNKS
+    assert all(len(chunk["embedding_text_excerpt"]) <= DEFAULT_CHUNK_TEXT_LIMIT for chunk in packet["chunks"])
+    assert len(packet["allowed_evidence_event_ids"]) <= DEFAULT_MAX_ALLOWED_EVENT_IDS
+    assert all(len(chunk["write_fact_event_ids"]) <= DEFAULT_MAX_CHUNK_FIELD_EVENT_IDS for chunk in packet["chunks"])
 
 
 def test_decision_packets_skip_unresolved_or_workless_windows() -> None:
