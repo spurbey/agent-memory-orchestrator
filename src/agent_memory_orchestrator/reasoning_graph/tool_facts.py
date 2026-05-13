@@ -71,7 +71,31 @@ class ToolFact:
 
 
 def tool_facts_from_events(events: Iterable[TimelineEvent]) -> tuple[ToolFact, ...]:
-    return tuple(fact for event in events if (fact := tool_fact_from_event(event)) is not None)
+    ordered = list(events)
+    result_by_call_id: dict[str, TimelineEvent] = {}
+    for event in ordered:
+        if event.event_type != "tool_result":
+            continue
+        call_id = str(event.metadata.get("call_id") or "")
+        if call_id and call_id not in result_by_call_id:
+            result_by_call_id[call_id] = event
+
+    facts: list[ToolFact] = []
+    paired_result_ids: set[str] = set()
+    for event in ordered:
+        if event.event_type == "tool_use":
+            call_id = str(event.metadata.get("call_id") or "")
+            result = result_by_call_id.get(call_id)
+            if result is not None:
+                facts.append(_paired_tool_fact(event, result, call_id=call_id))
+                paired_result_ids.add(result.id)
+                continue
+        if event.id in paired_result_ids:
+            continue
+        fact = tool_fact_from_event(event)
+        if fact is not None:
+            facts.append(fact)
+    return tuple(facts)
 
 
 def tool_fact_from_event(event: TimelineEvent) -> ToolFact | None:
@@ -80,14 +104,44 @@ def tool_fact_from_event(event: TimelineEvent) -> ToolFact | None:
 
     command = _command_text(event)
     output = event.content or ""
-    paths = _dedupe((*event.files, *_extract_paths(command), *_extract_paths(output)))
+    return _tool_fact_from_parts(event=event, command=command, output=output, files=event.files)
+
+
+def _paired_tool_fact(tool_use: TimelineEvent, tool_result: TimelineEvent, *, call_id: str) -> ToolFact:
+    command = _command_text(tool_use) or tool_use.content
+    output = tool_result.content or ""
+    files = _dedupe((*tool_use.files, *tool_result.files))
+    fact = _tool_fact_from_parts(
+        event=tool_use,
+        command=command,
+        output=output,
+        files=files,
+        metadata={
+            "call_id": call_id,
+            "paired_result_event_id": tool_result.id,
+            "source_event_ids": [tool_use.id, tool_result.id],
+            "raw_event_name": tool_use.metadata.get("raw_event_name", ""),
+        },
+    )
+    return fact
+
+
+def _tool_fact_from_parts(
+    *,
+    event: TimelineEvent,
+    command: str,
+    output: str,
+    files: Iterable[str] = (),
+    metadata: dict[str, Any] | None = None,
+) -> ToolFact:
+    paths = _dedupe((*files, *_extract_paths(command), *_extract_paths(output)))
     changed_files = _changed_files(event, command, output, paths)
     inspected_files = _inspected_files(command, output, paths, changed_files)
     tool_kind = _classify_tool(event, command, output, changed_files=changed_files, inspected_files=inspected_files)
     test_result = _test_result(command, output) if tool_kind == "test_or_lint" else ""
     output_chars = len(output)
     raw_only = output_chars > HUGE_OUTPUT_CHARS
-    semantic_payload = _semantic_payload(tool_kind, output_chars)
+    semantic_payload = False if raw_only else _semantic_payload(tool_kind, output_chars)
     keep_reasons = _keep_reasons(
         tool_kind=tool_kind,
         changed_files=changed_files,
@@ -116,7 +170,7 @@ def tool_fact_from_event(event: TimelineEvent) -> ToolFact | None:
         test_result=test_result,
         keep_reasons=keep_reasons,
         diagnostics=diagnostics,
-        metadata={"raw_event_name": event.metadata.get("raw_event_name", "")},
+        metadata=metadata or {"raw_event_name": event.metadata.get("raw_event_name", "")},
     )
 
 
@@ -150,6 +204,8 @@ def _classify_tool(
         return "git_commit_or_ref"
     if _looks_like_test_or_lint(command_l):
         return "test_or_lint"
+    if _looks_like_filesystem_write(command_l):
+        return "filesystem_write"
     if _looks_like_read_or_search(command_l):
         return "read_or_search"
     if _looks_like_environment_check(command_l):
@@ -194,6 +250,8 @@ def _inspected_files(
 
 def _semantic_payload(tool_kind: str, output_chars: int) -> bool:
     if tool_kind in {"write_patch", "git_status", "git_commit_or_ref", "test_or_lint"}:
+        return True
+    if tool_kind == "filesystem_write":
         return True
     if tool_kind == "git_diff_or_show":
         return output_chars <= 20_000
@@ -304,6 +362,23 @@ def _looks_like_read_or_search(command: str) -> bool:
             "cat ",
             "type ",
             "git grep",
+            "get-childitem",
+            "ls ",
+            "dir ",
+        )
+    )
+
+
+def _looks_like_filesystem_write(command: str) -> bool:
+    return any(
+        token in command
+        for token in (
+            "new-item",
+            "mkdir",
+            "set-content",
+            "out-file",
+            "copy-item",
+            "move-item",
         )
     )
 
