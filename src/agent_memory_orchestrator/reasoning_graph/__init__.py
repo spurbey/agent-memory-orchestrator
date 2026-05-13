@@ -24,6 +24,7 @@ from .code_versioning import CodeVersionPlan
 from .code_versioning import CodeVersionRelation
 from .code_versioning import resolve_code_node_version
 from .decision_extraction import DecisionExtractionResult
+from .decision_extraction import build_decision_extraction_payload
 from .decision_extraction import extract_decisions
 from .embedding_store import GraphEmbeddingHit
 from .embedding_store import GraphEmbeddingRecord
@@ -36,6 +37,18 @@ from .relationships import ValidationLinkResult
 from .relationships import code_node_provenance_edges
 from .relationships import produced_change_edges
 from .relationships import validation_edges_for_test
+from .qwen_batch import BatchQwenDecisionExtractor
+from .qwen_batch import DECISION_EXTRACTION_CALL
+from .qwen_batch import QWEN_BATCH_SCHEMA_VERSION
+from .qwen_batch import QwenBatchJob
+from .qwen_batch import QwenBatchResult
+from .qwen_batch import QwenBatchValidation
+from .qwen_batch import load_qwen_batch_job
+from .qwen_batch import load_qwen_batch_result
+from .qwen_batch import stable_json_hash
+from .qwen_batch import validate_qwen_batch_result
+from .qwen_batch import write_qwen_batch_job
+from .qwen_batch import write_qwen_batch_result
 from .timeline import TimelineEdge
 from .timeline import TimelineGraph
 from .timeline import build_timeline
@@ -63,6 +76,12 @@ __all__ = [
     "GraphFaissBuildResult",
     "HashEmbeddingProvider",
     "MergePlan",
+    "BatchQwenDecisionExtractor",
+    "DECISION_EXTRACTION_CALL",
+    "QWEN_BATCH_SCHEMA_VERSION",
+    "QwenBatchJob",
+    "QwenBatchResult",
+    "QwenBatchValidation",
     "ReasoningEdge",
     "TestRun",
     "TimelineEvent",
@@ -73,6 +92,7 @@ __all__ = [
     "ValidationReport",
     "build_timeline",
     "build_decision_threads",
+    "build_decision_extraction_payload",
     "code_nodes_from_hunks",
     "code_node_provenance_edges",
     "cosine_similarity",
@@ -82,14 +102,20 @@ __all__ = [
     "hash_content",
     "load_amo_evidence_events",
     "load_codex_transcript_events",
+    "load_qwen_batch_job",
+    "load_qwen_batch_result",
     "make_embedding_id",
     "parse_unified_zero_hunks",
     "produced_change_edges",
     "python_ast_expander",
     "resolve_code_node_version",
     "semantic_drift_boundary",
+    "stable_json_hash",
     "validation_edges_for_test",
     "should_accept_ast_parent",
+    "validate_qwen_batch_result",
     "validate_graph_object",
     "validate_status_transition",
+    "write_qwen_batch_job",
+    "write_qwen_batch_result",
 ]
