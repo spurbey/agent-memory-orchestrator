@@ -31,6 +31,42 @@ A Qwen result may affect graph state only when all are true:
 
 If any gate fails, output becomes diagnostic or review candidate only.
 
+## Remote Batch Runtime
+
+When local Qwen is unavailable or too slow, AMO may export a Qwen batch job for a GPU runtime such as Google Colab.
+
+The batch runtime is compute only. It is not graph authority.
+
+Exported job schema:
+
+```json
+{
+  "job_id": "qwen_job:decision_extraction_fallback:<hash>",
+  "schema_version": "qwen-batch-v1",
+  "runtime": "colab_batch",
+  "model": "qwen3:1.7b",
+  "call": "decision_extraction_fallback",
+  "payload_hash": "sha256-of-payload",
+  "payload": {}
+}
+```
+
+Returned result schema:
+
+```json
+{
+  "job_id": "same job id",
+  "schema_version": "qwen-batch-v1",
+  "runtime": "colab_batch",
+  "model": "qwen3:1.7b",
+  "call": "decision_extraction_fallback",
+  "payload_hash": "same sha256-of-payload",
+  "output": {}
+}
+```
+
+Local AMO must reject a batch result when `job_id`, `call`, `payload_hash`, schema version, or output schema does not match the exported job. Qwen may cite only event ids present in the exported payload or durable evidence refs attached to the `ExtractionRun`.
+
 ## Common Failure Behavior
 
 Timeout, model unavailable, empty response, invalid JSON, schema mismatch, and low confidence must not mutate graph. Store diagnostic fields:
