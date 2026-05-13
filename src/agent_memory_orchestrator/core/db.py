@@ -105,6 +105,27 @@ CREATE TABLE IF NOT EXISTS memory_vectors (
   FOREIGN KEY (memory_id) REFERENCES memory_units(id) ON DELETE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS graph_embeddings (
+  embedding_id TEXT PRIMARY KEY,
+  node_id TEXT NOT NULL,
+  node_kind TEXT NOT NULL,
+  memory_class TEXT NOT NULL,
+  graph_scope TEXT NOT NULL,
+  graph_path TEXT NOT NULL DEFAULT '',
+  session_id TEXT NOT NULL DEFAULT '',
+  extraction_run_id TEXT NOT NULL DEFAULT '',
+  embedding_kind TEXT NOT NULL,
+  model TEXT NOT NULL,
+  dims INTEGER NOT NULL,
+  content_hash TEXT NOT NULL,
+  vector_json TEXT NOT NULL,
+  importance REAL NOT NULL DEFAULT 0.5,
+  memory_tier TEXT NOT NULL DEFAULT 'hot',
+  status TEXT NOT NULL DEFAULT 'active',
+  created_at TEXT NOT NULL,
+  last_accessed_at TEXT NOT NULL DEFAULT ''
+);
+
 CREATE TABLE IF NOT EXISTS entities (
   id TEXT PRIMARY KEY,
   entity_type TEXT NOT NULL,
@@ -280,6 +301,15 @@ ON memory_units(topic_key, status);
 
 CREATE INDEX IF NOT EXISTS idx_memory_units_project_visibility
 ON memory_units(project_id, visibility_scope, status);
+
+CREATE INDEX IF NOT EXISTS idx_graph_embeddings_node
+ON graph_embeddings(node_id, embedding_kind, model, status);
+
+CREATE INDEX IF NOT EXISTS idx_graph_embeddings_lookup
+ON graph_embeddings(embedding_kind, model, graph_scope, status);
+
+CREATE INDEX IF NOT EXISTS idx_graph_embeddings_session
+ON graph_embeddings(session_id, extraction_run_id, status);
 
 CREATE INDEX IF NOT EXISTS idx_entities_normalized
 ON entities(normalized_name);
