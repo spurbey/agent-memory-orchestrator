@@ -112,6 +112,28 @@ def extract_decisions(
     )
 
 
+def build_decision_extraction_payload(
+    *,
+    thread: DecisionThread,
+    events: list[TimelineEvent],
+    extraction_run: ExtractionRun,
+) -> dict[str, Any]:
+    event_by_id = {event.id: event for event in events}
+    thread_events = [event_by_id[event_id] for event_id in thread.event_ids if event_id in event_by_id]
+    return {
+        "session_id": thread.session_id,
+        "extraction_run_id": extraction_run.id,
+        "thread_id": thread.id,
+        "messages": [
+            {"role": _role_for_event(event), "text": event.content[:2000], "event_id": event.id}
+            for event in thread_events
+            if event.content and event.event_type in {"user_message", "agent_message", "tool_use", "tool_result", "post_tool_use"}
+        ],
+        "code_nodes": [],
+        "tests": [],
+    }
+
+
 def _deterministic_decisions(
     event: TimelineEvent,
     *,
@@ -152,18 +174,7 @@ def _qwen_fallback(
     extraction_run: ExtractionRun,
     qwen: QwenDecisionExtractor,
 ) -> DecisionExtractionResult:
-    payload = {
-        "session_id": thread.session_id,
-        "extraction_run_id": extraction_run.id,
-        "thread_id": thread.id,
-        "messages": [
-            {"role": _role_for_event(event), "text": event.content[:2000], "event_id": event.id}
-            for event in thread_events
-            if event.content and event.event_type in {"user_message", "agent_message", "tool_use", "tool_result", "post_tool_use"}
-        ],
-        "code_nodes": [],
-        "tests": [],
-    }
+    payload = build_decision_extraction_payload(thread=thread, events=thread_events, extraction_run=extraction_run)
     try:
         raw = qwen.extract(payload)
     except Exception as exc:  # noqa: BLE001 - Qwen failures are diagnostics, not crashes.
@@ -202,7 +213,12 @@ def _qwen_fallback(
             session_id=thread.session_id,
             extraction_run_id=extraction_run.id,
             summary=_qwen_summary(item),
-            evidence_ids=_evidence_ids_from_qwen(item, thread, extraction_run),
+            evidence_ids=_evidence_ids_from_qwen(
+                item,
+                thread,
+                extraction_run,
+                allowed_event_ids={event.id for event in thread_events},
+            ),
             kind=kind,
             confidence=confidence,
             source="qwen",
@@ -253,11 +269,17 @@ def _evidence_ids(event: TimelineEvent, thread: DecisionThread, extraction_run: 
     return _dedupe(values)
 
 
-def _evidence_ids_from_qwen(item: dict[str, Any], thread: DecisionThread, extraction_run: ExtractionRun) -> tuple[str, ...]:
+def _evidence_ids_from_qwen(
+    item: dict[str, Any],
+    thread: DecisionThread,
+    extraction_run: ExtractionRun,
+    *,
+    allowed_event_ids: set[str],
+) -> tuple[str, ...]:
     values = []
     raw_ids = item.get("evidence_event_ids")
     if isinstance(raw_ids, list):
-        values.extend(str(value) for value in raw_ids if str(value).startswith("raw_"))
+        values.extend(str(value) for value in raw_ids if str(value) in allowed_event_ids or str(value).startswith("raw_"))
     values.extend(thread.evidence_ids)
     values.extend(extraction_run.evidence_ids)
     return _dedupe(values)
