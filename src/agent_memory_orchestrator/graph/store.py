@@ -9,6 +9,55 @@ from pathlib import Path
 from typing import Any, Protocol
 
 
+SEARCH_STOPWORDS = {
+    "about",
+    "after",
+    "again",
+    "also",
+    "and",
+    "are",
+    "because",
+    "been",
+    "before",
+    "being",
+    "between",
+    "but",
+    "can",
+    "could",
+    "did",
+    "does",
+    "for",
+    "from",
+    "has",
+    "have",
+    "how",
+    "into",
+    "its",
+    "not",
+    "now",
+    "only",
+    "should",
+    "that",
+    "the",
+    "then",
+    "this",
+    "use",
+    "used",
+    "using",
+    "via",
+    "was",
+    "were",
+    "what",
+    "when",
+    "where",
+    "which",
+    "why",
+    "will",
+    "with",
+    "would",
+}
+
+
 class GraphBackendUnavailable(RuntimeError):
     pass
 
@@ -217,6 +266,15 @@ class KuzuGraphStore:
         )
 
     def search_nodes(self, query: str, *, limit: int = 25, kinds: list[str] | None = None) -> list[dict[str, Any]]:
+        if self._uses_compact_node_schema():
+            where = _compact_search_where(query, kinds)
+            result = self._conn.execute(
+                "MATCH (n:GraphNode) "
+                f"{where} "
+                "RETURN n.id, n.kind, n.packet_id, n.commit_sha, n.label, n.summary, n.properties_json "
+                f"LIMIT {int(limit)}"
+            )
+            return [_compact_row_to_node(row) for row in _rows(result)]
         where = _search_where(query, kinds)
         result = self._conn.execute(
             "MATCH (n:GraphNode) "
@@ -235,6 +293,22 @@ class KuzuGraphStore:
         session_id: str = "",
         status: str = "",
     ) -> list[dict[str, Any]]:
+        if self._uses_compact_node_schema():
+            clauses: list[str] = []
+            if kinds:
+                clauses.append("(" + " OR ".join(f"n.kind = {_q(kind)}" for kind in kinds) + ")")
+            if session_id:
+                clauses.append(f"lower(n.properties_json) CONTAINS {_q(session_id.lower())}")
+            if status:
+                clauses.append(f"lower(n.properties_json) CONTAINS {_q(status.lower())}")
+            where = "WHERE " + " AND ".join(clauses) if clauses else ""
+            result = self._conn.execute(
+                "MATCH (n:GraphNode) "
+                f"{where} "
+                "RETURN n.id, n.kind, n.packet_id, n.commit_sha, n.label, n.summary, n.properties_json "
+                f"LIMIT {int(limit)}"
+            )
+            return [_compact_row_to_node(row) for row in _rows(result)]
         clauses: list[str] = []
         if kinds:
             clauses.append("(" + " OR ".join(f"n.kind = {_q(kind)}" for kind in kinds) + ")")
@@ -254,6 +328,14 @@ class KuzuGraphStore:
         return [_row_to_node(row) for row in _rows(result)]
 
     def neighbors(self, node_id: str, *, limit: int = 25) -> list[dict[str, Any]]:
+        if self._uses_compact_node_schema():
+            result = self._conn.execute(
+                "MATCH (n:GraphNode)-[e:GraphEdge]-(m:GraphNode) "
+                f"WHERE n.id = {_q(node_id)} "
+                "RETURN m.id, m.kind, m.packet_id, m.commit_sha, m.label, m.summary, m.properties_json "
+                f"LIMIT {int(limit)}"
+            )
+            return [_compact_row_to_node(row) for row in _rows(result)]
         result = self._conn.execute(
             "MATCH (n:GraphNode)-[e:GraphEdge]-(m:GraphNode) "
             f"WHERE n.id = {_q(node_id)} "
@@ -270,6 +352,23 @@ class KuzuGraphStore:
         session_id: str = "",
         kinds: list[str] | None = None,
     ) -> list[dict[str, Any]]:
+        if self._uses_compact_node_schema():
+            clauses: list[str] = []
+            if session_id:
+                clauses.append(
+                    f"(lower(a.properties_json) CONTAINS {_q(session_id.lower())} "
+                    f"OR lower(b.properties_json) CONTAINS {_q(session_id.lower())})"
+                )
+            if kinds:
+                clauses.append("(" + " OR ".join(f"e.kind = {_q(kind)}" for kind in kinds) + ")")
+            where = "WHERE " + " AND ".join(clauses) if clauses else ""
+            result = self._conn.execute(
+                "MATCH (a:GraphNode)-[e:GraphEdge]->(b:GraphNode) "
+                f"{where} "
+                "RETURN a.id, b.id, e.kind, e.properties_json "
+                f"LIMIT {int(limit)}"
+            )
+            return [_compact_row_to_edge(row) for row in _rows(result)]
         clauses: list[str] = []
         if session_id:
             clauses.append(f"(a.session_id = {_q(session_id)} OR b.session_id = {_q(session_id)})")
@@ -285,6 +384,13 @@ class KuzuGraphStore:
         return [_row_to_edge(row) for row in _rows(result)]
 
     def merge_status(self, *, session_id: str = "") -> dict[str, Any]:
+        if self._uses_compact_node_schema():
+            where = f"WHERE lower(n.properties_json) CONTAINS {_q(session_id.lower())} " if session_id else ""
+            result = self._conn.execute(f"MATCH (n:GraphNode) {where}RETURN n.kind, count(*)")
+            counts: dict[str, int] = {}
+            for row in _rows(result):
+                counts[str(row[0])] = int(row[1])
+            return {"backend": "kuzu", "graph_path": str(self.graph_path), "schema": "compact", "counts": counts}
         where = f"WHERE n.session_id = {_q(session_id)} " if session_id else ""
         result = self._conn.execute(f"MATCH (n:GraphNode) {where}RETURN n.status, count(*)")
         counts: dict[str, int] = {}
@@ -293,6 +399,8 @@ class KuzuGraphStore:
         return {"backend": "kuzu", "graph_path": str(self.graph_path), "counts": counts}
 
     def set_node_status(self, node_id: str, status: str) -> bool:
+        if self._uses_compact_node_schema():
+            return False
         self._conn.execute(
             "MATCH (n:GraphNode) "
             f"WHERE n.id = {_q(node_id)} "
@@ -311,6 +419,21 @@ class KuzuGraphStore:
                     pass
             setattr(self, attr, None)
         gc.collect()
+
+    def _uses_compact_node_schema(self) -> bool:
+        return "properties_json" in self._node_columns() and "status" not in self._node_columns()
+
+    def _node_columns(self) -> set[str]:
+        cached = getattr(self, "_node_columns_cache", None)
+        if cached is not None:
+            return cached
+        try:
+            result = self._conn.execute("CALL table_info('GraphNode') RETURN *")
+            columns = {str(row[1]) for row in _rows(result) if len(row) > 1}
+        except Exception:
+            columns = set()
+        self._node_columns_cache = columns
+        return columns
 
 
 class InMemoryGraphStore:
@@ -460,6 +583,24 @@ def _search_where(query: str, kinds: list[str] | None) -> str:
     return "WHERE " + " AND ".join(clauses) if clauses else ""
 
 
+def _compact_search_where(query: str, kinds: list[str] | None) -> str:
+    clauses: list[str] = []
+    terms = _terms(query)
+    if terms:
+        clauses.append(
+            "("
+            + " OR ".join(
+                f"lower(n.label) CONTAINS {_q(term)} OR lower(n.summary) CONTAINS {_q(term)} "
+                f"OR lower(n.properties_json) CONTAINS {_q(term)}"
+                for term in terms[:8]
+            )
+            + ")"
+        )
+    if kinds:
+        clauses.append("(" + " OR ".join(f"n.kind = {_q(kind)}" for kind in kinds) + ")")
+    return "WHERE " + " AND ".join(clauses) if clauses else ""
+
+
 def _rows(result: Any) -> list[list[Any]]:
     rows: list[list[Any]] = []
     if hasattr(result, "has_next") and hasattr(result, "get_next"):
@@ -495,6 +636,40 @@ def _row_to_node(row: list[Any]) -> dict[str, Any]:
     }
 
 
+def _compact_row_to_node(row: list[Any]) -> dict[str, Any]:
+    metadata_raw = row[6] if len(row) > 6 else "{}"
+    try:
+        metadata = json.loads(metadata_raw or "{}")
+    except json.JSONDecodeError:
+        metadata = {}
+    status = str(metadata.get("status") or metadata.get("node_status") or "session_final")
+    session_id = str(metadata.get("session_id") or metadata.get("source_session_id") or "")
+    evidence_refs = metadata.get("evidence_refs") if isinstance(metadata.get("evidence_refs"), list) else []
+    evidence_id = str(evidence_refs[0]) if evidence_refs else str(metadata.get("evidence_id") or "")
+    return {
+        "id": row[0],
+        "kind": row[1],
+        "label": row[4],
+        "summary": row[5],
+        "status": status,
+        "scope": str(metadata.get("scope") or "session"),
+        "session_id": session_id,
+        "project_id": str(metadata.get("project_id") or "default"),
+        "source_app": str(metadata.get("source_app") or "unknown"),
+        "evidence_id": evidence_id,
+        "commit_id": row[3],
+        "created_at": str(metadata.get("created_at") or ""),
+        "updated_at": str(metadata.get("updated_at") or ""),
+        "packet_id": row[2],
+        "commit_sha": row[3],
+        "metadata": {
+            **metadata,
+            "packet_id": metadata.get("packet_id") or row[2],
+            "commit_sha": metadata.get("commit_sha") or row[3],
+        },
+    }
+
+
 def _row_to_edge(row: list[Any]) -> dict[str, Any]:
     metadata_raw = row[8] if len(row) > 8 else "{}"
     try:
@@ -514,16 +689,44 @@ def _row_to_edge(row: list[Any]) -> dict[str, Any]:
     }
 
 
+def _compact_row_to_edge(row: list[Any]) -> dict[str, Any]:
+    metadata_raw = row[3] if len(row) > 3 else "{}"
+    try:
+        metadata = json.loads(metadata_raw or "{}")
+    except json.JSONDecodeError:
+        metadata = {}
+    source_id = str(row[0])
+    target_id = str(row[1])
+    kind = str(row[2])
+    return {
+        "id": str(metadata.get("id") or f"edge:{source_id}:{kind}:{target_id}"),
+        "source_id": source_id,
+        "target_id": target_id,
+        "kind": kind,
+        "weight": float(metadata.get("weight") or 1.0),
+        "confidence": float(metadata.get("confidence") or 0.8),
+        "evidence_id": str(metadata.get("evidence_id") or ""),
+        "created_at": str(metadata.get("created_at") or ""),
+        "metadata": metadata,
+    }
+
+
 def _q(value: object) -> str:
     return json.dumps("" if value is None else str(value))
 
 
 def _terms(text: str) -> list[str]:
-    return [
-        re.sub(r"[^a-z0-9_.-]+", "", token.lower())
-        for token in str(text or "").split()
-        if re.sub(r"[^a-z0-9_.-]+", "", token.lower())
-    ]
+    terms: list[str] = []
+    for token in str(text or "").split():
+        clean = re.sub(r"[^a-z0-9_.-]+", "", token.lower())
+        if len(clean) <= 2:
+            continue
+        if clean in SEARCH_STOPWORDS:
+            continue
+        if re.fullmatch(r"[0-9a-f]{16,40}", clean):
+            continue
+        terms.append(clean)
+    return terms
 
 
 def _now() -> str:

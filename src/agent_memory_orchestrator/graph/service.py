@@ -9,6 +9,7 @@ import time
 from pathlib import Path
 from typing import Any
 
+from ..core.db import connect
 from ..integrations.adapters import normalize_adapter_event
 from ..core.config import Settings
 from ..evidence.drain import EvidenceDrain
@@ -16,7 +17,14 @@ from ..evidence.drain import _read_jsonl_from
 from ..evidence.raw_store import RawEvidenceRef, RawEvidenceStore
 from ..evidence.triggers import TriggerDecision, detect_trigger
 from ..evidence.window import clean_evidence_window
+from ..llm.embeddings import embed_text
 from ..llm.qwen import DeterministicPlanner, OllamaQwenClient, QueryPlan, QwenPlanner, QwenUnavailable
+from ..reasoning_graph.embedding_store import GraphEmbeddingStore
+from ..reasoning_graph.retrieval import RetrievalIndexStore
+from ..reasoning_graph.retrieval import build_retrieval_documents_from_graph
+from ..reasoning_graph.retrieval import embed_missing_retrieval_documents
+from ..reasoning_graph.retrieval import retrieve_session_graph as retrieve_indexed_session_graph
+from ..reasoning_graph.session_runtime import StrictTextEmbedder
 from ..versioning import LocalGitBackend, VersionBackend, WorkLedger
 from .cache import GraphSearchCache
 from .consolidation import DeterministicGraphConsolidator
@@ -47,6 +55,53 @@ VERSION_FLOW_EDGE_KINDS = {
     "HAS_WINDOW",
 }
 VERSION_RELATION_EDGE_KINDS = {"REFINES", "SUPERSEDES", "DUPLICATE_OF", "CONTRADICTS"}
+RETRIEVAL_STOPWORDS = {
+    "about",
+    "after",
+    "again",
+    "also",
+    "and",
+    "are",
+    "because",
+    "been",
+    "before",
+    "being",
+    "between",
+    "but",
+    "can",
+    "could",
+    "did",
+    "does",
+    "for",
+    "from",
+    "has",
+    "have",
+    "how",
+    "into",
+    "its",
+    "not",
+    "now",
+    "only",
+    "should",
+    "that",
+    "the",
+    "then",
+    "this",
+    "use",
+    "used",
+    "using",
+    "via",
+    "was",
+    "were",
+    "what",
+    "when",
+    "where",
+    "which",
+    "why",
+    "will",
+    "with",
+    "would",
+}
 
 
 class GraphRagService:
@@ -664,6 +719,135 @@ class GraphRagService:
     def graph_cache_status(self) -> dict[str, Any]:
         return self.search_cache.status()
 
+    def rebuild_retrieval_index(
+        self,
+        *,
+        db_path: Path | None = None,
+        session_id: str = "",
+        limit: int = 10000,
+        max_doc_chars: int = 5000,
+    ) -> dict[str, Any]:
+        target_db = db_path or self.settings.db_path
+        conn = connect(target_db)
+        try:
+            index = RetrievalIndexStore(conn)
+            docs = build_retrieval_documents_from_graph(
+                self.store,
+                session_id=session_id,
+                node_limit=max(1, min(100000, int(limit))),
+                max_doc_chars=max(1000, int(max_doc_chars)),
+            )
+            written = index.replace_documents(docs)
+            return {
+                "ok": True,
+                "db_path": str(target_db),
+                "graph_path": str(self.settings.graph_path),
+                "session_id": session_id,
+                "retrieval_document_count": written,
+                "doc_type_counts": _count_by(docs, "doc_type"),
+                "node_kind_counts": _count_by(docs, "node_kind"),
+            }
+        finally:
+            conn.close()
+
+    def embed_retrieval_index(
+        self,
+        *,
+        db_path: Path | None = None,
+        session_id: str = "",
+        limit: int = 0,
+        model: str = "",
+        graph_scope: str = "",
+        rebuild_faiss: bool = True,
+    ) -> dict[str, Any]:
+        target_db = db_path or self.settings.db_path
+        embedding_model = model or self.settings.embedding_model
+        scope = graph_scope or _graph_scope_for_path(self.settings.graph_path)
+        conn = connect(target_db)
+        try:
+            index = RetrievalIndexStore(conn)
+            embedding_store = GraphEmbeddingStore(conn, db_path=target_db)
+            embedder = _text_embedder_for_model(embedding_model, dims=self.settings.embedding_dims)
+            result = embed_missing_retrieval_documents(
+                index_store=index,
+                embedding_store=embedding_store,
+                embedder=embedder,
+                model=embedding_model,
+                graph_scope=scope,
+                session_id=session_id,
+                extraction_run_id="graph_retrieval_index",
+                limit=max(0, int(limit)),
+            )
+            faiss = (
+                embedding_store.build_faiss_cache(
+                    embedding_kind="retrieval_text",
+                    model=embedding_model,
+                    graph_scope=scope,
+                ).as_dict()
+                if rebuild_faiss
+                else {"status": "skipped", "reason": "disabled"}
+            )
+            return {
+                "ok": True,
+                "db_path": str(target_db),
+                "graph_path": str(self.settings.graph_path),
+                "graph_scope": scope,
+                "embedding": result.as_dict(),
+                "faiss": faiss,
+            }
+        finally:
+            conn.close()
+
+    def retrieve_indexed_graph(
+        self,
+        *,
+        query: str,
+        db_path: Path | None = None,
+        session_id: str = "",
+        limit: int = 8,
+        use_vector: bool = True,
+        model: str = "",
+        graph_scope: str = "",
+        include_answer: bool = True,
+    ) -> dict[str, Any]:
+        query = str(query or "").strip()
+        if not query:
+            raise ValueError("query is required")
+        target_db = db_path or self.settings.db_path
+        embedding_model = model or self.settings.embedding_model
+        scope = graph_scope or _graph_scope_for_path(self.settings.graph_path)
+        conn = connect(target_db)
+        try:
+            index = RetrievalIndexStore(conn)
+            embedding_store: GraphEmbeddingStore | None = None
+            embedder = None
+            if use_vector and self.settings.vector_backend != "disabled":
+                embedding_store = GraphEmbeddingStore(conn, db_path=target_db)
+                embedder = _text_embedder_for_model(embedding_model, dims=self.settings.embedding_dims)
+            result = retrieve_indexed_session_graph(
+                query=query,
+                index_store=index,
+                graph_store=self.store,
+                embedding_store=embedding_store,
+                embedder=embedder,
+                embedding_model=embedding_model if embedder is not None else "",
+                graph_scope=scope,
+                session_id=session_id,
+                limit=max(1, min(50, int(limit))),
+            )
+            payload = {
+                "ok": True,
+                "db_path": str(target_db),
+                "graph_path": str(self.settings.graph_path),
+                "graph_scope": scope,
+                "retrieval": result.as_dict(),
+            }
+            if include_answer:
+                payload["answer"] = _answer_from_retrieval_result(result.as_dict())
+            return payload
+        finally:
+            conn.close()
+
     def work_trace(self, *, commit: str = "HEAD", cwd: str | Path | None = None) -> dict[str, Any]:
         trace = WorkLedger(self.version_backend).trace_commit(commit=commit, cwd=cwd)
         return {"ok": trace.commit.available, "trace": trace.as_dict()}
@@ -818,6 +1002,79 @@ class GraphRagService:
 
 def create_graph_service(settings: Settings) -> GraphRagService:
     return GraphRagService(settings)
+
+
+class _HashTextEmbedder:
+    def __init__(self, dims: int) -> None:
+        self.dims = dims
+
+    def embed(self, text: str) -> list[float]:
+        return embed_text(text, self.dims)
+
+
+def _text_embedder_for_model(model: str, *, dims: int):
+    if model.strip().lower() in {"hash", "hash-fallback", "deterministic", "local-hash"}:
+        return _HashTextEmbedder(dims)
+    return StrictTextEmbedder(model)
+
+
+def _graph_scope_for_path(graph_path: Path) -> str:
+    safe = re.sub(r"[^a-zA-Z0-9]+", "_", str(graph_path.resolve()).lower()).strip("_")
+    return f"graph:{safe[-80:] or 'default'}"
+
+
+def _count_by(items: list[Any], attr: str) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for item in items:
+        value = str(getattr(item, attr, "") or "")
+        counts[value] = counts.get(value, 0) + 1
+    return dict(sorted(counts.items()))
+
+
+def _answer_from_retrieval_result(result: dict[str, Any]) -> dict[str, Any]:
+    hits = result.get("hits") if isinstance(result.get("hits"), list) else []
+    if not hits:
+        return {
+            "text": "No indexed graph evidence matched the query.",
+            "citations": [],
+            "node_ids": [],
+        }
+    lines = ["AMO indexed graph answer:"]
+    citations: list[dict[str, Any]] = []
+    node_ids: list[str] = []
+    for index, hit in enumerate(hits[:5], start=1):
+        doc = hit.get("document") if isinstance(hit, dict) and isinstance(hit.get("document"), dict) else {}
+        graph_node = hit.get("graph_node") if isinstance(hit, dict) and isinstance(hit.get("graph_node"), dict) else {}
+        node_id = str(doc.get("graph_node_id") or graph_node.get("id") or "")
+        node_ids.append(node_id)
+        title = str(doc.get("title") or graph_node.get("label") or node_id)
+        body = str(doc.get("body") or graph_node.get("summary") or "")
+        statement = _best_answer_line(body) or str(graph_node.get("summary") or "")
+        lines.append(f"{index}. {title}: {statement}".strip())
+        citations.append(
+            {
+                "rank": index,
+                "doc_id": doc.get("doc_id"),
+                "graph_node_id": node_id,
+                "doc_type": doc.get("doc_type"),
+                "packet_id": doc.get("packet_id"),
+                "commit_sha": doc.get("commit_sha"),
+                "score": hit.get("score"),
+            }
+        )
+    return {
+        "text": "\n".join(lines),
+        "citations": citations,
+        "node_ids": [node_id for node_id in node_ids if node_id],
+    }
+
+
+def _best_answer_line(body: str) -> str:
+    for prefix in ("statement:", "summary:", "reason:", "symbol:", "file_path:"):
+        for line in body.splitlines():
+            if line.strip().lower().startswith(prefix):
+                return line.split(":", 1)[-1].strip()
+    return body.strip().splitlines()[0][:300] if body.strip() else ""
 
 
 def _fallback_event(payload: dict[str, Any], default_agent: str) -> dict[str, Any]:
@@ -1040,13 +1297,20 @@ def _rank_nodes(
     include_historical: bool,
     require_lexical: bool = False,
 ) -> list[dict[str, Any]]:
-    terms = [term for term in re.sub(r"[^a-zA-Z0-9_. -]+", " ", query).lower().split() if len(term) > 2]
+    terms = _retrieval_terms(query)
+    query_term_set = set(terms)
     ranked: list[tuple[float, dict[str, Any]]] = []
     for node in nodes:
         if not include_historical and node.get("status") in {"superseded", "abandoned"}:
             continue
         text = f"{node.get('kind')} {node.get('label')} {node.get('summary')} {json.dumps(node.get('metadata', {}), sort_keys=True)}".lower()
-        lexical = sum(1.0 for term in terms if term in text)
+        node_terms = set(_retrieval_terms(text))
+        lexical = float(len(query_term_set & node_terms))
+        substring = sum(0.25 for term in query_term_set - node_terms if term in text)
+        lexical += substring
+        graph_score = float(node.get("graph_score") or 0.0)
+        if terms and lexical <= 0 and graph_score <= 0:
+            continue
         if require_lexical and terms and lexical <= 0:
             continue
         status = str(node.get("status") or "")
@@ -1059,9 +1323,22 @@ def _rank_nodes(
         else:
             status_bonus = 0.0
         evidence_bonus = 0.5 if node.get("evidence_id") else 0.0
-        ranked.append((lexical + status_bonus + evidence_bonus + float(node.get("graph_score") or 0.0), node))
+        ranked.append((lexical + status_bonus + evidence_bonus + graph_score, node))
     ranked.sort(key=lambda item: item[0], reverse=True)
     return [{**node, "score": round(score, 6)} for score, node in ranked]
+
+
+def _retrieval_terms(text: str) -> list[str]:
+    terms: list[str] = []
+    for token in re.findall(r"[a-z0-9_.-]+", str(text or "").lower()):
+        if len(token) <= 2:
+            continue
+        if token in RETRIEVAL_STOPWORDS:
+            continue
+        if re.fullmatch(r"[0-9a-f]{16,40}", token):
+            continue
+        terms.append(token)
+    return terms
 
 
 def _trim_weak_tail_matches(nodes: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -1134,7 +1411,18 @@ def _is_clean_context_snapshot(node: dict[str, Any]) -> bool:
 def _is_clean_answer_summary(summary: str, metadata: object = None) -> bool:
     text = summary.strip()
     lowered = text.lower()
+    generic_summaries = {
+        "update files in the session",
+        "git commit operation executed",
+        "git commit operation executed.",
+    }
+    if lowered in generic_summaries:
+        return False
     if len(text) < 16:
+        return False
+    if re.match(r"^(from\s+[\w.]+\s+import\b|import\s+[\w.]+\b|class\s+\w+\b|def\s+\w+\b)", lowered):
+        return False
+    if re.search(r"\|\s*(from\s+[\w.]+\s+import\b|import\s+[\w.]+\b|class\s+\w+\b|def\s+\w+\b)", lowered):
         return False
     noisy_prefixes = (
         '"continue":',
@@ -1162,6 +1450,19 @@ def _is_clean_answer_summary(summary: str, metadata: object = None) -> bool:
     if lowered.startswith(noisy_prefixes):
         return False
     if any(term in lowered for term in noisy_terms):
+        return False
+    if text.count(" | ") >= 6 and (
+        _code_token_ratio(text) > 0.05
+        or "return " in lowered
+        or "_write_" in lowered
+        or "_read_" in lowered
+    ):
+        return False
+    if len(text) > 600 and text.count(" | ") >= 6:
+        return False
+    if len(text) > 600 and _code_token_ratio(text) > 0.08:
+        return False
+    if len(text) > 900:
         return False
     if len(text) > 240 and _punctuation_ratio(text) > 0.18:
         return False
