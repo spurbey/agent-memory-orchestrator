@@ -146,6 +146,149 @@ def test_graph_search_excludes_raw_evidence_without_explicit_raw_request(tmp_pat
     assert "No answer-grade graph memory" in result["context"]
 
 
+def test_graph_search_does_not_return_zero_match_commits_from_expansion(tmp_path: Path) -> None:
+    store = InMemoryGraphStore()
+    store.upsert_node(
+        GraphNode(
+            id="work:clean:1",
+            kind="WorkChange",
+            label="Clean evidence windows",
+            summary="Clean evidence windows before graph extraction.",
+            status="committed",
+            scope="central",
+            evidence_id="raw_1",
+            commit_id="abc123",
+        )
+    )
+    store.upsert_node(
+        GraphNode(
+            id="commit:abc123",
+            kind="GitCommit",
+            label="abc123",
+            summary="Git commit abc123 linked to session work",
+            status="committed",
+            scope="central",
+            evidence_id="raw_1",
+            commit_id="abc123",
+        )
+    )
+    store.upsert_edge(
+        GraphEdge(
+            id="edge:work:commit",
+            source_id="work:clean:1",
+            target_id="commit:abc123",
+            kind="COMMITTED_AS",
+            evidence_id="raw_1",
+        )
+    )
+    svc = GraphRagService(
+        make_settings(tmp_path),
+        store=store,
+        planner=DeterministicPlanner(),
+        version_backend=_StaticGitBackend(),
+    )
+    try:
+        result = svc.graph_search(query="clean evidence graph extraction", limit=5)
+    finally:
+        svc.close()
+
+    assert [node["id"] for node in result["nodes"]] == ["work:clean:1"]
+
+
+def test_graph_search_stopwords_do_not_make_generic_drafts_relevant(tmp_path: Path) -> None:
+    store = InMemoryGraphStore()
+    store.upsert_node(
+        GraphNode(
+            id="decision:generic",
+            kind="Decision",
+            label="Update files in the session",
+            summary="Update files in the session",
+            status="draft",
+            scope="session",
+            evidence_id="raw_1",
+        )
+    )
+    svc = GraphRagService(
+        make_settings(tmp_path),
+        store=store,
+        planner=DeterministicPlanner(),
+        version_backend=_StaticGitBackend(),
+    )
+    try:
+        result = svc.graph_search(query="is the slack connector connected via websocket or HTTP API?", limit=5)
+    finally:
+        svc.close()
+
+    assert result["count"] == 0
+    assert result["nodes"] == []
+
+
+def test_graph_search_rejects_code_snippet_work_changes(tmp_path: Path) -> None:
+    store = InMemoryGraphStore()
+    store.upsert_node(
+        GraphNode(
+            id="work:snippet",
+            kind="WorkChange",
+            label="from pathlib import Path",
+            summary=(
+                "from pathlib import Path | from typing import Any | "
+                "from .graph_service import GraphRagService | Git commit operation executed."
+            ),
+            status="draft",
+            scope="session",
+            evidence_id="raw_1",
+        )
+    )
+    svc = GraphRagService(
+        make_settings(tmp_path),
+        store=store,
+        planner=DeterministicPlanner(),
+        version_backend=_StaticGitBackend(),
+    )
+    try:
+        result = svc.graph_search(query="how is bm25 configured in the system?", limit=5)
+    finally:
+        svc.close()
+
+    assert result["count"] == 0
+    assert result["nodes"] == []
+
+
+def test_graph_search_rejects_bulk_markdown_and_code_dump_work_changes(tmp_path: Path) -> None:
+    store = InMemoryGraphStore()
+    noisy_summary = (
+        "# Implementation Tracker | Last updated: 2026-05-07 | Baseline design: docs/FINAL_DESIGN_V1.md | "
+        "Phase 1 implemented | Phase 2 implemented | Phase 3 pending | Phase 4 implemented | "
+        "_write_hook_log(\"capture_failed\", error_type=type(exc).__name__, error=str(exc)); | "
+        "raw, timed_out, read_error = _read_stdin_with_timeout(timeout_seconds); | "
+        "if read_error: return {\"systemMessage\": \"failed\"}"
+    )
+    store.upsert_node(
+        GraphNode(
+            id="work:bulk-dump",
+            kind="WorkChange",
+            label="# Implementation Tracker",
+            summary=noisy_summary,
+            status="draft",
+            scope="session",
+            evidence_id="raw_1",
+        )
+    )
+    svc = GraphRagService(
+        make_settings(tmp_path),
+        store=store,
+        planner=DeterministicPlanner(),
+        version_backend=_StaticGitBackend(),
+    )
+    try:
+        result = svc.graph_search(query="how is bm25 configured in the system?", limit=5)
+    finally:
+        svc.close()
+
+    assert result["count"] == 0
+    assert result["nodes"] == []
+
+
 def test_raw_word_in_topic_does_not_enable_raw_evidence_retrieval(tmp_path: Path) -> None:
     store = InMemoryGraphStore()
     store.upsert_node(
