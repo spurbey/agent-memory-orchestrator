@@ -11,6 +11,29 @@ from .models import ExtractionRun
 
 QWEN_CONFIDENCE_THRESHOLD = 0.75
 
+VALID_EDGE_KINDS = frozenset(
+    {
+        "CAUSED_BY",
+        "COMMITTED_AS",
+        "CONFLICTS_WITH",
+        "CREATED_CODE_NODE",
+        "CREATED_WORK_CHANGE",
+        "DUPLICATE_OF",
+        "FAILED_VALIDATION",
+        "FOLLOWED_BY",
+        "INVALIDATES",
+        "LINKED_TO_COMMIT",
+        "MEMBER_OF",
+        "MODIFIES",
+        "PRODUCED_CHANGE_IN",
+        "REFINES",
+        "REVERTS",
+        "SUPERSEDES",
+        "SUPERSEDED_BY",
+        "VALIDATED_BY",
+    }
+)
+
 STATUS_TRANSITIONS: dict[str, set[str]] = {
     "draft": {"session_final", "abandoned"},
     "session_final": {"active", "committed", "abandoned"},
@@ -142,6 +165,24 @@ def validate_status_transition(old_status: str, new_status: str, *, explicit_evi
     return ValidationReport.from_issues(issues)
 
 
+def validate_reasoning_edge(edge: Any) -> ValidationReport:
+    issues: list[ValidationIssue] = []
+    data = _object_data(edge)
+    _require(data, "source_id", issues)
+    _require(data, "target_id", issues)
+    _require(data, "kind", issues)
+    kind = str(data.get("kind") or "")
+    if kind and kind not in VALID_EDGE_KINDS:
+        issues.append(ValidationIssue("invalid_edge_kind", f"Invalid edge kind: {kind}", "kind"))
+    evidence_ids = tuple(str(item).strip() for item in data.get("evidence_ids", ()) if str(item).strip())
+    if not evidence_ids:
+        issues.append(ValidationIssue("edge_missing_evidence", "ReasoningEdge requires evidence_ids", "evidence_ids"))
+    confidence = _float(data.get("confidence"), default=-1.0)
+    if confidence < 0.0 or confidence > 1.0:
+        issues.append(ValidationIssue("edge_invalid_confidence", "ReasoningEdge confidence must be between 0 and 1", "confidence"))
+    return ValidationReport.from_issues(issues)
+
+
 def _validate_extraction_run(run: ExtractionRun, issues: list[ValidationIssue]) -> None:
     _require(run.as_dict(), "id", issues)
     _require(run.as_dict(), "session_id", issues)
@@ -189,8 +230,10 @@ def _validate_code_hunk(data: dict[str, Any], issues: list[ValidationIssue]) -> 
         issues.append(ValidationIssue("code_hunk_missing_file", "CodeHunk requires file_path", "file_path"))
     if _int(data.get("new_start")) <= 0:
         issues.append(ValidationIssue("code_hunk_invalid_new_start", "CodeHunk new_start must be positive", "new_start"))
-    if _int(data.get("old_start")) <= 0:
-        issues.append(ValidationIssue("code_hunk_invalid_old_start", "CodeHunk old_start must be positive", "old_start"))
+    old_start = _int(data.get("old_start"))
+    old_count = _int(data.get("old_count"))
+    if old_start <= 0 and old_count > 0:
+        issues.append(ValidationIssue("code_hunk_invalid_old_start", "CodeHunk old_start must be positive unless old_count is zero", "old_start"))
 
 
 def _object_data(obj: Any) -> dict[str, Any]:

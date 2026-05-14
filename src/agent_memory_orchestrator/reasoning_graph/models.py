@@ -13,6 +13,7 @@ ANSWER_GRADE_KINDS = frozenset(
         "Bug",
         "Blocker",
         "OpenQuestion",
+        "WorkChange",
         "TestRun",
         "CodeNode",
         "CodeHunk",
