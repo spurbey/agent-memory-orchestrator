@@ -111,6 +111,7 @@ class GraphEmbeddingHit:
     node_kind: str
     memory_class: str
     graph_scope: str
+    graph_path: str
     embedding_kind: str
     model: str
     score: float
@@ -122,6 +123,7 @@ class GraphEmbeddingHit:
             "node_kind": self.node_kind,
             "memory_class": self.memory_class,
             "graph_scope": self.graph_scope,
+            "graph_path": self.graph_path,
             "embedding_kind": self.embedding_kind,
             "model": self.model,
             "score": self.score,
@@ -479,6 +481,7 @@ def _hit_from_record(record: GraphEmbeddingRecord, score: float) -> GraphEmbeddi
         node_kind=record.node_kind,
         memory_class=record.memory_class,
         graph_scope=record.graph_scope,
+        graph_path=record.graph_path,
         embedding_kind=record.embedding_kind,
         model=record.model,
         score=round(float(score), 6),

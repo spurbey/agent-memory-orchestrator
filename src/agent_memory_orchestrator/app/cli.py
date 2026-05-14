@@ -4,7 +4,7 @@ import argparse
 import json
 import os
 import sys
-from dataclasses import replace
+from dataclasses import asdict, replace
 from pathlib import Path
 
 from ..core.config import Settings
@@ -26,6 +26,13 @@ from ..orchestration import OrchestratorService
 from ..core.privacy import redact_secrets
 from ..llm.models import download_models, list_model_presets, model_status, preflight_models
 from ..llm.qwen import QwenUnavailable
+from ..reasoning_graph.session_runtime import DEFAULT_CODE_EMBEDDING_MODEL
+from ..reasoning_graph.session_runtime import SessionGraphBuildOptions
+from ..reasoning_graph.session_runtime import SessionGraphQueryOptions
+from ..reasoning_graph.session_runtime import build_and_query_session_graph
+from ..reasoning_graph.session_runtime import build_session_graph
+from ..reasoning_graph.session_runtime import default_session_graph_path
+from ..reasoning_graph.session_runtime import query_session_graph
 from .client import DaemonClient, DaemonUnavailable
 
 
@@ -147,6 +154,36 @@ def _build_parser() -> argparse.ArgumentParser:
     graph_rebuild_cache.add_argument("--limit", type=int, default=5000)
     graph_rebuild_cache.add_argument("--offline", action="store_true", help="Open Kuzu directly for single-process maintenance.")
 
+    graph_retrieval_build = sub.add_parser("graph-retrieval-build", help="Build SQLite/FTS retrieval docs from the graph")
+    graph_retrieval_build.add_argument("--session-id", default="")
+    graph_retrieval_build.add_argument("--limit", type=int, default=10000)
+    graph_retrieval_build.add_argument("--max-doc-chars", type=int, default=5000)
+    graph_retrieval_build.add_argument("--db-path", type=Path, default=None)
+    graph_retrieval_build.add_argument("--graph-path", type=Path, default=None)
+    graph_retrieval_build.add_argument("--offline", action="store_true", help="Open Kuzu directly for single-process maintenance.")
+
+    graph_retrieval_embed = sub.add_parser("graph-retrieval-embed", help="Resume embedding missing graph retrieval docs")
+    graph_retrieval_embed.add_argument("--session-id", default="")
+    graph_retrieval_embed.add_argument("--limit", type=int, default=100)
+    graph_retrieval_embed.add_argument("--model", default="")
+    graph_retrieval_embed.add_argument("--graph-scope", default="")
+    graph_retrieval_embed.add_argument("--db-path", type=Path, default=None)
+    graph_retrieval_embed.add_argument("--graph-path", type=Path, default=None)
+    graph_retrieval_embed.add_argument("--no-faiss", action="store_true", help="Do not rebuild the FAISS cache after embedding.")
+    graph_retrieval_embed.add_argument("--offline", action="store_true", help="Open Kuzu directly for single-process maintenance.")
+
+    graph_retrieve = sub.add_parser("graph-retrieve", help="Retrieve over graph docs with exact/BM25/vector/Kuzu expansion")
+    graph_retrieve.add_argument("--query", required=True)
+    graph_retrieve.add_argument("--session-id", default="")
+    graph_retrieve.add_argument("--limit", type=int, default=8)
+    graph_retrieve.add_argument("--model", default="")
+    graph_retrieve.add_argument("--graph-scope", default="")
+    graph_retrieve.add_argument("--db-path", type=Path, default=None)
+    graph_retrieve.add_argument("--graph-path", type=Path, default=None)
+    graph_retrieve.add_argument("--no-vector", action="store_true")
+    graph_retrieve.add_argument("--no-answer", action="store_true")
+    graph_retrieve.add_argument("--offline", action="store_true", help="Open Kuzu directly for single-process maintenance.")
+
     graph_finalize = sub.add_parser("graph-finalize-session", help="Promote one session's draft graph work into central graph")
     graph_finalize.add_argument("--session-id", required=True)
     graph_finalize.add_argument("--commit", default="HEAD")
@@ -168,6 +205,33 @@ def _build_parser() -> argparse.ArgumentParser:
     graph_version_flow.add_argument("--session-id", default="", help="Restrict version flow to one AMO session.")
     graph_version_flow.add_argument("--limit", type=int, default=100)
     graph_version_flow.add_argument("--offline", action="store_true", help="Open Kuzu directly for single-process maintenance.")
+
+    graph_build_session = sub.add_parser(
+        "graph-build-session",
+        help="Build an isolated production session graph from real AMO evidence and Codex transcripts",
+    )
+    graph_build_session.add_argument("--session-id", required=True)
+    graph_build_session.add_argument("--commit", required=True)
+    graph_build_session.add_argument("--repo-root", type=Path, default=Path.cwd())
+    graph_build_session.add_argument("--graph-path", type=Path, default=None)
+    graph_build_session.add_argument("--evidence-path", action="append", type=Path, default=[])
+    graph_build_session.add_argument("--transcript-path", action="append", type=Path, default=[])
+    graph_build_session.add_argument("--file-path", action="append", default=[])
+    graph_build_session.add_argument("--query", default="")
+    graph_build_session.add_argument("--code-query", default="")
+    graph_build_session.add_argument("--limit", type=int, default=8)
+    graph_build_session.add_argument("--limit-events", type=int, default=None)
+    graph_build_session.add_argument("--force", action="store_true", help="Replace the target session graph path.")
+    graph_build_session.add_argument("--text-embedding-model", default="")
+    graph_build_session.add_argument("--code-embedding-model", default=DEFAULT_CODE_EMBEDDING_MODEL)
+
+    graph_session_search = sub.add_parser("graph-session-search", help="Search an isolated production session graph")
+    graph_session_search.add_argument("--graph-path", required=True, type=Path)
+    graph_session_search.add_argument("--query", default="")
+    graph_session_search.add_argument("--code-query", default="")
+    graph_session_search.add_argument("--limit", type=int, default=8)
+    graph_session_search.add_argument("--text-embedding-model", default="")
+    graph_session_search.add_argument("--code-embedding-model", default=DEFAULT_CODE_EMBEDDING_MODEL)
 
     slack = sub.add_parser("slack", help="Configure and run local Slack Socket Mode connector")
     slack_sub = slack.add_subparsers(dest="slack_command", required=True)
@@ -562,6 +626,50 @@ def main(argv: list[str] | None = None) -> int:
                 svc.close()
             return 0
 
+        if args.command == "graph-build-session":
+            settings = Settings.load()
+            graph_path = args.graph_path or default_session_graph_path(args.session_id)
+            build_options = SessionGraphBuildOptions(
+                session_id=args.session_id,
+                graph_path=graph_path,
+                repo_root=args.repo_root,
+                commit=args.commit,
+                evidence_paths=tuple(args.evidence_path or ()),
+                transcript_paths=tuple(args.transcript_path or ()),
+                file_paths=tuple(args.file_path or ()),
+                text_embedding_model=args.text_embedding_model or settings.embedding_model,
+                code_embedding_model=args.code_embedding_model or DEFAULT_CODE_EMBEDDING_MODEL,
+                force=args.force,
+                limit_events=args.limit_events,
+            )
+            if args.query or args.code_query:
+                _print(
+                    build_and_query_session_graph(
+                        build_options,
+                        query=args.query or None,
+                        code_query=args.code_query or None,
+                        limit=args.limit,
+                    )
+                )
+            else:
+                _print({"ok": True, "build": asdict(build_session_graph(build_options))})
+            return 0
+
+        if args.command == "graph-session-search":
+            settings = Settings.load()
+            result = query_session_graph(
+                SessionGraphQueryOptions(
+                    graph_path=args.graph_path,
+                    query=args.query or None,
+                    code_query=args.code_query or None,
+                    text_embedding_model=args.text_embedding_model or settings.embedding_model,
+                    code_embedding_model=args.code_embedding_model or DEFAULT_CODE_EMBEDDING_MODEL,
+                    limit=args.limit,
+                )
+            )
+            _print({"ok": True, "result": asdict(result)})
+            return 0
+
         if args.command in {
             "graph-search",
             "graph-status",
@@ -570,11 +678,14 @@ def main(argv: list[str] | None = None) -> int:
             "graph-consolidate",
             "graph-cache-status",
             "graph-rebuild-cache",
+            "graph-retrieval-build",
+            "graph-retrieval-embed",
+            "graph-retrieve",
             "graph-finalize-session",
             "graph-rebuild-central",
             "graph-version-flow",
         }:
-            settings = Settings.load()
+            settings = _settings_with_path_overrides(Settings.load(), args)
             if args.offline:
                 graph = GraphRagService(settings)
                 try:
@@ -595,6 +706,33 @@ def main(argv: list[str] | None = None) -> int:
                         result = graph.graph_cache_status()
                     elif args.command == "graph-rebuild-cache":
                         result = graph.rebuild_graph_cache(limit=args.limit)
+                    elif args.command == "graph-retrieval-build":
+                        result = graph.rebuild_retrieval_index(
+                            db_path=args.db_path,
+                            session_id=args.session_id,
+                            limit=args.limit,
+                            max_doc_chars=args.max_doc_chars,
+                        )
+                    elif args.command == "graph-retrieval-embed":
+                        result = graph.embed_retrieval_index(
+                            db_path=args.db_path,
+                            session_id=args.session_id,
+                            limit=args.limit,
+                            model=args.model,
+                            graph_scope=args.graph_scope,
+                            rebuild_faiss=not args.no_faiss,
+                        )
+                    elif args.command == "graph-retrieve":
+                        result = graph.retrieve_indexed_graph(
+                            query=args.query,
+                            db_path=args.db_path,
+                            session_id=args.session_id,
+                            limit=args.limit,
+                            use_vector=not args.no_vector,
+                            model=args.model,
+                            graph_scope=args.graph_scope,
+                            include_answer=not args.no_answer,
+                        )
                     elif args.command == "graph-finalize-session":
                         result = graph.finalize_session(
                             session_id=args.session_id,
@@ -625,6 +763,8 @@ def main(argv: list[str] | None = None) -> int:
                         "graph-drain",
                         "graph-consolidate",
                         "graph-rebuild-cache",
+                        "graph-retrieval-build",
+                        "graph-retrieval-embed",
                         "graph-finalize-session",
                         "graph-rebuild-central",
                         "graph-version-flow",
@@ -656,6 +796,45 @@ def main(argv: list[str] | None = None) -> int:
                         result = client.get("/api/debug/graph-cache")
                     elif args.command == "graph-rebuild-cache":
                         result = client.post("/graph/rebuild-cache", {"limit": args.limit})
+                    elif args.command == "graph-retrieval-build":
+                        result = client.post(
+                            "/graph/retrieval-build",
+                            {
+                                "session_id": args.session_id,
+                                "limit": args.limit,
+                                "max_doc_chars": args.max_doc_chars,
+                                "db_path": str(args.db_path) if args.db_path else "",
+                                "graph_path": str(args.graph_path) if args.graph_path else "",
+                            },
+                        )
+                    elif args.command == "graph-retrieval-embed":
+                        result = client.post(
+                            "/graph/retrieval-embed",
+                            {
+                                "session_id": args.session_id,
+                                "limit": args.limit,
+                                "model": args.model,
+                                "graph_scope": args.graph_scope,
+                                "db_path": str(args.db_path) if args.db_path else "",
+                                "graph_path": str(args.graph_path) if args.graph_path else "",
+                                "rebuild_faiss": not args.no_faiss,
+                            },
+                        )
+                    elif args.command == "graph-retrieve":
+                        result = client.post(
+                            "/graph/retrieve",
+                            {
+                                "query": args.query,
+                                "session_id": args.session_id,
+                                "limit": args.limit,
+                                "model": args.model,
+                                "graph_scope": args.graph_scope,
+                                "db_path": str(args.db_path) if args.db_path else "",
+                                "graph_path": str(args.graph_path) if args.graph_path else "",
+                                "use_vector": not args.no_vector,
+                                "include_answer": not args.no_answer,
+                            },
+                        )
                     elif args.command == "graph-finalize-session":
                         result = client.post(
                             "/graph/finalize-session",
@@ -799,6 +978,23 @@ def _codex_hooks_snippet() -> dict:
             ]
         ),
     }
+
+
+def _settings_with_path_overrides(settings: Settings, args: argparse.Namespace) -> Settings:
+    updates = {}
+    db_path = getattr(args, "db_path", None)
+    graph_path = getattr(args, "graph_path", None)
+    if db_path:
+        updates["db_path"] = Path(db_path).expanduser().resolve()
+    if graph_path:
+        updates["graph_path"] = Path(graph_path).expanduser().resolve()
+    if not updates:
+        return settings
+    for key in ("db_path", "graph_path"):
+        path = updates.get(key)
+        if isinstance(path, Path):
+            path.parent.mkdir(parents=True, exist_ok=True)
+    return replace(settings, **updates)
 
 
 def _add_model_selection_args(parser: argparse.ArgumentParser) -> None:
