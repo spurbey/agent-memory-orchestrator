@@ -9,6 +9,7 @@ import pytest
 
 from agent_memory_orchestrator.reasoning_graph import CodeNode
 from agent_memory_orchestrator.reasoning_graph import ChunkingConfig
+from agent_memory_orchestrator.reasoning_graph import code_node_commit_edges
 from agent_memory_orchestrator.reasoning_graph import DecisionThread
 from agent_memory_orchestrator.reasoning_graph import extract_decisions
 from agent_memory_orchestrator.reasoning_graph import DecisionUnit
@@ -26,12 +27,17 @@ from agent_memory_orchestrator.reasoning_graph import extract_code_nodes_from_co
 from agent_memory_orchestrator.reasoning_graph import parse_unified_zero_hunks
 from agent_memory_orchestrator.reasoning_graph import produced_change_edges
 from agent_memory_orchestrator.reasoning_graph import python_ast_expander
+from agent_memory_orchestrator.reasoning_graph import query_session_graph
 from agent_memory_orchestrator.reasoning_graph import resolve_code_node_version
 from agent_memory_orchestrator.reasoning_graph import semantic_drift_boundary
 from agent_memory_orchestrator.reasoning_graph import should_accept_ast_parent
 from agent_memory_orchestrator.reasoning_graph import validation_edges_for_test
 from agent_memory_orchestrator.reasoning_graph import validate_graph_object
+from agent_memory_orchestrator.reasoning_graph import validate_reasoning_edge
 from agent_memory_orchestrator.reasoning_graph import validate_status_transition
+from agent_memory_orchestrator.reasoning_graph import work_change_code_edges
+from agent_memory_orchestrator.reasoning_graph import work_change_commit_edges
+from agent_memory_orchestrator.reasoning_graph import work_changes_from_commit_windows
 
 
 def _codes(report) -> set[str]:
@@ -55,6 +61,27 @@ class _QwenDecisionStub:
     def extract(self, payload):
         self.last_input = payload
         return self.payload
+
+
+class _SessionQueryStore:
+    def __init__(self, nodes: list[dict], neighbors: dict[str, list[dict]] | None = None) -> None:
+        self.nodes = nodes
+        self._neighbors = neighbors or {}
+
+    def list_nodes(self, *, limit: int = 25, kinds: list[str] | None = None, session_id: str = "", status: str = "") -> list[dict]:
+        out = []
+        for node in self.nodes:
+            if kinds and node.get("kind") not in kinds:
+                continue
+            if session_id and node.get("session_id") != session_id:
+                continue
+            if status and node.get("status") != status:
+                continue
+            out.append(node)
+        return out[:limit]
+
+    def neighbors(self, node_id: str, *, limit: int = 25) -> list[dict]:
+        return self._neighbors.get(node_id, [])[:limit]
 
 
 def _event(event_id: str, event_type: str, content: str, *, files: tuple[str, ...] = ()) -> TimelineEvent:
@@ -169,6 +196,22 @@ def test_accepts_valid_code_node_with_provenance() -> None:
     )
 
     report = validate_graph_object(node)
+
+    assert report.ok is True
+
+
+def test_accepts_work_change_with_commit_provenance() -> None:
+    change = DecisionUnit(
+        id="work:s1:abc123",
+        session_id="s1",
+        extraction_run_id="run1",
+        summary="feat(memory): add local memory engine. Changed 2 files.",
+        evidence_ids=("commit:abc123",),
+        kind="WorkChange",
+        confidence=1.0,
+    )
+
+    report = validate_graph_object(change)
 
     assert report.ok is True
 
@@ -502,6 +545,27 @@ def test_unified_zero_hunk_parser_extracts_atomic_hunks() -> None:
     assert hunks[1].new_count == 2
 
 
+def test_added_file_hunk_with_old_start_zero_is_valid() -> None:
+    diff = """diff --git a/src/new_file.py b/src/new_file.py
+--- /dev/null
++++ b/src/new_file.py
+@@ -0,0 +1,2 @@
++def created():
++    return True
+"""
+    hunks = parse_unified_zero_hunks(
+        diff,
+        session_id="s1",
+        extraction_run_id="run1",
+        commit_id="abc123",
+        evidence_ids=("commit:abc123",),
+    )
+
+    report = validate_graph_object(hunks[0])
+
+    assert report.ok is True
+
+
 def test_ast_parent_stop_rule_is_three_times_hunk_size() -> None:
     assert should_accept_ast_parent(2, 6) is True
     assert should_accept_ast_parent(2, 7) is False
@@ -565,6 +629,59 @@ def test_python_ast_expander_creates_structural_code_node_with_previous_content(
     assert nodes[0].metadata["structural_id"]
 
 
+def test_large_added_python_file_compacts_to_top_level_regions() -> None:
+    source_lines = [
+        "import json",
+        "import os",
+        "",
+        "CONSTANT = 1",
+        "",
+        "class Worker:",
+        "    def run(self):",
+        "        return True",
+        "",
+    ]
+    for index in range(1, 31):
+        source_lines.extend(
+            [
+                f"def helper_{index}():",
+                f"    value = {index}",
+                "    if value:",
+                "        return value",
+                "    return 0",
+                "",
+            ]
+        )
+    source = "\n".join(source_lines)
+    diff = "\n".join(
+        [
+            "diff --git a/src/large.py b/src/large.py",
+            "--- /dev/null",
+            "+++ b/src/large.py",
+            f"@@ -0,0 +1,{len(source_lines)} @@",
+            *[f"+{line}" for line in source_lines],
+        ]
+    )
+    hunks = parse_unified_zero_hunks(
+        diff,
+        session_id="s1",
+        extraction_run_id="run1",
+        commit_id="abc123",
+        evidence_ids=("raw1",),
+    )
+
+    nodes = code_nodes_from_hunks(
+        hunks,
+        file_contents={"src/large.py": source},
+        ast_expander=python_ast_expander,
+    )
+
+    assert len(nodes) <= 24
+    assert {node.ast_type for node in nodes} >= {"ImportBlock", "ModuleAssignmentBlock", "ClassDef"}
+    assert any(node.ast_type == "FunctionDef" for node in nodes)
+    assert all("compaction_reason" in node.metadata for node in nodes)
+
+
 def test_real_commit_produces_code_hunks_and_nodes_without_whole_file_blobs() -> None:
     repo_root = Path(__file__).resolve().parents[1]
     verify = subprocess.run(
@@ -598,6 +715,66 @@ def test_real_commit_produces_code_hunks_and_nodes_without_whole_file_blobs() ->
         assert len(node.content.splitlines()) < 150
         assert node.metadata["language"] == "python"
     assert any(node.ast_status == "parsed" for node in nodes)
+
+
+def test_commit_windows_create_deterministic_work_changes() -> None:
+    changes = work_changes_from_commit_windows(
+        [
+            {
+                "window_id": "window:commit:abc123",
+                "commit_id": "abc123",
+                "full_sha": "abc123456789",
+                "message": "feat(memory): add local memory engine",
+                "ordinal": 1,
+                "start_index": 10,
+                "end_index": 20,
+                "event_count": 11,
+                "message_event_count": 4,
+                "tool_event_count": 7,
+                "git_changed_files": ["src/memory.py", "tests/test_memory.py"],
+                "git_name_status": [{"status": "A", "path": "src/memory.py"}],
+            },
+            {"commit_id": "abcdef1", "message": "fake smoke commit"},
+        ],
+        session_id="s1",
+        extraction_run_id="run1",
+    )
+
+    assert len(changes) == 1
+    assert changes[0].kind == "WorkChange"
+    assert changes[0].evidence_ids == ("commit:abc123",)
+    assert changes[0].metadata["commit_category"] == "feat"
+    assert "src/memory.py" in changes[0].summary
+
+
+def test_session_graph_query_ranks_specific_work_change() -> None:
+    store = _SessionQueryStore(
+        [
+            {
+                "id": "work:s1:05f0f49",
+                "kind": "WorkChange",
+                "label": "feat(installer): add npx wrapper package",
+                "summary": "Add npm installer wrapper.",
+                "session_id": "s1",
+                "metadata": {"commit_message": "feat(installer): add npx wrapper package"},
+            },
+            {
+                "id": "work:s1:25c77b6",
+                "kind": "WorkChange",
+                "label": "feat(reasoning-graph): add focused evidence windows",
+                "summary": "Build cleaned focused evidence windows and tool facts for reasoning graph chunking.",
+                "session_id": "s1",
+                "metadata": {"commit_message": "feat(reasoning-graph): add focused evidence windows"},
+            },
+        ],
+        neighbors={"work:s1:25c77b6": [{"id": "commit:25c77b6", "kind": "GitCommit", "commit_id": "25c77b6"}]},
+    )
+
+    hits = query_session_graph(store, "focused evidence windows", session_id="s1", kinds=["WorkChange"])
+
+    assert hits
+    assert hits[0].node["id"] == "work:s1:25c77b6"
+    assert hits[0].neighbors[0]["commit_id"] == "25c77b6"
 
 
 def test_same_ast_same_topic_creates_code_version_edge() -> None:
@@ -906,6 +1083,42 @@ def test_code_node_provenance_edges_keep_code_search_explainable() -> None:
     assert edges[0].target_id == code.id
     assert edges[0].kind == "CREATED_CODE_NODE"
     assert edges[0].metadata["file_path"] == code.file_path
+
+
+def test_work_change_links_to_code_nodes_and_commit() -> None:
+    change = DecisionUnit(
+        id="work:s1:c5326f8",
+        session_id="s1",
+        extraction_run_id="run1",
+        summary="fix(hooks): harden installer hook.",
+        evidence_ids=("commit:c5326f8",),
+        kind="WorkChange",
+        confidence=1.0,
+        metadata={
+            "commit_id": "c5326f8",
+            "full_sha": "c5326f8abc",
+            "commit_message": "fix(hooks): harden installer hook",
+            "git_changed_files": ["src/agent_memory_orchestrator/install_service.py"],
+        },
+    )
+    code = _code_node("code:s1:c5326f8:hook", "def hook(): pass")
+
+    code_edges = work_change_code_edges(work_changes=[change], code_nodes=[code])
+    commit_edges = work_change_commit_edges(work_changes=[change])
+    code_commit_edges = code_node_commit_edges(code_nodes=[code])
+
+    assert len(code_edges) == 1
+    assert code_edges[0].kind == "PRODUCED_CHANGE_IN"
+    assert code_edges[0].source_id == change.id
+    assert code_edges[0].target_id == code.id
+    assert code_edges[0].metadata["commit_id"] == "c5326f8"
+    assert validate_reasoning_edge(code_edges[0]).ok is True
+    assert commit_edges[0].kind == "COMMITTED_AS"
+    assert commit_edges[0].target_id == "commit:c5326f8"
+    assert validate_reasoning_edge(commit_edges[0]).ok is True
+    assert code_commit_edges[0].kind == "LINKED_TO_COMMIT"
+    assert code_commit_edges[0].source_id == code.id
+    assert validate_reasoning_edge(code_commit_edges[0]).ok is True
 
 
 def test_passing_test_after_write_creates_validated_by_and_bumps_once() -> None:

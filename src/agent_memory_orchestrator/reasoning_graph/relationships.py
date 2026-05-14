@@ -105,6 +105,87 @@ def code_node_provenance_edges(
     return tuple(edges)
 
 
+def work_change_code_edges(
+    *,
+    work_changes: list[DecisionUnit],
+    code_nodes: list[CodeNode],
+) -> tuple[ReasoningEdge, ...]:
+    edges: list[ReasoningEdge] = []
+    nodes_by_commit: dict[str, list[CodeNode]] = {}
+    for node in code_nodes:
+        nodes_by_commit.setdefault(node.commit_id, []).append(node)
+
+    for work_change in work_changes:
+        commit_id = str(work_change.metadata.get("commit_id") or "")
+        files = {str(path) for path in work_change.metadata.get("git_changed_files", ())}
+        for code_node in nodes_by_commit.get(commit_id, ()):
+            if files and code_node.file_path not in files:
+                continue
+            evidence_ids = _dedupe((*work_change.evidence_ids, *code_node.evidence_ids))
+            edges.append(
+                ReasoningEdge(
+                    source_id=work_change.id,
+                    target_id=code_node.id,
+                    kind="PRODUCED_CHANGE_IN",
+                    confidence=1.0,
+                    evidence_ids=evidence_ids,
+                    metadata={
+                        "commit_id": commit_id,
+                        "file_path": code_node.file_path,
+                        "hunk_id": code_node.metadata.get("hunk_id", ""),
+                        "structural_id": code_node.metadata.get("structural_id", ""),
+                        "ast_type": code_node.ast_type,
+                        "ast_status": code_node.ast_status,
+                    },
+                )
+            )
+    return tuple(edges)
+
+
+def work_change_commit_edges(*, work_changes: list[DecisionUnit]) -> tuple[ReasoningEdge, ...]:
+    edges: list[ReasoningEdge] = []
+    for work_change in work_changes:
+        commit_id = str(work_change.metadata.get("commit_id") or "")
+        if not commit_id:
+            continue
+        edges.append(
+            ReasoningEdge(
+                source_id=work_change.id,
+                target_id=f"commit:{commit_id}",
+                kind="COMMITTED_AS",
+                confidence=1.0,
+                evidence_ids=work_change.evidence_ids,
+                metadata={
+                    "commit_id": commit_id,
+                    "full_sha": str(work_change.metadata.get("full_sha") or ""),
+                    "commit_message": str(work_change.metadata.get("commit_message") or ""),
+                },
+            )
+        )
+    return tuple(edges)
+
+
+def code_node_commit_edges(*, code_nodes: list[CodeNode]) -> tuple[ReasoningEdge, ...]:
+    edges: list[ReasoningEdge] = []
+    for code_node in code_nodes:
+        edges.append(
+            ReasoningEdge(
+                source_id=code_node.id,
+                target_id=f"commit:{code_node.commit_id}",
+                kind="LINKED_TO_COMMIT",
+                confidence=1.0,
+                evidence_ids=code_node.evidence_ids,
+                metadata={
+                    "commit_id": code_node.commit_id,
+                    "file_path": code_node.file_path,
+                    "hunk_id": code_node.metadata.get("hunk_id", ""),
+                    "structural_id": code_node.metadata.get("structural_id", ""),
+                },
+            )
+        )
+    return tuple(edges)
+
+
 def validation_edges_for_test(
     *,
     decision: DecisionUnit,
