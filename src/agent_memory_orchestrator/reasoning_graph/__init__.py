@@ -74,6 +74,11 @@ from .validation import validate_graph_object
 from .validation import validate_reasoning_edge
 from .validation import validate_status_transition
 from .work_changes import work_changes_from_commit_windows
+from .work_packets import REASONING_WORK_PACKET_SCHEMA_VERSION
+from .work_packets import ReasoningWorkPacketBuild
+from .work_packets import build_reasoning_work_packets_from_view
+from .work_packets import is_strict_validation_fact
+from .work_packets import packet_json_contains_raw_internal_ids
 
 __all__ = [
     "CodeHunk",
@@ -99,7 +104,9 @@ __all__ = [
     "QwenBatchJob",
     "QwenBatchResult",
     "QwenBatchValidation",
+    "REASONING_WORK_PACKET_SCHEMA_VERSION",
     "ReasoningEdge",
+    "ReasoningWorkPacketBuild",
     "RetrievalDocument",
     "RetrievalHit",
     "RetrievalIndexStore",
@@ -115,6 +122,7 @@ __all__ = [
     "build_timeline",
     "build_decision_threads",
     "build_decision_extraction_payload",
+    "build_reasoning_work_packets_from_view",
     "build_retrieval_documents_from_graph",
     "classify_query",
     "code_node_commit_edges",
@@ -126,12 +134,14 @@ __all__ = [
     "extract_decisions",
     "embed_missing_retrieval_documents",
     "hash_content",
+    "is_strict_validation_fact",
     "load_amo_evidence_events",
     "load_codex_transcript_events",
     "load_qwen_batch_job",
     "load_qwen_batch_result",
     "make_embedding_id",
     "parse_unified_zero_hunks",
+    "packet_json_contains_raw_internal_ids",
     "produced_change_edges",
     "python_ast_expander",
     "query_session_graph",
