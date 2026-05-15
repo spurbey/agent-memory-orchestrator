@@ -59,6 +59,10 @@ from .reasoning_extraction import stable_reasoning_node_id
 from .reasoning_extraction import validate_reasoning_node
 from .session_query import SessionGraphHit
 from .session_query import query_session_graph
+from .session_graph_writer import CompactKuzuWriteResult
+from .session_graph_writer import CompactSessionGraph
+from .session_graph_writer import build_compact_session_graph
+from .session_graph_writer import write_compact_session_graph
 from .qwen_batch import BatchQwenDecisionExtractor
 from .qwen_batch import DECISION_EXTRACTION_CALL
 from .qwen_batch import QWEN_BATCH_SCHEMA_VERSION
@@ -93,6 +97,8 @@ __all__ = [
     "CodeNode",
     "CodeVersionPlan",
     "CodeVersionRelation",
+    "CompactKuzuWriteResult",
+    "CompactSessionGraph",
     "ChunkingConfig",
     "AstExpansion",
     "ALLOWED_REASONING_NODE_TYPES",
@@ -133,6 +139,7 @@ __all__ = [
     "build_decision_threads",
     "build_decision_extraction_payload",
     "build_reasoning_work_packets_from_view",
+    "build_compact_session_graph",
     "build_retrieval_documents_from_graph",
     "classify_query",
     "collect_packet_evidence_refs",
@@ -174,6 +181,7 @@ __all__ = [
     "work_change_code_edges",
     "work_change_commit_edges",
     "work_changes_from_commit_windows",
+    "write_compact_session_graph",
     "write_qwen_batch_job",
     "write_qwen_batch_result",
 ]
