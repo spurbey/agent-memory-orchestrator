@@ -38,6 +38,32 @@ CAPTURE_ONLY_EVENTS = {"user_prompt_submit", "prompt", "post_tool_use", "tool_re
 EVIDENCE_ONLY_KINDS = {"RawEvidenceRef", "Prompt", "ToolUse", "ToolResult", "Turn", "Session", "App", "Repo", "Branch"}
 SUPPORT_ONLY_KINDS = {"File", "Symbol", "Topic", "CleanedEvidenceWindow", "GraphDelta"}
 ANSWER_SEED_KINDS = ["ContextSnapshot", "WorkChange", "Decision", "Fix", "Bug", "Blocker", "TestRun", "GitCommit"]
+ISOLATED_GRAPH_VISUAL_KINDS = {
+    "ReasoningNode",
+    "DecisionUnit",
+    "Problem",
+    "Decision",
+    "Cause",
+    "Fix",
+    "Constraint",
+    "OpenQuestion",
+    "WorkChange",
+    "Commit",
+    "GitCommit",
+    "Packet",
+    "CodeNode",
+    "CodeVersion",
+    "CodeHunk",
+    "Symbol",
+    "EvidenceRef",
+}
+ISOLATED_GRAPH_VISUAL_STATUSES = {
+    "session_final",
+    "candidate_reasoning_packet",
+    "accepted",
+    "active",
+    "committed",
+}
 VERSION_FLOW_EDGE_KINDS = {
     "COMMITTED_AS",
     "REFINES",
@@ -578,17 +604,30 @@ class GraphRagService:
         ]
         output_ids: set[str] = set()
         nodes: list[dict[str, Any]] = []
+        isolated_pool: list[dict[str, Any]] = []
         for node in pool:
             node_id = str(node.get("id") or "")
             if node_id in output_ids:
                 continue
-            if node.get("scope") == "central" or node.get("status") in {"committed", "active"}:
+            if _is_central_graph_seed(node):
                 nodes.append(_sanitize_output_node(node))
                 output_ids.add(node_id)
             if len(nodes) >= safe_limit:
                 break
-        node_by_id = {str(node.get("id") or ""): node for node in all_nodes + pool}
-        all_edges = self.store.list_edges(limit=safe_limit * 8)
+        if not nodes:
+            isolated_pool = _isolated_graph_seed_pool(self.store, all_nodes, limit=safe_limit)
+            for node in isolated_pool:
+                node_id = str(node.get("id") or "")
+                if node_id in output_ids:
+                    continue
+                if not _is_isolated_graph_seed(node):
+                    continue
+                nodes.append(_sanitize_output_node(node))
+                output_ids.add(node_id)
+                if len(nodes) >= safe_limit:
+                    break
+        node_by_id = {str(node.get("id") or ""): node for node in all_nodes + pool + isolated_pool}
+        all_edges = self.store.list_edges(limit=safe_limit * 32)
         central_edges: list[dict[str, Any]] = []
         edge_ids: set[str] = set()
         frontier = set(output_ids)
@@ -604,24 +643,31 @@ class GraphRagService:
                     continue
                 if source_id not in frontier and target_id not in frontier:
                     continue
+                missing_endpoint_ids = [
+                    endpoint_id for endpoint_id in (source_id, target_id) if endpoint_id not in output_ids
+                ]
+                if len(nodes) + len(missing_endpoint_ids) > safe_limit:
+                    continue
+                missing_endpoints: list[tuple[str, dict[str, Any]]] = []
+                for endpoint_id in missing_endpoint_ids:
+                    endpoint = node_by_id.get(endpoint_id)
+                    if not endpoint:
+                        missing_endpoints = []
+                        break
+                    missing_endpoints.append((endpoint_id, endpoint))
+                if len(missing_endpoints) != len(missing_endpoint_ids):
+                    continue
                 if edge_id not in edge_ids:
                     central_edges.append(edge)
                     edge_ids.add(edge_id)
-                for endpoint_id in (source_id, target_id):
-                    if endpoint_id in output_ids:
-                        continue
-                    endpoint = node_by_id.get(endpoint_id)
-                    if not endpoint:
-                        continue
+                for endpoint_id, endpoint in missing_endpoints:
                     nodes.append(_sanitize_output_node(endpoint))
                     output_ids.add(endpoint_id)
                     next_frontier.add(endpoint_id)
-                    if len(nodes) >= safe_limit:
-                        break
-                if len(nodes) >= safe_limit or len(central_edges) >= safe_limit * 4:
+                if len(central_edges) >= safe_limit * 4:
                     break
             frontier = next_frontier
-            if len(nodes) >= safe_limit or len(central_edges) >= safe_limit * 4:
+            if len(central_edges) >= safe_limit * 4:
                 break
         return {
             "ok": True,
@@ -1626,6 +1672,62 @@ def _matches_commit(node: dict[str, Any], commit: str) -> bool:
     return any(value.lower().startswith(needle) or needle in value.lower() for value in values if value)
 
 
+def _is_central_graph_seed(node: dict[str, Any]) -> bool:
+    return str(node.get("scope") or "") == "central" or str(node.get("status") or "") in {"committed", "active"}
+
+
+def _is_isolated_graph_seed(node: dict[str, Any]) -> bool:
+    kind = str(node.get("kind") or "")
+    status = str(node.get("status") or "")
+    if kind not in ISOLATED_GRAPH_VISUAL_KINDS:
+        return False
+    if status in ISOLATED_GRAPH_VISUAL_STATUSES:
+        return True
+    metadata = node.get("metadata") if isinstance(node.get("metadata"), dict) else {}
+    return str(metadata.get("stage") or "").startswith("stage")
+
+
+def _isolated_graph_seed_pool(
+    store: GraphStore,
+    nodes: list[dict[str, Any]],
+    *,
+    limit: int,
+) -> list[dict[str, Any]]:
+    priority = {
+        "ReasoningNode": 0,
+        "Decision": 1,
+        "Problem": 1,
+        "Cause": 1,
+        "Fix": 1,
+        "Constraint": 1,
+        "Commit": 2,
+        "GitCommit": 2,
+        "Packet": 3,
+        "CodeNode": 4,
+        "Symbol": 5,
+        "CodeVersion": 6,
+        "CodeHunk": 7,
+        "EvidenceRef": 8,
+    }
+    rows = list(nodes)
+    per_kind_limit = max(20, min(160, limit))
+    for kind in priority:
+        rows.extend(store.list_nodes(kinds=[kind], limit=per_kind_limit))
+    unique: dict[str, dict[str, Any]] = {}
+    for node in rows:
+        node_id = str(node.get("id") or "")
+        if node_id and node_id not in unique:
+            unique[node_id] = node
+    return sorted(
+        unique.values(),
+        key=lambda node: (
+            priority.get(str(node.get("kind") or ""), 50),
+            str(node.get("commit_id") or ""),
+            str(node.get("id") or ""),
+        ),
+    )
+
+
 def _build_version_flow(
     *,
     commit_node: dict[str, Any],
@@ -1816,7 +1918,21 @@ def _central_graph_warnings(nodes: list[dict[str, Any]], edges: list[dict[str, A
         warnings.append("central_graph_edges_sparse")
     if dangling:
         warnings.append("central_graph_has_dangling_visible_edges")
-    version_edges = [edge for edge in edges if edge.get("kind") in {"COMMITTED_AS", "REFINES", "SUPERSEDES", "DUPLICATE_OF", "CONTRADICTS"}]
+    version_edges = [
+        edge
+        for edge in edges
+        if edge.get("kind")
+        in {
+            "COMMITTED_AS",
+            "REFINES",
+            "SUPERSEDES",
+            "DUPLICATE_OF",
+            "CONTRADICTS",
+            "REASON_NODE_EXPLAINS_COMMIT",
+            "REASON_NODE_IN_PACKET",
+            "COMMIT_PRODUCED_HUNK",
+        }
+    ]
     if nodes and not version_edges:
         warnings.append("central_graph_has_no_visible_version_edges")
     return warnings

@@ -151,6 +151,101 @@ def test_central_graph_snapshot_lists_committed_nodes_and_edges(tmp_path: Path) 
     assert {edge["kind"] for edge in central["edges"]} >= {"COMMITTED_AS", "CREATED", "EXTRACTED_AS"}
 
 
+def test_central_graph_snapshot_falls_back_to_isolated_v2_session_graph(tmp_path: Path) -> None:
+    store = InMemoryGraphStore()
+    store.upsert_node(
+        GraphNode(
+            id="reasoning:WP0057:decision:1",
+            kind="ReasoningNode",
+            label="Gate Qwen decision quality",
+            summary="Qwen reasoning extraction was gated by deterministic validation.",
+            status="session_final",
+            scope="session",
+            session_id="s1",
+            commit_id="167bb3a",
+            metadata={"packet_id": "WP0057", "commit_sha": "167bb3a"},
+        )
+    )
+    store.upsert_node(
+        GraphNode(
+            id="commit:167bb3a",
+            kind="Commit",
+            label="167bb3a",
+            summary="Reasoning graph commit for Qwen quality gates.",
+            status="session_final",
+            scope="session",
+            session_id="s1",
+            commit_id="167bb3a",
+        )
+    )
+    store.upsert_node(
+        GraphNode(
+            id="packet:WP0057",
+            kind="Packet",
+            label="WP0057",
+            summary="Commit-backed reasoning packet.",
+            status="candidate_reasoning_packet",
+            scope="session",
+            session_id="s1",
+            commit_id="167bb3a",
+        )
+    )
+    store.upsert_node(
+        GraphNode(
+            id="code:validation.py:validate",
+            kind="CodeNode",
+            label="validation.py::validate",
+            summary="Validation code related to reasoning-node acceptance.",
+            status="session_final",
+            scope="session",
+            session_id="s1",
+            commit_id="167bb3a",
+        )
+    )
+    store.upsert_edge(
+        GraphEdge(
+            id="edge:packet-reasoning",
+            source_id="packet:WP0057",
+            target_id="reasoning:WP0057:decision:1",
+            kind="HAS_REASONING_NODE",
+        )
+    )
+    store.upsert_edge(
+        GraphEdge(
+            id="edge:reasoning-code",
+            source_id="reasoning:WP0057:decision:1",
+            target_id="code:validation.py:validate",
+            kind="EXPLAINS_CODE",
+        )
+    )
+    store.upsert_edge(
+        GraphEdge(
+            id="edge:reasoning-commit",
+            source_id="reasoning:WP0057:decision:1",
+            target_id="commit:167bb3a",
+            kind="EXTRACTED_FROM_COMMIT",
+        )
+    )
+    svc = GraphRagService(
+        make_settings(tmp_path),
+        store=store,
+        planner=DeterministicPlanner(),
+        version_backend=_StaticGitBackend(),
+    )
+    try:
+        central = svc.central_graph(limit=10)
+    finally:
+        svc.close()
+
+    node_ids = {node["id"] for node in central["nodes"]}
+    assert node_ids >= {"reasoning:WP0057:decision:1", "packet:WP0057", "code:validation.py:validate", "commit:167bb3a"}
+    assert {edge["kind"] for edge in central["edges"]} >= {
+        "HAS_REASONING_NODE",
+        "EXPLAINS_CODE",
+        "EXTRACTED_FROM_COMMIT",
+    }
+
+
 def test_daemon_exposes_dependency_free_3d_graph_view() -> None:
     assert "AMO Control Room" in SESSION_COCKPIT_HTML
     assert "/web/amo.css" in SESSION_COCKPIT_HTML
