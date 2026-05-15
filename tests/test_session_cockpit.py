@@ -246,6 +246,39 @@ def test_central_graph_snapshot_falls_back_to_isolated_v2_session_graph(tmp_path
     }
 
 
+def test_central_graph_full_mode_can_return_more_than_browser_slice_limit(tmp_path: Path) -> None:
+    store = InMemoryGraphStore()
+    for index in range(620):
+        store.upsert_node(
+            GraphNode(
+                id=f"reasoning:WP{index:04d}:decision:1",
+                kind="ReasoningNode",
+                label=f"Reasoning node {index}",
+                summary="Session-final reasoning node.",
+                status="session_final",
+                scope="session",
+                session_id="s1",
+                commit_id=f"{index:07x}",
+            )
+        )
+    svc = GraphRagService(
+        make_settings(tmp_path),
+        store=store,
+        planner=DeterministicPlanner(),
+        version_backend=_StaticGitBackend(),
+    )
+    try:
+        sliced = svc.central_graph(limit=620)
+        full = svc.central_graph(limit=620, full=True)
+    finally:
+        svc.close()
+
+    assert len(sliced["nodes"]) == 500
+    assert sliced["full"] is False
+    assert len(full["nodes"]) == 620
+    assert full["full"] is True
+
+
 def test_daemon_exposes_dependency_free_3d_graph_view() -> None:
     assert "AMO Control Room" in SESSION_COCKPIT_HTML
     assert "/web/amo.css" in SESSION_COCKPIT_HTML

@@ -6,7 +6,7 @@ const AMO = {
   selectedSession: null,
   health: null,
   connectors: { slack: null },
-  centralGraph: { nodes: [], edges: [], warnings: [] },
+  centralGraph: { nodes: [], edges: [], warnings: [], full: false, limit: 360 },
   versionFlow: { flows: [], nodes: [], edges: [], warnings: [] },
   graph: {
     canvas: null,
@@ -134,11 +134,23 @@ async function loadSessions() {
   renderDashboard();
   if (!AMO.selectedSessionId && AMO.sessions[0]) await selectSession(AMO.sessions[0].session_id, { silent: true });
 }
-async function loadCentralGraph() {
-  const data = await apiGet("/api/graph/central?limit=360");
-  AMO.centralGraph = { nodes: data.nodes || [], edges: data.edges || [], warnings: data.warnings || [], status: data.status || {} };
+async function loadCentralGraph(options = {}) {
+  const full = typeof options.full === "boolean" ? options.full : !!AMO.centralGraph.full;
+  const limit = full ? 5000 : 360;
+  const params = new URLSearchParams({ limit: String(limit) });
+  if (full) params.set("full", "true");
+  const data = await apiGet(`/api/graph/central?${params.toString()}`);
+  AMO.centralGraph = {
+    nodes: data.nodes || [],
+    edges: data.edges || [],
+    warnings: data.warnings || [],
+    status: data.status || {},
+    full: !!data.full,
+    limit: data.limit || limit,
+  };
   setupGraphFilters();
   buildGraph();
+  renderGraphLoadMode();
   renderDashboard();
 }
 async function loadVersionFlow() {
@@ -415,6 +427,10 @@ function setupGraphFilters() {
   $("kindFilter").innerHTML = `<option value="">All kinds</option>` + kinds.map(k => `<option>${escapeHtml(k)}</option>`).join("");
   $("statusFilter").innerHTML = `<option value="">All status</option>` + statuses.map(s => `<option>${escapeHtml(s)}</option>`).join("");
 }
+function renderGraphLoadMode() {
+  $("graphSliceBtn")?.classList.toggle("primary", !AMO.centralGraph.full);
+  $("graphFullBtn")?.classList.toggle("primary", !!AMO.centralGraph.full);
+}
 function buildGraph() {
   const query = $("graphFilter")?.value.trim().toLowerCase() || $("globalSearch")?.value.trim().toLowerCase() || "";
   const kindFilter = $("kindFilter")?.value || "";
@@ -435,18 +451,21 @@ function buildGraph() {
   AMO.graph.nodes = nodes;
   AMO.graph.edges = edges;
   seedPositions(nodes);
-  simulateGraph(80);
+  simulateGraph(nodes.length > 1000 ? 8 : 80);
   drawGraph();
   renderGraphMini();
 }
 function seedPositions(nodes) {
   const g = AMO.graph;
+  const largeGraph = nodes.length > 1000;
   nodes.forEach((node, index) => {
     const id = nodeId(node);
     if (!g.positions.has(id)) {
       const h = hashCode(id);
       const angle = ((h % 3600) / 3600) * Math.PI * 2;
-      const ring = 130 + (index % 7) * 36 + ((h >>> 8) % 70);
+      const ring = largeGraph
+        ? 180 + Math.sqrt(index + 1) * 18 + ((h >>> 8) % 120)
+        : 130 + (index % 7) * 36 + ((h >>> 8) % 70);
       g.positions.set(id, { x: Math.cos(angle) * ring, y: Math.sin(angle) * ring });
       g.velocities.set(id, { x: 0, y: 0 });
     }
@@ -457,28 +476,31 @@ function simulateGraph(iterations = 1) {
   const nodes = g.nodes;
   const edges = g.edges;
   const idToNode = new Map(nodes.map(n => [nodeId(n), n]));
+  const pairwiseRepulsion = nodes.length <= 1000;
   for (let step = 0; step < iterations; step += 1) {
-    for (let i = 0; i < nodes.length; i += 1) {
-      const a = nodes[i];
-      const pa = g.positions.get(nodeId(a));
-      const va = g.velocities.get(nodeId(a));
-      if (!pa || !va) continue;
-      for (let j = i + 1; j < nodes.length; j += 1) {
-        const b = nodes[j];
-        const pb = g.positions.get(nodeId(b));
-        const vb = g.velocities.get(nodeId(b));
-        if (!pb || !vb) continue;
-        let dx = pa.x - pb.x;
-        let dy = pa.y - pb.y;
-        const dist2 = dx * dx + dy * dy + 80;
-        const force = Math.min(3.2, 900 / dist2);
-        const dist = Math.sqrt(dist2);
-        dx /= dist;
-        dy /= dist;
-        va.x += dx * force;
-        va.y += dy * force;
-        vb.x -= dx * force;
-        vb.y -= dy * force;
+    if (pairwiseRepulsion) {
+      for (let i = 0; i < nodes.length; i += 1) {
+        const a = nodes[i];
+        const pa = g.positions.get(nodeId(a));
+        const va = g.velocities.get(nodeId(a));
+        if (!pa || !va) continue;
+        for (let j = i + 1; j < nodes.length; j += 1) {
+          const b = nodes[j];
+          const pb = g.positions.get(nodeId(b));
+          const vb = g.velocities.get(nodeId(b));
+          if (!pb || !vb) continue;
+          let dx = pa.x - pb.x;
+          let dy = pa.y - pb.y;
+          const dist2 = dx * dx + dy * dy + 80;
+          const force = Math.min(3.2, 900 / dist2);
+          const dist = Math.sqrt(dist2);
+          dx /= dist;
+          dy /= dist;
+          va.x += dx * force;
+          va.y += dy * force;
+          vb.x -= dx * force;
+          vb.y -= dy * force;
+        }
       }
     }
     edges.forEach(edge => {
@@ -758,6 +780,8 @@ function bindEvents() {
   $("graphFilter").addEventListener("input", buildGraph);
   $("kindFilter").addEventListener("change", buildGraph);
   $("statusFilter").addEventListener("change", buildGraph);
+  $("graphSliceBtn").addEventListener("click", () => loadCentralGraph({ full: false }));
+  $("graphFullBtn").addEventListener("click", () => loadCentralGraph({ full: true }));
   $("supportToggle").addEventListener("change", buildGraph);
   $("labelsToggle").addEventListener("change", drawGraph);
   $("drainSessionBtn").addEventListener("click", drainSelected);

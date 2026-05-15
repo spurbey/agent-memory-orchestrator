@@ -594,8 +594,9 @@ class GraphRagService:
             "central_graph": self.central_graph(limit=80),
         }
 
-    def central_graph(self, *, limit: int = 100) -> dict[str, Any]:
-        safe_limit = max(1, min(500, int(limit)))
+    def central_graph(self, *, limit: int = 100, full: bool = False) -> dict[str, Any]:
+        max_limit = 10000 if full else 500
+        safe_limit = max(1, min(max_limit, int(limit)))
         all_nodes = self.store.list_nodes(limit=safe_limit * 8)
         pool = [
             *self.store.list_nodes(status="committed", limit=safe_limit),
@@ -673,6 +674,8 @@ class GraphRagService:
             "ok": True,
             "nodes": nodes,
             "edges": central_edges[: safe_limit * 4],
+            "full": full,
+            "limit": safe_limit,
             "status": self.merge_status(),
             "warnings": _central_graph_warnings(nodes, central_edges),
         }
@@ -1710,7 +1713,7 @@ def _isolated_graph_seed_pool(
         "EvidenceRef": 8,
     }
     rows = list(nodes)
-    per_kind_limit = max(20, min(160, limit))
+    per_kind_limit = limit if limit > 500 else max(20, min(160, limit))
     for kind in priority:
         rows.extend(store.list_nodes(kinds=[kind], limit=per_kind_limit))
     unique: dict[str, dict[str, Any]] = {}

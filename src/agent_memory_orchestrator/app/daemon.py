@@ -204,7 +204,14 @@ class AmoHandler(BaseHTTPRequestHandler):
                             self._write_json(200, graph.session_detail(session_id=session_id, limit=limit))
                             return
                         if path == "/api/graph/central":
-                            self._write_json(200, graph.central_graph(limit=limit))
+                            full = (query.get("full") or ["false"])[0].lower() == "true"
+                            central_limit = _bounded_int(
+                                raw_limit,
+                                default=5000 if full else 360,
+                                minimum=1,
+                                maximum=10000 if full else 500,
+                            )
+                            self._write_json(200, graph.central_graph(limit=central_limit, full=full))
                             return
                         if path == "/api/graph/version-flow":
                             commit = (query.get("commit") or [""])[0]
