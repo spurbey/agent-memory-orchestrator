@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from agent_memory_orchestrator.reasoning_graph import BatchQwenDecisionExtractor
+from agent_memory_orchestrator.reasoning_graph import DEFAULT_QWEN_BATCH_RUNTIME
 from agent_memory_orchestrator.reasoning_graph import DECISION_EXTRACTION_CALL
 from agent_memory_orchestrator.reasoning_graph import DecisionThread
 from agent_memory_orchestrator.reasoning_graph import ExtractionRun
@@ -105,6 +106,8 @@ def test_qwen_batch_job_round_trips_and_validates(tmp_path: Path) -> None:
 
     assert validation.ok is True
     assert loaded_job.payload_hash == job.payload_hash
+    assert loaded_job.runtime == DEFAULT_QWEN_BATCH_RUNTIME
+    assert loaded_result.runtime == DEFAULT_QWEN_BATCH_RUNTIME
     assert loaded_result.output == _valid_decision_output()
 
 

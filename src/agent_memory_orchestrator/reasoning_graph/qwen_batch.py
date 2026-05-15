@@ -9,6 +9,7 @@ from typing import Any
 
 
 QWEN_BATCH_SCHEMA_VERSION = "qwen-batch-v1"
+DEFAULT_QWEN_BATCH_RUNTIME = "external_batch"
 DECISION_EXTRACTION_CALL = "decision_extraction_fallback"
 DECISION_EXTRACTION_REQUIRED_FIELDS = (
     "decision_type",
@@ -27,7 +28,7 @@ class QwenBatchJob:
     payload: dict[str, Any]
     payload_hash: str
     schema_version: str = QWEN_BATCH_SCHEMA_VERSION
-    runtime: str = "colab_batch"
+    runtime: str = DEFAULT_QWEN_BATCH_RUNTIME
     model: str = ""
     created_at: str = ""
     metadata: dict[str, Any] = field(default_factory=dict)
@@ -39,7 +40,7 @@ class QwenBatchJob:
         call: str,
         payload: dict[str, Any],
         model: str = "",
-        runtime: str = "colab_batch",
+        runtime: str = DEFAULT_QWEN_BATCH_RUNTIME,
         metadata: dict[str, Any] | None = None,
     ) -> "QwenBatchJob":
         payload_hash = stable_json_hash(payload)
@@ -76,7 +77,7 @@ class QwenBatchResult:
     payload_hash: str
     output: dict[str, Any]
     schema_version: str = QWEN_BATCH_SCHEMA_VERSION
-    runtime: str = "colab_batch"
+    runtime: str = DEFAULT_QWEN_BATCH_RUNTIME
     model: str = ""
     created_at: str = ""
     diagnostics: tuple[dict[str, Any], ...] = ()
@@ -88,7 +89,7 @@ class QwenBatchResult:
         job: QwenBatchJob,
         output: dict[str, Any],
         model: str = "",
-        runtime: str = "colab_batch",
+        runtime: str = DEFAULT_QWEN_BATCH_RUNTIME,
         diagnostics: tuple[dict[str, Any], ...] = (),
     ) -> "QwenBatchResult":
         return cls(

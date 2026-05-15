@@ -31,11 +31,11 @@ A Qwen result may affect graph state only when all are true:
 
 If any gate fails, output becomes diagnostic or review candidate only.
 
-## Remote Batch Runtime
+## External Batch Runtime
 
-When local Qwen is unavailable or too slow, AMO may export a Qwen batch job for a GPU runtime such as Google Colab.
+Production inference should use the configured local Ollama runtime, normally `qwen3.5:9b`. When local Qwen is unavailable or too slow, AMO may export a Qwen batch job for an external GPU runtime.
 
-The batch runtime is compute only. It is not graph authority.
+The external runtime is compute only. It is not graph authority. Google Colab is acceptable as a development harness, but it is not the production default.
 
 Exported job schema:
 
@@ -43,7 +43,7 @@ Exported job schema:
 {
   "job_id": "qwen_job:decision_extraction_fallback:<hash>",
   "schema_version": "qwen-batch-v1",
-  "runtime": "colab_batch",
+  "runtime": "external_batch",
   "model": "qwen3.5:9b",
   "call": "decision_extraction_fallback",
   "payload_hash": "sha256-of-payload",
@@ -57,7 +57,7 @@ Returned result schema:
 {
   "job_id": "same job id",
   "schema_version": "qwen-batch-v1",
-  "runtime": "colab_batch",
+  "runtime": "external_batch",
   "model": "qwen3.5:9b",
   "call": "decision_extraction_fallback",
   "payload_hash": "same sha256-of-payload",
