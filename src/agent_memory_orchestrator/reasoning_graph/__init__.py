@@ -74,6 +74,7 @@ from .session_graph_writer import CompactSessionGraph
 from .session_graph_writer import build_compact_session_graph
 from .session_graph_writer import write_compact_session_graph
 from .qwen_batch import BatchQwenDecisionExtractor
+from .qwen_batch import DEFAULT_QWEN_BATCH_RUNTIME
 from .qwen_batch import DECISION_EXTRACTION_CALL
 from .qwen_batch import QWEN_BATCH_SCHEMA_VERSION
 from .qwen_batch import QwenBatchJob
@@ -124,6 +125,7 @@ __all__ = [
     "HashEmbeddingProvider",
     "MergePlan",
     "BatchQwenDecisionExtractor",
+    "DEFAULT_QWEN_BATCH_RUNTIME",
     "DECISION_EXTRACTION_CALL",
     "QWEN_BATCH_SCHEMA_VERSION",
     "QwenBatchJob",
