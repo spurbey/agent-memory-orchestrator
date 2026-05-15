@@ -885,6 +885,10 @@ class GraphRagService:
                 session_id=session_id,
                 limit=max(1, min(50, int(limit))),
                 require_vector=require_vector,
+                reranker_backend=self.settings.reranker_backend,
+                reranker_model=self.settings.reranker_model,
+                rerank_top_k=self.settings.rerank_top_k,
+                rerank_max_chars=self.settings.rerank_max_chars,
             )
             payload = {
                 "ok": True,
