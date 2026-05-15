@@ -9,6 +9,7 @@ import pytest
 from agent_memory_orchestrator.core.db import connect
 from agent_memory_orchestrator.config import Settings
 from agent_memory_orchestrator.graph.service import GraphRagService
+from agent_memory_orchestrator.graph.service import _unique_nonempty
 from agent_memory_orchestrator.graph.store import GraphEdge
 from agent_memory_orchestrator.graph.store import GraphNode
 from agent_memory_orchestrator.graph.store import InMemoryGraphStore
@@ -389,3 +390,11 @@ def test_graph_service_wires_retrieval_build_embed_and_answer(tmp_path: Path) ->
     assert first_citation["packet_ids"] == ["WP0001"]
     assert first_citation["commit_shas"] == ["abc1234"]
     assert "code:retrieval:retrieve_session_graph" in first_citation["code_node_ids"]
+
+
+def test_unique_nonempty_dedupes_nested_citation_values() -> None:
+    assert _unique_nonempty(["E0001", ["E0001", "E0002"], ("", None, "E0002"), {"E0003"}]) == [
+        "E0001",
+        "E0002",
+        "E0003",
+    ]
