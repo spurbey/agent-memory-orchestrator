@@ -53,6 +53,15 @@ QUERY_STOPWORDS = {
     "with",
 }
 
+VERSION_FLOW_OPERATOR_TERMS = {
+    "flow",
+    "history",
+    "show",
+    "symbol",
+    "version",
+    "versions",
+}
+
 
 class TextEmbeddingProvider(Protocol):
     def embed(self, text: str) -> list[float]:
@@ -567,12 +576,14 @@ def retrieve_session_graph(
 
 def classify_query(query: str) -> str:
     lowered = query.lower()
-    if "::" in query or re.search(r"\b[\w./-]+\.(py|js|ts|tsx|jsx|md)\b", lowered):
+    if re.search(r"\b(version flow|version history|version chain|symbol version|symbol history|show versions?)\b", lowered):
         return "version_flow"
     if "why" in lowered or "reason" in lowered:
         return "code_why"
     if "decision" in lowered or "decide" in lowered:
         return "decision_history"
+    if "::" in query or re.search(r"\b[\w./-]+\.(py|js|ts|tsx|jsx|md)\b", lowered):
+        return "version_flow"
     return "semantic_search"
 
 
@@ -789,12 +800,18 @@ def _rerank_document(
     neighbors: tuple[dict[str, Any], ...],
 ) -> tuple[float, list[str]]:
     terms = _terms(query)
+    scoring_terms = terms
+    if intent == "version_flow":
+        # "version flow" is an operator phrase. Rank by the requested symbol/path
+        # terms, otherwise functions named "version_flow" beat the actual symbol.
+        scoring_terms = terms.difference(VERSION_FLOW_OPERATOR_TERMS) or terms
     text = _normalize(f"{doc.title} {doc.body} {json.dumps(doc.metadata, sort_keys=True)}")
     reasons = [f"fused:{round(fused_score, 6)}"]
     score = fused_score
-    overlap = [term for term in terms if term in text]
+    overlap = [term for term in scoring_terms if term in text]
     if overlap:
-        score += min(0.4, len(overlap) / max(1, len(terms)) * 0.4)
+        overlap_ratio = len(overlap) / max(1, len(scoring_terms))
+        score += min(0.4, overlap_ratio * 0.4)
         reasons.append("term_overlap:" + ",".join(overlap[:8]))
     if intent in {"code_why", "decision_history"} and doc.doc_type == "reasoning":
         score += 0.25
@@ -802,6 +819,13 @@ def _rerank_document(
     if intent == "version_flow" and doc.doc_type in {"symbol", "code"}:
         score += 0.25
         reasons.append("version_flow_boost")
+        if overlap:
+            target_ratio = len(overlap) / max(1, len(scoring_terms))
+            score += target_ratio * 0.2
+            reasons.append(f"version_target_overlap:{round(target_ratio, 3)}")
+        if doc.doc_type == "symbol":
+            score += 0.1
+            reasons.append("symbol_version_boost")
     if doc.memory_class == "supporting_evidence":
         score -= 0.1
         reasons.append("supporting_evidence_penalty")
