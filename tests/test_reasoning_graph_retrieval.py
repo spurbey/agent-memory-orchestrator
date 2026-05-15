@@ -384,3 +384,8 @@ def test_graph_service_wires_retrieval_build_embed_and_answer(tmp_path: Path) ->
     assert result["ok"] is True
     assert result["retrieval"]["hits"]
     assert "AMO indexed graph answer" in result["answer"]["text"]
+    assert "Support: packet WP0001 | commit abc1234 | code retrieve_session_graph" in result["answer"]["text"]
+    first_citation = result["answer"]["citations"][0]
+    assert first_citation["packet_ids"] == ["WP0001"]
+    assert first_citation["commit_shas"] == ["abc1234"]
+    assert "code:retrieval:retrieve_session_graph" in first_citation["code_node_ids"]
