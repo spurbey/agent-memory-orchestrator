@@ -5,7 +5,7 @@
 ## Usage
 
 ```bash
-npx agent-memory-orchestrator-cli install --target codex --preset cpu-light --qwen-model qwen3:0.6b
+npx agent-memory-orchestrator-cli install --target codex --preset cpu-balanced --qwen-model qwen3.5:9b
 ```
 
 Options:
@@ -37,7 +37,7 @@ amo-cli uninstall --target all
 Slack is optional:
 
 ```bash
-npx agent-memory-orchestrator-cli install --target codex --preset cpu-light --qwen-model qwen3:0.6b --with-slack
+npx agent-memory-orchestrator-cli install --target codex --preset cpu-balanced --qwen-model qwen3.5:9b --with-slack
 amo-cli slack setup-wizard
 amo-cli slack run --reply-mode answer
 ```

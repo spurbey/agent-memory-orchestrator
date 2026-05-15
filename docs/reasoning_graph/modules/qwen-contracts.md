@@ -44,7 +44,7 @@ Exported job schema:
   "job_id": "qwen_job:decision_extraction_fallback:<hash>",
   "schema_version": "qwen-batch-v1",
   "runtime": "colab_batch",
-  "model": "qwen3:1.7b",
+  "model": "qwen3.5:9b",
   "call": "decision_extraction_fallback",
   "payload_hash": "sha256-of-payload",
   "payload": {}
@@ -58,7 +58,7 @@ Returned result schema:
   "job_id": "same job id",
   "schema_version": "qwen-batch-v1",
   "runtime": "colab_batch",
-  "model": "qwen3:1.7b",
+  "model": "qwen3.5:9b",
   "call": "decision_extraction_fallback",
   "payload_hash": "same sha256-of-payload",
   "output": {}

@@ -77,19 +77,19 @@ Install prerequisites first:
 ```bash
 python --version   # 3.10+
 node --version     # 18+
-ollama pull qwen3:0.6b
+ollama pull qwen3.5:9b
 ```
 
 Then install the Python runtime, write local AMO config, register Codex hooks + MCP, and initialize local stores:
 
 ```bash
-npx agent-memory-orchestrator-cli install --target codex --preset cpu-light --qwen-model qwen3:0.6b
+npx agent-memory-orchestrator-cli install --target codex --preset cpu-balanced --qwen-model qwen3.5:9b
 ```
 
 Install for Claude + Codex when both apps are used:
 
 ```bash
-npx agent-memory-orchestrator-cli install --target all --preset cpu-light --qwen-model qwen3:0.6b
+npx agent-memory-orchestrator-cli install --target all --preset cpu-balanced --qwen-model qwen3.5:9b
 ```
 
 The installer uses `pipx`, creates `~/.agent-memory-orchestrator`, previews changes unless `--yes` is passed, backs up agent config files, and configures capture-only hooks plus MCP through the selected AMO home directory.
@@ -97,8 +97,8 @@ The installer uses `pipx`, creates `~/.agent-memory-orchestrator`, previews chan
 Optional runtimes are explicit:
 
 ```bash
-npx agent-memory-orchestrator-cli install --with-models --download-models --target codex --preset cpu-light --qwen-model qwen3:0.6b
-npx agent-memory-orchestrator-cli install --with-slack --target codex --preset cpu-light --qwen-model qwen3:0.6b
+npx agent-memory-orchestrator-cli install --with-models --download-models --target codex --preset cpu-balanced --qwen-model qwen3.5:9b
+npx agent-memory-orchestrator-cli install --with-slack --target codex --preset cpu-balanced --qwen-model qwen3.5:9b
 ```
 
 Diagnostics:
@@ -250,7 +250,7 @@ python -m agent_memory_orchestrator.cli slack setup `
 Install the optional WebSocket runtime and run the connector:
 
 ```powershell
-npx agent-memory-orchestrator-cli install --with-slack --target codex --preset cpu-light --qwen-model qwen3:0.6b
+npx agent-memory-orchestrator-cli install --with-slack --target codex --preset cpu-balanced --qwen-model qwen3.5:9b
 amo-cli slack run --reply-mode answer
 ```
 
@@ -465,8 +465,8 @@ Model downloads are explicit setup actions. AMO will not silently download model
 Qwen preset defaults:
 
 - `cpu-light`: `qwen3:1.7b`
-- `cpu-balanced`: `qwen3:1.7b`
-- `gpu-quality`: `qwen3:8b`
+- `cpu-balanced`: `qwen3.5:9b`
+- `gpu-quality`: `qwen3.5:9b`
 
 For the smoothest first install on constrained machines, use the smaller smoke model:
 
@@ -474,7 +474,7 @@ For the smoothest first install on constrained machines, use the smaller smoke m
 npx agent-memory-orchestrator-cli install --target codex --preset cpu-light --qwen-model qwen3:0.6b
 ```
 
-Move to `qwen3:1.7b` or larger once local Qwen diagnostics pass reliably.
+Production reasoning extraction is intended to run through Ollama with `qwen3.5:9b` on machines with enough GPU memory. Use `qwen3:1.7b` or `qwen3:0.6b` only as constrained smoke-test overrides.
 
 List hardware-oriented presets:
 

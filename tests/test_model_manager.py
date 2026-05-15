@@ -15,7 +15,9 @@ def test_model_presets_include_hardware_profiles() -> None:
     assert "gpu-quality" in presets
     assert presets["cpu-balanced"]["embedding_model"] == "BAAI/bge-m3"
     assert presets["cpu-balanced"]["reranker_model"] == "BAAI/bge-reranker-base"
-    assert presets["cpu-balanced"]["qwen_model"] == "qwen3:1.7b"
+    assert presets["cpu-balanced"]["qwen_model"] == "qwen3.5:9b"
+    assert presets["gpu-quality"]["qwen_model"] == "qwen3.5:9b"
+    assert presets["cpu-light"]["qwen_model"] == "qwen3:1.7b"
 
 
 def test_resolve_models_allows_overrides() -> None:
@@ -46,7 +48,7 @@ def test_model_status_uses_cache_and_optional_load_check(monkeypatch: pytest.Mon
     assert result["models"]["embedding"]["load_checked"] is True
     assert result["models"]["reranker"]["available"] is False
     assert result["env"]["AMO_RERANKER_BACKEND"] == "cross-encoder"
-    assert result["env"]["AMO_QWEN_MODEL"] == "qwen3:1.7b"
+    assert result["env"]["AMO_QWEN_MODEL"] == "qwen3.5:9b"
 
 
 def test_download_models_calls_explicit_loaders(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

@@ -193,7 +193,7 @@ Latency targets:
 1. Kuzu is graph truth.
 2. SQLite is legacy/compatibility only for this pivot.
 3. Qwen via Ollama is the default local LLM runtime.
-4. `qwen3:1.7b` is the reliable default; larger Qwen models are opt-in.
+4. `qwen3.5:9b` through Ollama is the production default for machines with enough local GPU memory; smaller Qwen models are constrained smoke-test overrides.
 5. Hooks capture only; retrieval is explicit except tiny `SessionStart` status.
 6. Raw evidence is not included in context unless explicitly requested.
 7. Local Git ships first behind a version backend interface.
