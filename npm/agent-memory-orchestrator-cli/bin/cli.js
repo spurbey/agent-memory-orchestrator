@@ -38,7 +38,7 @@ Wrapper flags:
   --with-all-extras     Enable all optional runtime extras.
 
 Examples:
-  npx agent-memory-orchestrator-cli install --target codex --preset cpu-light --qwen-model qwen3:0.6b
+  npx agent-memory-orchestrator-cli install --target codex --preset cpu-balanced --qwen-model qwen3.5:9b
   npx agent-memory-orchestrator-cli install --with-models --download-models --target all
   npx agent-memory-orchestrator-cli install --with-slack --target claude
   npx agent-memory-orchestrator-cli doctor --target codex
@@ -268,7 +268,7 @@ function runDoctor(args) {
         python: py || null,
         pipx_available: Boolean(runner),
         amo_cli_available: false,
-        hint: "Run `npx agent-memory-orchestrator-cli install --target codex --preset cpu-light --qwen-model qwen3:0.6b`.",
+        hint: "Run `npx agent-memory-orchestrator-cli install --target codex --preset cpu-balanced --qwen-model qwen3.5:9b`.",
       },
       null,
       2

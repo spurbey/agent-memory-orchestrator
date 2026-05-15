@@ -5,6 +5,10 @@ from pathlib import Path
 from typing import Any
 
 
+DEFAULT_QWEN_MODEL = "qwen3.5:9b"
+LOW_RESOURCE_QWEN_MODEL = "qwen3:1.7b"
+
+
 @dataclass(slots=True, frozen=True)
 class ModelPreset:
     name: str
@@ -21,7 +25,7 @@ MODEL_PRESETS: dict[str, ModelPreset] = {
         name="cpu-light",
         embedding_model="BAAI/bge-small-en-v1.5",
         reranker_model="cross-encoder/ms-marco-MiniLM-L-6-v2",
-        qwen_model="qwen3:1.7b",
+        qwen_model=LOW_RESOURCE_QWEN_MODEL,
         vector_backend="faiss",
         recommended_for="CPU-only laptops or low-memory machines.",
         notes="Fast local setup; use --qwen-model qwen3:0.6b only when 1.7b cannot load.",
@@ -30,19 +34,19 @@ MODEL_PRESETS: dict[str, ModelPreset] = {
         name="cpu-balanced",
         embedding_model="BAAI/bge-m3",
         reranker_model="BAAI/bge-reranker-base",
-        qwen_model="qwen3:1.7b",
+        qwen_model=DEFAULT_QWEN_MODEL,
         vector_backend="faiss",
-        recommended_for="Modern CPU machines with roughly 8-16 GB RAM available.",
-        notes="Recommended default for reliable local GraphRAG planning; override to qwen3:4b only when latency is acceptable.",
+        recommended_for="Default production profile for local workstations with about 16 GB GPU VRAM.",
+        notes="Runs Stage 4/GraphRAG reasoning through Ollama using Qwen3.5 9B; constrained machines should choose cpu-light.",
     ),
     "gpu-quality": ModelPreset(
         name="gpu-quality",
         embedding_model="BAAI/bge-m3",
         reranker_model="BAAI/bge-reranker-large",
-        qwen_model="qwen3:8b",
+        qwen_model=DEFAULT_QWEN_MODEL,
         vector_backend="faiss",
-        recommended_for="GPU or high-RAM workstation where reranking quality matters more than latency.",
-        notes="Higher-quality reranking, heavier model load and slower CPU fallback.",
+        recommended_for="GPU workstation where reranking quality matters more than latency.",
+        notes="Same Qwen3.5 9B Ollama extraction model as default production, with heavier reranker.",
     ),
 }
 

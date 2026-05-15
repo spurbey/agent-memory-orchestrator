@@ -137,6 +137,7 @@ def test_settings_default_home_is_user_amo_dir(tmp_path: Path, monkeypatch) -> N
 
     assert settings.home == user_home / ".agent-memory-orchestrator"
     assert settings.graph_path == user_home / ".agent-memory-orchestrator" / ".graph" / "amo.kuzu"
+    assert settings.qwen_model == "qwen3.5:9b"
 
 
 def test_settings_loads_bom_prefixed_json_config(tmp_path: Path, monkeypatch) -> None:

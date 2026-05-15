@@ -25,9 +25,9 @@ Raw Codex/tool-call events are support evidence only. They must not become answe
 | Stage | Purpose | Production Owner | Current Status | Acceptance Gate |
 | --- | --- | --- | --- | --- |
 | 01 raw JSONL | Preserve the whole evidence file and identify sessions/transcripts | raw evidence ledger and transcript import modules | artifact-proven only | raw record counts and selected transcript paths match source files |
-| 02 reasoning evidence view | Convert noisy raw events into concise user/agent/read/write/validation evidence refs | new production packet-prep module needed | artifact-proven only | no raw tool-call payloads in LLM-facing text, support refs remain traceable |
-| 03 work packets | Build commit-backed work packets from the whole session | new production packet builder needed, using Git truth and Stage 02 evidence refs | artifact-proven with strict Stage 3B output | every packet resolves to a real commit, fake commits quarantined |
-| 04 reasoning extraction | Extract `Problem`, `Cause`, `Decision`, `Fix`, `Constraint`, `OpenQuestion` packet-wise | new production LLM runner and validator needed | Colab runner plus merged accepted output | output split into accepted/needs_review/rejected, refs are packet-local evidence refs only |
+| 02 reasoning evidence view | Convert noisy raw events into concise user/agent/read/write/validation evidence refs | `reasoning_graph.evidence_view` | production module committed | no raw tool-call payloads in LLM-facing text, support refs remain traceable |
+| 03 work packets | Build commit-backed work packets from the whole session | `reasoning_graph.work_packets`, using Git truth and Stage 02 evidence refs | production module committed | every packet resolves to a real commit, fake commits quarantined |
+| 04 reasoning extraction | Extract `Problem`, `Cause`, `Decision`, `Fix`, `Constraint`, `OpenQuestion` packet-wise | production Ollama/Qwen runner plus deterministic validator | Colab was a validation harness only; production target is local Ollama with `qwen3.5:9b` | output split into accepted/needs_review/rejected, refs are packet-local evidence refs only |
 | 05 code graph | Attach deterministic code/version truth | `reasoning_graph.code_analysis`, `work_changes`, `relationships`, `validation`, `session_query`, `session_runtime` | production modules committed | Git hunks map to CodeNodes, symbol versions are valid, Fix nodes link to code |
 | 06 isolated Kuzu | Write validated session graph without mutating central graph | Kuzu graph store plus session graph writer | artifact-proven, compact Kuzu reads supported | node/edge manifests match Kuzu readback and all edges resolve |
 | 07 retrieval | Build answer retrieval over graph docs | `reasoning_graph.retrieval`, graph service, CLI, daemon | production modules committed | exact/BM25/vector fusion retrieves expected packets/commits/symbols |
@@ -38,7 +38,7 @@ Raw Codex/tool-call events are support evidence only. They must not become answe
 - Stage 01 must ingest the whole raw JSONL file, not a focused window.
 - Stage 02 may compress evidence but must keep provenance refs.
 - Stage 03 must use Git commits as the work-packet spine.
-- Stage 04 is the only required LLM stage in this flow.
+- Stage 04 is the only required LLM stage in this flow and should run through local Ollama in production. Colab outputs are import/test artifacts, not the normal runtime path.
 - Stage 05 and Stage 06 are deterministic and should not call an LLM.
 - Stage 07 can use embeddings and ranking, but graph expansion must keep citations to packet, commit, reasoning, code, and symbol nodes.
 - Central graph writes must wait until isolated graph validation and retrieval evaluation pass.
