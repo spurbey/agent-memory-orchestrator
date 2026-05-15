@@ -49,6 +49,14 @@ from .retrieval import build_retrieval_documents_from_graph
 from .retrieval import classify_query
 from .retrieval import embed_missing_retrieval_documents
 from .retrieval import retrieve_session_graph
+from .reasoning_extraction import ALLOWED_REASONING_NODE_TYPES
+from .reasoning_extraction import ReasoningExtractionReview
+from .reasoning_extraction import collect_packet_evidence_refs
+from .reasoning_extraction import extract_json_object
+from .reasoning_extraction import review_reasoning_extraction_results
+from .reasoning_extraction import review_reasoning_packet_result
+from .reasoning_extraction import stable_reasoning_node_id
+from .reasoning_extraction import validate_reasoning_node
 from .session_query import SessionGraphHit
 from .session_query import query_session_graph
 from .qwen_batch import BatchQwenDecisionExtractor
@@ -87,6 +95,7 @@ __all__ = [
     "CodeVersionRelation",
     "ChunkingConfig",
     "AstExpansion",
+    "ALLOWED_REASONING_NODE_TYPES",
     "DecisionThread",
     "DecisionExtractionResult",
     "DecisionUnit",
@@ -106,6 +115,7 @@ __all__ = [
     "QwenBatchValidation",
     "REASONING_WORK_PACKET_SCHEMA_VERSION",
     "ReasoningEdge",
+    "ReasoningExtractionReview",
     "ReasoningWorkPacketBuild",
     "RetrievalDocument",
     "RetrievalHit",
@@ -125,6 +135,7 @@ __all__ = [
     "build_reasoning_work_packets_from_view",
     "build_retrieval_documents_from_graph",
     "classify_query",
+    "collect_packet_evidence_refs",
     "code_node_commit_edges",
     "code_nodes_from_hunks",
     "code_node_provenance_edges",
@@ -132,6 +143,7 @@ __all__ = [
     "default_ast_expander",
     "extract_code_nodes_from_commit",
     "extract_decisions",
+    "extract_json_object",
     "embed_missing_retrieval_documents",
     "hash_content",
     "is_strict_validation_fact",
@@ -145,15 +157,19 @@ __all__ = [
     "produced_change_edges",
     "python_ast_expander",
     "query_session_graph",
+    "review_reasoning_extraction_results",
+    "review_reasoning_packet_result",
     "retrieve_session_graph",
     "resolve_code_node_version",
     "semantic_drift_boundary",
     "stable_json_hash",
+    "stable_reasoning_node_id",
     "validation_edges_for_test",
     "should_accept_ast_parent",
     "validate_qwen_batch_result",
     "validate_graph_object",
     "validate_reasoning_edge",
+    "validate_reasoning_node",
     "validate_status_transition",
     "work_change_code_edges",
     "work_change_commit_edges",
