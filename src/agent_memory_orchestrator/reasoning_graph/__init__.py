@@ -32,6 +32,16 @@ from .embedding_store import GraphEmbeddingStore
 from .embedding_store import GraphFaissBuildResult
 from .embedding_store import hash_content
 from .embedding_store import make_embedding_id
+from .evidence_view import REASONING_EVIDENCE_VIEW_SCHEMA_VERSION
+from .evidence_view import REASONING_EVIDENCE_VIEW_STAGE
+from .evidence_view import ReasoningEvidenceViewBuild
+from .evidence_view import build_reasoning_evidence_view
+from .evidence_view import classify_tool
+from .evidence_view import clean_user_request
+from .evidence_view import keep_assistant_reasoning
+from .evidence_view import keep_user_request
+from .evidence_view import reasoning_evidence_view_contains_raw_internal_ids
+from .evidence_view import write_reasoning_evidence_view_artifacts
 from .relationships import ReasoningEdge
 from .relationships import ValidationLinkResult
 from .relationships import code_node_commit_edges
@@ -120,7 +130,10 @@ __all__ = [
     "QwenBatchResult",
     "QwenBatchValidation",
     "REASONING_WORK_PACKET_SCHEMA_VERSION",
+    "REASONING_EVIDENCE_VIEW_SCHEMA_VERSION",
+    "REASONING_EVIDENCE_VIEW_STAGE",
     "ReasoningEdge",
+    "ReasoningEvidenceViewBuild",
     "ReasoningExtractionReview",
     "ReasoningWorkPacketBuild",
     "RetrievalDocument",
@@ -141,7 +154,9 @@ __all__ = [
     "build_reasoning_work_packets_from_view",
     "build_compact_session_graph",
     "build_retrieval_documents_from_graph",
+    "build_reasoning_evidence_view",
     "classify_query",
+    "classify_tool",
     "collect_packet_evidence_refs",
     "code_node_commit_edges",
     "code_nodes_from_hunks",
@@ -154,6 +169,9 @@ __all__ = [
     "embed_missing_retrieval_documents",
     "hash_content",
     "is_strict_validation_fact",
+    "clean_user_request",
+    "keep_assistant_reasoning",
+    "keep_user_request",
     "load_amo_evidence_events",
     "load_codex_transcript_events",
     "load_qwen_batch_job",
@@ -164,6 +182,7 @@ __all__ = [
     "produced_change_edges",
     "python_ast_expander",
     "query_session_graph",
+    "reasoning_evidence_view_contains_raw_internal_ids",
     "review_reasoning_extraction_results",
     "review_reasoning_packet_result",
     "retrieve_session_graph",
@@ -181,6 +200,7 @@ __all__ = [
     "work_change_code_edges",
     "work_change_commit_edges",
     "work_changes_from_commit_windows",
+    "write_reasoning_evidence_view_artifacts",
     "write_compact_session_graph",
     "write_qwen_batch_job",
     "write_qwen_batch_result",
