@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import sqlite3
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from agent_memory_orchestrator.core.db import connect
 from agent_memory_orchestrator.config import Settings
 from agent_memory_orchestrator.graph.service import GraphRagService
+from agent_memory_orchestrator.graph.service import _unique_nonempty
 from agent_memory_orchestrator.graph.store import GraphEdge
 from agent_memory_orchestrator.graph.store import GraphNode
 from agent_memory_orchestrator.graph.store import InMemoryGraphStore
@@ -240,6 +242,59 @@ def test_retrieve_session_graph_can_require_bi_encoder_candidates(tmp_path: Path
         )
 
 
+def test_retrieve_session_graph_applies_cross_encoder_rerank(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    graph = _graph()
+    _conn, index_store, embedding_store = _sqlite_store(tmp_path)
+    index_store.upsert_documents(build_retrieval_documents_from_graph(graph, session_id="s1"))
+    embed_missing_retrieval_documents(
+        index_store=index_store,
+        embedding_store=embedding_store,
+        embedder=_KeywordEmbedder(),
+        model="test-embedder",
+        graph_scope="test-graph",
+        session_id="s1",
+        extraction_run_id="run1",
+    )
+    calls: dict[str, object] = {}
+
+    def fake_rerank_candidates(**kwargs):
+        candidates = list(kwargs["candidates"])
+        calls["backend"] = kwargs["backend"]
+        calls["model_name"] = kwargs["model_name"]
+        calls["candidate_count"] = len(candidates)
+        return SimpleNamespace(
+            scores={candidate.memory_id: 1.0 for candidate in candidates},
+            backend="cross-encoder",
+            model=kwargs["model_name"],
+            fallback_reason="",
+        )
+
+    monkeypatch.setattr(
+        "agent_memory_orchestrator.reasoning_graph.retrieval.rerank_candidates",
+        fake_rerank_candidates,
+    )
+
+    result = retrieve_session_graph(
+        query="why use BM25 vector retrieval before graph expansion",
+        index_store=index_store,
+        graph_store=graph,
+        embedding_store=embedding_store,
+        embedder=_KeywordEmbedder(),
+        embedding_model="test-embedder",
+        graph_scope="test-graph",
+        session_id="s1",
+        limit=3,
+        reranker_backend="cross-encoder",
+        reranker_model="test-cross-encoder",
+        rerank_top_k=2,
+    )
+
+    assert calls == {"backend": "cross-encoder", "model_name": "test-cross-encoder", "candidate_count": 2}
+    assert result.reranker == "deterministic+bi_encoder+cross_encoder"
+    assert any(reason.startswith("cross_encoder_score:") for reason in result.hits[0].reasons)
+    assert any(reason == "cross_encoder_model:test-cross-encoder" for reason in result.hits[0].reasons)
+
+
 def test_version_flow_queries_boost_symbol_or_code_docs(tmp_path: Path) -> None:
     graph = _graph()
     graph.upsert_node(
@@ -330,3 +385,16 @@ def test_graph_service_wires_retrieval_build_embed_and_answer(tmp_path: Path) ->
     assert result["ok"] is True
     assert result["retrieval"]["hits"]
     assert "AMO indexed graph answer" in result["answer"]["text"]
+    assert "Support: packet WP0001 | commit abc1234 | code retrieve_session_graph" in result["answer"]["text"]
+    first_citation = result["answer"]["citations"][0]
+    assert first_citation["packet_ids"] == ["WP0001"]
+    assert first_citation["commit_shas"] == ["abc1234"]
+    assert "code:retrieval:retrieve_session_graph" in first_citation["code_node_ids"]
+
+
+def test_unique_nonempty_dedupes_nested_citation_values() -> None:
+    assert _unique_nonempty(["E0001", ["E0001", "E0002"], ("", None, "E0002"), {"E0003"}]) == [
+        "E0001",
+        "E0002",
+        "E0003",
+    ]
