@@ -3,6 +3,8 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
+import pytest
+
 from agent_memory_orchestrator.core.db import connect
 from agent_memory_orchestrator.config import Settings
 from agent_memory_orchestrator.graph.service import GraphRagService
@@ -209,11 +211,33 @@ def test_retrieve_session_graph_fuses_candidates_and_expands_after_ranking(tmp_p
 
     assert result.intent == "code_why"
     assert result.vector_status == "sqlite:completed"
+    assert result.reranker == "deterministic+bi_encoder"
     assert result.candidate_counts["bm25"] > 0
     assert result.candidate_counts["vector"] > 0
     assert result.hits[0].document.doc_type == "reasoning"
     assert result.hits[0].document.graph_node_id == "reason:WP0001:decision:retrieval"
+    assert any(reason.startswith("bi_encoder_score:") for reason in result.hits[0].reasons)
     assert any(neighbor["id"] == "code:retrieval:retrieve_session_graph" for neighbor in result.hits[0].neighbors)
+
+
+def test_retrieve_session_graph_can_require_bi_encoder_candidates(tmp_path: Path) -> None:
+    graph = _graph()
+    _conn, index_store, embedding_store = _sqlite_store(tmp_path)
+    index_store.upsert_documents(build_retrieval_documents_from_graph(graph, session_id="s1"))
+
+    with pytest.raises(ValueError, match="vector retrieval required"):
+        retrieve_session_graph(
+            query="why use BM25 vector retrieval before graph expansion",
+            index_store=index_store,
+            graph_store=graph,
+            embedding_store=embedding_store,
+            embedder=_KeywordEmbedder(),
+            embedding_model="test-embedder",
+            graph_scope="test-graph",
+            session_id="s1",
+            limit=3,
+            require_vector=True,
+        )
 
 
 def test_version_flow_queries_boost_symbol_or_code_docs(tmp_path: Path) -> None:

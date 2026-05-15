@@ -145,6 +145,7 @@ class RetrievalResult:
     hits: tuple[RetrievalHit, ...]
     candidate_counts: dict[str, int]
     vector_status: str = "not_requested"
+    reranker: str = "deterministic"
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -152,6 +153,7 @@ class RetrievalResult:
             "intent": self.intent,
             "candidate_counts": self.candidate_counts,
             "vector_status": self.vector_status,
+            "reranker": self.reranker,
             "hits": [hit.as_dict() for hit in self.hits],
         }
 
@@ -519,6 +521,8 @@ def retrieve_session_graph(
     candidate_limit: int = 80,
     expand_neighbors: int = 12,
     embedding_kind: str = RETRIEVAL_EMBEDDING_KIND,
+    require_vector: bool = False,
+    bi_encoder_weight: float = 0.2,
 ) -> RetrievalResult:
     intent = classify_query(query)
     exact = index_store.exact_search(query, limit=candidate_limit)
@@ -533,7 +537,11 @@ def retrieve_session_graph(
         candidate_limit=candidate_limit,
         embedding_kind=embedding_kind,
     )
-    fused = _rrf_fuse({"exact": exact, "bm25": bm25, "vector": vector})
+    if require_vector and not vector:
+        raise ValueError(f"vector retrieval required but returned no candidates (status={vector_status})")
+    candidate_sets = {"exact": exact, "bm25": bm25, "vector": vector}
+    source_scores = _candidate_raw_scores(candidate_sets)
+    fused = _rrf_fuse(candidate_sets)
     docs_by_id = index_store.get_documents_by_ids(doc_id for doc_id, _score, _sources in fused)
     ranked: list[tuple[RetrievalDocument, float, tuple[str, ...], tuple[str, ...], tuple[dict[str, Any], ...]]] = []
     for doc_id, fused_score, sources in fused:
@@ -541,7 +549,15 @@ def retrieve_session_graph(
         if doc is None:
             continue
         neighbors = tuple(graph_store.neighbors(doc.graph_node_id, limit=expand_neighbors)) if expand_neighbors else ()
-        final_score, reasons = _rerank_document(query=query, intent=intent, doc=doc, fused_score=fused_score, neighbors=neighbors)
+        final_score, reasons = _rerank_document(
+            query=query,
+            intent=intent,
+            doc=doc,
+            fused_score=fused_score,
+            neighbors=neighbors,
+            source_scores=source_scores.get(doc_id, {}),
+            bi_encoder_weight=bi_encoder_weight,
+        )
         ranked.append((doc, final_score, sources, tuple(reasons), neighbors))
     ranked.sort(key=lambda item: item[1], reverse=True)
 
@@ -565,6 +581,7 @@ def retrieve_session_graph(
         intent=intent,
         hits=hits,
         vector_status=vector_status,
+        reranker="deterministic+bi_encoder" if vector else "deterministic",
         candidate_counts={
             "exact": len(exact),
             "bm25": len(bm25),
@@ -791,6 +808,15 @@ def _rrf_fuse(candidate_sets: dict[str, list[RetrievalCandidate]], *, k: int = 6
     ]
 
 
+def _candidate_raw_scores(candidate_sets: dict[str, list[RetrievalCandidate]]) -> dict[str, dict[str, float]]:
+    scores: dict[str, dict[str, float]] = {}
+    for source, candidates in candidate_sets.items():
+        for candidate in candidates:
+            source_scores = scores.setdefault(candidate.doc_id, {})
+            source_scores[source] = max(float(candidate.raw_score), source_scores.get(source, float("-inf")))
+    return scores
+
+
 def _rerank_document(
     *,
     query: str,
@@ -798,6 +824,8 @@ def _rerank_document(
     doc: RetrievalDocument,
     fused_score: float,
     neighbors: tuple[dict[str, Any], ...],
+    source_scores: dict[str, float],
+    bi_encoder_weight: float,
 ) -> tuple[float, list[str]]:
     terms = _terms(query)
     scoring_terms = terms
@@ -816,6 +844,12 @@ def _rerank_document(
     if intent in {"code_why", "decision_history"} and doc.doc_type == "reasoning":
         score += 0.25
         reasons.append("reasoning_boost")
+    if "vector" in source_scores:
+        vector_score = max(0.0, min(1.0, float(source_scores["vector"])))
+        vector_boost = vector_score * max(0.0, float(bi_encoder_weight))
+        score += vector_boost
+        reasons.append(f"bi_encoder_score:{round(vector_score, 6)}")
+        reasons.append(f"bi_encoder_boost:{round(vector_boost, 6)}")
     if intent == "version_flow" and doc.doc_type in {"symbol", "code"}:
         score += 0.25
         reasons.append("version_flow_boost")

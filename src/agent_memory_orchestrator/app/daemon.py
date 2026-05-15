@@ -459,6 +459,7 @@ class AmoHandler(BaseHTTPRequestHandler):
                             use_vector=bool(payload.get("use_vector", True)),
                             model=str(payload.get("model") or ""),
                             graph_scope=str(payload.get("graph_scope") or ""),
+                            require_vector=bool(payload.get("require_vector", False)),
                             include_answer=bool(payload.get("include_answer", True)),
                         )
                         self._write_json(200, result)

@@ -181,6 +181,7 @@ def _build_parser() -> argparse.ArgumentParser:
     graph_retrieve.add_argument("--db-path", type=Path, default=None)
     graph_retrieve.add_argument("--graph-path", type=Path, default=None)
     graph_retrieve.add_argument("--no-vector", action="store_true")
+    graph_retrieve.add_argument("--require-vector", action="store_true", help="Fail instead of falling back if vector retrieval returns no candidates.")
     graph_retrieve.add_argument("--no-answer", action="store_true")
     graph_retrieve.add_argument("--offline", action="store_true", help="Open Kuzu directly for single-process maintenance.")
 
@@ -731,6 +732,7 @@ def main(argv: list[str] | None = None) -> int:
                             use_vector=not args.no_vector,
                             model=args.model,
                             graph_scope=args.graph_scope,
+                            require_vector=args.require_vector,
                             include_answer=not args.no_answer,
                         )
                     elif args.command == "graph-finalize-session":
@@ -832,6 +834,7 @@ def main(argv: list[str] | None = None) -> int:
                                 "db_path": str(args.db_path) if args.db_path else "",
                                 "graph_path": str(args.graph_path) if args.graph_path else "",
                                 "use_vector": not args.no_vector,
+                                "require_vector": args.require_vector,
                                 "include_answer": not args.no_answer,
                             },
                         )

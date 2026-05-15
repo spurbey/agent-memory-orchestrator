@@ -808,6 +808,7 @@ class GraphRagService:
         use_vector: bool = True,
         model: str = "",
         graph_scope: str = "",
+        require_vector: bool = False,
         include_answer: bool = True,
     ) -> dict[str, Any]:
         query = str(query or "").strip()
@@ -834,6 +835,7 @@ class GraphRagService:
                 graph_scope=scope,
                 session_id=session_id,
                 limit=max(1, min(50, int(limit))),
+                require_vector=require_vector,
             )
             payload = {
                 "ok": True,
