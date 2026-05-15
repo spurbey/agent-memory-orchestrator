@@ -118,6 +118,29 @@ amo-cli graph-retrieve --query "why did this code change?" --require-vector
 
 </details>
 
+<details>
+<summary>Connect Slack</summary>
+
+Install the optional Slack Socket Mode runtime:
+
+```bash
+npx agent-memory-orchestrator-cli install --target codex --preset cpu-balanced --qwen-model qwen3.5:9b --with-slack
+```
+
+Create or configure the Slack app locally:
+
+```bash
+amo-cli slack setup-link
+amo-cli slack setup-wizard
+amo-cli slack run --reply-mode answer
+```
+
+In `answer` mode, AMO only posts when the bot is mentioned. Normal captured messages become local evidence and can later be drained into the graph.
+
+Full guide: [Slack connector](./docs/integrations/slack.md).
+
+</details>
+
 ## How Retrieval Works
 
 AMO V2 retrieval is layered for precision:
