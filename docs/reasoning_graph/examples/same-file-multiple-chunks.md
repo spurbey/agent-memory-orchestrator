@@ -5,7 +5,6 @@
 - ../algorithms/chunking-and-decision-threads.md
 
 ## Used by
-- ../implementation/02-phase-session-graph.md
 
 ## Related docs
 - ../algorithms/code-node-versioning.md

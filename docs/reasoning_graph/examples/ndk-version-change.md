@@ -6,7 +6,6 @@
 - ../algorithms/decision-extraction.md
 
 ## Used by
-- ../implementation/09-test-and-acceptance-gates.md
 
 ## Related docs
 - ../algorithms/validated-by-and-test-linking.md

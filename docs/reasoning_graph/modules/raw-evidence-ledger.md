@@ -11,7 +11,6 @@
 
 ## Related docs
 - ../architecture/05-failure-and-safety-model.md
-- ../implementation/01-phase-raw-timeline.md
 
 ## Purpose
 

@@ -6,9 +6,6 @@
 - 05-failure-and-safety-model.md
 
 ## Used by
-- ../implementation/01-phase-raw-timeline.md
-- ../implementation/02-phase-session-graph.md
-- ../implementation/05-phase-central-merge.md
 
 ## Related docs
 - ../modules/session-timeline-builder.md

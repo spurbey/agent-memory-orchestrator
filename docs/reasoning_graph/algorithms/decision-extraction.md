@@ -7,7 +7,6 @@
 ## Used by
 - relationship-extraction.md
 - ../modules/session-graph-builder.md
-- ../implementation/04-phase-decision-reasoning.md
 
 ## Related docs
 - validated-by-and-test-linking.md

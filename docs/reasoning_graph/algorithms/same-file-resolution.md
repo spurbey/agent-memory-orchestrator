@@ -7,7 +7,6 @@
 
 ## Used by
 - ../modules/session-graph-builder.md
-- ../implementation/02-phase-session-graph.md
 
 ## Related docs
 - ../examples/same-file-multiple-chunks.md

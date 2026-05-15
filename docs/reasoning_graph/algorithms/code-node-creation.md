@@ -8,7 +8,6 @@
 ## Used by
 - code-node-versioning.md
 - ../modules/session-graph-builder.md
-- ../implementation/03-phase-code-analysis.md
 
 ## Related docs
 - same-file-resolution.md

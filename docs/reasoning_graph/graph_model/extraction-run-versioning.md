@@ -8,7 +8,6 @@
 ## Used by
 - ../modules/extraction-run-manager.md
 - ../modules/qwen-contracts.md
-- ../implementation/02-phase-session-graph.md
 
 ## Related docs
 - central-versioning-rules.md
