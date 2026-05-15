@@ -7,14 +7,18 @@ It installs the Python AMO runtime with `pipx`, writes local config, configures 
 ## Install
 
 ```bash
-npx agent-memory-orchestrator-cli install --target codex --preset cpu-balanced --qwen-model qwen3.5:9b
+npx agent-memory-orchestrator-cli -- install --target codex --preset cpu-balanced --qwen-model qwen3.5:9b
 ```
+
+The `--` after the package name is intentional. It prevents npm/npx from consuming AMO flags such as `--target`.
 
 Install for Claude and Codex:
 
 ```bash
-npx agent-memory-orchestrator-cli install --target all --preset cpu-balanced --qwen-model qwen3.5:9b
+npx agent-memory-orchestrator-cli -- install --target all --preset cpu-balanced --qwen-model qwen3.5:9b
 ```
+
+If `npx` resolves `agent-memory-orchestrator-cli@0.1.1`, that registry package is too old for this command shape. Publish/use `0.1.2` or newer.
 
 ## Common Options
 
@@ -33,7 +37,7 @@ npx agent-memory-orchestrator-cli install --target all --preset cpu-balanced --q
 ## Diagnostics
 
 ```bash
-npx agent-memory-orchestrator-cli doctor --target codex
+npx agent-memory-orchestrator-cli -- doctor --target codex
 amo-cli doctor --target codex
 ```
 
@@ -46,7 +50,7 @@ amo-cli uninstall --target all
 ## Optional Slack Runtime
 
 ```bash
-npx agent-memory-orchestrator-cli install --target codex --preset cpu-balanced --qwen-model qwen3.5:9b --with-slack
+npx agent-memory-orchestrator-cli -- install --target codex --preset cpu-balanced --qwen-model qwen3.5:9b --with-slack
 amo-cli slack setup-wizard
 amo-cli slack run --reply-mode answer
 ```

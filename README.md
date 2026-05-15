@@ -58,7 +58,7 @@ Prerequisites:
 
 ```bash
 ollama pull qwen3.5:9b
-npx agent-memory-orchestrator-cli install --target codex --preset cpu-balanced --qwen-model qwen3.5:9b
+npx agent-memory-orchestrator-cli -- install --target codex --preset cpu-balanced --qwen-model qwen3.5:9b
 amo-cli doctor --target codex
 amo-daemon
 ```
@@ -124,7 +124,7 @@ amo-cli graph-retrieve --query "why did this code change?" --require-vector
 Install the optional Slack Socket Mode runtime:
 
 ```bash
-npx agent-memory-orchestrator-cli install --target codex --preset cpu-balanced --qwen-model qwen3.5:9b --with-slack
+npx agent-memory-orchestrator-cli -- install --target codex --preset cpu-balanced --qwen-model qwen3.5:9b --with-slack
 ```
 
 Create or configure the Slack app locally:
