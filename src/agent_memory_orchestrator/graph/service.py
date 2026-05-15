@@ -8,6 +8,7 @@ import shutil
 import time
 from pathlib import Path
 from typing import Any
+from typing import Iterable
 
 from ..core.db import connect
 from ..integrations.adapters import normalize_adapter_event
@@ -1100,12 +1101,20 @@ def _answer_from_retrieval_result(result: dict[str, Any]) -> dict[str, Any]:
     for index, hit in enumerate(hits[:5], start=1):
         doc = hit.get("document") if isinstance(hit, dict) and isinstance(hit.get("document"), dict) else {}
         graph_node = hit.get("graph_node") if isinstance(hit, dict) and isinstance(hit.get("graph_node"), dict) else {}
+        neighbors = hit.get("neighbors") if isinstance(hit, dict) and isinstance(hit.get("neighbors"), list) else []
         node_id = str(doc.get("graph_node_id") or graph_node.get("id") or "")
         node_ids.append(node_id)
         title = str(doc.get("title") or graph_node.get("label") or node_id)
         body = str(doc.get("body") or graph_node.get("summary") or "")
-        statement = _best_answer_line(body) or str(graph_node.get("summary") or "")
-        lines.append(f"{index}. {title}: {statement}".strip())
+        statement = _body_field(body, "statement") or _best_answer_line(body) or str(graph_node.get("summary") or "")
+        reason = _body_field(body, "reason")
+        support = _answer_support(doc=doc, graph_node=graph_node, neighbors=neighbors)
+        line = f"{index}. {title}: {statement}".strip()
+        if reason and reason.lower() != statement.lower():
+            line += f" Reason: {reason}"
+        if support["summary"]:
+            line += f" Support: {support['summary']}"
+        lines.append(line)
         citations.append(
             {
                 "rank": index,
@@ -1114,6 +1123,12 @@ def _answer_from_retrieval_result(result: dict[str, Any]) -> dict[str, Any]:
                 "doc_type": doc.get("doc_type"),
                 "packet_id": doc.get("packet_id"),
                 "commit_sha": doc.get("commit_sha"),
+                "packet_ids": support["packet_ids"],
+                "commit_shas": support["commit_shas"],
+                "evidence_ids": support["evidence_ids"],
+                "code_node_ids": support["code_node_ids"],
+                "code_nodes": support["code_nodes"],
+                "neighbor_node_ids": support["neighbor_node_ids"],
                 "score": hit.get("score"),
             }
         )
@@ -1122,6 +1137,88 @@ def _answer_from_retrieval_result(result: dict[str, Any]) -> dict[str, Any]:
         "citations": citations,
         "node_ids": [node_id for node_id in node_ids if node_id],
     }
+
+
+def _answer_support(*, doc: dict[str, Any], graph_node: dict[str, Any], neighbors: list[dict[str, Any]]) -> dict[str, Any]:
+    metadata = graph_node.get("metadata") if isinstance(graph_node.get("metadata"), dict) else {}
+    doc_meta = doc.get("metadata") if isinstance(doc.get("metadata"), dict) else {}
+    packet_ids = _unique_nonempty(
+        [
+            doc.get("packet_id"),
+            graph_node.get("packet_id"),
+            metadata.get("packet_id"),
+            metadata.get("source_packet_id"),
+            *(neighbor.get("packet_id") for neighbor in neighbors),
+            *(neighbor.get("label") for neighbor in neighbors if str(neighbor.get("kind") or "") == "Packet"),
+        ]
+    )
+    commit_shas = _unique_nonempty(
+        [
+            doc.get("commit_sha"),
+            graph_node.get("commit_sha"),
+            graph_node.get("commit_id"),
+            metadata.get("commit_sha"),
+            metadata.get("source_commit_sha"),
+            *(neighbor.get("commit_sha") for neighbor in neighbors),
+            *(neighbor.get("commit_id") for neighbor in neighbors),
+        ]
+    )
+    evidence_values: list[Any] = [
+        graph_node.get("evidence_id"),
+        metadata.get("evidence_id"),
+        metadata.get("evidence_refs"),
+        doc_meta.get("evidence_refs"),
+    ]
+    evidence_values.extend(neighbor.get("evidence_id") for neighbor in neighbors)
+    evidence_values.extend(neighbor.get("id") for neighbor in neighbors if str(neighbor.get("kind") or "") == "EvidenceRef")
+    evidence_ids = _unique_nonempty(evidence_values)
+    code_neighbors = [
+        neighbor
+        for neighbor in neighbors
+        if str(neighbor.get("kind") or "") in {"CodeNode", "CodeVersion", "CodeHunk", "Symbol", "SymbolVersion"}
+    ]
+    code_node_ids = _unique_nonempty(neighbor.get("id") for neighbor in code_neighbors)
+    code_nodes = _unique_nonempty(neighbor.get("label") or neighbor.get("summary") for neighbor in code_neighbors)[:8]
+    neighbor_node_ids = _unique_nonempty(neighbor.get("id") for neighbor in neighbors)
+    summary_parts = []
+    if packet_ids:
+        summary_parts.append("packet " + ", ".join(packet_ids[:3]))
+    if commit_shas:
+        summary_parts.append("commit " + ", ".join(commit_shas[:3]))
+    if evidence_ids:
+        summary_parts.append("evidence " + ", ".join(evidence_ids[:3]))
+    if code_nodes:
+        summary_parts.append("code " + "; ".join(code_nodes[:3]))
+    return {
+        "packet_ids": packet_ids,
+        "commit_shas": commit_shas,
+        "evidence_ids": evidence_ids,
+        "code_node_ids": code_node_ids,
+        "code_nodes": code_nodes,
+        "neighbor_node_ids": neighbor_node_ids,
+        "summary": " | ".join(summary_parts),
+    }
+
+
+def _unique_nonempty(values: Iterable[Any]) -> list[str]:
+    out: list[str] = []
+    for value in values:
+        if isinstance(value, (list, tuple, set)):
+            out.extend(_unique_nonempty(value))
+            continue
+        text = str(value or "").strip()
+        if text and text not in out:
+            out.append(text)
+    return out
+
+
+def _body_field(body: str, field: str) -> str:
+    prefix = f"{field.strip().lower()}:"
+    for line in body.splitlines():
+        stripped = line.strip()
+        if stripped.lower().startswith(prefix):
+            return stripped.split(":", 1)[-1].strip()
+    return ""
 
 
 def _best_answer_line(body: str) -> str:
