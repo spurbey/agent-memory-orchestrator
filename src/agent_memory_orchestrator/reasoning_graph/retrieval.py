@@ -8,6 +8,8 @@ from typing import Any, Iterable, Protocol
 
 from ..core.db import init_schema
 from ..graph.store import GraphStore
+from ..llm.rerankers import RerankCandidate
+from ..llm.rerankers import rerank_candidates
 from .embedding_store import GraphEmbeddingHit
 from .embedding_store import GraphEmbeddingRecord
 from .embedding_store import GraphEmbeddingStore
@@ -523,6 +525,10 @@ def retrieve_session_graph(
     embedding_kind: str = RETRIEVAL_EMBEDDING_KIND,
     require_vector: bool = False,
     bi_encoder_weight: float = 0.2,
+    reranker_backend: str = "disabled",
+    reranker_model: str = "",
+    rerank_top_k: int = 50,
+    rerank_max_chars: int = 1800,
 ) -> RetrievalResult:
     intent = classify_query(query)
     exact = index_store.exact_search(query, limit=candidate_limit)
@@ -560,6 +566,14 @@ def retrieve_session_graph(
         )
         ranked.append((doc, final_score, sources, tuple(reasons), neighbors))
     ranked.sort(key=lambda item: item[1], reverse=True)
+    ranked, reranker_label = _cross_encoder_rerank(
+        query=query,
+        ranked=ranked,
+        backend=reranker_backend,
+        model_name=reranker_model,
+        top_k=rerank_top_k,
+        max_chars=rerank_max_chars,
+    )
 
     graph_nodes = {
         str(node.get("id")): node
@@ -581,7 +595,7 @@ def retrieve_session_graph(
         intent=intent,
         hits=hits,
         vector_status=vector_status,
-        reranker="deterministic+bi_encoder" if vector else "deterministic",
+        reranker=reranker_label or ("deterministic+bi_encoder" if vector else "deterministic"),
         candidate_counts={
             "exact": len(exact),
             "bm25": len(bm25),
@@ -589,6 +603,88 @@ def retrieve_session_graph(
             "fused": len(fused),
         },
     )
+
+
+def _cross_encoder_rerank(
+    *,
+    query: str,
+    ranked: list[tuple[RetrievalDocument, float, tuple[str, ...], tuple[str, ...], tuple[dict[str, Any], ...]]],
+    backend: str,
+    model_name: str,
+    top_k: int,
+    max_chars: int,
+) -> tuple[
+    list[tuple[RetrievalDocument, float, tuple[str, ...], tuple[str, ...], tuple[dict[str, Any], ...]]],
+    str,
+]:
+    selected_backend = str(backend or "disabled").strip().lower()
+    if selected_backend in {"", "disabled", "none"} or not ranked:
+        return ranked, ""
+    if selected_backend not in {"auto", "lexical", "cross-encoder"}:
+        raise ValueError("reranker backend must be one of: disabled, auto, lexical, cross-encoder")
+    rerank_count = max(1, min(int(top_k or 50), len(ranked)))
+    candidates = [
+        RerankCandidate(
+            memory_id=doc.doc_id,
+            text=_reranker_text(doc, neighbors, max_chars=max_chars),
+        )
+        for doc, _score, _sources, _reasons, neighbors in ranked[:rerank_count]
+    ]
+    reranked = rerank_candidates(
+        query=query,
+        candidates=candidates,
+        backend=selected_backend,
+        model_name=model_name,
+        max_chars=max_chars,
+    )
+    by_doc_id = reranked.scores
+    boosted: list[
+        tuple[RetrievalDocument, float, tuple[str, ...], tuple[str, ...], tuple[dict[str, Any], ...]]
+    ] = []
+    for doc, score, sources, reasons, neighbors in ranked[:rerank_count]:
+        cross_score = max(0.0, min(1.0, float(by_doc_id.get(doc.doc_id, 0.0))))
+        new_reasons = [
+            *reasons,
+            f"{_safe_reranker_prefix(reranked.backend)}_score:{round(cross_score, 6)}",
+            f"{_safe_reranker_prefix(reranked.backend)}_model:{reranked.model}",
+        ]
+        if reranked.fallback_reason:
+            new_reasons.append(f"reranker_fallback:{reranked.fallback_reason}")
+        boosted.append((doc, score + cross_score * 0.45, sources, tuple(new_reasons), neighbors))
+    output = [*boosted, *ranked[rerank_count:]]
+    output.sort(key=lambda item: item[1], reverse=True)
+    base = "deterministic+bi_encoder" if any("vector" in item[2] for item in ranked) else "deterministic"
+    suffix = "cross_encoder" if reranked.backend == "cross-encoder" else reranked.backend.replace("-", "_")
+    if reranked.fallback_reason:
+        suffix = f"{suffix}_fallback"
+    return output, f"{base}+{suffix}"
+
+
+def _reranker_text(
+    doc: RetrievalDocument,
+    neighbors: tuple[dict[str, Any], ...],
+    *,
+    max_chars: int,
+) -> str:
+    neighbor_text = "\n".join(
+        f"{node.get('kind')}: {node.get('label') or ''} {node.get('summary') or ''}"
+        for node in neighbors[:12]
+    )
+    text = "\n".join(
+        part
+        for part in (
+            doc.title,
+            doc.body,
+            "metadata: " + json.dumps(doc.metadata, sort_keys=True),
+            "neighbors:\n" + neighbor_text if neighbor_text else "",
+        )
+        if part
+    )
+    return text[: max(100, int(max_chars or 1800))]
+
+
+def _safe_reranker_prefix(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "_", value.strip().lower()).strip("_") or "reranker"
 
 
 def classify_query(query: str) -> str:

@@ -1,49 +1,67 @@
-# AMO Reasoning Graph Implementation Spec
-
-## Depends on
-- ../claude_handbook.md
-- ../FINAL_DESIGN_V1.md
-
-## Used by
-- implementation/00-implementation-principles.md
-- implementation/09-test-and-acceptance-gates.md
-
-## Related docs
-- architecture/01-system-purpose.md
-- architecture/02-three-level-storage.md
-- modules/qwen-contracts.md
-- architecture/05-failure-and-safety-model.md
+# Reasoning Graph V2
 
 ## Purpose
 
-This folder is the canonical implementation specification for AMO Reasoning Graph V1. The older `docs/claude_handbook.md` remains source handover material. This folder normalizes that handover into module contracts, algorithm specifications, graph schema rules, implementation phases, and real-environment validation gates.
+The Reasoning Graph explains why code changed.
 
-AMO exists because Git answers what changed, but not why it changed. The reasoning graph records the decision chain, evidence, code hunks, tests, commits, and version relationships that explain why code took its current form.
+Git already records what changed. AMO V2 adds the reasoning layer around it: problems, causes, decisions, fixes, constraints, evidence, tests, code hunks, symbols, commits, and version relationships.
+
+## V2 Pipeline
+
+```text
+raw evidence and transcripts
+-> reasoning evidence view
+-> commit-backed work packets
+-> packet-wise reasoning extraction
+-> Git hunks and AST CodeNodes
+-> reasoning-to-code linking
+-> graph validation
+-> isolated Kuzu session graph
+-> retrieval docs, embeddings, graph expansion, reranking
+-> central graph merge after acceptance
+```
+
+## Source of Truth
+
+V2 uses deterministic facts as the spine:
+
+- Git commits define work boundaries.
+- Git hunks define changed code regions.
+- AST mapping defines CodeNodes and symbols where possible.
+- LLM extraction adds reasoning nodes only after validation.
+- Kuzu stores graph truth.
+- SQLite stores retrieval/index ledgers.
+- FAISS is a rebuildable vector cache.
 
 ## Read Order
 
-1. Start with `architecture/01-system-purpose.md` and `architecture/02-three-level-storage.md`.
-2. Read `architecture/05-failure-and-safety-model.md` before any implementation work.
-3. Read `modules/qwen-contracts.md` before writing any LLM call.
-4. Read `graph_model/node-types.md`, `edge-types.md`, and `status-lifecycle.md` before adding Kuzu writes.
-5. Read algorithm docs before coding their modules.
-6. Follow the phase docs in `implementation/` in order.
-7. Use `examples/` to validate expected graph shape.
+1. [V2 production stage plan](./implementation/11-v2-production-stage-plan.md)
+2. [System purpose](./architecture/01-system-purpose.md)
+3. [Three-level storage](./architecture/02-three-level-storage.md)
+4. [Failure and safety model](./architecture/05-failure-and-safety-model.md)
+5. [Node types](./graph_model/node-types.md)
+6. [Edge types](./graph_model/edge-types.md)
+7. [Provenance and evidence](./graph_model/provenance-and-evidence.md)
+8. Algorithm docs under [algorithms](./algorithms/)
+9. Module contracts under [modules](./modules/)
+10. Examples under [examples](./examples/)
 
-## System Shape
+## Stage Boundaries
 
-The system has three storage levels:
+| Stage | Job | Deterministic or LLM |
+| --- | --- | --- |
+| 01 raw evidence | Preserve full source events | deterministic |
+| 02 evidence view | Filter into answer-grade evidence refs | deterministic |
+| 03 work packets | Group by commit and evidence refs | deterministic |
+| 04 reasoning extraction | Extract Problem/Cause/Decision/Fix/Constraint/OpenQuestion | local LLM plus validator |
+| 05 code graph | Git hunks, AST mapping, CodeNodes, symbol versions | deterministic |
+| 06 graph write | Write isolated session graph | deterministic |
+| 07 retrieval | BM25/vector/graph expansion/rerank/answer citations | deterministic plus optional local reranker |
 
-1. Raw session timeline: append-only high-fidelity evidence and transcript events.
-2. Session summary graph: cleaned, chunked, extracted, versioned per-session reasoning graph.
-3. Central graph: committed, reconciled, append-only graph across sessions.
+## Acceptance Rule
 
-Hooks only capture. The daemon owns queueing, Qwen, embeddings, Tree-sitter, Kuzu, merge, clustering, and validation. Retrieval ranking is not redesigned in this documentation phase, but graph inspection APIs are specified because they validate the graph and later become retrieval building blocks.
+A graph node is not answer-grade unless it can cite packet, commit, evidence, and when applicable code support. Raw tool calls and internal transcript IDs are provenance only; they are not user-facing reasoning nodes.
 
 ## Documentation Contract
 
-Every document in this folder must include `Depends on`, `Used by`, and `Related docs`. A document without those sections is incomplete.
-
-Every algorithm document must define exact inputs, outputs, thresholds, pseudocode, examples, edge cases, tests, and graph nodes or edges affected.
-
-Every module document must define purpose, inputs, outputs, owned state, public interfaces planned, Kuzu writes, failure modes, and validation checks.
+Detailed docs in this folder should define inputs, outputs, graph effects, validation checks, and failure modes. This README and the V2 production stage plan define the current product path.
