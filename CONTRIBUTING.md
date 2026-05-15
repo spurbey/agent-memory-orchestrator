@@ -25,6 +25,13 @@ python -m pytest -q
 ruff check src tests
 ```
 
+For packaging changes:
+
+```bash
+python -m build
+python -m twine check dist/*
+```
+
 For npm installer changes:
 
 ```bash
@@ -32,6 +39,14 @@ cd npm/agent-memory-orchestrator-cli
 npm run check
 npm pack --dry-run
 ```
+
+## Pull Requests
+
+- Keep each pull request scoped to one behavior change, refactor, or documentation update.
+- Include the validation commands you ran in the pull request template.
+- Update public docs when a command, configuration key, graph schema, or MCP tool changes.
+- Do not commit generated metadata, local evidence, local graph stores, SQLite databases, logs, or `.tmp` artifacts.
+- Use security advisories for vulnerabilities; do not open public issues with exploit details or secrets.
 
 ## Architecture Boundaries
 
