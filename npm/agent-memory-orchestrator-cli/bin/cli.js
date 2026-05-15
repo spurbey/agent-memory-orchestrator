@@ -27,8 +27,8 @@ function printUsage() {
 Agent Memory Orchestrator installer
 
 Usage:
-  npx agent-memory-orchestrator-cli install [--from <pip_spec>] [wrapper flags] [amo install flags]
-  npx agent-memory-orchestrator-cli doctor [--target codex|claude|all]
+  npx agent-memory-orchestrator-cli -- install [--from <pip_spec>] [wrapper flags] [amo install flags]
+  npx agent-memory-orchestrator-cli -- doctor [--target codex|claude|all]
   npx agent-memory-orchestrator-cli --help
 
 Wrapper flags:
@@ -38,10 +38,10 @@ Wrapper flags:
   --with-all-extras     Enable all optional runtime extras.
 
 Examples:
-  npx agent-memory-orchestrator-cli install --target codex --preset cpu-balanced --qwen-model qwen3.5:9b
-  npx agent-memory-orchestrator-cli install --with-models --download-models --target all
-  npx agent-memory-orchestrator-cli install --with-slack --target claude
-  npx agent-memory-orchestrator-cli doctor --target codex
+  npx agent-memory-orchestrator-cli -- install --target codex --preset cpu-balanced --qwen-model qwen3.5:9b
+  npx agent-memory-orchestrator-cli -- install --with-models --download-models --target all
+  npx agent-memory-orchestrator-cli -- install --with-slack --target claude
+  npx agent-memory-orchestrator-cli -- doctor --target codex
   `);
 }
 
@@ -268,7 +268,7 @@ function runDoctor(args) {
         python: py || null,
         pipx_available: Boolean(runner),
         amo_cli_available: false,
-        hint: "Run `npx agent-memory-orchestrator-cli install --target codex --preset cpu-balanced --qwen-model qwen3.5:9b`.",
+        hint: "Run `npx agent-memory-orchestrator-cli -- install --target codex --preset cpu-balanced --qwen-model qwen3.5:9b`.",
       },
       null,
       2
@@ -277,7 +277,11 @@ function runDoctor(args) {
 }
 
 function main() {
-  const [command, ...args] = process.argv.slice(2);
+  const argv = process.argv.slice(2);
+  if (argv[0] === "--") {
+    argv.shift();
+  }
+  const [command, ...args] = argv;
   if (!command || command === "--help" || command === "-h") {
     printUsage();
     process.exit(0);
