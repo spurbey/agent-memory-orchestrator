@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -238,6 +239,59 @@ def test_retrieve_session_graph_can_require_bi_encoder_candidates(tmp_path: Path
             limit=3,
             require_vector=True,
         )
+
+
+def test_retrieve_session_graph_applies_cross_encoder_rerank(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    graph = _graph()
+    _conn, index_store, embedding_store = _sqlite_store(tmp_path)
+    index_store.upsert_documents(build_retrieval_documents_from_graph(graph, session_id="s1"))
+    embed_missing_retrieval_documents(
+        index_store=index_store,
+        embedding_store=embedding_store,
+        embedder=_KeywordEmbedder(),
+        model="test-embedder",
+        graph_scope="test-graph",
+        session_id="s1",
+        extraction_run_id="run1",
+    )
+    calls: dict[str, object] = {}
+
+    def fake_rerank_candidates(**kwargs):
+        candidates = list(kwargs["candidates"])
+        calls["backend"] = kwargs["backend"]
+        calls["model_name"] = kwargs["model_name"]
+        calls["candidate_count"] = len(candidates)
+        return SimpleNamespace(
+            scores={candidate.memory_id: 1.0 for candidate in candidates},
+            backend="cross-encoder",
+            model=kwargs["model_name"],
+            fallback_reason="",
+        )
+
+    monkeypatch.setattr(
+        "agent_memory_orchestrator.reasoning_graph.retrieval.rerank_candidates",
+        fake_rerank_candidates,
+    )
+
+    result = retrieve_session_graph(
+        query="why use BM25 vector retrieval before graph expansion",
+        index_store=index_store,
+        graph_store=graph,
+        embedding_store=embedding_store,
+        embedder=_KeywordEmbedder(),
+        embedding_model="test-embedder",
+        graph_scope="test-graph",
+        session_id="s1",
+        limit=3,
+        reranker_backend="cross-encoder",
+        reranker_model="test-cross-encoder",
+        rerank_top_k=2,
+    )
+
+    assert calls == {"backend": "cross-encoder", "model_name": "test-cross-encoder", "candidate_count": 2}
+    assert result.reranker == "deterministic+bi_encoder+cross_encoder"
+    assert any(reason.startswith("cross_encoder_score:") for reason in result.hits[0].reasons)
+    assert any(reason == "cross_encoder_model:test-cross-encoder" for reason in result.hits[0].reasons)
 
 
 def test_version_flow_queries_boost_symbol_or_code_docs(tmp_path: Path) -> None:
