@@ -1202,13 +1202,20 @@ def _answer_support(*, doc: dict[str, Any], graph_node: dict[str, Any], neighbor
 
 def _unique_nonempty(values: Iterable[Any]) -> list[str]:
     out: list[str] = []
-    for value in values:
+    seen: set[str] = set()
+
+    def visit(value: Any) -> None:
         if isinstance(value, (list, tuple, set)):
-            out.extend(_unique_nonempty(value))
-            continue
+            for item in value:
+                visit(item)
+            return
         text = str(value or "").strip()
-        if text and text not in out:
+        if text and text not in seen:
+            seen.add(text)
             out.append(text)
+
+    for value in values:
+        visit(value)
     return out
 
 
