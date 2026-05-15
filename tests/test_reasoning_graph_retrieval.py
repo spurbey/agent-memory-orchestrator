@@ -218,6 +218,38 @@ def test_retrieve_session_graph_fuses_candidates_and_expands_after_ranking(tmp_p
 
 def test_version_flow_queries_boost_symbol_or_code_docs(tmp_path: Path) -> None:
     graph = _graph()
+    graph.upsert_node(
+        GraphNode(
+            id="symbol:graph_service:version_flow",
+            kind="Symbol",
+            label="src/agent_memory_orchestrator/graph/service.py::GraphRagService.version_flow",
+            summary="Symbol version_flow in graph service.",
+            status="accepted",
+            session_id="s1",
+            commit_id="def5678",
+            metadata={
+                "file_path": "src/agent_memory_orchestrator/graph/service.py",
+                "symbol": "GraphRagService.version_flow",
+                "version_count": 1,
+            },
+        )
+    )
+    graph.upsert_node(
+        GraphNode(
+            id="symbol:graph_service:rank_nodes",
+            kind="Symbol",
+            label="src/agent_memory_orchestrator/graph_service.py::_rank_nodes",
+            summary="Symbol _rank_nodes in graph service.",
+            status="accepted",
+            session_id="s1",
+            commit_id="def5678",
+            metadata={
+                "file_path": "src/agent_memory_orchestrator/graph_service.py",
+                "symbol": "_rank_nodes",
+                "version_count": 4,
+            },
+        )
+    )
     _conn, index_store, _embedding_store = _sqlite_store(tmp_path)
     index_store.upsert_documents(build_retrieval_documents_from_graph(graph, session_id="s1"))
 
@@ -231,8 +263,22 @@ def test_version_flow_queries_boost_symbol_or_code_docs(tmp_path: Path) -> None:
     )
 
     assert classify_query("show version flow for retrieval.py::retrieve_session_graph") == "version_flow"
+    assert classify_query("show version flow for graph service rank nodes") == "version_flow"
+    assert classify_query("why did we add retrieval.py for graph expansion") == "code_why"
     assert result.hits
     assert result.hits[0].document.doc_type in {"symbol", "code"}
+
+    natural_result = retrieve_session_graph(
+        query="show version flow for graph service rank nodes",
+        index_store=index_store,
+        graph_store=graph,
+        session_id="s1",
+        limit=3,
+        expand_neighbors=0,
+    )
+
+    assert natural_result.intent == "version_flow"
+    assert natural_result.hits[0].document.graph_node_id == "symbol:graph_service:rank_nodes"
 
 
 def test_graph_service_wires_retrieval_build_embed_and_answer(tmp_path: Path) -> None:
