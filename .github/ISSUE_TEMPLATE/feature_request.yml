@@ -1,0 +1,49 @@
+name: Feature request
+description: Propose a focused AMO improvement.
+title: "[Feature]: "
+labels: ["enhancement", "needs-triage"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What user or maintainer problem does this solve?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+      description: Describe the smallest useful change.
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - install
+        - hooks/evidence
+        - graph/reasoning
+        - retrieval
+        - MCP
+        - web UI
+        - connectors
+        - docs
+        - other
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Optional. Note any rejected approaches or tradeoffs.
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Scope checks
+      options:
+        - label: This request does not require automatic prompt injection of private memory.
+          required: true
+        - label: I am not including real private evidence or secrets.
+          required: true

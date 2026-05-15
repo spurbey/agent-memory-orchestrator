@@ -1,0 +1,55 @@
+name: Bug report
+description: Report a reproducible AMO problem.
+title: "[Bug]: "
+labels: ["bug", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not paste real tokens, private evidence, raw transcripts, or private graph data.
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: What failed, and what did you expect instead?
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Reproduction steps
+      description: Include the exact command or UI flow with sanitized paths.
+      placeholder: |
+        1. Run ...
+        2. Open ...
+        3. See ...
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: OS, Python version, install method, AMO version or commit, and optional components used.
+      placeholder: |
+        OS:
+        Python:
+        Install method:
+        AMO version/commit:
+        Optional extras:
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Sanitized logs or diagnostics
+      description: Paste only bounded, sanitized output. Prefer `amo-cli doctor` output when relevant.
+      render: text
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Safety checks
+      options:
+        - label: I removed tokens, private keys, private transcripts, and raw private evidence.
+          required: true
+        - label: I checked existing issues before filing this report.
+          required: true
