@@ -8,7 +8,6 @@
 ## Used by
 - ../modules/session-graph-builder.md
 - ../modules/central-graph-merge-engine.md
-- ../implementation/04-phase-decision-reasoning.md
 
 ## Related docs
 - ../examples/ndk-version-change.md

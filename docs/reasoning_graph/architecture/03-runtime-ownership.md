@@ -7,7 +7,6 @@
 ## Used by
 - ../modules/daemon-job-queue.md
 - ../modules/qwen-contracts.md
-- ../implementation/00-implementation-principles.md
 
 ## Related docs
 - ../modules/kuzu-graph-store.md

@@ -7,7 +7,6 @@
 ## Used by
 - ../modules/qwen-contracts.md
 - ../modules/daemon-job-queue.md
-- ../implementation/09-test-and-acceptance-gates.md
 
 ## Related docs
 - ../graph_model/status-lifecycle.md

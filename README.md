@@ -26,7 +26,7 @@ It turns agent sessions into a queryable graph of:
 - reasoning nodes that explain why code changed
 - retrieval-ready context with packet, commit, evidence, and code citations
 
-AMO is not another chat history dump. The V2 pipeline treats Git and code as the factual spine, then uses local LLM extraction only to enrich the why.
+AMO is not another chat history dump. The V2 graph treats Git and code as the factual spine, then uses local LLM extraction only to enrich the why.
 
 ## Why It Exists
 
@@ -186,15 +186,13 @@ Retrieval is explicit through CLI or MCP tools such as:
 
 ## Project Status
 
-AMO is an active local-first reference implementation. The current product direction is V2:
+AMO is an active local-first product. The current direction is V2:
 
 - Git-backed work packets are the durable factual unit.
 - Reasoning nodes are extracted packet-wise and validated before graph promotion.
 - Code hunks, AST-derived CodeNodes, and symbol versions anchor code history.
 - Retrieval combines lexical, vector, graph expansion, and cross-encoder reranking.
 - The central graph merge/versioning path is still being hardened.
-
-See [the V2 production stage plan](./docs/reasoning_graph/implementation/11-v2-production-stage-plan.md) for the detailed pipeline.
 
 ## Contributing
 

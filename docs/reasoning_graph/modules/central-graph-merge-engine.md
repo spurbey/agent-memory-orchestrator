@@ -7,8 +7,6 @@
 - ../algorithms/decision-deduplication.md
 
 ## Used by
-- ../implementation/05-phase-central-merge.md
-- ../implementation/07-phase-fresh-rebuild.md
 
 ## Related docs
 - qwen-contracts.md

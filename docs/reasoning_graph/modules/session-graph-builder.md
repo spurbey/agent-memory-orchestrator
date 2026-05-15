@@ -8,7 +8,6 @@
 
 ## Used by
 - central-graph-merge-engine.md
-- ../implementation/02-phase-session-graph.md
 
 ## Related docs
 - ../algorithms/code-node-creation.md

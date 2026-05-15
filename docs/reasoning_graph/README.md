@@ -6,7 +6,7 @@ The Reasoning Graph explains why code changed.
 
 Git already records what changed. AMO V2 adds the reasoning layer around it: problems, causes, decisions, fixes, constraints, evidence, tests, code hunks, symbols, commits, and version relationships.
 
-## V2 Pipeline
+## V2 Flow
 
 ```text
 raw evidence and transcripts
@@ -33,30 +33,28 @@ V2 uses deterministic facts as the spine:
 - SQLite stores retrieval/index ledgers.
 - FAISS is a rebuildable vector cache.
 
+## Core Concepts
+
+| Concept | Meaning |
+| --- | --- |
+| Evidence | Append-only source material captured from hooks, transcripts, tools, and connectors |
+| Work packet | Commit-backed unit that groups the problem, rationale, changed files, and validation refs |
+| Reasoning node | Validated `Problem`, `Cause`, `Decision`, `Fix`, `Constraint`, or `OpenQuestion` |
+| Code node | Hunk or AST-derived code region linked to a packet and commit |
+| Symbol version | A versioned symbol view across commits |
+| Retrieval document | Searchable text projection of graph nodes for BM25, vector, and rerank retrieval |
+
 ## Read Order
 
-1. [V2 production stage plan](./implementation/11-v2-production-stage-plan.md)
-2. [System purpose](./architecture/01-system-purpose.md)
-3. [Three-level storage](./architecture/02-three-level-storage.md)
-4. [Failure and safety model](./architecture/05-failure-and-safety-model.md)
-5. [Node types](./graph_model/node-types.md)
-6. [Edge types](./graph_model/edge-types.md)
-7. [Provenance and evidence](./graph_model/provenance-and-evidence.md)
-8. Algorithm docs under [algorithms](./algorithms/)
-9. Module contracts under [modules](./modules/)
-10. Examples under [examples](./examples/)
-
-## Stage Boundaries
-
-| Stage | Job | Deterministic or LLM |
-| --- | --- | --- |
-| 01 raw evidence | Preserve full source events | deterministic |
-| 02 evidence view | Filter into answer-grade evidence refs | deterministic |
-| 03 work packets | Group by commit and evidence refs | deterministic |
-| 04 reasoning extraction | Extract Problem/Cause/Decision/Fix/Constraint/OpenQuestion | local LLM plus validator |
-| 05 code graph | Git hunks, AST mapping, CodeNodes, symbol versions | deterministic |
-| 06 graph write | Write isolated session graph | deterministic |
-| 07 retrieval | BM25/vector/graph expansion/rerank/answer citations | deterministic plus optional local reranker |
+1. [System purpose](./architecture/01-system-purpose.md)
+2. [Three-level storage](./architecture/02-three-level-storage.md)
+3. [Failure and safety model](./architecture/05-failure-and-safety-model.md)
+4. [Node types](./graph_model/node-types.md)
+5. [Edge types](./graph_model/edge-types.md)
+6. [Provenance and evidence](./graph_model/provenance-and-evidence.md)
+7. Algorithm docs under [algorithms](./algorithms/)
+8. Module contracts under [modules](./modules/)
+9. Examples under [examples](./examples/)
 
 ## Acceptance Rule
 
@@ -64,4 +62,4 @@ A graph node is not answer-grade unless it can cite packet, commit, evidence, an
 
 ## Documentation Contract
 
-Detailed docs in this folder should define inputs, outputs, graph effects, validation checks, and failure modes. This README and the V2 production stage plan define the current product path.
+Detailed docs in this folder should define inputs, outputs, graph effects, validation checks, and failure modes. Keep user-facing docs focused on product behavior.

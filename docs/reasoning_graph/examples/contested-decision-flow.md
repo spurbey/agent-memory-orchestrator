@@ -5,8 +5,6 @@
 - ../graph_model/status-lifecycle.md
 
 ## Used by
-- ../implementation/05-phase-central-merge.md
-- ../implementation/08-phase-web-debugging.md
 
 ## Related docs
 - ../modules/web-debug-visibility.md

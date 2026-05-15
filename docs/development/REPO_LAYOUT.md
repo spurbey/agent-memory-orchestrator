@@ -27,21 +27,18 @@ agent-memory-orchestrator/
 
 ## Reasoning Graph Documentation
 
-The detailed Reasoning Graph V1 implementation specs live under:
+The product-facing reasoning graph docs live under:
 
 ```text
 docs/reasoning_graph/
   architecture/       # purpose, storage levels, runtime ownership, data flow, failure model
-  modules/            # module contracts and planned interfaces
-  algorithms/         # exact algorithm mechanics, thresholds, pseudocode, tests
+  modules/            # module contracts and public runtime responsibilities
+  algorithms/         # algorithm mechanics and validation expectations
   graph_model/        # node, edge, status, extraction, central versioning, provenance rules
-  implementation/     # phased build plan with real-data gates
   examples/           # concrete graph flows and expected shapes
 ```
 
-Implementation work should follow these docs before adding or moving runtime
-modules. Keep root-level compatibility shims when moving existing modules into
-more specific packages.
+Keep user-facing docs focused on product behavior.
 
 ## Current Migration Policy
 
