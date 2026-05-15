@@ -6,7 +6,6 @@
 ## Used by
 - tree-sitter-ast-expansion.md
 - code-node-creation.md
-- ../implementation/03-phase-code-analysis.md
 
 ## Related docs
 - ../graph_model/node-types.md

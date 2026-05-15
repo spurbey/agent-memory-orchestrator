@@ -21,7 +21,6 @@ AMO is local-first. Hooks capture evidence, the daemon owns graph work, Kuzu sto
 V2 source of truth:
 
 - [Reasoning Graph V2 overview](./reasoning_graph/README.md)
-- [V2 production stage plan](./reasoning_graph/implementation/11-v2-production-stage-plan.md)
 
 ## Operational Guides
 

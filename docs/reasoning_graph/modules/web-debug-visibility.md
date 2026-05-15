@@ -5,7 +5,6 @@
 - ../architecture/04-data-flow-end-to-end.md
 
 ## Used by
-- ../implementation/08-phase-web-debugging.md
 
 ## Related docs
 - ../examples/contested-decision-flow.md

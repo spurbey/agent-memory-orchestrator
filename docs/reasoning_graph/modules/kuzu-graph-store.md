@@ -13,11 +13,10 @@
 
 ## Related docs
 - daemon-job-queue.md
-- ../implementation/07-phase-fresh-rebuild.md
 
 ## Purpose
 
-Provide the single graph persistence backend for AMO Reasoning Graph V1.
+Provide the single graph persistence backend for AMO Reasoning Graph V2.
 
 ## Inputs
 

@@ -1,16 +1,33 @@
 # Architecture
 
-This file is a short index. The canonical design is:
+AMO is local-first graph memory for AI coding sessions.
 
-- [FINAL_DESIGN_V1.md](./FINAL_DESIGN_V1.md)
+## Runtime Shape
 
-Execution tracking is maintained in:
+- Hooks capture evidence and fail open.
+- The daemon owns Kuzu, graph jobs, retrieval, local model calls, and web UI state.
+- MCP exposes explicit retrieval tools to agents.
+- Kuzu stores graph truth.
+- SQLite stores retrieval/index ledgers.
+- FAISS is a rebuildable vector cache.
+- Ollama/Qwen is used for local reasoning extraction where configured.
 
-- [IMPLEMENTATION_TRACKER.md](./IMPLEMENTATION_TRACKER.md)
+## Retrieval Shape
 
-## Summary
+```text
+query
+-> exact + BM25 + vector candidates
+-> deterministic fusion
+-> graph neighborhood expansion
+-> optional cross-encoder rerank
+-> answer with packet, commit, evidence, and code citations
+```
 
-- Local-first persistent memory + orchestration.
-- Shared MCP surface for both Claude and Codex.
-- Deterministic review loop: `draft -> review -> revise -> ready_for_user -> approved/rejected`.
-- Local DB is authoritative source of truth.
+## Safety Rules
+
+- No automatic prompt memory injection.
+- Raw hooks and transcript payloads remain provenance unless promoted through validation.
+- Model downloads are explicit setup actions.
+- Runtime state, evidence, graph stores, logs, and exports stay out of Git.
+
+See [Reasoning Graph V2](./reasoning_graph/README.md) for graph model details.

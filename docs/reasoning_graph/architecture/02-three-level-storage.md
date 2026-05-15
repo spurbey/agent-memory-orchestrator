@@ -7,8 +7,6 @@
 ## Used by
 - 04-data-flow-end-to-end.md
 - ../graph_model/extraction-run-versioning.md
-- ../implementation/01-phase-raw-timeline.md
-- ../implementation/02-phase-session-graph.md
 
 ## Related docs
 - ../modules/raw-evidence-ledger.md

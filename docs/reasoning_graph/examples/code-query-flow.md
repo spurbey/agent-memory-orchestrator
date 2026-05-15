@@ -7,7 +7,6 @@
 
 ## Used by
 - future retrieval work
-- ../implementation/08-phase-web-debugging.md
 
 ## Related docs
 - ../architecture/04-data-flow-end-to-end.md

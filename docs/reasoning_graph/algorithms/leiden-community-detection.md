@@ -6,7 +6,6 @@
 
 ## Used by
 - ../modules/graph-validation.md
-- ../implementation/06-phase-clustering.md
 
 ## Related docs
 - ../graph_model/node-types.md
