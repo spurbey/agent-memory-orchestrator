@@ -7,7 +7,6 @@
 ## Used by
 - code-node-creation.md
 - same-file-resolution.md
-- ../implementation/03-phase-code-analysis.md
 
 ## Related docs
 - ../graph_model/node-types.md

@@ -6,8 +6,6 @@
 - ../architecture/05-failure-and-safety-model.md
 
 ## Used by
-- ../implementation/09-test-and-acceptance-gates.md
-- ../implementation/07-phase-fresh-rebuild.md
 
 ## Related docs
 - qwen-contracts.md

@@ -7,7 +7,6 @@
 ## Used by
 - session-graph-builder.md
 - qwen-contracts.md
-- ../implementation/02-phase-session-graph.md
 
 ## Related docs
 - ../architecture/05-failure-and-safety-model.md

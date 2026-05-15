@@ -6,7 +6,6 @@
 
 ## Used by
 - session-timeline-builder.md
-- ../implementation/01-phase-raw-timeline.md
 
 ## Related docs
 - ../algorithms/chunking-and-decision-threads.md

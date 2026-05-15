@@ -7,13 +7,11 @@
 ## Used by
 - extraction-run-manager.md
 - central-graph-merge-engine.md
-- ../implementation/00-implementation-principles.md
 
 ## Related docs
 - graph-validation.md
 - kuzu-graph-store.md
 - ../graph_model/extraction-run-versioning.md
-- ../implementation/09-test-and-acceptance-gates.md
 
 ## Purpose
 

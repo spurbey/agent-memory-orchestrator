@@ -2,12 +2,10 @@
 
 ## Depends on
 - ../README.md
-- ../../claude_handbook.md
 
 ## Used by
 - 02-three-level-storage.md
 - 04-data-flow-end-to-end.md
-- ../implementation/00-implementation-principles.md
 
 ## Related docs
 - ../graph_model/central-versioning-rules.md
