@@ -25,9 +25,15 @@ const AMO = {
   },
 };
 
-const ANSWER_KINDS = new Set(["Decision", "WorkChange", "Fix", "Bug", "Blocker", "TestRun", "ContextSnapshot", "GitCommit", "Topic", "Cluster"]);
+const ANSWER_KINDS = new Set([
+  "Decision", "WorkChange", "Fix", "Bug", "Blocker", "TestRun", "ContextSnapshot", "GitCommit", "Topic", "Cluster",
+  "ReasoningNode", "Problem", "Cause", "Constraint", "OpenQuestion", "Commit", "Packet", "CodeNode", "CodeVersion", "Symbol",
+]);
 const SUPPORT_KINDS = new Set(["RawEvidenceRef", "CleanedEvidenceWindow", "GraphDelta", "Session", "Repo", "Branch", "File", "App"]);
-const VERSION_EDGES = new Set(["COMMITTED_AS", "REFINES", "SUPERSEDES", "DUPLICATE_OF", "CONTRADICTS", "VALIDATED_BY", "MERGED_INTO"]);
+const VERSION_EDGES = new Set([
+  "COMMITTED_AS", "REFINES", "SUPERSEDES", "DUPLICATE_OF", "CONTRADICTS", "VALIDATED_BY", "MERGED_INTO",
+  "REASON_NODE_EXPLAINS_COMMIT", "REASON_NODE_IN_PACKET", "COMMIT_PRODUCED_HUNK",
+]);
 const PIPELINE = [
   ["Raw", "Captured hook events", "raw"],
   ["Clean", "Bounded evidence windows", "clean"],
@@ -83,7 +89,8 @@ function readableKind(kind) { return kind.replace(/([a-z])([A-Z])/g, "$1 $2"); }
 function isAnswerNode(node) {
   const kind = nodeKind(node);
   if (SUPPORT_KINDS.has(kind)) return false;
-  return ANSWER_KINDS.has(kind) || node.scope === "central" || node.status === "committed";
+  const status = nodeStatus(node);
+  return ANSWER_KINDS.has(kind) || node.scope === "central" || ["committed", "active", "session_final", "accepted"].includes(status);
 }
 function nodeColor(kind, status) {
   const color = {
@@ -182,14 +189,16 @@ function renderDashboard() {
   const edges = AMO.centralGraph.edges || [];
   const committed = nodes.filter(n => nodeStatus(n) === "committed").length;
   const draft = nodes.filter(n => nodeStatus(n) === "draft").length;
+  const sessionFinal = nodes.filter(n => ["session_final", "accepted"].includes(nodeStatus(n))).length;
   const rawEvents = sessions.reduce((sum, row) => sum + Number(row.raw_events || 0), 0);
+  const graphCaption = sessionFinal ? `${sessionFinal} session-final, ${committed} committed` : `${committed} committed, ${draft} draft`;
   $("metricGrid").innerHTML = [
     metric("Sessions", sessions.length, "tracked workstreams"),
     metric("Raw events", rawEvents, "captured evidence records"),
-    metric("Graph nodes", nodes.length, `${committed} committed, ${draft} draft`),
+    metric("Graph nodes", nodes.length, graphCaption),
     metric("Edges", edges.length, "visible central relations"),
   ].join("");
-  renderPipeline($("pipelineStrip"), { raw: rawEvents, clean: sessions.reduce((sum, s) => sum + Number(s.graph_counts?.draft || 0), 0), delta: nodes.filter(n => nodeKind(n) === "GraphDelta").length, draft, merge: edges.filter(e => VERSION_EDGES.has(edgeKind(e))).length, central: committed + nodes.filter(n => n.scope === "central").length, cache: nodes.length });
+  renderPipeline($("pipelineStrip"), { raw: rawEvents, clean: sessions.reduce((sum, s) => sum + Number(s.graph_counts?.draft || 0), 0), delta: nodes.filter(n => nodeKind(n) === "GraphDelta").length, draft, merge: edges.filter(e => VERSION_EDGES.has(edgeKind(e))).length, central: committed + sessionFinal + nodes.filter(n => n.scope === "central").length, cache: nodes.length });
   $("recentSessions").innerHTML = sessions.slice(0, 7).map(sessionCard).join("") || empty("No captured sessions yet.");
 }
 function metric(label, value, caption) { return `<div class="metric"><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong><span>${escapeHtml(caption)}</span></div>`; }
