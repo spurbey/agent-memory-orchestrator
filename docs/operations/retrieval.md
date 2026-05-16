@@ -10,9 +10,53 @@ query
 -> exact + BM25 + vector candidates
 -> deterministic fusion
 -> graph neighborhood expansion for top candidates
--> cross-encoder rerank top candidates when configured
+-> cross-encoder rerank top candidates when configured as a secondary signal
+-> typed answer-trace traversal from each top node
 -> answer with packet/commit/evidence/code citations
 ```
+
+## Ranking Rules
+
+The ranker is graph-first. Vector and cross-encoder scores improve ordering, but
+they do not replace graph provenance or packet-level reasoning.
+
+- `code_why` queries prefer answer-grade reasoning nodes, then linked code and symbols.
+- `decision_history` queries prefer primary reasoning text over changed-path metadata.
+- Hook queries expand to the AMO hook behavior vocabulary: capture, injection, prompt, and `UserPromptSubmit`.
+- Agent names such as Codex/Claude are treated as context for hook queries, not the whole topic.
+- Supporting evidence, commit hubs, and test artifacts are penalized unless the query is actually about those artifacts.
+- Cross-encoder reranking remains enabled, but for `decision_history` it uses a smaller weight because local code-oriented rerankers can over-score the literal word "decision" and under-score final policy nodes.
+
+## Answer Trace Traversal
+
+Retrieval finds the best door into the graph. The answer trace walks from that
+door through typed graph edges so the response can explain:
+
+- what problem or goal started the work
+- what cause or constraint shaped the change
+- what decision was made
+- what fix/code change landed
+- which packet, commit, evidence, hunk, code node, and symbol support it
+
+Traversal is deterministic. Qwen is not used to walk the graph and cannot invent
+links. Qwen can later summarize a finished trace, but the trace itself comes
+from stored graph edges.
+
+Current traversal rules:
+
+- Start from each top retrieval hit.
+- Walk only answer-grade edge types such as `REASON_NODE_IN_PACKET`,
+  `REASON_NODE_EXPLAINS_COMMIT`, `REASON_NODE_EVIDENCED_BY`,
+  `REASON_NODE_LINKED_TO_HUNK`, `REASON_NODE_LINKED_TO_CODE_NODE`,
+  `COMMIT_PRODUCED_HUNK`, `HUNK_MAPS_TO_CODE_NODE`, and symbol/version edges.
+- Use bounded BFS to avoid graph flood.
+- Prefer reasoning in the seed packet and seed commit before broader neighbors.
+- Prefer visible label/summary query overlap for the answer chain; metadata
+  overlap can help retrieval but should not dominate the human-facing narrative.
+- Emit at most one chain node per role in the primary answer trace:
+  `Problem -> Cause -> Decision -> Constraint -> Fix -> OpenQuestion`.
+- Keep extra packets, commits, evidence, hunks, code nodes, and symbols as
+  citation support rather than forcing them into the narrative.
 
 ## Build the Retrieval Index
 
@@ -81,3 +125,43 @@ If a result cannot cite graph support, treat it as not ready for answer-grade re
 | Raw evidence JSONL | Append-only provenance |
 
 Kuzu remains graph truth. FAISS can be deleted and rebuilt.
+
+## Real V2 Reset Validation
+
+The current real-session validation target is:
+
+```text
+.tmp/reasoning-graph-v2-reset-2026-05-14/
+```
+
+Run:
+
+```powershell
+python .tmp\reasoning-graph-v2-reset-2026-05-14\07_retrieval_pipeline\stage7d_vector_query_eval.py
+```
+
+Expected high-level result:
+
+- `stage_acceptance = PASS`
+- `vector_status = faiss:completed`
+- `reranker = deterministic+bi_encoder+cross_encoder`
+- `what decisions were made about Codex hooks?` ranks `Fix: Hook behavior change to capture-only` first.
+- `which code changes are connected to Qwen extraction?` ranks Stage 4 decision-extraction reasoning first.
+- `why did we add focused evidence windows?` ranks the focused evidence window reasoning and code nodes.
+
+Latest trace validation:
+
+- `why did we change graph_service.py?` returns `WP0030` and traces the
+  session-graph explanation problem to commit `50b24f6` and graph-service code
+  nodes.
+- `what decisions were made about Codex hooks?` returns `WP0018` and traces
+  hook timeout -> stdin/heavy hook cause -> Kuzu/capture-only decision ->
+  capture-only fix.
+- `what work was done for Slack connector?` returns `WP0034` and traces Slack
+  mention handling -> committed graph answer policy -> threaded reply
+  implementation.
+- `which code changes are connected to Qwen extraction?` returns `WP0057` and
+  traces low decision yield -> deterministic spine plus LLM enrichment policy ->
+  strict Qwen decision-quality gate implementation.
+- `why did we add focused evidence windows?` returns `WP0046` and traces staged
+  module architecture -> validation constraint -> `extraction_window.py` fix.

@@ -44,6 +44,8 @@ QUERY_STOPWORDS = {
     "from",
     "how",
     "into",
+    "made",
+    "make",
     "the",
     "this",
     "was",
@@ -52,6 +54,7 @@ QUERY_STOPWORDS = {
     "where",
     "which",
     "why",
+    "were",
     "with",
 }
 
@@ -62,6 +65,34 @@ VERSION_FLOW_OPERATOR_TERMS = {
     "symbol",
     "version",
     "versions",
+}
+
+DECISION_HISTORY_OPERATOR_TERMS = {
+    "decision",
+    "decide",
+    "decided",
+    "made",
+}
+
+CODE_WHY_OPERATOR_TERMS = {
+    "change",
+    "changed",
+    "code",
+    "file",
+}
+
+AGENT_CONTEXT_TERMS = {
+    "agent",
+    "claude",
+    "codex",
+}
+
+HOOK_QUERY_EXPANSION_TERMS = {
+    "capture",
+    "inject",
+    "injection",
+    "prompt",
+    "userpromptsubmit",
 }
 
 
@@ -568,6 +599,7 @@ def retrieve_session_graph(
     ranked.sort(key=lambda item: item[1], reverse=True)
     ranked, reranker_label = _cross_encoder_rerank(
         query=query,
+        intent=intent,
         ranked=ranked,
         backend=reranker_backend,
         model_name=reranker_model,
@@ -608,6 +640,7 @@ def retrieve_session_graph(
 def _cross_encoder_rerank(
     *,
     query: str,
+    intent: str,
     ranked: list[tuple[RetrievalDocument, float, tuple[str, ...], tuple[str, ...], tuple[dict[str, Any], ...]]],
     backend: str,
     model_name: str,
@@ -641,16 +674,18 @@ def _cross_encoder_rerank(
     boosted: list[
         tuple[RetrievalDocument, float, tuple[str, ...], tuple[str, ...], tuple[dict[str, Any], ...]]
     ] = []
+    cross_weight = _cross_encoder_weight(intent)
     for doc, score, sources, reasons, neighbors in ranked[:rerank_count]:
         cross_score = max(0.0, min(1.0, float(by_doc_id.get(doc.doc_id, 0.0))))
         new_reasons = [
             *reasons,
             f"{_safe_reranker_prefix(reranked.backend)}_score:{round(cross_score, 6)}",
             f"{_safe_reranker_prefix(reranked.backend)}_model:{reranked.model}",
+            f"{_safe_reranker_prefix(reranked.backend)}_weight:{round(cross_weight, 3)}",
         ]
         if reranked.fallback_reason:
             new_reasons.append(f"reranker_fallback:{reranked.fallback_reason}")
-        boosted.append((doc, score + cross_score * 0.45, sources, tuple(new_reasons), neighbors))
+        boosted.append((doc, score + cross_score * cross_weight, sources, tuple(new_reasons), neighbors))
     output = [*boosted, *ranked[rerank_count:]]
     output.sort(key=lambda item: item[1], reverse=True)
     base = "deterministic+bi_encoder" if any("vector" in item[2] for item in ranked) else "deterministic"
@@ -658,6 +693,15 @@ def _cross_encoder_rerank(
     if reranked.fallback_reason:
         suffix = f"{suffix}_fallback"
     return output, f"{base}+{suffix}"
+
+
+def _cross_encoder_weight(intent: str) -> float:
+    if intent == "decision_history":
+        # Small code-oriented rerankers often over-score the literal word
+        # "decision" and under-score graph-specific policy nodes such as
+        # capture-only hooks. Keep them as a secondary signal for this intent.
+        return 0.08
+    return 0.45
 
 
 def _reranker_text(
@@ -930,6 +974,7 @@ def _rerank_document(
         # terms, otherwise functions named "version_flow" beat the actual symbol.
         scoring_terms = terms.difference(VERSION_FLOW_OPERATOR_TERMS) or terms
     text = _normalize(f"{doc.title} {doc.body} {json.dumps(doc.metadata, sort_keys=True)}")
+    primary_text = _primary_rank_text(doc, include_code_locator_context=_query_has_code_locator(query))
     reasons = [f"fused:{round(fused_score, 6)}"]
     score = fused_score
     overlap = [term for term in scoring_terms if term in text]
@@ -937,9 +982,27 @@ def _rerank_document(
         overlap_ratio = len(overlap) / max(1, len(scoring_terms))
         score += min(0.4, overlap_ratio * 0.4)
         reasons.append("term_overlap:" + ",".join(overlap[:8]))
+    topic_terms = _topic_terms(query, intent)
+    if topic_terms:
+        topic_overlap = [term for term in topic_terms if term in primary_text]
+        if topic_overlap:
+            topic_ratio = len(topic_overlap) / max(1, len(topic_terms))
+            score += min(0.5, topic_ratio * 0.5)
+            reasons.append("topic_focus_overlap:" + ",".join(topic_overlap[:8]))
+        elif intent in {"code_why", "decision_history"}:
+            score -= 0.18
+            reasons.append("topic_focus_penalty")
     if intent in {"code_why", "decision_history"} and doc.doc_type == "reasoning":
         score += 0.25
         reasons.append("reasoning_boost")
+    node_type = _doc_node_type(doc)
+    if intent == "decision_history" and doc.doc_type == "reasoning":
+        if node_type == "Decision":
+            score += 0.18
+            reasons.append("decision_node_boost")
+        elif node_type in {"Cause", "Fix", "Constraint"}:
+            score += 0.08
+            reasons.append("decision_context_boost")
     if "vector" in source_scores:
         vector_score = max(0.0, min(1.0, float(source_scores["vector"])))
         vector_boost = vector_score * max(0.0, float(bi_encoder_weight))
@@ -957,8 +1020,14 @@ def _rerank_document(
             score += 0.1
             reasons.append("symbol_version_boost")
     if doc.memory_class == "supporting_evidence":
-        score -= 0.1
+        score -= 0.18
         reasons.append("supporting_evidence_penalty")
+    if doc.doc_type == "commit":
+        score -= 0.12
+        reasons.append("commit_hub_penalty")
+    if _looks_like_test_artifact(doc) and "test" not in terms:
+        score -= 0.08
+        reasons.append("test_artifact_penalty")
     neighbor_text = _normalize(" ".join(f"{n.get('label') or ''} {n.get('summary') or ''}" for n in neighbors))
     if neighbor_text and any(term in neighbor_text for term in terms):
         score += 0.08
@@ -1034,7 +1103,7 @@ def _importance(doc_type: str, node_kind: str, metadata: dict[str, Any]) -> floa
 
 
 def _fts_query(query: str) -> str:
-    terms = sorted(_terms(query))[:12]
+    terms = sorted(_expanded_query_terms(query))[:12]
     return " OR ".join(terms)
 
 
@@ -1057,9 +1126,78 @@ def _terms(text: str) -> set[str]:
             continue
         if re.fullmatch(r"[0-9a-f]{16,40}", token):
             continue
-        terms.add(token)
+        terms.add(_stem_term(token))
     return terms
 
 
 def _normalize(text: str) -> str:
     return " ".join(re.findall(r"[a-zA-Z0-9_./:-]+", str(text).lower()))
+
+
+def _stem_term(token: str) -> str:
+    if len(token) > 4 and token.endswith("ies"):
+        return token[:-3] + "y"
+    if len(token) > 4 and token.endswith("es"):
+        return token[:-2]
+    if len(token) > 3 and token.endswith("s"):
+        return token[:-1]
+    return token
+
+
+def _topic_terms(query: str, intent: str) -> set[str]:
+    terms = set(_expanded_query_terms(query))
+    if "hook" in terms:
+        # In AMO queries, "Codex hooks" usually names the agent surface.
+        # The durable topic is the hook behavior: capture, injection, prompt flow.
+        terms = terms.difference(AGENT_CONTEXT_TERMS)
+    if intent == "decision_history":
+        return terms.difference(DECISION_HISTORY_OPERATOR_TERMS)
+    if intent == "code_why":
+        return terms.difference(CODE_WHY_OPERATOR_TERMS)
+    if intent == "version_flow":
+        return terms.difference(VERSION_FLOW_OPERATOR_TERMS)
+    return terms
+
+
+def _expanded_query_terms(query: str) -> set[str]:
+    terms = _terms(query)
+    if "hook" in terms:
+        terms.update(HOOK_QUERY_EXPANSION_TERMS)
+    return terms
+
+
+def _query_has_code_locator(query: str) -> bool:
+    lowered = query.lower()
+    return bool(
+        "::" in query
+        or re.search(r"\b[\w./-]+\.(py|js|ts|tsx|jsx|md|toml|json|yaml|yml)\b", lowered)
+        or re.search(r"\b[a-z0-9]+_[a-z0-9_]+\b", lowered)
+    )
+
+
+def _primary_rank_text(doc: RetrievalDocument, *, include_code_locator_context: bool = False) -> str:
+    if doc.doc_type != "reasoning":
+        return _normalize(f"{doc.title} {doc.body}")
+
+    kept: list[str] = [doc.title]
+    for raw_line in doc.body.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        prefix = line.split(":", 1)[0].strip().lower()
+        if prefix in {"changed paths", "linked code", "evidence", "metadata", "paths", "file_path", "symbol"} and not include_code_locator_context:
+            continue
+        kept.append(line)
+    return _normalize(" ".join(kept))
+
+
+def _doc_node_type(doc: RetrievalDocument) -> str:
+    metadata = doc.metadata.get("node_metadata") if isinstance(doc.metadata, dict) else None
+    if isinstance(metadata, dict):
+        return str(metadata.get("node_type") or "")
+    return str(doc.metadata.get("node_type") or "") if isinstance(doc.metadata, dict) else ""
+
+
+def _looks_like_test_artifact(doc: RetrievalDocument) -> bool:
+    lowered = f"{doc.title} {doc.body}".lower()
+    return "tests/" in lowered or "tests\\" in lowered or "test_" in lowered
