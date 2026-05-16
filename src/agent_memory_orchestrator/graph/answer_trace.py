@@ -378,7 +378,6 @@ def _edge_sort_key(edge: dict[str, Any], node: dict[str, Any], query_terms: set[
 
 def _node_score(node: dict[str, Any], query_terms: set[str]) -> float:
     kind = str(node.get("kind") or "")
-    text = _normalize(_node_text(node))
     overlap = _query_overlap(node, query_terms)
     return TRACE_KIND_PRIORITIES.get(kind, 0.2) + min(1.5, overlap * 0.25)
 
