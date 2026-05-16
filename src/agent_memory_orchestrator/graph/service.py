@@ -29,6 +29,8 @@ from ..reasoning_graph.session_runtime import StrictTextEmbedder
 from ..versioning import LocalGitBackend, VersionBackend, WorkLedger
 from .cache import GraphSearchCache
 from .consolidation import DeterministicGraphConsolidator
+from .answer_trace import build_answer_trace
+from .answer_trace import format_answer_trace
 from .merge import CommitMergeEngine, QwenMergeClassifier
 from .session import QwenGraphExtractor, SessionGraphBuilder
 from .store import GraphEdge, GraphNode, GraphStore, KuzuGraphStore
@@ -899,7 +901,11 @@ class GraphRagService:
                 "retrieval": result.as_dict(),
             }
             if include_answer:
-                payload["answer"] = _answer_from_retrieval_result(result.as_dict())
+                payload["answer"] = _answer_from_retrieval_result(
+                    result.as_dict(),
+                    graph_store=self.store,
+                    session_id=session_id,
+                )
             return payload
         finally:
             conn.close()
@@ -1087,7 +1093,12 @@ def _count_by(items: list[Any], attr: str) -> dict[str, int]:
     return dict(sorted(counts.items()))
 
 
-def _answer_from_retrieval_result(result: dict[str, Any]) -> dict[str, Any]:
+def _answer_from_retrieval_result(
+    result: dict[str, Any],
+    *,
+    graph_store: GraphStore | None = None,
+    session_id: str = "",
+) -> dict[str, Any]:
     hits = result.get("hits") if isinstance(result.get("hits"), list) else []
     if not hits:
         return {
@@ -1108,10 +1119,23 @@ def _answer_from_retrieval_result(result: dict[str, Any]) -> dict[str, Any]:
         body = str(doc.get("body") or graph_node.get("summary") or "")
         statement = _body_field(body, "statement") or _best_answer_line(body) or str(graph_node.get("summary") or "")
         reason = _body_field(body, "reason")
-        support = _answer_support(doc=doc, graph_node=graph_node, neighbors=neighbors)
+        trace = (
+            build_answer_trace(
+                seed_node_id=node_id,
+                graph_store=graph_store,
+                query=str(result.get("query") or ""),
+                session_id=session_id,
+            )
+            if graph_store is not None and node_id
+            else {}
+        )
+        support = _answer_support(doc=doc, graph_node=graph_node, neighbors=neighbors, trace=trace)
         line = f"{index}. {title}: {statement}".strip()
         if reason and reason.lower() != statement.lower():
             line += f" Reason: {reason}"
+        trace_summary = format_answer_trace(trace)
+        if trace_summary:
+            line += f" Trace: {trace_summary}"
         if support["summary"]:
             line += f" Support: {support['summary']}"
         lines.append(line)
@@ -1129,6 +1153,7 @@ def _answer_from_retrieval_result(result: dict[str, Any]) -> dict[str, Any]:
                 "code_node_ids": support["code_node_ids"],
                 "code_nodes": support["code_nodes"],
                 "neighbor_node_ids": support["neighbor_node_ids"],
+                "trace": trace,
                 "score": hit.get("score"),
             }
         )
@@ -1139,9 +1164,16 @@ def _answer_from_retrieval_result(result: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _answer_support(*, doc: dict[str, Any], graph_node: dict[str, Any], neighbors: list[dict[str, Any]]) -> dict[str, Any]:
+def _answer_support(
+    *,
+    doc: dict[str, Any],
+    graph_node: dict[str, Any],
+    neighbors: list[dict[str, Any]],
+    trace: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     metadata = graph_node.get("metadata") if isinstance(graph_node.get("metadata"), dict) else {}
     doc_meta = doc.get("metadata") if isinstance(doc.get("metadata"), dict) else {}
+    trace_support = trace.get("support") if isinstance(trace, dict) and isinstance(trace.get("support"), dict) else {}
     packet_ids = _unique_nonempty(
         [
             doc.get("packet_id"),
@@ -1150,6 +1182,7 @@ def _answer_support(*, doc: dict[str, Any], graph_node: dict[str, Any], neighbor
             metadata.get("source_packet_id"),
             *(neighbor.get("packet_id") for neighbor in neighbors),
             *(neighbor.get("label") for neighbor in neighbors if str(neighbor.get("kind") or "") == "Packet"),
+            trace_support.get("packet_ids"),
         ]
     )
     commit_shas = _unique_nonempty(
@@ -1161,6 +1194,7 @@ def _answer_support(*, doc: dict[str, Any], graph_node: dict[str, Any], neighbor
             metadata.get("source_commit_sha"),
             *(neighbor.get("commit_sha") for neighbor in neighbors),
             *(neighbor.get("commit_id") for neighbor in neighbors),
+            trace_support.get("commit_shas"),
         ]
     )
     evidence_values: list[Any] = [
@@ -1171,15 +1205,31 @@ def _answer_support(*, doc: dict[str, Any], graph_node: dict[str, Any], neighbor
     ]
     evidence_values.extend(neighbor.get("evidence_id") for neighbor in neighbors)
     evidence_values.extend(neighbor.get("id") for neighbor in neighbors if str(neighbor.get("kind") or "") == "EvidenceRef")
+    evidence_values.extend(trace_support.get("evidence_ids") or [])
     evidence_ids = _unique_nonempty(evidence_values)
     code_neighbors = [
         neighbor
         for neighbor in neighbors
         if str(neighbor.get("kind") or "") in {"CodeNode", "CodeVersion", "CodeHunk", "Symbol", "SymbolVersion"}
     ]
-    code_node_ids = _unique_nonempty(neighbor.get("id") for neighbor in code_neighbors)
-    code_nodes = _unique_nonempty(neighbor.get("label") or neighbor.get("summary") for neighbor in code_neighbors)[:8]
-    neighbor_node_ids = _unique_nonempty(neighbor.get("id") for neighbor in neighbors)
+    code_node_ids = _unique_nonempty(
+        [
+            *(neighbor.get("id") for neighbor in code_neighbors),
+            trace_support.get("code_node_ids"),
+        ]
+    )
+    code_nodes = _unique_nonempty(
+        [
+            *(neighbor.get("label") or neighbor.get("summary") for neighbor in code_neighbors),
+            trace_support.get("code_nodes"),
+        ]
+    )[:8]
+    neighbor_node_ids = _unique_nonempty(
+        [
+            *(neighbor.get("id") for neighbor in neighbors),
+            trace_support.get("neighbor_node_ids"),
+        ]
+    )
     summary_parts = []
     if packet_ids:
         summary_parts.append("packet " + ", ".join(packet_ids[:3]))
