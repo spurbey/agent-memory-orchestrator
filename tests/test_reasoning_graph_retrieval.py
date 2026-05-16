@@ -10,6 +10,8 @@ from agent_memory_orchestrator.core.db import connect
 from agent_memory_orchestrator.config import Settings
 from agent_memory_orchestrator.graph.service import GraphRagService
 from agent_memory_orchestrator.graph.service import _unique_nonempty
+from agent_memory_orchestrator.graph.answer_trace import build_answer_trace
+from agent_memory_orchestrator.graph.answer_trace import format_answer_trace
 from agent_memory_orchestrator.graph.store import GraphEdge
 from agent_memory_orchestrator.graph.store import GraphNode
 from agent_memory_orchestrator.graph.store import InMemoryGraphStore
@@ -295,6 +297,108 @@ def test_retrieve_session_graph_applies_cross_encoder_rerank(tmp_path: Path, mon
     assert any(reason == "cross_encoder_model:test-cross-encoder" for reason in result.hits[0].reasons)
 
 
+def test_decision_history_query_prefers_primary_topic_over_metadata_noise(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    graph = InMemoryGraphStore()
+    graph.upsert_node(
+        GraphNode(
+            id="reason:hooks:fix:capture_only",
+            kind="ReasoningNode",
+            label="Fix: Hook behavior change to capture-only",
+            summary="Hooks are capture-only and explicit MCP graph search performs retrieval.",
+            status="accepted",
+            session_id="s1",
+            commit_id="8351639",
+            metadata={
+                "packet_id": "WP0018",
+                "commit_sha": "8351639",
+                "node_type": "Fix",
+                "subject": "Hook behavior change to capture-only",
+                "statement": "Hooks are capture-only and explicit MCP graph search performs retrieval.",
+                "reason": "Real hook execution timed out when retrieval and ingestion ran inside the hook.",
+                "paths": ["src/agent_memory_orchestrator/hook.py"],
+            },
+        )
+    )
+    graph.upsert_node(
+        GraphNode(
+            id="reason:memory:decision:splitting",
+            kind="ReasoningNode",
+            label="Decision: memory splitting strategy",
+            summary="Store one durable idea per memory unit.",
+            status="accepted",
+            session_id="s1",
+            commit_id="c78d93c",
+            metadata={
+                "packet_id": "WP0011",
+                "commit_sha": "c78d93c",
+                "node_type": "Decision",
+                "subject": "memory splitting strategy",
+                "statement": "Store one durable idea per memory unit.",
+                "reason": "Mixed paragraph memories were too broad.",
+                "paths": [
+                    "README.md",
+                    "docs/IMPLEMENTATION_TRACKER.md",
+                    "src/agent_memory_orchestrator/hook.py",
+                ],
+            },
+        )
+    )
+    _conn, index_store, _embedding_store = _sqlite_store(tmp_path)
+    index_store.upsert_documents(build_retrieval_documents_from_graph(graph, session_id="s1"))
+
+    result = retrieve_session_graph(
+        query="what decisions were made about Codex hooks?",
+        index_store=index_store,
+        graph_store=graph,
+        session_id="s1",
+        limit=2,
+        expand_neighbors=0,
+    )
+
+    assert result.intent == "decision_history"
+    assert result.hits[0].document.graph_node_id == "reason:hooks:fix:capture_only"
+    assert any(reason.startswith("topic_focus_overlap:") for reason in result.hits[0].reasons)
+    assert "topic_focus_penalty" in result.hits[1].reasons
+
+    def misleading_cross_encoder(**kwargs):
+        candidates = list(kwargs["candidates"])
+        return SimpleNamespace(
+            scores={
+                candidate.memory_id: (
+                    1.0 if "memory:decision:splitting" in candidate.memory_id else 0.0
+                )
+                for candidate in candidates
+            },
+            backend="cross-encoder",
+            model=kwargs["model_name"],
+            fallback_reason="",
+        )
+
+    monkeypatch.setattr(
+        "agent_memory_orchestrator.reasoning_graph.retrieval.rerank_candidates",
+        misleading_cross_encoder,
+    )
+
+    reranked = retrieve_session_graph(
+        query="what decisions were made about Codex hooks?",
+        index_store=index_store,
+        graph_store=graph,
+        session_id="s1",
+        limit=2,
+        expand_neighbors=0,
+        reranker_backend="cross-encoder",
+        reranker_model="misleading-cross-encoder",
+        rerank_top_k=2,
+    )
+
+    assert reranked.reranker == "deterministic+cross_encoder"
+    assert reranked.hits[0].document.graph_node_id == "reason:hooks:fix:capture_only"
+    assert any(reason == "cross_encoder_weight:0.08" for reason in reranked.hits[1].reasons)
+
+
 def test_version_flow_queries_boost_symbol_or_code_docs(tmp_path: Path) -> None:
     graph = _graph()
     graph.upsert_node(
@@ -390,6 +494,249 @@ def test_graph_service_wires_retrieval_build_embed_and_answer(tmp_path: Path) ->
     assert first_citation["packet_ids"] == ["WP0001"]
     assert first_citation["commit_shas"] == ["abc1234"]
     assert "code:retrieval:retrieve_session_graph" in first_citation["code_node_ids"]
+
+
+def test_answer_trace_walks_packet_commit_hunk_and_code_chain() -> None:
+    graph = InMemoryGraphStore()
+    graph.upsert_node(
+        GraphNode(
+            id="reason:hooks:problem",
+            kind="ReasoningNode",
+            label="Problem: Hook execution timeout",
+            summary="Codex hooks timed out when retrieval ran inside the hook.",
+            metadata={"packet_id": "WP0018", "commit_sha": "8351639", "node_type": "Problem"},
+        )
+    )
+    graph.upsert_node(
+        GraphNode(
+            id="reason:hooks:fix",
+            kind="ReasoningNode",
+            label="Fix: Hook behavior change to capture-only",
+            summary="Hooks became capture-only and retrieval moved to explicit graph search.",
+            metadata={"packet_id": "WP0018", "commit_sha": "8351639", "node_type": "Fix"},
+        )
+    )
+    graph.upsert_node(
+        GraphNode(
+            id="packet:WP0018",
+            kind="Packet",
+            label="WP0018",
+            summary="GraphRAG hook pivot packet.",
+            metadata={"packet_id": "WP0018", "commit_sha": "8351639"},
+        )
+    )
+    graph.upsert_node(
+        GraphNode(
+            id="commit:8351639",
+            kind="Commit",
+            label="8351639",
+            summary="feat(graph): pivot memory runtime to Kuzu GraphRAG",
+            commit_id="8351639",
+            metadata={"packet_id": "WP0018", "commit_sha": "8351639"},
+        )
+    )
+    graph.upsert_node(
+        GraphNode(
+            id="evidence:E01156",
+            kind="EvidenceRef",
+            label="rationale:E01156",
+            summary="UserPromptSubmit is capture-only and no memory injection runs in the hook.",
+            metadata={"packet_id": "WP0018", "commit_sha": "8351639", "evidence_ref_id": "E01156"},
+        )
+    )
+    graph.upsert_node(
+        GraphNode(
+            id="hunk:hook",
+            kind="CodeHunk",
+            label="src/agent_memory_orchestrator/hook.py:40",
+            summary="Changed hook response to avoid prompt injection.",
+            metadata={"packet_id": "WP0018", "commit_sha": "8351639"},
+        )
+    )
+    graph.upsert_node(
+        GraphNode(
+            id="code:hook_response",
+            kind="CodeNode",
+            label="src/agent_memory_orchestrator/hook.py::_hook_response",
+            summary="Builds capture-only hook response.",
+            metadata={"packet_id": "WP0018", "commit_sha": "8351639"},
+        )
+    )
+    for edge in [
+        GraphEdge("e1", "reason:hooks:problem", "packet:WP0018", "REASON_NODE_IN_PACKET"),
+        GraphEdge("e2", "reason:hooks:fix", "packet:WP0018", "REASON_NODE_IN_PACKET"),
+        GraphEdge("e3", "reason:hooks:fix", "commit:8351639", "REASON_NODE_EXPLAINS_COMMIT"),
+        GraphEdge("e4", "reason:hooks:fix", "evidence:E01156", "REASON_NODE_EVIDENCED_BY"),
+        GraphEdge("e5", "commit:8351639", "hunk:hook", "COMMIT_PRODUCED_HUNK"),
+        GraphEdge("e6", "hunk:hook", "code:hook_response", "HUNK_MAPS_TO_CODE_NODE"),
+    ]:
+        graph.upsert_edge(edge)
+
+    trace = build_answer_trace(
+        seed_node_id="reason:hooks:fix",
+        graph_store=graph,
+        query="what decisions were made about Codex hooks?",
+    )
+    trace_text = format_answer_trace(trace)
+
+    assert [item["role"] for item in trace["chain"]] == ["Problem", "Fix"]
+    assert trace["support"]["packet_ids"] == ["WP0018"]
+    assert trace["support"]["commit_shas"] == ["8351639"]
+    assert "evidence:E01156" in trace["support"]["evidence_ids"]
+    assert "code:hook_response" in trace["support"]["code_node_ids"]
+    assert "Problem: Codex hooks timed out" in trace_text
+    assert "Fix: Hooks became capture-only" in trace_text
+
+
+def test_answer_trace_prefers_visible_query_match_over_metadata_only_match() -> None:
+    graph = InMemoryGraphStore()
+    graph.upsert_node(
+        GraphNode(
+            id="reason:hooks:fix",
+            kind="ReasoningNode",
+            label="Fix: Hook behavior change to capture-only",
+            summary="Hooks became capture-only and retrieval moved to explicit graph search.",
+            metadata={"packet_id": "WP0018", "commit_sha": "8351639", "node_type": "Fix"},
+        )
+    )
+    graph.upsert_node(
+        GraphNode(
+            id="reason:hooks:problem",
+            kind="ReasoningNode",
+            label="Problem: Hook execution timeout",
+            summary="Manual smoke tests passed but real Codex hook execution timed out.",
+            metadata={"packet_id": "WP0018", "commit_sha": "8351639", "node_type": "Problem"},
+        )
+    )
+    graph.upsert_node(
+        GraphNode(
+            id="reason:bm25:problem",
+            kind="ReasoningNode",
+            label="Problem: Noisy BM25 retrieval",
+            summary="BM25 finds exact terms rather than understanding user intent.",
+            metadata={
+                "packet_id": "WP0018",
+                "commit_sha": "8351639",
+                "node_type": "Problem",
+                "reason": "This mentions codex hooks only as an example of exact-term matching.",
+            },
+        )
+    )
+    graph.upsert_node(
+        GraphNode(
+            id="packet:WP0018",
+            kind="Packet",
+            label="WP0018",
+            summary="Hook behavior packet.",
+            metadata={"packet_id": "WP0018", "commit_sha": "8351639"},
+        )
+    )
+    for edge in [
+        GraphEdge("e1", "reason:hooks:fix", "packet:WP0018", "REASON_NODE_IN_PACKET"),
+        GraphEdge("e2", "reason:hooks:problem", "packet:WP0018", "REASON_NODE_IN_PACKET"),
+        GraphEdge("e3", "reason:bm25:problem", "packet:WP0018", "REASON_NODE_IN_PACKET"),
+    ]:
+        graph.upsert_edge(edge)
+
+    trace = build_answer_trace(
+        seed_node_id="reason:hooks:fix",
+        graph_store=graph,
+        query="what decisions were made about Codex hooks?",
+    )
+
+    problems = [item for item in trace["chain"] if item["role"] == "Problem"]
+    assert len(problems) == 1
+    assert problems[0]["id"] == "reason:hooks:problem"
+
+
+def test_graph_service_answer_includes_multihop_trace(tmp_path: Path) -> None:
+    graph = InMemoryGraphStore()
+    graph.upsert_node(
+        GraphNode(
+            id="reason:hooks:problem",
+            kind="ReasoningNode",
+            label="Problem: Hook execution timeout",
+            summary="Hook execution timed out when retrieval ran inside UserPromptSubmit.",
+            metadata={"packet_id": "WP0018", "commit_sha": "8351639", "node_type": "Problem"},
+        )
+    )
+    graph.upsert_node(
+        GraphNode(
+            id="reason:hooks:fix",
+            kind="ReasoningNode",
+            label="Fix: Hook behavior change to capture-only",
+            summary="Hooks became capture-only and explicit graph search performs retrieval.",
+            metadata={
+                "packet_id": "WP0018",
+                "commit_sha": "8351639",
+                "node_type": "Fix",
+                "statement": "Hooks became capture-only and explicit graph search performs retrieval.",
+            },
+        )
+    )
+    graph.upsert_node(
+        GraphNode(
+            id="packet:WP0018",
+            kind="Packet",
+            label="WP0018",
+            summary="Hook behavior packet.",
+            metadata={"packet_id": "WP0018", "commit_sha": "8351639"},
+        )
+    )
+    graph.upsert_node(
+        GraphNode(
+            id="commit:8351639",
+            kind="Commit",
+            label="8351639",
+            summary="feat(graph): pivot memory runtime to Kuzu GraphRAG",
+            metadata={"packet_id": "WP0018", "commit_sha": "8351639"},
+        )
+    )
+    graph.upsert_node(
+        GraphNode(
+            id="hunk:hook",
+            kind="CodeHunk",
+            label="src/agent_memory_orchestrator/hook.py:40",
+            summary="Changed hook response to capture-only.",
+            metadata={"packet_id": "WP0018", "commit_sha": "8351639"},
+        )
+    )
+    graph.upsert_node(
+        GraphNode(
+            id="code:hook_response",
+            kind="CodeNode",
+            label="src/agent_memory_orchestrator/hook.py::_hook_response",
+            summary="Builds capture-only hook response.",
+            metadata={"packet_id": "WP0018", "commit_sha": "8351639"},
+        )
+    )
+    for edge in [
+        GraphEdge("e1", "reason:hooks:problem", "packet:WP0018", "REASON_NODE_IN_PACKET"),
+        GraphEdge("e2", "reason:hooks:fix", "packet:WP0018", "REASON_NODE_IN_PACKET"),
+        GraphEdge("e3", "reason:hooks:fix", "commit:8351639", "REASON_NODE_EXPLAINS_COMMIT"),
+        GraphEdge("e4", "commit:8351639", "hunk:hook", "COMMIT_PRODUCED_HUNK"),
+        GraphEdge("e5", "hunk:hook", "code:hook_response", "HUNK_MAPS_TO_CODE_NODE"),
+    ]:
+        graph.upsert_edge(edge)
+
+    svc = GraphRagService(_settings(tmp_path), store=graph, planner=DeterministicPlanner())
+    try:
+        svc.rebuild_retrieval_index(session_id="")
+        result = svc.retrieve_indexed_graph(
+            query="what decisions were made about Codex hooks?",
+            limit=1,
+            use_vector=False,
+        )
+    finally:
+        svc.close()
+
+    assert result["ok"] is True
+    assert "Trace:" in result["answer"]["text"]
+    assert "Problem: Hook execution timed out" in result["answer"]["text"]
+    assert "Fix: Hooks became capture-only" in result["answer"]["text"]
+    citation = result["answer"]["citations"][0]
+    assert citation["trace"]["support"]["packet_ids"] == ["WP0018"]
+    assert "code:hook_response" in citation["trace"]["support"]["code_node_ids"]
 
 
 def test_unique_nonempty_dedupes_nested_citation_values() -> None:
