@@ -295,6 +295,108 @@ def test_retrieve_session_graph_applies_cross_encoder_rerank(tmp_path: Path, mon
     assert any(reason == "cross_encoder_model:test-cross-encoder" for reason in result.hits[0].reasons)
 
 
+def test_decision_history_query_prefers_primary_topic_over_metadata_noise(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    graph = InMemoryGraphStore()
+    graph.upsert_node(
+        GraphNode(
+            id="reason:hooks:fix:capture_only",
+            kind="ReasoningNode",
+            label="Fix: Hook behavior change to capture-only",
+            summary="Hooks are capture-only and explicit MCP graph search performs retrieval.",
+            status="accepted",
+            session_id="s1",
+            commit_id="8351639",
+            metadata={
+                "packet_id": "WP0018",
+                "commit_sha": "8351639",
+                "node_type": "Fix",
+                "subject": "Hook behavior change to capture-only",
+                "statement": "Hooks are capture-only and explicit MCP graph search performs retrieval.",
+                "reason": "Real hook execution timed out when retrieval and ingestion ran inside the hook.",
+                "paths": ["src/agent_memory_orchestrator/hook.py"],
+            },
+        )
+    )
+    graph.upsert_node(
+        GraphNode(
+            id="reason:memory:decision:splitting",
+            kind="ReasoningNode",
+            label="Decision: memory splitting strategy",
+            summary="Store one durable idea per memory unit.",
+            status="accepted",
+            session_id="s1",
+            commit_id="c78d93c",
+            metadata={
+                "packet_id": "WP0011",
+                "commit_sha": "c78d93c",
+                "node_type": "Decision",
+                "subject": "memory splitting strategy",
+                "statement": "Store one durable idea per memory unit.",
+                "reason": "Mixed paragraph memories were too broad.",
+                "paths": [
+                    "README.md",
+                    "docs/IMPLEMENTATION_TRACKER.md",
+                    "src/agent_memory_orchestrator/hook.py",
+                ],
+            },
+        )
+    )
+    _conn, index_store, _embedding_store = _sqlite_store(tmp_path)
+    index_store.upsert_documents(build_retrieval_documents_from_graph(graph, session_id="s1"))
+
+    result = retrieve_session_graph(
+        query="what decisions were made about Codex hooks?",
+        index_store=index_store,
+        graph_store=graph,
+        session_id="s1",
+        limit=2,
+        expand_neighbors=0,
+    )
+
+    assert result.intent == "decision_history"
+    assert result.hits[0].document.graph_node_id == "reason:hooks:fix:capture_only"
+    assert any(reason.startswith("topic_focus_overlap:") for reason in result.hits[0].reasons)
+    assert "topic_focus_penalty" in result.hits[1].reasons
+
+    def misleading_cross_encoder(**kwargs):
+        candidates = list(kwargs["candidates"])
+        return SimpleNamespace(
+            scores={
+                candidate.memory_id: (
+                    1.0 if "memory:decision:splitting" in candidate.memory_id else 0.0
+                )
+                for candidate in candidates
+            },
+            backend="cross-encoder",
+            model=kwargs["model_name"],
+            fallback_reason="",
+        )
+
+    monkeypatch.setattr(
+        "agent_memory_orchestrator.reasoning_graph.retrieval.rerank_candidates",
+        misleading_cross_encoder,
+    )
+
+    reranked = retrieve_session_graph(
+        query="what decisions were made about Codex hooks?",
+        index_store=index_store,
+        graph_store=graph,
+        session_id="s1",
+        limit=2,
+        expand_neighbors=0,
+        reranker_backend="cross-encoder",
+        reranker_model="misleading-cross-encoder",
+        rerank_top_k=2,
+    )
+
+    assert reranked.reranker == "deterministic+cross_encoder"
+    assert reranked.hits[0].document.graph_node_id == "reason:hooks:fix:capture_only"
+    assert any(reason == "cross_encoder_weight:0.08" for reason in reranked.hits[1].reasons)
+
+
 def test_version_flow_queries_boost_symbol_or_code_docs(tmp_path: Path) -> None:
     graph = _graph()
     graph.upsert_node(
