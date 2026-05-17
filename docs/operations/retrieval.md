@@ -102,6 +102,38 @@ Expected response shape:
 }
 ```
 
+## Dashboard Retrieval
+
+The web dashboard Retrieval tab defaults to the same indexed V2 endpoint as the
+CLI: `/graph/retrieve`. It should show:
+
+- generated answer text
+- vector status, usually `faiss:completed`
+- reranker label, for example `deterministic+bi_encoder+cross_encoder`
+- ranked hits
+- packet, commit, evidence, code-node, and answer-trace citations
+
+The dashboard no longer exposes the older `/graph/search` path. `/graph/search`
+remains only as a compatibility/smoke route for old tooling. Product retrieval
+must use the V2 document index, embedding ledger, FAISS cache, reranker, graph
+neighborhood expansion, and answer-trace renderer.
+
+Configure the active V2 source in `config.json`:
+
+```json
+{
+  "graph_path": ".graph/amo.kuzu",
+  "retrieval_db_path": ".data/retrieval.sqlite",
+  "retrieval_graph_path": "",
+  "retrieval_graph_scope": ""
+}
+```
+
+`retrieval_graph_path` can point at an isolated V2 graph when the graph used for
+retrieval differs from the dashboard graph. Blank means use `graph_path`.
+`retrieval_graph_scope` can be blank; AMO will choose the active embedded scope
+for the configured model when possible.
+
 ## Citation Contract
 
 Every answer should be traceable to graph support:

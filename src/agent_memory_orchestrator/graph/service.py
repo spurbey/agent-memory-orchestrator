@@ -22,6 +22,7 @@ from ..llm.embeddings import embed_text
 from ..llm.qwen import DeterministicPlanner, OllamaQwenClient, QueryPlan, QwenPlanner, QwenUnavailable
 from ..reasoning_graph.embedding_store import GraphEmbeddingStore
 from ..reasoning_graph.retrieval import RetrievalIndexStore
+from ..reasoning_graph.retrieval import RETRIEVAL_EMBEDDING_KIND
 from ..reasoning_graph.retrieval import build_retrieval_documents_from_graph
 from ..reasoning_graph.retrieval import embed_missing_retrieval_documents
 from ..reasoning_graph.retrieval import retrieve_session_graph as retrieve_indexed_session_graph
@@ -779,7 +780,7 @@ class GraphRagService:
         limit: int = 10000,
         max_doc_chars: int = 5000,
     ) -> dict[str, Any]:
-        target_db = db_path or self.settings.db_path
+        target_db = _retrieval_db_path(self.settings, db_path)
         conn = connect(target_db)
         try:
             index = RetrievalIndexStore(conn)
@@ -812,9 +813,9 @@ class GraphRagService:
         graph_scope: str = "",
         rebuild_faiss: bool = True,
     ) -> dict[str, Any]:
-        target_db = db_path or self.settings.db_path
+        target_db = _retrieval_db_path(self.settings, db_path)
         embedding_model = model or self.settings.embedding_model
-        scope = graph_scope or _graph_scope_for_path(self.settings.graph_path)
+        scope = graph_scope or self.settings.retrieval_graph_scope or _graph_scope_for_path(self.settings.graph_path)
         conn = connect(target_db)
         try:
             index = RetrievalIndexStore(conn)
@@ -866,11 +867,16 @@ class GraphRagService:
         query = str(query or "").strip()
         if not query:
             raise ValueError("query is required")
-        target_db = db_path or self.settings.db_path
+        target_db = _retrieval_db_path(self.settings, db_path)
         embedding_model = model or self.settings.embedding_model
-        scope = graph_scope or _graph_scope_for_path(self.settings.graph_path)
         conn = connect(target_db)
         try:
+            scope = _resolve_retrieval_graph_scope(
+                conn,
+                requested_scope=graph_scope or self.settings.retrieval_graph_scope,
+                default_scope=_graph_scope_for_path(self.settings.graph_path),
+                embedding_model=embedding_model,
+            )
             index = RetrievalIndexStore(conn)
             embedding_store: GraphEmbeddingStore | None = None
             embedder = None
@@ -1080,9 +1086,53 @@ def _text_embedder_for_model(model: str, *, dims: int):
     return StrictTextEmbedder(model)
 
 
+def _retrieval_db_path(settings: Settings, override: Path | None = None) -> Path:
+    path = override or settings.retrieval_db_path or settings.db_path
+    target = path if path.is_absolute() else (settings.home / path).resolve()
+    target.parent.mkdir(parents=True, exist_ok=True)
+    return target
+
+
 def _graph_scope_for_path(graph_path: Path) -> str:
     safe = re.sub(r"[^a-zA-Z0-9]+", "_", str(graph_path.resolve()).lower()).strip("_")
     return f"graph:{safe[-80:] or 'default'}"
+
+
+def _resolve_retrieval_graph_scope(
+    conn: Any,
+    *,
+    requested_scope: str,
+    default_scope: str,
+    embedding_model: str,
+) -> str:
+    requested = str(requested_scope or "").strip()
+    if requested or not embedding_model:
+        return requested or default_scope
+
+    params = (RETRIEVAL_EMBEDDING_KIND, embedding_model, default_scope)
+    row = conn.execute(
+        """
+        SELECT COUNT(*) AS count
+        FROM graph_embeddings
+        WHERE embedding_kind = ? AND model = ? AND graph_scope = ? AND status = 'active'
+        """,
+        params,
+    ).fetchone()
+    if int(row["count"] if row else 0) > 0:
+        return default_scope
+
+    fallback = conn.execute(
+        """
+        SELECT graph_scope, COUNT(*) AS count
+        FROM graph_embeddings
+        WHERE embedding_kind = ? AND model = ? AND status = 'active'
+        GROUP BY graph_scope
+        ORDER BY count DESC, graph_scope ASC
+        LIMIT 1
+        """,
+        (RETRIEVAL_EMBEDDING_KIND, embedding_model),
+    ).fetchone()
+    return str(fallback["graph_scope"]) if fallback else default_scope
 
 
 def _count_by(items: list[Any], attr: str) -> dict[str, int]:

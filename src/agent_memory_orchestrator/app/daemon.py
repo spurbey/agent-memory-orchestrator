@@ -414,7 +414,7 @@ class AmoHandler(BaseHTTPRequestHandler):
                 return
             if self.path == "/graph/retrieval-build":
                 with _GRAPH_LOCK:
-                    graph_settings = _settings_with_payload_paths(self.settings, payload)
+                    graph_settings = _settings_with_payload_paths(self.settings, payload, prefer_retrieval=True)
                     graph = GraphRagService(graph_settings)
                     try:
                         limit = _bounded_int(str(payload.get("limit") or ""), default=10000, minimum=1, maximum=100000)
@@ -436,7 +436,7 @@ class AmoHandler(BaseHTTPRequestHandler):
                 return
             if self.path == "/graph/retrieval-embed":
                 with _GRAPH_LOCK:
-                    graph_settings = _settings_with_payload_paths(self.settings, payload)
+                    graph_settings = _settings_with_payload_paths(self.settings, payload, prefer_retrieval=True)
                     graph = GraphRagService(graph_settings)
                     try:
                         limit = _bounded_int(str(payload.get("limit") or ""), default=100, minimum=0, maximum=100000)
@@ -454,21 +454,30 @@ class AmoHandler(BaseHTTPRequestHandler):
                 return
             if self.path == "/graph/retrieve":
                 with _GRAPH_LOCK:
-                    graph_settings = _settings_with_payload_paths(self.settings, payload)
+                    graph_settings = _settings_with_payload_paths(self.settings, payload, prefer_retrieval=True)
                     graph = GraphRagService(graph_settings)
                     try:
                         limit = _bounded_int(str(payload.get("limit") or ""), default=8, minimum=1, maximum=50)
-                        result = graph.retrieve_indexed_graph(
-                            query=str(payload.get("query") or ""),
-                            db_path=_optional_payload_path(payload, "db_path"),
-                            session_id=str(payload.get("session_id") or ""),
-                            limit=limit,
-                            use_vector=bool(payload.get("use_vector", True)),
-                            model=str(payload.get("model") or ""),
-                            graph_scope=str(payload.get("graph_scope") or ""),
-                            require_vector=bool(payload.get("require_vector", False)),
-                            include_answer=bool(payload.get("include_answer", True)),
-                        )
+                        try:
+                            result = graph.retrieve_indexed_graph(
+                                query=str(payload.get("query") or ""),
+                                db_path=_optional_payload_path(payload, "db_path"),
+                                session_id=str(payload.get("session_id") or ""),
+                                limit=limit,
+                                use_vector=bool(payload.get("use_vector", True)),
+                                model=str(payload.get("model") or ""),
+                                graph_scope=str(payload.get("graph_scope") or ""),
+                                require_vector=bool(payload.get("require_vector", False)),
+                                include_answer=bool(payload.get("include_answer", True)),
+                            )
+                        except ValueError as exc:
+                            result = {
+                                "ok": False,
+                                "error": str(exc),
+                                "hint": "Build the V2 retrieval index and embeddings for the configured graph, or configure retrieval_graph_path/retrieval_db_path.",
+                                "graph_path": str(graph_settings.graph_path),
+                                "db_path": str(graph_settings.retrieval_db_path),
+                            }
                         self._write_json(200, result)
                     finally:
                         graph.close()
@@ -557,10 +566,12 @@ def _optional_payload_path(payload: dict[str, Any], key: str) -> Path | None:
     return Path(value).expanduser().resolve()
 
 
-def _settings_with_payload_paths(settings: Settings, payload: dict[str, Any]) -> Settings:
+def _settings_with_payload_paths(settings: Settings, payload: dict[str, Any], *, prefer_retrieval: bool = False) -> Settings:
     updates: dict[str, Path] = {}
     db_path = _optional_payload_path(payload, "db_path")
     graph_path = _optional_payload_path(payload, "graph_path")
+    if graph_path is None and prefer_retrieval and settings.retrieval_graph_path is not None:
+        graph_path = settings.retrieval_graph_path
     if db_path is not None:
         updates["db_path"] = db_path
     if graph_path is not None:
