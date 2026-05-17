@@ -20,7 +20,14 @@ Production now supports the validated Stage 8 core:
 6. Repair safe provenance-only mistakes, such as non-validation refs in `validation_refs`.
 7. Write the skill, provenance, corrected result, and validation report.
 
-Checkpoint selection and slash-command UX are intentionally not finalized yet. Those will decide how users mark a checkpoint during a live Codex/Claude session. The production core here starts after a compact packet already exists.
+Live checkpoint marking is now configured by the installer:
+
+- Claude Code gets a `/skill-checkpoint` command file at `.claude/commands/skill-checkpoint.md`.
+- Codex gets a discoverable `amo-skill-checkpoint` skill because this environment exposes skills but not the same command-file surface.
+
+Both surfaces tell the agent to run one local `amo-cli skill-checkpoint mark` command. The command records a lightweight checkpoint marker in AMO evidence and writes a pending marker file. It does not summarize the session inside the agent.
+
+The compact packet builder from a pending marker is still the next phase. The production core here starts once a compact packet exists.
 
 ## Why This Shape Exists
 
@@ -112,6 +119,20 @@ Qwen must not return `skill_md` or `skill_md_lines`. AMO renders the final Markd
 
 ## Commands
 
+Mark the current session as a pending checkpoint:
+
+```powershell
+amo-cli skill-checkpoint mark `
+  --agent codex `
+  --note "turn this workflow into a reusable skill"
+```
+
+List pending checkpoints:
+
+```powershell
+amo-cli skill-checkpoint status
+```
+
 Run local Qwen extraction:
 
 ```powershell
@@ -158,8 +179,7 @@ Safe automatic repair:
 
 These are intentionally left for the next phase:
 
-- live checkpoint marking UX, such as a slash command or explicit AMO checkpoint command,
-- checkpoint-window selection from hook evidence,
+- compact packet building from a pending checkpoint marker,
 - installing the rendered skill into Codex/Claude discovery paths,
 - skill quality scoring across multiple checkpoints,
 - graph links from generated skills back to checkpoint/session/version nodes.

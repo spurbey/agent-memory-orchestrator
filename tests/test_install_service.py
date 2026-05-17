@@ -49,6 +49,9 @@ def test_codex_install_applies_managed_hooks_and_mcp(tmp_path: Path) -> None:
     assert "amo_hook_launcher.py" in hook_command
     assert "--agent codex" in hook_command
     assert str(amo_home.resolve()) in hook_command
+    codex_skill = user_home / ".codex" / "skills" / "amo-skill-checkpoint" / "SKILL.md"
+    assert codex_skill.exists()
+    assert "skill-checkpoint mark --agent codex" in codex_skill.read_text(encoding="utf-8")
     launcher_text = (amo_home / "bin" / "amo_hook_launcher.py").read_text(encoding="utf-8")
     assert "IMPORT_ROOT" in launcher_text
     assert "runpy.run_module('agent_memory_orchestrator.hook'" in launcher_text
@@ -57,6 +60,7 @@ def test_codex_install_applies_managed_hooks_and_mcp(tmp_path: Path) -> None:
     assert status["ok"] is True
     assert status["checks"]["codex"]["hooks_configured"] is True
     assert status["checks"]["codex"]["hooks_file_exists"] is True
+    assert status["checks"]["codex"]["skill_checkpoint_configured"] is True
 
 
 def test_claude_install_merges_json_settings(tmp_path: Path) -> None:
@@ -77,10 +81,14 @@ def test_claude_install_merges_json_settings(tmp_path: Path) -> None:
     assert payload["mcpServers"]["agent-memory-orchestrator"]["args"][-1] == str(amo_home.resolve())
     assert "UserPromptSubmit" in payload["hooks"]
     assert any("agent_memory_orchestrator.hook --agent claude" in hook["command"] for hook in payload["hooks"]["Stop"][0]["hooks"])
+    command = user_home / ".claude" / "commands" / "skill-checkpoint.md"
+    assert command.exists()
+    assert "skill-checkpoint mark --agent claude" in command.read_text(encoding="utf-8")
 
     status = doctor(target="claude", user_home=user_home, amo_home=amo_home)
     assert status["checks"]["claude"]["mcp_configured"] is True
     assert status["checks"]["claude"]["hooks_configured"] is True
+    assert status["checks"]["claude"]["skill_checkpoint_configured"] is True
 
 
 def test_uninstall_removes_managed_entries(tmp_path: Path) -> None:
@@ -100,6 +108,8 @@ def test_uninstall_removes_managed_entries(tmp_path: Path) -> None:
     assert "amo_hook_launcher.py" not in codex_hooks
     assert "agent-memory-orchestrator" not in claude_payload.get("mcpServers", {})
     assert not any(claude_payload.get("hooks", {}).values())
+    assert not (user_home / ".codex" / "skills" / "amo-skill-checkpoint" / "SKILL.md").exists()
+    assert not (user_home / ".claude" / "commands" / "skill-checkpoint.md").exists()
 
 
 def test_settings_loads_installer_runtime_config(tmp_path: Path, monkeypatch) -> None:
