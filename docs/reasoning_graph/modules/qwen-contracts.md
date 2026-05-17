@@ -179,6 +179,43 @@ Output schema:
 
 Threshold: `>= 0.60`. Low confidence uses deterministic top-term label.
 
+## Call: Skill Checkpoint Distillation
+
+Owner: skill checkpoint module.
+
+This call turns one compact checkpoint packet into structured skill sections. It does not install a skill and does not mutate graph state.
+
+Production runtime is local Ollama, normally `qwen3.5:9b`. Colab/GPU notebooks are development harnesses only.
+
+Input:
+
+```json
+{
+  "checkpoint": {"checkpoint_id": "string"},
+  "events": [{"ref": "E0001", "type": "user_prompt|git_commit|commit_expansion|validation|stop_summary", "content": "bounded text"}]
+}
+```
+
+Output schema:
+
+```json
+{
+  "checkpoint_id": "string",
+  "evidence_cards": [{"ref": "E0001", "summary": "string", "semantic_role": "string", "importance": "high|medium|low", "confidence": 0.0}],
+  "work_chains": [{"chain_type": "implementation_workflow", "problem_or_goal": "string", "problem_source": "user_stated|inferred_from_events|not_clear", "symptom_refs": ["E0001"], "diagnosis_refs": ["E0002"], "action_refs": ["E0003"], "validation_refs": ["E0004"], "reusable_pattern": "string", "confidence": 0.0}],
+  "skill_name": "lowercase-hyphen-name",
+  "description": "specific what-and-when description",
+  "skill_sections": {"title": "string", "overview": "string", "when_to_use": ["string"], "workflow": ["string"], "validation": ["string"], "safety": ["string"]},
+  "diagnostics": []
+}
+```
+
+AMO renders `SKILL.md` from `skill_sections`. Qwen must not return raw `skill_md` or `skill_md_lines`.
+
+May create: no graph nodes directly. The module may write a rendered `SKILL.md`, `skill_provenance.json`, corrected Qwen result, and validation report.
+
+Hard gate: rendered `SKILL.md` must not contain evidence refs, raw transcript ids, tool-call ids, or private absolute paths. `validation_refs` must point to validation/test events; safe automatic repair may replace invalid validation refs with actual validation refs from the same packet.
+
 May update: `Community.label` only.
 
 Must never change membership or decision status.

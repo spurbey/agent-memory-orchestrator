@@ -33,6 +33,10 @@ from ..reasoning_graph.session_runtime import build_and_query_session_graph
 from ..reasoning_graph.session_runtime import build_session_graph
 from ..reasoning_graph.session_runtime import default_session_graph_path
 from ..reasoning_graph.session_runtime import query_session_graph
+from ..skill_checkpoint import DEFAULT_LOCAL_NUM_CTX
+from ..skill_checkpoint import DEFAULT_NUM_PREDICT
+from ..skill_checkpoint import run_local_skill_checkpoint_extraction
+from ..skill_checkpoint import write_skill_checkpoint_outputs
 from .client import DaemonClient, DaemonUnavailable
 
 
@@ -280,6 +284,31 @@ def _build_parser() -> argparse.ArgumentParser:
     debug_retrieval = debug_sub.add_parser("retrieval", help="Show retrieval output through daemon")
     debug_retrieval.add_argument("--query", required=True)
     debug_retrieval.add_argument("--limit", type=int, default=8)
+
+    skill_checkpoint = sub.add_parser(
+        "skill-checkpoint",
+        help="Build or finalize a reusable skill from a compact checkpoint packet",
+    )
+    skill_checkpoint_sub = skill_checkpoint.add_subparsers(dest="skill_checkpoint_command", required=True)
+    skill_checkpoint_extract = skill_checkpoint_sub.add_parser(
+        "extract",
+        help="Run local Ollama/Qwen over a compact checkpoint packet and write validated skill outputs",
+    )
+    skill_checkpoint_extract.add_argument("--packet", required=True, type=Path)
+    skill_checkpoint_extract.add_argument("--out-dir", required=True, type=Path)
+    skill_checkpoint_extract.add_argument("--num-ctx", type=int, default=DEFAULT_LOCAL_NUM_CTX)
+    skill_checkpoint_extract.add_argument("--num-predict", type=int, default=DEFAULT_NUM_PREDICT)
+    skill_checkpoint_extract.add_argument("--timeout-seconds", type=float)
+    skill_checkpoint_extract.add_argument("--no-auto-repair-validation-refs", action="store_true")
+
+    skill_checkpoint_finalize = skill_checkpoint_sub.add_parser(
+        "finalize",
+        help="Post-validate a Qwen skill-checkpoint result and render SKILL.md/provenance",
+    )
+    skill_checkpoint_finalize.add_argument("--result", required=True, type=Path)
+    skill_checkpoint_finalize.add_argument("--packet", required=True, type=Path)
+    skill_checkpoint_finalize.add_argument("--out-dir", required=True, type=Path)
+    skill_checkpoint_finalize.add_argument("--no-auto-repair-validation-refs", action="store_true")
 
     timeline = sub.add_parser("timeline", help="View session timeline")
     timeline.add_argument("--session-id", required=True)
@@ -901,6 +930,34 @@ def main(argv: list[str] | None = None) -> int:
                     _print({"ok": False, "requires_daemon": True, "error": str(exc)})
                     return 1
                 return 0
+
+        if args.command == "skill-checkpoint":
+            if args.skill_checkpoint_command == "extract":
+                settings = Settings.load()
+                packet = json.loads(args.packet.read_text(encoding="utf-8"))
+                report = run_local_skill_checkpoint_extraction(
+                    packet=packet,
+                    settings=settings,
+                    out_dir=args.out_dir,
+                    num_ctx=args.num_ctx,
+                    num_predict=args.num_predict,
+                    timeout_seconds=args.timeout_seconds,
+                    auto_repair_validation_refs=not args.no_auto_repair_validation_refs,
+                )
+            elif args.skill_checkpoint_command == "finalize":
+                packet = json.loads(args.packet.read_text(encoding="utf-8"))
+                result = json.loads(args.result.read_text(encoding="utf-8"))
+                report = write_skill_checkpoint_outputs(
+                    result=result,
+                    packet=packet,
+                    out_dir=args.out_dir,
+                    auto_repair_validation_refs=not args.no_auto_repair_validation_refs,
+                )
+            else:
+                parser.error(f"unknown skill-checkpoint command: {args.skill_checkpoint_command}")
+                return 2
+            _print({"ok": report.get("status") == "accepted", "result": report})
+            return 0 if report.get("status") == "accepted" else 1
 
         settings = Settings.load()
         orch = OrchestratorService(settings)

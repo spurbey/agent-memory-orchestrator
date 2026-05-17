@@ -11,6 +11,7 @@ This is the documentation map for Agent Memory Orchestrator.
 | Develop locally | [Local development](./setup/local-development.md) |
 | Configure local models | [Local models](./setup/local-models.md) |
 | Test retrieval quality | [Retrieval pipeline](./operations/retrieval.md) |
+| Build reusable skills from checkpoints | [Skill checkpoint pipeline](./skill_checkpoint/README.md) |
 | Connect Slack | [Slack connector](./integrations/slack.md) |
 | Understand repo layout | [Repository layout](./development/REPO_LAYOUT.md) |
 
@@ -27,6 +28,7 @@ V2 source of truth:
 - [Local development](./setup/local-development.md)
 - [Local models](./setup/local-models.md)
 - [Retrieval pipeline](./operations/retrieval.md)
+- [Skill checkpoint pipeline](./skill_checkpoint/README.md)
 - [Slack connector](./integrations/slack.md)
 
 ## Development and Release
