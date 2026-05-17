@@ -107,8 +107,17 @@ async function apiGet(path) {
 }
 async function apiPost(path, payload) {
   const response = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json", Accept: "application/json" }, body: JSON.stringify(payload || {}) });
-  if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
-  return response.json();
+  const raw = await response.text();
+  let parsed = {};
+  if (raw) {
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      parsed = { error: raw };
+    }
+  }
+  if (!response.ok) throw new Error(parsed.error || `${response.status} ${response.statusText}`);
+  return parsed;
 }
 function empty(message) { return `<div class="empty-state"><div><h2>No data</h2><p>${escapeHtml(message)}</p></div></div>`; }
 function setDaemon(ok, label) {
@@ -396,15 +405,78 @@ async function runRetrieval() {
   $("retrievalResult").innerHTML = `<section class="panel"><p class="muted">Searching graph memory...</p></section>`;
   setView("retrieval");
   try {
-    const result = await apiPost("/graph/search", { query, limit: 10, include_raw: $("includeRaw").checked, include_historical: $("includeHistorical").checked });
+    const result = await apiPost("/graph/retrieve", {
+      query,
+      limit: 10,
+      use_vector: true,
+      require_vector: $("requireVector")?.checked ?? false,
+      include_answer: true,
+    });
     renderRetrievalResult(result);
   } catch (error) {
     $("retrievalResult").innerHTML = `<section class="panel"><h2>Search failed</h2><p class="muted">${escapeHtml(error.message)}</p></section>`;
   }
 }
 function renderRetrievalResult(result) {
-  const nodes = result.nodes || [];
-  $("retrievalResult").innerHTML = `<section class="panel"><div class="result-grid"><div><p class="eyebrow">Plan</p><h2>${escapeHtml(result.plan?.intent || "general")}</h2><p class="muted">${escapeHtml((result.plan?.entities || []).join(", ") || "No entities extracted")}</p><div class="session-meta"><span class="pill ${result.raw_included ? "warn" : "good"}">raw ${result.raw_included ? "included" : "hidden"}</span><span class="pill ${result.qwen?.compression_fallback ? "warn" : "good"}">qwen ${result.qwen?.compression_fallback ? "fallback" : "ok"}</span><span class="pill blue">${escapeHtml(result.timing?.total_ms || 0)} ms</span></div></div><pre class="code-block">${escapeHtml(result.context || "")}</pre></div></section><section class="panel"><div class="panel-head"><h2>Returned nodes</h2><span class="pill good">${nodes.length}</span></div><div class="node-list">${nodes.map(renderNodeCard).join("") || empty("No answer-grade graph memory matched.")}</div></section>`;
+  if (result?.ok === false) {
+    $("retrievalResult").innerHTML = `<section class="panel"><h2>V2 retrieval is not ready</h2><p class="muted">${escapeHtml(result.error || "Unknown retrieval error")}</p>${result.hint ? `<p class="muted">${escapeHtml(result.hint)}</p>` : ""}<pre class="code-block">${escapeHtml(formatJson({ graph_path: result.graph_path, db_path: result.db_path }))}</pre></section>`;
+    return;
+  }
+  renderIndexedRetrievalResult(result);
+}
+function renderIndexedRetrievalResult(result) {
+  const retrieval = result.retrieval || {};
+  const answer = result.answer || {};
+  const hits = retrieval.hits || [];
+  const citations = answer.citations || [];
+  const candidateCounts = retrieval.candidate_counts || {};
+  const source = `${result.graph_scope || "default scope"} | ${truncate(result.db_path || "", 80)}`;
+  $("retrievalResult").innerHTML = `
+    <section class="panel">
+      <div class="result-grid">
+        <div>
+          <p class="eyebrow">Indexed V2 retrieval</p>
+          <h2>${escapeHtml(retrieval.intent || "general")}</h2>
+          <p class="muted">${escapeHtml(source)}</p>
+          <div class="session-meta">
+            <span class="pill ${String(retrieval.vector_status || "").includes("completed") ? "good" : "warn"}">vector ${escapeHtml(retrieval.vector_status || "unknown")}</span>
+            <span class="pill blue">${escapeHtml(retrieval.reranker || "deterministic")}</span>
+            <span class="pill good">${escapeHtml(hits.length)} hits</span>
+          </div>
+          <div class="retrieval-counts">${Object.entries(candidateCounts).map(([key, value]) => `<span>${escapeHtml(key)} ${escapeHtml(value)}</span>`).join("")}</div>
+        </div>
+        <pre class="code-block">${escapeHtml(answer.text || "No generated answer returned.")}</pre>
+      </div>
+    </section>
+    <section class="panel">
+      <div class="panel-head"><h2>Answer citations</h2><span class="pill good">${citations.length}</span></div>
+      <div class="retrieval-citations">${citations.map(renderCitationCard).join("") || empty("No citations returned.")}</div>
+    </section>
+    <section class="panel">
+      <div class="panel-head"><h2>Ranked hits</h2><span class="pill good">${hits.length}</span></div>
+      <div class="retrieval-hits">${hits.map(renderRetrievalHitCard).join("") || empty("No indexed retrieval hits matched.")}</div>
+    </section>`;
+}
+function renderCitationCard(citation) {
+  const trace = citation.trace || {};
+  const chain = Array.isArray(trace.chain) ? trace.chain : [];
+  return `<article class="retrieval-card">
+    <div class="panel-head"><div><p class="eyebrow">rank ${escapeHtml(citation.rank || "")}</p><h3>${escapeHtml(citation.packet_id || citation.graph_node_id || citation.doc_id || "citation")}</h3></div><span class="pill blue">${escapeHtml(citation.doc_type || "doc")}</span></div>
+    <p class="muted">commit ${escapeHtml((citation.commit_shas || [citation.commit_sha]).filter(Boolean).join(", ") || "-")} | evidence ${escapeHtml((citation.evidence_ids || []).slice(0, 4).join(", ") || "-")}</p>
+    <p class="muted">code ${escapeHtml((citation.code_nodes || citation.code_node_ids || []).slice(0, 3).join(", ") || "-")}</p>
+    ${chain.length ? `<pre class="code-block small">${escapeHtml(chain.map(item => `${item.role || item.kind || "node"}: ${item.label || item.summary || item.id}`).join("\n"))}</pre>` : ""}
+  </article>`;
+}
+function renderRetrievalHitCard(hit, index) {
+  const doc = hit.document || {};
+  const node = hit.graph_node || {};
+  const title = doc.title || node.label || doc.graph_node_id || `hit ${index + 1}`;
+  return `<article class="retrieval-card">
+    <div class="panel-head"><div><p class="eyebrow">${escapeHtml(doc.doc_type || node.kind || "hit")}</p><h3>${escapeHtml(title)}</h3></div><span class="pill good">${escapeHtml(hit.score ?? "")}</span></div>
+    <p class="muted">packet ${escapeHtml(doc.packet_id || "-")} | commit ${escapeHtml(doc.commit_sha || "-")} | node ${escapeHtml(doc.graph_node_id || node.id || "-")}</p>
+    <p>${escapeHtml(truncate(doc.body || node.summary || "", 360))}</p>
+    <p class="muted">${escapeHtml((hit.sources || []).join(", ") || "no source labels")} | ${escapeHtml((hit.reasons || []).slice(0, 6).join(" | "))}</p>
+  </article>`;
 }
 async function runAdminJob(kind) {
   const output = $("adminOutput");
