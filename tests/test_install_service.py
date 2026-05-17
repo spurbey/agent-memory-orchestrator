@@ -116,6 +116,9 @@ def test_settings_loads_installer_runtime_config(tmp_path: Path, monkeypatch) ->
 
     assert settings.embedding_model == "BAAI/bge-small-en-v1.5"
     assert settings.db_path == amo_home.resolve() / ".data" / "codex_live_memory.db"
+    assert settings.retrieval_db_path == amo_home.resolve() / ".data" / "retrieval.sqlite"
+    assert settings.retrieval_graph_path is None
+    assert settings.retrieval_graph_scope == ""
     assert settings.reranker_model == "cross-encoder/ms-marco-MiniLM-L-6-v2"
     assert settings.reranker_backend == "cross-encoder"
     assert settings.vector_backend == "faiss"
@@ -137,6 +140,7 @@ def test_settings_default_home_is_user_amo_dir(tmp_path: Path, monkeypatch) -> N
 
     assert settings.home == user_home / ".agent-memory-orchestrator"
     assert settings.graph_path == user_home / ".agent-memory-orchestrator" / ".graph" / "amo.kuzu"
+    assert settings.retrieval_db_path == user_home / ".agent-memory-orchestrator" / ".data" / "retrieval.sqlite"
     assert settings.qwen_model == "qwen3.5:9b"
 
 

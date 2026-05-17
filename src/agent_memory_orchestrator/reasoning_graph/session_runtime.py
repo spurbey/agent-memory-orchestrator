@@ -100,8 +100,7 @@ class StrictTextEmbedder:
         except Exception as exc:  # pragma: no cover - environment dependent
             raise RuntimeError(f"text_embedding_model_unavailable:{model_name}:{exc}") from exc
         self._cache: dict[str, list[float]] = {}
-        dims = getattr(self._model, "get_sentence_embedding_dimension", lambda: None)()
-        self.dims = int(dims or 0)
+        self.dims = _model_embedding_dimension(self._model)
 
     def embed(self, text: str) -> list[float]:
         text = text or ""
@@ -120,6 +119,16 @@ class StrictTextEmbedder:
         vectors = self._model.encode(unique, batch_size=batch_size, normalize_embeddings=True)
         for text, vector in zip(unique, vectors, strict=True):
             self._cache[text] = [float(x) for x in vector.tolist()]
+
+
+def _model_embedding_dimension(model: Any) -> int:
+    current = getattr(model, "get_embedding_dimension", None)
+    if callable(current):
+        return int(current() or 0)
+    legacy = getattr(model, "get_sentence_embedding_dimension", None)
+    if callable(legacy):
+        return int(legacy() or 0)
+    return 0
 
 
 class CodeBertEmbedder:
