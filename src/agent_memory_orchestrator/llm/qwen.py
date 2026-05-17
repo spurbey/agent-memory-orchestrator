@@ -138,6 +138,23 @@ class OllamaQwenClient:
             raise QwenUnavailable("ollama returned no context text")
         return text
 
+    def generate_json(
+        self,
+        prompt: str,
+        *,
+        num_predict: int,
+        timeout_seconds: float | None = None,
+        schema: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Run a local Ollama JSON call for bounded production extraction tasks."""
+
+        return self._generate_json(
+            prompt,
+            num_predict=num_predict,
+            timeout_seconds=timeout_seconds,
+            schema=schema,
+        )
+
     def _generate_json(
         self,
         prompt: str,
