@@ -371,6 +371,11 @@ details summary { cursor: pointer; color: var(--accent-2); }
 .retrieval-panel { display: flex; justify-content: space-between; gap: 24px; align-items: flex-end; }
 .retrieval-form { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; justify-content: flex-end; }
 .retrieval-result { display: grid; gap: 14px; margin-top: 18px; }
+.retrieval-counts { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; color: var(--muted); font: 12px var(--mono); }
+.retrieval-counts span { border: 1px solid var(--line); border-radius: 999px; padding: 5px 8px; background: rgba(8, 18, 15, 0.5); }
+.retrieval-citations, .retrieval-hits { display: grid; gap: 12px; }
+.retrieval-card { border: 1px solid var(--line); border-radius: 18px; padding: 14px; background: rgba(8, 18, 15, 0.44); }
+.code-block.small { max-height: 180px; font-size: 11px; }
 .result-grid { display: grid; grid-template-columns: 0.8fr 1.2fr; gap: 18px; }
 .health-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
 .health-item { padding: 12px; border: 1px solid var(--line); border-radius: 15px; background: rgba(8, 18, 15, 0.52); }

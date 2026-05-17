@@ -207,12 +207,11 @@
           <div>
             <p class="eyebrow">Graph query inspector</p>
             <h2>See what retrieval actually returns</h2>
-            <p class="muted">Run the same explicit GraphRAG search used by MCP/CLI. The result shows planner intent, selected nodes, Qwen fallback state, and timing.</p>
+            <p class="muted">Run the V2 indexed GraphRAG path: exact/BM25, vector retrieval, reranking, graph neighborhood expansion, and cited answer assembly.</p>
           </div>
           <div class="retrieval-form">
             <input id="retrievalQuery" class="search" placeholder="Ask AMO memory" />
-            <label class="check"><input id="includeHistorical" type="checkbox" /> historical</label>
-            <label class="check"><input id="includeRaw" type="checkbox" /> raw evidence</label>
+            <label class="check"><input id="requireVector" type="checkbox" checked /> vector</label>
             <button id="runRetrievalBtn" class="btn primary">Run Search</button>
           </div>
         </section>

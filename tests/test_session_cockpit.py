@@ -291,6 +291,8 @@ def test_daemon_exposes_dependency_free_3d_graph_view() -> None:
     assert "Slack mention answers" in GRAPH3D_HTML
     assert "provenance" in GRAPH3D_HTML
     assert "Graph query inspector" in GRAPH3D_HTML
+    assert "V2 indexed GraphRAG" in GRAPH3D_HTML
+    assert "Legacy search" not in GRAPH3D_HTML
     assert "3d-force-graph" not in GRAPH3D_HTML
 
 
