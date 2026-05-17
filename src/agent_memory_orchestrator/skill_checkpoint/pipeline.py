@@ -4,10 +4,13 @@ import copy
 import hashlib
 import json
 import re
+import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Protocol
 
 from ..core.config import Settings
+from ..evidence.raw_store import RawEvidenceStore
 from ..llm.qwen import OllamaQwenClient
 
 SKILL_CHECKPOINT_SCHEMA_VERSION = "skill-checkpoint-v1"
@@ -23,6 +26,7 @@ DEFAULT_PROMPT_PROFILE: dict[str, int] = {
     "result_chars": 900,
     "generic_chars": 1200,
 }
+CHECKPOINT_MODES = {"workflow", "single_commit"}
 
 VALIDATION_EVENT_TYPES = {"validation", "test_run", "test_result"}
 VALIDATION_RESULT_TYPES = {"tool_result", "command_result"}
@@ -228,6 +232,119 @@ def run_local_skill_checkpoint_extraction(
     )
 
 
+def mark_skill_checkpoint(
+    *,
+    settings: Settings,
+    agent: str,
+    note: str = "",
+    mode: str = "workflow",
+    session_id: str = "",
+    cwd: Path | None = None,
+) -> dict[str, Any]:
+    """Record a lightweight checkpoint marker without interrupting the agent."""
+
+    if mode not in CHECKPOINT_MODES:
+        raise ValueError(f"mode must be one of: {', '.join(sorted(CHECKPOINT_MODES))}")
+    if agent not in {"codex", "claude"}:
+        raise ValueError("agent must be codex or claude")
+
+    resolved_cwd = (cwd or Path.cwd()).expanduser().resolve()
+    inferred_session = session_id.strip() or infer_latest_session_id(settings.evidence_dir, source_app=agent)
+    if not inferred_session:
+        inferred_session = f"manual-{agent}-{_timestamp_compact()}"
+    checkpoint_id = f"skillcp_{_timestamp_compact()}_{uuid.uuid4().hex[:8]}"
+    created_at = datetime.now(timezone.utc).isoformat()
+    payload = {
+        "hook_event_name": "SkillCheckpoint",
+        "event_type": "skill_checkpoint",
+        "session_id": inferred_session,
+        "source_app": agent,
+        "created_at": created_at,
+        "cwd": str(resolved_cwd),
+        "checkpoint": {
+            "checkpoint_id": checkpoint_id,
+            "mode": mode,
+            "note": note.strip(),
+            "selection_policy": "previous_stop_or_nearest_prior_commit_to_checkpoint",
+        },
+    }
+    evidence = RawEvidenceStore(settings.evidence_dir).append(
+        payload,
+        session_id=inferred_session,
+        source_app=agent,
+        event_name="skill_checkpoint",
+    )
+    marker = {
+        "schema_version": SKILL_CHECKPOINT_SCHEMA_VERSION,
+        "checkpoint_id": checkpoint_id,
+        "status": "pending_packet",
+        "agent": agent,
+        "session_id": inferred_session,
+        "mode": mode,
+        "note": note.strip(),
+        "cwd": str(resolved_cwd),
+        "created_at": created_at,
+        "evidence": evidence.as_dict(),
+        "next_steps": [
+            "Build a compact checkpoint packet from captured evidence.",
+            "Run amo-cli skill-checkpoint extract once packet selection is available.",
+        ],
+    }
+    marker_path = _checkpoint_marker_path(settings, checkpoint_id)
+    marker_path.parent.mkdir(parents=True, exist_ok=True)
+    marker_path.write_text(json.dumps(marker, indent=2), encoding="utf-8")
+    return {"ok": True, "checkpoint": marker, "marker_path": str(marker_path)}
+
+
+def list_skill_checkpoints(settings: Settings, *, limit: int = 20) -> dict[str, Any]:
+    root = settings.home / "skill-checkpoints" / "pending"
+    rows: list[dict[str, Any]] = []
+    if root.exists():
+        for path in sorted(root.glob("*.json"), key=lambda item: item.stat().st_mtime, reverse=True)[:limit]:
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            rows.append(
+                {
+                    "checkpoint_id": payload.get("checkpoint_id"),
+                    "status": payload.get("status"),
+                    "agent": payload.get("agent"),
+                    "session_id": payload.get("session_id"),
+                    "mode": payload.get("mode"),
+                    "note": payload.get("note"),
+                    "created_at": payload.get("created_at"),
+                    "path": str(path),
+                }
+            )
+    return {"ok": True, "count": len(rows), "checkpoints": rows}
+
+
+def infer_latest_session_id(evidence_dir: Path, *, source_app: str) -> str:
+    """Best-effort inference for slash-command ergonomics."""
+
+    try:
+        files = sorted(evidence_dir.glob("*.jsonl"), key=lambda item: item.stat().st_mtime, reverse=True)
+    except OSError:
+        return ""
+    for path in files[:7]:
+        try:
+            lines = path.read_text(encoding="utf-8").splitlines()
+        except OSError:
+            continue
+        for line in reversed(lines):
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if str(record.get("source_app") or "") != source_app:
+                continue
+            session_id = str(record.get("session_id") or "").strip()
+            if session_id:
+                return session_id
+    return ""
+
+
 def write_skill_checkpoint_outputs(
     *,
     result: dict[str, Any],
@@ -268,6 +385,14 @@ def write_skill_checkpoint_outputs(
     }
     report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
     return report
+
+
+def _checkpoint_marker_path(settings: Settings, checkpoint_id: str) -> Path:
+    return settings.home / "skill-checkpoints" / "pending" / f"{checkpoint_id}.json"
+
+
+def _timestamp_compact() -> str:
+    return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
 
 
 def finalize_skill_checkpoint_result(
