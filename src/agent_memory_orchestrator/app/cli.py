@@ -35,6 +35,8 @@ from ..reasoning_graph.session_runtime import default_session_graph_path
 from ..reasoning_graph.session_runtime import query_session_graph
 from ..skill_checkpoint import DEFAULT_LOCAL_NUM_CTX
 from ..skill_checkpoint import DEFAULT_NUM_PREDICT
+from ..skill_checkpoint import list_skill_checkpoints
+from ..skill_checkpoint import mark_skill_checkpoint
 from ..skill_checkpoint import run_local_skill_checkpoint_extraction
 from ..skill_checkpoint import write_skill_checkpoint_outputs
 from .client import DaemonClient, DaemonUnavailable
@@ -296,10 +298,29 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     skill_checkpoint_extract.add_argument("--packet", required=True, type=Path)
     skill_checkpoint_extract.add_argument("--out-dir", required=True, type=Path)
+    skill_checkpoint_extract.add_argument("--amo-home", type=Path)
     skill_checkpoint_extract.add_argument("--num-ctx", type=int, default=DEFAULT_LOCAL_NUM_CTX)
     skill_checkpoint_extract.add_argument("--num-predict", type=int, default=DEFAULT_NUM_PREDICT)
     skill_checkpoint_extract.add_argument("--timeout-seconds", type=float)
     skill_checkpoint_extract.add_argument("--no-auto-repair-validation-refs", action="store_true")
+
+    skill_checkpoint_mark = skill_checkpoint_sub.add_parser(
+        "mark",
+        help="Mark the current agent session as a pending skill checkpoint",
+    )
+    skill_checkpoint_mark.add_argument("--agent", choices=["codex", "claude"], default="codex")
+    skill_checkpoint_mark.add_argument("--session-id", default="", help="Optional explicit session id. Defaults to latest captured session for the agent.")
+    skill_checkpoint_mark.add_argument("--note", default="", help="Optional user intent or checkpoint note.")
+    skill_checkpoint_mark.add_argument("--mode", choices=["workflow", "single_commit"], default="workflow")
+    skill_checkpoint_mark.add_argument("--cwd", type=Path, default=Path.cwd())
+    skill_checkpoint_mark.add_argument("--amo-home", type=Path)
+
+    skill_checkpoint_status = skill_checkpoint_sub.add_parser(
+        "status",
+        help="List pending skill checkpoints",
+    )
+    skill_checkpoint_status.add_argument("--limit", type=int, default=20)
+    skill_checkpoint_status.add_argument("--amo-home", type=Path)
 
     skill_checkpoint_finalize = skill_checkpoint_sub.add_parser(
         "finalize",
@@ -308,6 +329,7 @@ def _build_parser() -> argparse.ArgumentParser:
     skill_checkpoint_finalize.add_argument("--result", required=True, type=Path)
     skill_checkpoint_finalize.add_argument("--packet", required=True, type=Path)
     skill_checkpoint_finalize.add_argument("--out-dir", required=True, type=Path)
+    skill_checkpoint_finalize.add_argument("--amo-home", type=Path)
     skill_checkpoint_finalize.add_argument("--no-auto-repair-validation-refs", action="store_true")
 
     timeline = sub.add_parser("timeline", help="View session timeline")
@@ -932,6 +954,8 @@ def main(argv: list[str] | None = None) -> int:
                 return 0
 
         if args.command == "skill-checkpoint":
+            if getattr(args, "amo_home", None):
+                os.environ["AMO_HOME"] = str(args.amo_home.expanduser().resolve())
             if args.skill_checkpoint_command == "extract":
                 settings = Settings.load()
                 packet = json.loads(args.packet.read_text(encoding="utf-8"))
@@ -944,6 +968,19 @@ def main(argv: list[str] | None = None) -> int:
                     timeout_seconds=args.timeout_seconds,
                     auto_repair_validation_refs=not args.no_auto_repair_validation_refs,
                 )
+            elif args.skill_checkpoint_command == "mark":
+                settings = Settings.load()
+                report = mark_skill_checkpoint(
+                    settings=settings,
+                    agent=args.agent,
+                    session_id=args.session_id,
+                    note=args.note,
+                    mode=args.mode,
+                    cwd=args.cwd,
+                )
+            elif args.skill_checkpoint_command == "status":
+                settings = Settings.load()
+                report = list_skill_checkpoints(settings, limit=args.limit)
             elif args.skill_checkpoint_command == "finalize":
                 packet = json.loads(args.packet.read_text(encoding="utf-8"))
                 result = json.loads(args.result.read_text(encoding="utf-8"))
@@ -956,8 +993,9 @@ def main(argv: list[str] | None = None) -> int:
             else:
                 parser.error(f"unknown skill-checkpoint command: {args.skill_checkpoint_command}")
                 return 2
-            _print({"ok": report.get("status") == "accepted", "result": report})
-            return 0 if report.get("status") == "accepted" else 1
+            ok = bool(report.get("ok", report.get("status") == "accepted"))
+            _print({"ok": ok, "result": report})
+            return 0 if ok else 1
 
         settings = Settings.load()
         orch = OrchestratorService(settings)
