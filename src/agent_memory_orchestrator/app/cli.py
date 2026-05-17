@@ -987,10 +987,17 @@ def _settings_with_path_overrides(settings: Settings, args: argparse.Namespace) 
     updates = {}
     db_path = getattr(args, "db_path", None)
     graph_path = getattr(args, "graph_path", None)
+    retrieval_command = getattr(args, "command", "") in {
+        "graph-retrieval-build",
+        "graph-retrieval-embed",
+        "graph-retrieve",
+    }
     if db_path:
         updates["db_path"] = Path(db_path).expanduser().resolve()
     if graph_path:
         updates["graph_path"] = Path(graph_path).expanduser().resolve()
+    elif retrieval_command and settings.retrieval_graph_path is not None:
+        updates["graph_path"] = settings.retrieval_graph_path
     if not updates:
         return settings
     for key in ("db_path", "graph_path"):

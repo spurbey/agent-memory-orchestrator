@@ -68,6 +68,9 @@ class Settings:
     rerank_max_chars: int = 1800
     graph_backend: str = "kuzu"
     graph_path: Path = Path(".graph/amo.kuzu")
+    retrieval_db_path: Path = Path(".data/retrieval.sqlite")
+    retrieval_graph_path: Path | None = None
+    retrieval_graph_scope: str = ""
     evidence_dir: Path = Path(".evidence")
     qwen_runtime: str = "ollama"
     qwen_model: str = DEFAULT_QWEN_MODEL
@@ -108,6 +111,10 @@ class Settings:
         rerank_max_chars = int(_setting(config, "rerank_max_chars", "1800"))
         graph_backend = str(_setting(config, "graph_backend", "kuzu")).strip().lower()
         graph_path = Path(str(_setting(config, "graph_path", ".graph/amo.kuzu")))
+        retrieval_db_path = Path(str(_setting(config, "retrieval_db_path", ".data/retrieval.sqlite")))
+        retrieval_graph_path_raw = str(_setting(config, "retrieval_graph_path", "")).strip()
+        retrieval_graph_path = Path(retrieval_graph_path_raw) if retrieval_graph_path_raw else None
+        retrieval_graph_scope = str(_setting(config, "retrieval_graph_scope", "")).strip()
         evidence_dir = Path(str(_setting(config, "evidence_dir", ".evidence")))
         qwen_runtime = str(_setting(config, "qwen_runtime", "ollama")).strip().lower()
         qwen_model = str(_setting(config, "qwen_model", DEFAULT_QWEN_MODEL)).strip()
@@ -125,6 +132,10 @@ class Settings:
             export_dir = (home / export_dir).resolve()
         if not graph_path.is_absolute():
             graph_path = (home / graph_path).resolve()
+        if not retrieval_db_path.is_absolute():
+            retrieval_db_path = (home / retrieval_db_path).resolve()
+        if retrieval_graph_path is not None and not retrieval_graph_path.is_absolute():
+            retrieval_graph_path = (home / retrieval_graph_path).resolve()
         if not evidence_dir.is_absolute():
             evidence_dir = (home / evidence_dir).resolve()
 
@@ -208,6 +219,9 @@ class Settings:
             rerank_max_chars=rerank_max_chars,
             graph_backend=graph_backend,
             graph_path=graph_path,
+            retrieval_db_path=retrieval_db_path,
+            retrieval_graph_path=retrieval_graph_path,
+            retrieval_graph_scope=retrieval_graph_scope,
             evidence_dir=evidence_dir,
             qwen_runtime=qwen_runtime,
             qwen_model=qwen_model,
