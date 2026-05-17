@@ -284,13 +284,15 @@ def test_daemon_exposes_dependency_free_3d_graph_view() -> None:
     assert "/web/amo.css" in SESSION_COCKPIT_HTML
     assert "/web/amo.js" in SESSION_COCKPIT_HTML
     assert '<canvas id="graphCanvas"' in GRAPH3D_HTML
-    assert "Obsidian style explorer" in GRAPH3D_HTML
+    assert "Spatial graph explorer" in GRAPH3D_HTML
     assert "Knowledge creation flow" in GRAPH3D_HTML
     assert "cleaned evidence sent to graph extraction" in GRAPH3D_HTML.lower()
     assert "Connectors" in GRAPH3D_HTML
     assert "Slack mention answers" in GRAPH3D_HTML
     assert "provenance" in GRAPH3D_HTML
     assert "Graph query inspector" in GRAPH3D_HTML
+    assert "V2 indexed GraphRAG" in GRAPH3D_HTML
+    assert "Legacy search" not in GRAPH3D_HTML
     assert "3d-force-graph" not in GRAPH3D_HTML
 
 
