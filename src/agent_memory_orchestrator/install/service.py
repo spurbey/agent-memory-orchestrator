@@ -14,6 +14,7 @@ from ..llm.models import resolve_models
 
 MANAGED_BEGIN = "# BEGIN AMO MANAGED BLOCK"
 MANAGED_END = "# END AMO MANAGED BLOCK"
+SKILL_CHECKPOINT_MARKER = "AMO_SKILL_CHECKPOINT_MANAGED"
 CLAUDE_MCP_NAME = "agent-memory-orchestrator"
 CODEX_MCP_NAME = "agent_memory_orchestrator"
 SUPPORTED_TARGETS = {"codex", "claude", "all"}
@@ -66,10 +67,24 @@ def build_install_plan(options: InstallOptions) -> dict[str, Any]:
                 python_command=options.python_command,
             )
         )
+        operations.append(
+            _codex_skill_checkpoint_operation(
+                skill_path=user_home / ".codex" / "skills" / "amo-skill-checkpoint" / "SKILL.md",
+                amo_home=amo_home,
+                python_command=options.python_command,
+            )
+        )
     if "claude" in targets:
         operations.append(
             _claude_operation(
                 settings_path=user_home / ".claude" / "settings.json",
+                amo_home=amo_home,
+                python_command=options.python_command,
+            )
+        )
+        operations.append(
+            _claude_skill_checkpoint_command_operation(
+                command_path=user_home / ".claude" / "commands" / "skill-checkpoint.md",
                 amo_home=amo_home,
                 python_command=options.python_command,
             )
@@ -123,9 +138,11 @@ def uninstall(target: str = "all", user_home: Path | None = None) -> dict[str, A
     if "codex" in selected:
         results.append(_uninstall_codex(home / ".codex" / "config.toml"))
         results.append(_uninstall_codex_hooks(home / ".codex" / "hooks.json"))
+        results.append(_uninstall_managed_file(home / ".codex" / "skills" / "amo-skill-checkpoint" / "SKILL.md", "codex-skill-checkpoint"))
     if "claude" in selected:
         path = home / ".claude" / "settings.json"
         results.append(_uninstall_claude(path))
+        results.append(_uninstall_managed_file(home / ".claude" / "commands" / "skill-checkpoint.md", "claude-skill-checkpoint"))
     return {"ok": True, "results": results}
 
 
@@ -156,6 +173,7 @@ def doctor(target: str = "all", user_home: Path | None = None, amo_home: Path | 
             "mcp_configured": CODEX_MCP_NAME in text,
             "hooks_configured": "agent_memory_orchestrator.hook" in text or _codex_has_amo_hooks(hooks_payload),
             "codex_hooks_enabled": bool(re.search(r"(?m)^\s*codex_hooks\s*=\s*true\s*$", text)),
+            "skill_checkpoint_configured": (home / ".codex" / "skills" / "amo-skill-checkpoint" / "SKILL.md").exists(),
         }
     if "claude" in selected:
         path = home / ".claude" / "settings.json"
@@ -165,6 +183,7 @@ def doctor(target: str = "all", user_home: Path | None = None, amo_home: Path | 
             "settings_exists": path.exists(),
             "mcp_configured": CLAUDE_MCP_NAME in payload.get("mcpServers", {}),
             "hooks_configured": _claude_has_amo_hooks(payload),
+            "skill_checkpoint_configured": (home / ".claude" / "commands" / "skill-checkpoint.md").exists(),
         }
     ok = checks["amo_home"]["config_exists"] and all(
         not isinstance(item, dict)
@@ -326,6 +345,26 @@ def _codex_hooks_operation(
     }
 
 
+def _codex_skill_checkpoint_operation(*, skill_path: Path, amo_home: Path, python_command: str) -> dict[str, Any]:
+    return {
+        "target": "codex-skill-checkpoint",
+        "path": str(skill_path),
+        "exists": skill_path.exists(),
+        "after": _codex_skill_checkpoint_skill(amo_home=amo_home, python_command=python_command),
+        "description": "Install the AMO skill-checkpoint trigger skill for Codex.",
+    }
+
+
+def _claude_skill_checkpoint_command_operation(*, command_path: Path, amo_home: Path, python_command: str) -> dict[str, Any]:
+    return {
+        "target": "claude-skill-checkpoint",
+        "path": str(command_path),
+        "exists": command_path.exists(),
+        "after": _claude_skill_checkpoint_command(amo_home=amo_home, python_command=python_command),
+        "description": "Install the /skill-checkpoint command for Claude Code.",
+    }
+
+
 def _codex_hooks_cleanup_operation(*, hooks_path: Path) -> dict[str, Any]:
     exists = hooks_path.exists()
     payload = _read_json(hooks_path)
@@ -347,6 +386,55 @@ def _codex_hooks_cleanup_operation(*, hooks_path: Path) -> dict[str, Any]:
         "after": json.dumps(payload, indent=2, sort_keys=True) + "\n" if payload or exists else "",
         "description": "Remove stale AMO hooks.json entries before writing the current hook set.",
     }
+
+
+def _codex_skill_checkpoint_skill(*, amo_home: Path, python_command: str) -> str:
+    command = _skill_checkpoint_mark_command(python_command, "codex", amo_home, note_placeholder="<user note>")
+    return (
+        "---\n"
+        "name: amo-skill-checkpoint\n"
+        "description: Use when the user types /skill-checkpoint or asks to turn the current workflow into a reusable AMO skill checkpoint.\n"
+        "---\n\n"
+        f"<!-- {SKILL_CHECKPOINT_MARKER}: codex -->\n\n"
+        "# AMO Skill Checkpoint\n\n"
+        "When the user asks for `/skill-checkpoint`, do not summarize the session manually and do not call sub-agents.\n\n"
+        "Run one local AMO marker command from the current workspace:\n\n"
+        "```powershell\n"
+        f"{command}\n"
+        "```\n\n"
+        "Replace `<user note>` with the user's checkpoint note if provided. If no note is provided, omit `--note` or pass an empty note.\n\n"
+        "After the command returns, report only the `checkpoint_id` and marker path. AMO hooks already captured the surrounding prompts, tool calls, tool results, code reads, patches, commits, and validation evidence.\n"
+    )
+
+
+def _claude_skill_checkpoint_command(*, amo_home: Path, python_command: str) -> str:
+    command = _skill_checkpoint_mark_command(python_command, "claude", amo_home, note_placeholder="$ARGUMENTS")
+    return (
+        "---\n"
+        "description: Mark the current AMO session as a reusable skill checkpoint\n"
+        "---\n\n"
+        f"<!-- {SKILL_CHECKPOINT_MARKER}: claude -->\n\n"
+        "Mark the current AMO session as a pending skill checkpoint. Do not summarize the session manually.\n\n"
+        "Run this command from the current workspace:\n\n"
+        "```bash\n"
+        f"{command}\n"
+        "```\n\n"
+        "Then reply with the `checkpoint_id`, marker path, and that AMO will build the compact packet later from captured hook evidence.\n"
+    )
+
+
+def _skill_checkpoint_mark_command(
+    python_command: str,
+    agent: str,
+    amo_home: Path,
+    *,
+    note_placeholder: str,
+) -> str:
+    note = note_placeholder.replace('"', '\\"')
+    return (
+        f'{_shell_command_atom(python_command)} -m agent_memory_orchestrator.app.cli '
+        f'skill-checkpoint mark --agent {agent} --amo-home "{amo_home}" --note "{note}"'
+    )
 
 
 def _claude_operation(*, settings_path: Path, amo_home: Path, python_command: str) -> dict[str, Any]:
@@ -499,6 +587,20 @@ def _uninstall_codex_hooks(path: Path) -> dict[str, Any]:
             backup_path = str(backup)
         path.write_text(after, encoding="utf-8")
     return {"target": "codex-hooks", "path": str(path), "changed": changed, "backup_path": backup_path}
+
+
+def _uninstall_managed_file(path: Path, target: str) -> dict[str, Any]:
+    changed = False
+    backup_path = ""
+    if path.exists():
+        text = path.read_text(encoding="utf-8")
+        if SKILL_CHECKPOINT_MARKER in text:
+            backup = _backup_path(path)
+            shutil.copy2(path, backup)
+            backup_path = str(backup)
+            path.unlink()
+            changed = True
+    return {"target": target, "path": str(path), "changed": changed, "backup_path": backup_path}
 
 
 def _uninstall_claude(path: Path) -> dict[str, Any]:
