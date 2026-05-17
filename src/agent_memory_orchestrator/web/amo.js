@@ -15,13 +15,20 @@ const AMO = {
     edges: [],
     positions: new Map(),
     velocities: new Map(),
+    screenPositions: new Map(),
     selectedId: "",
     hoveredId: "",
     scale: 1,
     tx: 0,
     ty: 0,
+    rotationX: -0.42,
+    rotationY: 0.68,
+    cameraDistance: 960,
+    fov: 720,
     dragging: false,
     dragStart: null,
+    dragMode: "",
+    spaceDown: false,
   },
 };
 
@@ -187,6 +194,7 @@ async function refreshAll() {
 }
 function setView(view) {
   AMO.view = view;
+  document.body.classList.toggle("graph-mode", view === "graph");
   qsa(".view").forEach(el => el.classList.toggle("active", el.id === `${view}View`));
   qsa(".nav-item").forEach(el => el.classList.toggle("active", el.dataset.view === view));
   const copy = {
@@ -530,16 +538,27 @@ function buildGraph() {
 function seedPositions(nodes) {
   const g = AMO.graph;
   const largeGraph = nodes.length > 1000;
+  const count = Math.max(1, nodes.length);
   nodes.forEach((node, index) => {
     const id = nodeId(node);
+    const h = hashCode(id);
     if (!g.positions.has(id)) {
-      const h = hashCode(id);
-      const angle = ((h % 3600) / 3600) * Math.PI * 2;
-      const ring = largeGraph
-        ? 180 + Math.sqrt(index + 1) * 18 + ((h >>> 8) % 120)
-        : 130 + (index % 7) * 36 + ((h >>> 8) % 70);
-      g.positions.set(id, { x: Math.cos(angle) * ring, y: Math.sin(angle) * ring });
-      g.velocities.set(id, { x: 0, y: 0 });
+      const theta = ((h % 7200) / 7200) * Math.PI * 2;
+      const phi = Math.acos(1 - (2 * (index + 0.5)) / count);
+      const shell = largeGraph
+        ? 260 + Math.cbrt(index + 1) * 44 + ((h >>> 8) % 180)
+        : 180 + (index % 7) * 42 + ((h >>> 8) % 95);
+      g.positions.set(id, {
+        x: Math.sin(phi) * Math.cos(theta) * shell,
+        y: Math.sin(phi) * Math.sin(theta) * shell,
+        z: Math.cos(phi) * shell + ((h >>> 16) % 180) - 90,
+      });
+      g.velocities.set(id, { x: 0, y: 0, z: 0 });
+    } else {
+      const pos = g.positions.get(id);
+      if (pos && typeof pos.z !== "number") pos.z = ((h >>> 16) % 240) - 120;
+      const velocity = g.velocities.get(id);
+      if (velocity && typeof velocity.z !== "number") velocity.z = 0;
     }
   });
 }
@@ -548,7 +567,7 @@ function simulateGraph(iterations = 1) {
   const nodes = g.nodes;
   const edges = g.edges;
   const idToNode = new Map(nodes.map(n => [nodeId(n), n]));
-  const pairwiseRepulsion = nodes.length <= 1000;
+  const pairwiseRepulsion = nodes.length <= 900;
   for (let step = 0; step < iterations; step += 1) {
     if (pairwiseRepulsion) {
       for (let i = 0; i < nodes.length; i += 1) {
@@ -563,15 +582,19 @@ function simulateGraph(iterations = 1) {
           if (!pb || !vb) continue;
           let dx = pa.x - pb.x;
           let dy = pa.y - pb.y;
-          const dist2 = dx * dx + dy * dy + 80;
-          const force = Math.min(3.2, 900 / dist2);
+          let dz = (pa.z || 0) - (pb.z || 0);
+          const dist2 = dx * dx + dy * dy + dz * dz + 160;
+          const force = Math.min(2.7, 1600 / dist2);
           const dist = Math.sqrt(dist2);
           dx /= dist;
           dy /= dist;
+          dz /= dist;
           va.x += dx * force;
           va.y += dy * force;
+          va.z += dz * force;
           vb.x -= dx * force;
           vb.y -= dy * force;
+          vb.z -= dz * force;
         }
       }
     }
@@ -586,24 +609,30 @@ function simulateGraph(iterations = 1) {
       if (!ps || !pt || !vs || !vt) return;
       const dx = pt.x - ps.x;
       const dy = pt.y - ps.y;
-      const dist = Math.sqrt(dx * dx + dy * dy) || 1;
-      const desired = VERSION_EDGES.has(edgeKind(edge)) ? 118 : 156;
-      const force = (dist - desired) * 0.012;
+      const dz = (pt.z || 0) - (ps.z || 0);
+      const dist = Math.sqrt(dx * dx + dy * dy + dz * dz) || 1;
+      const desired = VERSION_EDGES.has(edgeKind(edge)) ? 156 : 210;
+      const force = (dist - desired) * 0.01;
       const fx = (dx / dist) * force;
       const fy = (dy / dist) * force;
-      vs.x += fx; vs.y += fy; vt.x -= fx; vt.y -= fy;
+      const fz = (dz / dist) * force;
+      vs.x += fx; vs.y += fy; vs.z += fz;
+      vt.x -= fx; vt.y -= fy; vt.z -= fz;
     });
     nodes.forEach(node => {
       const id = nodeId(node);
       const p = g.positions.get(id);
       const v = g.velocities.get(id);
       if (!p || !v) return;
-      v.x += -p.x * 0.003;
-      v.y += -p.y * 0.003;
-      v.x *= 0.82;
-      v.y *= 0.82;
-      p.x += Math.max(-14, Math.min(14, v.x));
-      p.y += Math.max(-14, Math.min(14, v.y));
+      v.x += -p.x * 0.0024;
+      v.y += -p.y * 0.0024;
+      v.z += -(p.z || 0) * 0.0024;
+      v.x *= 0.84;
+      v.y *= 0.84;
+      v.z *= 0.84;
+      p.x += Math.max(-13, Math.min(13, v.x));
+      p.y += Math.max(-13, Math.min(13, v.y));
+      p.z = (p.z || 0) + Math.max(-13, Math.min(13, v.z));
     });
   }
 }
@@ -614,11 +643,14 @@ function setupGraphCanvas() {
   AMO.graph.ctx = canvas.getContext("2d");
   resizeGraph();
   canvas.addEventListener("wheel", onGraphWheel, { passive: false });
+  canvas.addEventListener("contextmenu", event => event.preventDefault());
   canvas.addEventListener("pointerdown", onGraphPointerDown);
   canvas.addEventListener("pointermove", onGraphPointerMove);
   canvas.addEventListener("pointerup", onGraphPointerUp);
   canvas.addEventListener("pointerleave", onGraphPointerUp);
   canvas.addEventListener("dblclick", () => focusSelectedNeighbors());
+  window.addEventListener("keydown", onGraphKeyDown);
+  window.addEventListener("keyup", onGraphKeyUp);
   window.addEventListener("resize", resizeGraph);
 }
 function resizeGraph() {
@@ -629,21 +661,49 @@ function resizeGraph() {
   canvas.width = Math.max(1, Math.floor(rect.width * ratio));
   canvas.height = Math.max(1, Math.floor(rect.height * ratio));
   AMO.graph.ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
-  if (!AMO.graph.tx && !AMO.graph.ty) { AMO.graph.tx = rect.width / 2; AMO.graph.ty = rect.height / 2; }
   drawGraph();
 }
-function worldToScreen(p) { const g = AMO.graph; return { x: p.x * g.scale + g.tx, y: p.y * g.scale + g.ty }; }
-function screenToWorld(x, y) { const g = AMO.graph; return { x: (x - g.tx) / g.scale, y: (y - g.ty) / g.scale }; }
+function rotateGraphPoint(p) {
+  const g = AMO.graph;
+  const x = p.x || 0;
+  const y = p.y || 0;
+  const z = p.z || 0;
+  const cy = Math.cos(g.rotationY);
+  const sy = Math.sin(g.rotationY);
+  const cx = Math.cos(g.rotationX);
+  const sx = Math.sin(g.rotationX);
+  const x1 = x * cy - z * sy;
+  const z1 = x * sy + z * cy;
+  const y2 = y * cx - z1 * sx;
+  const z2 = y * sx + z1 * cx;
+  return { x: x1, y: y2, z: z2 };
+}
+function worldToScreen(p) {
+  const g = AMO.graph;
+  const canvas = g.canvas;
+  if (!canvas) return { x: 0, y: 0, z: 0, depth: 1, perspective: 1, visible: false };
+  const rect = canvas.getBoundingClientRect();
+  const rotated = rotateGraphPoint(p);
+  const depth = Math.max(80, g.cameraDistance - rotated.z);
+  const perspective = (g.fov / depth) * g.scale;
+  return {
+    x: rect.width / 2 + g.tx + rotated.x * perspective,
+    y: rect.height / 2 + g.ty + rotated.y * perspective,
+    z: rotated.z,
+    depth,
+    perspective,
+    visible: depth > 30,
+  };
+}
 function graphPoint(event) { const rect = AMO.graph.canvas.getBoundingClientRect(); return { x: event.clientX - rect.left, y: event.clientY - rect.top }; }
 function hitNode(event) {
   const point = graphPoint(event);
   let best = null;
   let bestDist = Infinity;
   AMO.graph.nodes.forEach(node => {
-    const pos = AMO.graph.positions.get(nodeId(node));
-    if (!pos) return;
-    const sp = worldToScreen(pos);
-    const r = radiusForNode(node) + 8;
+    const sp = AMO.graph.screenPositions.get(nodeId(node)) || worldToScreen(AMO.graph.positions.get(nodeId(node)) || {});
+    if (!sp.visible) return;
+    const r = sp.radius + 9;
     const dx = point.x - sp.x;
     const dy = point.y - sp.y;
     const d = Math.sqrt(dx * dx + dy * dy);
@@ -654,12 +714,8 @@ function hitNode(event) {
 function onGraphWheel(event) {
   event.preventDefault();
   const g = AMO.graph;
-  const p = graphPoint(event);
-  const before = screenToWorld(p.x, p.y);
   const factor = event.deltaY > 0 ? 0.88 : 1.13;
-  g.scale = Math.max(0.08, Math.min(9, g.scale * factor));
-  g.tx = p.x - before.x * g.scale;
-  g.ty = p.y - before.y * g.scale;
+  g.scale = Math.max(0.12, Math.min(6.5, g.scale * factor));
   drawGraph();
 }
 function onGraphPointerDown(event) {
@@ -667,15 +723,30 @@ function onGraphPointerDown(event) {
   const hit = hitNode(event);
   if (hit) selectGraphNode(nodeId(hit));
   g.dragging = true;
-  g.dragStart = { x: event.clientX, y: event.clientY, tx: g.tx, ty: g.ty };
+  g.dragMode = event.shiftKey || g.spaceDown || event.button === 1 || event.button === 2 ? "pan" : "rotate";
+  g.dragStart = {
+    x: event.clientX,
+    y: event.clientY,
+    tx: g.tx,
+    ty: g.ty,
+    rotationX: g.rotationX,
+    rotationY: g.rotationY,
+  };
   g.canvas.classList.add("dragging");
   g.canvas.setPointerCapture(event.pointerId);
 }
 function onGraphPointerMove(event) {
   const g = AMO.graph;
   if (g.dragging && g.dragStart) {
-    g.tx = g.dragStart.tx + event.clientX - g.dragStart.x;
-    g.ty = g.dragStart.ty + event.clientY - g.dragStart.y;
+    const dx = event.clientX - g.dragStart.x;
+    const dy = event.clientY - g.dragStart.y;
+    if (g.dragMode === "pan") {
+      g.tx = g.dragStart.tx + dx;
+      g.ty = g.dragStart.ty + dy;
+    } else {
+      g.rotationY = g.dragStart.rotationY + dx * 0.006;
+      g.rotationX = Math.max(-1.35, Math.min(1.35, g.dragStart.rotationX + dy * 0.005));
+    }
     drawGraph();
     return;
   }
@@ -687,8 +758,46 @@ function onGraphPointerUp(event) {
   const g = AMO.graph;
   g.dragging = false;
   g.dragStart = null;
+  g.dragMode = "";
   g.canvas?.classList.remove("dragging");
   try { g.canvas?.releasePointerCapture(event.pointerId); } catch (_) {}
+}
+function onGraphKeyDown(event) {
+  if (AMO.view !== "graph") return;
+  const g = AMO.graph;
+  if (event.code === "Space") {
+    g.spaceDown = true;
+    event.preventDefault();
+    return;
+  }
+  const key = event.key.toLowerCase();
+  const step = event.shiftKey ? 72 : 34;
+  if (key === "arrowleft" || key === "a") {
+    g.tx += step;
+  } else if (key === "arrowright" || key === "d") {
+    g.tx -= step;
+  } else if (key === "arrowup" || key === "w") {
+    g.ty += step;
+  } else if (key === "arrowdown" || key === "s") {
+    g.ty -= step;
+  } else if (key === "+" || key === "=") {
+    g.scale = Math.min(6.5, g.scale * 1.12);
+  } else if (key === "-" || key === "_") {
+    g.scale = Math.max(0.12, g.scale * 0.88);
+  } else if (key === "0") {
+    g.tx = 0;
+    g.ty = 0;
+    g.scale = 1;
+    g.rotationX = -0.42;
+    g.rotationY = 0.68;
+  } else {
+    return;
+  }
+  event.preventDefault();
+  drawGraph();
+}
+function onGraphKeyUp(event) {
+  if (event.code === "Space") AMO.graph.spaceDown = false;
 }
 function drawGraph() {
   const g = AMO.graph;
@@ -698,58 +807,81 @@ function drawGraph() {
   const rect = canvas.getBoundingClientRect();
   ctx.clearRect(0, 0, rect.width, rect.height);
   ctx.save();
-  ctx.fillStyle = "#040907";
+  const bg = ctx.createRadialGradient(rect.width * 0.52, rect.height * 0.48, 0, rect.width * 0.52, rect.height * 0.48, Math.max(rect.width, rect.height) * 0.72);
+  bg.addColorStop(0, "#0c1712");
+  bg.addColorStop(0.48, "#040907");
+  bg.addColorStop(1, "#020504");
+  ctx.fillStyle = bg;
   ctx.fillRect(0, 0, rect.width, rect.height);
   const selectedNeighbors = neighborIds(g.selectedId);
   const selectedEdges = selectedEdgeIds(g.selectedId);
+  g.screenPositions = new Map();
+  g.nodes.forEach(node => {
+    const id = nodeId(node);
+    const pos = g.positions.get(id);
+    if (!pos) return;
+    const projected = worldToScreen(pos);
+    projected.radius = radiusForNode(node) * Math.max(0.68, Math.min(2.8, projected.perspective));
+    g.screenPositions.set(id, projected);
+  });
   ctx.lineCap = "round";
-  g.edges.forEach(edge => {
-    const ps = g.positions.get(edgeSource(edge));
-    const pt = g.positions.get(edgeTarget(edge));
-    if (!ps || !pt) return;
-    const a = worldToScreen(ps);
-    const b = worldToScreen(pt);
+  const edgeDrawList = g.edges
+    .map(edge => ({ edge, a: g.screenPositions.get(edgeSource(edge)), b: g.screenPositions.get(edgeTarget(edge)) }))
+    .filter(item => item.a?.visible && item.b?.visible)
+    .sort((left, right) => ((left.a.z + left.b.z) / 2) - ((right.a.z + right.b.z) / 2));
+  edgeDrawList.forEach(({ edge, a, b }) => {
     const kind = edgeKind(edge);
     const highlighted = selectedEdges.has(text(edge.id)) || (g.selectedId && (edgeSource(edge) === g.selectedId || edgeTarget(edge) === g.selectedId));
     const version = VERSION_EDGES.has(kind);
-    ctx.globalAlpha = g.selectedId ? (highlighted ? 0.88 : 0.10) : (version ? 0.44 : 0.22);
+    const depthAlpha = Math.max(0.08, Math.min(0.58, 1.04 - ((a.depth + b.depth) / 2) / 1400));
+    ctx.globalAlpha = g.selectedId ? (highlighted ? 0.92 : 0.10) : (version ? depthAlpha + 0.08 : depthAlpha);
     ctx.strokeStyle = version ? "#b7f56e" : "#668b7a";
-    ctx.lineWidth = highlighted ? 2.2 : 1;
+    ctx.lineWidth = highlighted ? 2.4 : Math.max(0.7, Math.min(1.7, (a.perspective + b.perspective) / 2));
     ctx.beginPath();
     ctx.moveTo(a.x, a.y);
     ctx.lineTo(b.x, b.y);
     ctx.stroke();
-    if (highlighted && g.scale > 0.45) {
+    if (highlighted && g.scale > 0.42) {
       ctx.globalAlpha = 0.86;
       ctx.fillStyle = "#9fb5aa";
       ctx.font = "11px ui-monospace, monospace";
       ctx.fillText(kind, (a.x + b.x) / 2 + 6, (a.y + b.y) / 2 - 6);
     }
   });
-  g.nodes.forEach(node => {
+  const nodeDrawList = [...g.nodes]
+    .map(node => ({ node, projected: g.screenPositions.get(nodeId(node)) }))
+    .filter(item => item.projected?.visible)
+    .sort((left, right) => left.projected.z - right.projected.z);
+  nodeDrawList.forEach(({ node, projected }) => {
     const id = nodeId(node);
-    const pos = g.positions.get(id);
-    if (!pos) return;
-    const sp = worldToScreen(pos);
     const selected = id === g.selectedId;
     const neighbor = selectedNeighbors.has(id);
     const hovered = id === g.hoveredId;
-    const alpha = g.selectedId ? (selected || neighbor ? 1 : 0.22) : 0.92;
-    const r = radiusForNode(node) * (selected ? 1.55 : hovered ? 1.28 : 1);
+    const depthAlpha = Math.max(0.32, Math.min(1, 1.08 - projected.depth / 1700));
+    const alpha = g.selectedId ? (selected || neighbor ? 1 : 0.18) : depthAlpha;
+    const r = projected.radius * (selected ? 1.65 : hovered ? 1.34 : 1);
     ctx.globalAlpha = alpha;
+    if (selected || hovered) {
+      ctx.globalAlpha = selected ? 0.34 : 0.20;
+      ctx.beginPath();
+      ctx.arc(projected.x, projected.y, r * 3.2, 0, Math.PI * 2);
+      ctx.fillStyle = nodeColor(nodeKind(node), nodeStatus(node));
+      ctx.fill();
+      ctx.globalAlpha = alpha;
+    }
     ctx.beginPath();
-    ctx.arc(sp.x, sp.y, r, 0, Math.PI * 2);
+    ctx.arc(projected.x, projected.y, r, 0, Math.PI * 2);
     ctx.fillStyle = nodeColor(nodeKind(node), nodeStatus(node));
     ctx.fill();
     ctx.strokeStyle = selected ? "#ffffff" : nodeStatus(node) === "draft" ? "rgba(255,255,255,0.38)" : "rgba(4,9,7,0.9)";
     ctx.lineWidth = selected ? 3 : 1.6;
     ctx.stroke();
-    const showLabels = $("labelsToggle")?.checked && (selected || hovered || neighbor || g.scale > 0.82 || g.nodes.length < 44);
+    const showLabels = $("labelsToggle")?.checked && (selected || hovered || neighbor || projected.perspective > 0.78 || g.nodes.length < 44);
     if (showLabels) {
       ctx.globalAlpha = selected || hovered ? 1 : Math.min(0.88, alpha + 0.18);
       ctx.font = `${selected ? 13 : 11}px ui-monospace, monospace`;
       ctx.fillStyle = selected ? "#eff7ef" : "#c8d8d0";
-      ctx.fillText(`${nodeKind(node)}: ${truncate(nodeLabel(node), selected ? 46 : 28)}`, sp.x + r + 5, sp.y + 4);
+      ctx.fillText(`${nodeKind(node)}: ${truncate(nodeLabel(node), selected ? 46 : 28)}`, projected.x + r + 5, projected.y + 4);
     }
   });
   ctx.restore();
@@ -782,19 +914,21 @@ function focusSelectedNeighbors() {
   const ids = neighborIds(id);
   const points = [...ids].map(nid => AMO.graph.positions.get(nid)).filter(Boolean);
   if (!points.length) return;
-  const cx = points.reduce((sum, p) => sum + p.x, 0) / points.length;
-  const cy = points.reduce((sum, p) => sum + p.y, 0) / points.length;
+  const projected = points.map(worldToScreen).filter(p => p.visible);
+  if (!projected.length) return;
+  const cx = projected.reduce((sum, p) => sum + p.x, 0) / projected.length;
+  const cy = projected.reduce((sum, p) => sum + p.y, 0) / projected.length;
   const rect = AMO.graph.canvas.getBoundingClientRect();
-  AMO.graph.scale = Math.max(0.7, Math.min(2.4, AMO.graph.scale));
-  AMO.graph.tx = rect.width / 2 - cx * AMO.graph.scale;
-  AMO.graph.ty = rect.height / 2 - cy * AMO.graph.scale;
+  AMO.graph.scale = Math.max(0.9, Math.min(2.8, AMO.graph.scale));
+  AMO.graph.tx += rect.width / 2 - cx;
+  AMO.graph.ty += rect.height / 2 - cy;
   drawGraph();
 }
 function renderGraphMini() {
   const n = AMO.graph.nodes.length;
   const e = AMO.graph.edges.length;
   const warnings = AMO.centralGraph.warnings || [];
-  $("graphMini").innerHTML = `${n} nodes | ${e} edges${warnings.length ? ` | ${warnings.length} warnings` : ""}`;
+  $("graphMini").innerHTML = `3D | ${n} nodes | ${e} edges${warnings.length ? ` | ${warnings.length} warnings` : ""}`;
 }
 function renderNodeInspector() {
   const id = AMO.graph.selectedId;
