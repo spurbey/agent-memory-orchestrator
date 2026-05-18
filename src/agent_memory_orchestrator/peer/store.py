@@ -9,7 +9,9 @@ from typing import Any
 from uuid import uuid4
 
 from ..core.config import Settings
+from .context import build_context_pack
 from .models import DEFAULT_CAPABILITIES, PeerConfig, PeerNode
+from .policy import PeerPolicy
 
 
 def _utc_now() -> str:
@@ -161,10 +163,9 @@ class PeerStore:
         expected_hash = str(invite.get("room_md_sha256") or "").strip()
         if room_md and expected_hash and _sha256(room_md) != expected_hash:
             raise ValueError("room_md_sha256 does not match room_md")
-        if config.auto_join == "trusted_only":
-            peer = config.peer_by_id(initiator)
-            if initiator != config.node_id and (peer is None or peer.trust != "trusted"):
-                raise PermissionError(f"initiator is not trusted: {initiator}")
+        decision = PeerPolicy(config).decide_invite(initiator)
+        if not decision.allowed:
+            raise PermissionError(decision.reason)
         room = {
             "room_id": room_id,
             "topic": str(invite.get("topic") or "").strip(),
@@ -196,6 +197,30 @@ class PeerStore:
             },
         )
         return self.get_room(room_id)
+
+    def context_pack(self, room_id: str, *, viewer_node_id: str | None = None) -> dict[str, Any]:
+        config = self.load_config()
+        room = self.get_room(room_id)
+        viewer = viewer_node_id or config.node_id
+        return build_context_pack(room=room, viewer_node_id=viewer, config=config).to_dict()
+
+    def update_rolling_summary(self, room_id: str, summary_md: str) -> dict[str, Any]:
+        room_id = _safe_room_id(room_id)
+        room_dir = self.rooms_dir / room_id
+        if not room_dir.exists():
+            raise FileNotFoundError(f"peer room not found: {room_id}")
+        summary_md = summary_md.strip()
+        if not summary_md.startswith("#"):
+            summary_md = "# Rolling Summary\n\n" + summary_md
+        (room_dir / "rolling_summary.md").write_text(summary_md.strip() + "\n", encoding="utf-8")
+        return self.append_message(
+            room_id,
+            {
+                "type": "summary_update",
+                "from": self.load_config().node_id,
+                "content": "Rolling summary updated.",
+            },
+        )
 
     def invite_payload(self, room_id: str) -> dict[str, Any]:
         room = self.get_room(room_id)
