@@ -291,6 +291,20 @@ def _build_parser() -> argparse.ArgumentParser:
     peer_add.add_argument("--trust", choices=["trusted", "limited", "blocked"], default="trusted")
     peer_sub.add_parser("status", help="Show peer node, policy, configured peers, and room count")
     peer_sub.add_parser("rooms", help="List local peer investigation rooms")
+    peer_context = peer_sub.add_parser("context", help="Build the three-layer context pack for a room")
+    peer_context.add_argument("--room-id", required=True)
+    peer_context.add_argument("--viewer-node-id", default="", help="Defaults to this AMO node id")
+    peer_message = peer_sub.add_parser("append-message", help="Append a local peer-room message for smoke tests/manual use")
+    peer_message.add_argument("--room-id", required=True)
+    peer_message.add_argument("--from-node-id", required=True)
+    peer_message.add_argument("--to-node-id", action="append", default=[])
+    peer_message.add_argument("--type", default="context_request")
+    peer_message.add_argument("--content", required=True)
+    peer_message.add_argument("--citation", action="append", default=[])
+    peer_message.add_argument("--confidence", type=float)
+    peer_summary = peer_sub.add_parser("update-summary", help="Replace a room's initiator-owned rolling summary")
+    peer_summary.add_argument("--room-id", required=True)
+    peer_summary.add_argument("--summary", required=True)
     peer_room = peer_sub.add_parser("open-room", help="Create an investigation room and invite configured peers")
     peer_room.add_argument("--topic", required=True)
     peer_room.add_argument("--peer", action="append", default=[], help="Peer node id to invite. Repeat for multiple peers.")
@@ -651,6 +665,25 @@ def main(argv: list[str] | None = None) -> int:
                 return 0
             if args.peer_command == "rooms":
                 _print(svc.list_rooms())
+                return 0
+            if args.peer_command == "context":
+                _print(svc.context_pack(args.room_id, viewer_node_id=args.viewer_node_id or None))
+                return 0
+            if args.peer_command == "append-message":
+                _print(
+                    svc.append_message(
+                        room_id=args.room_id,
+                        from_node_id=args.from_node_id,
+                        to_node_ids=args.to_node_id,
+                        message_type=args.type,
+                        content=args.content,
+                        citations=args.citation,
+                        confidence=args.confidence,
+                    )
+                )
+                return 0
+            if args.peer_command == "update-summary":
+                _print(svc.update_summary(args.room_id, summary_md=args.summary))
                 return 0
             if args.peer_command == "open-room":
                 _print(svc.open_room(topic=args.topic, peer_ids=args.peer, send_invites=not args.no_send))

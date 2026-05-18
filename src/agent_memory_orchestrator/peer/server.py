@@ -5,7 +5,7 @@ import json
 import os
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 from ..core.config import Settings
 from .service import PeerService
@@ -37,7 +37,9 @@ class PeerHandler(BaseHTTPRequestHandler):
         return payload
 
     def do_GET(self) -> None:  # noqa: N802
-        path = urlparse(self.path).path
+        parsed_url = urlparse(self.path)
+        path = parsed_url.path
+        query = parse_qs(parsed_url.query)
         svc = PeerService(self.settings)
         try:
             if path == "/peer/health":
@@ -48,6 +50,11 @@ class PeerHandler(BaseHTTPRequestHandler):
                 return
             if path == "/peer/rooms":
                 self._write_json(200, svc.list_rooms())
+                return
+            if path.startswith("/peer/rooms/") and path.endswith("/context"):
+                room_id = path.split("/")[-2]
+                viewer = (query.get("viewer") or [""])[0]
+                self._write_json(200, svc.context_pack(room_id, viewer_node_id=viewer or None))
                 return
             if path.startswith("/peer/rooms/"):
                 room_id = path.rsplit("/", 1)[-1]
@@ -70,6 +77,11 @@ class PeerHandler(BaseHTTPRequestHandler):
                 return
             if path == "/peer/messages":
                 result = svc.receive_message(payload)
+                self._write_json(200 if result.get("ok") else 400, result)
+                return
+            if path.startswith("/peer/rooms/") and path.endswith("/summary"):
+                room_id = path.split("/")[-2]
+                result = svc.update_summary(room_id, summary_md=str(payload.get("summary_md") or ""))
                 self._write_json(200 if result.get("ok") else 400, result)
                 return
             self._write_json(404, {"ok": False, "error": "not found"})

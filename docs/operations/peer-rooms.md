@@ -33,6 +33,24 @@ AMO_HOME/.peer/rooms/<room_id>/rolling_summary.md
 AMO_HOME/.peer/rooms/<room_id>/transcript.jsonl
 ```
 
+Append a local/manual message during smoke testing:
+
+```bash
+amo-cli peer append-message --room-id <room_id> --from-node-id sumit-zenbook --to-node-id poco-f1 --content "Can you check your graph memory?"
+```
+
+Build the exact three-layer prompt context AMO would hand to an LLM worker:
+
+```bash
+amo-cli peer context --room-id <room_id> --viewer-node-id poco-f1
+```
+
+Update the initiator-owned rolling summary:
+
+```bash
+amo-cli peer update-summary --room-id <room_id> --summary "Current understanding: poco-f1 found packet WP0030."
+```
+
 ## Context Model
 
 The LLM context window is assembled from three layers:
@@ -43,6 +61,19 @@ The LLM context window is assembled from three layers:
 
 The peer config is not sent directly to the LLM. AMO projects only the safe sharing boundary into the room context.
 
+The modular production layout is:
+
+```text
+src/agent_memory_orchestrator/peer/
+  models.py      # peer config, node roster, and share-boundary settings
+  policy.py      # auto-join/trust decisions and safe LLM policy projection
+  protocol.py    # normalized peer-room message records
+  context.py     # three-layer context-pack assembly
+  store.py       # local room files: room.md, rolling_summary.md, transcript.jsonl
+  service.py     # orchestration API used by CLI/server
+  server.py      # direct HTTP listener for Tailscale/private transport
+```
+
 ## Peer Listener Endpoints
 
 The peer listener exposes direct JSON endpoints:
@@ -52,8 +83,10 @@ GET  /peer/health
 GET  /peer/capabilities
 GET  /peer/rooms
 GET  /peer/rooms/{room_id}
+GET  /peer/rooms/{room_id}/context?viewer=<node_id>
 POST /peer/rooms/invite
 POST /peer/messages
+POST /peer/rooms/{room_id}/summary
 ```
 
 Tailscale handles private reachability. AMO still enforces local trust policy before accepting room invites.

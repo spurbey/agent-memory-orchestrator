@@ -7,6 +7,7 @@ from urllib.error import HTTPError, URLError
 
 from ..core.config import Settings
 from .models import PeerNode
+from .protocol import PeerMessage
 from .store import PeerStore
 
 
@@ -101,26 +102,45 @@ class PeerService:
         return {"ok": True, "accepted": True, "room": room}
 
     def receive_message(self, payload: dict[str, Any]) -> dict[str, Any]:
-        room_id = str(payload.get("room_id") or "").strip()
-        if not room_id:
+        message = PeerMessage.from_payload(payload)
+        if not message.room_id:
             return {"ok": False, "error": "room_id is required"}
-        message = {
-            "type": str(payload.get("type") or "peer_message"),
-            "from": str(payload.get("from") or payload.get("from_node_id") or "").strip(),
-            "to": payload.get("to") or payload.get("to_node_id") or "",
-            "content": str(payload.get("content") or ""),
-            "confidence": payload.get("confidence"),
-            "citations": payload.get("citations") or [],
-            "metadata": payload.get("metadata") or {},
-        }
-        stored = self.store.append_message(room_id, message)
+        stored = self.store.append_message(message.room_id, message.to_record())
         return {"ok": True, "message": stored}
+
+    def append_message(
+        self,
+        *,
+        room_id: str,
+        from_node_id: str,
+        content: str,
+        to_node_ids: list[str] | None = None,
+        message_type: str = "context_request",
+        citations: list[str] | None = None,
+        confidence: float | None = None,
+    ) -> dict[str, Any]:
+        message = PeerMessage(
+            room_id=room_id,
+            message_type=message_type,
+            from_node_id=from_node_id,
+            to_node_ids=tuple(to_node_ids or ()),
+            content=content,
+            citations=tuple(citations or ()),
+            confidence=confidence,
+        )
+        return {"ok": True, "message": self.store.append_message(room_id, message.to_record())}
 
     def list_rooms(self) -> dict[str, Any]:
         return {"ok": True, "rooms": self.store.list_rooms()}
 
     def room_detail(self, room_id: str) -> dict[str, Any]:
         return {"ok": True, "room": self.store.get_room(room_id)}
+
+    def context_pack(self, room_id: str, *, viewer_node_id: str | None = None) -> dict[str, Any]:
+        return {"ok": True, "context": self.store.context_pack(room_id, viewer_node_id=viewer_node_id)}
+
+    def update_summary(self, room_id: str, *, summary_md: str) -> dict[str, Any]:
+        return {"ok": True, "message": self.store.update_rolling_summary(room_id, summary_md)}
 
     def _post_json(self, url: str, payload: dict[str, Any], *, timeout: float = 10.0) -> dict[str, Any]:
         data = json.dumps(payload).encode("utf-8")

@@ -90,6 +90,73 @@ def test_untrusted_initiator_invite_is_denied(tmp_path: Path) -> None:
     assert "not trusted" in result["error"]
 
 
+def test_context_pack_uses_pairwise_recent_messages_for_peer(tmp_path: Path) -> None:
+    settings = make_settings(tmp_path / "initiator")
+    store = PeerStore(settings)
+    store.init_config(node_id="zenbook-amo")
+    room = PeerService(settings, store=store).open_room(
+        topic="route low-confidence memory question",
+        peer_ids=["poco-amo", "ui-amo"],
+        send_invites=False,
+    )["room"]
+    svc = PeerService(settings, store=store)
+    svc.append_message(
+        room_id=room["room_id"],
+        from_node_id="zenbook-amo",
+        to_node_ids=["poco-amo"],
+        content="Can you check graph retrieval memory?",
+    )
+    svc.append_message(
+        room_id=room["room_id"],
+        from_node_id="ui-amo",
+        to_node_ids=["zenbook-amo"],
+        content="Unrelated UI reply should not enter poco context.",
+    )
+    svc.append_message(
+        room_id=room["room_id"],
+        from_node_id="poco-amo",
+        to_node_ids=["zenbook-amo"],
+        message_type="context_response",
+        content="I found WP0030.",
+        citations=["WP0030"],
+        confidence=0.86,
+    )
+
+    pack = svc.context_pack(room["room_id"], viewer_node_id="poco-amo")["context"]
+
+    assert pack["role"] == "peer"
+    assert "route low-confidence memory question" in pack["layers"]["room_md"]
+    assert "Can you check graph retrieval memory?" in pack["context_text"]
+    assert "I found WP0030." in pack["context_text"]
+    assert "Unrelated UI reply" not in pack["context_text"]
+    assert pack["policy_projection"]["share_boundary"]
+
+
+def test_context_pack_uses_last_three_room_messages_for_initiator(tmp_path: Path) -> None:
+    settings = make_settings(tmp_path / "initiator")
+    store = PeerStore(settings)
+    store.init_config(node_id="zenbook-amo")
+    room = PeerService(settings, store=store).open_room(
+        topic="collect peer answers",
+        peer_ids=["poco-amo"],
+        send_invites=False,
+    )["room"]
+    svc = PeerService(settings, store=store)
+    for idx in range(4):
+        svc.append_message(
+            room_id=room["room_id"],
+            from_node_id=f"peer-{idx}",
+            content=f"message {idx}",
+            message_type="context_response",
+        )
+
+    pack = svc.context_pack(room["room_id"], viewer_node_id="zenbook-amo")["context"]
+    recent_contents = [item["content"] for item in pack["layers"]["recent_messages"]]
+
+    assert pack["role"] == "initiator"
+    assert recent_contents == ["message 1", "message 2", "message 3"]
+
+
 def make_settings(tmp_path: Path) -> Settings:
     return Settings(
         home=tmp_path,
