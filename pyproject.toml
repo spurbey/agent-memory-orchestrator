@@ -36,6 +36,7 @@ slack = [
 amo-cli = "agent_memory_orchestrator.app.cli:main"
 amo-mcp = "agent_memory_orchestrator.mcp.server:main"
 amo-daemon = "agent_memory_orchestrator.app.daemon:main"
+amo-peer = "agent_memory_orchestrator.peer.server:main"
 amo-hook = "agent_memory_orchestrator.hook:main"
 
 [tool.setuptools]
