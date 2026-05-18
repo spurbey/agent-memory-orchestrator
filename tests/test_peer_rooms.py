@@ -1,0 +1,402 @@
+from __future__ import annotations
+
+from pathlib import Path
+
+from agent_memory_orchestrator.core.config import Settings
+from agent_memory_orchestrator.peer.auth import wrap_payload
+from agent_memory_orchestrator.peer.models import PeerNode
+from agent_memory_orchestrator.peer.service import PeerService
+from agent_memory_orchestrator.peer.store import PeerStore
+
+
+def test_peer_room_invite_creates_three_layer_context_files(tmp_path: Path) -> None:
+    settings = make_settings(tmp_path / "initiator")
+    store = PeerStore(settings)
+    store.init_config(node_id="zenbook-amo", display_name="Zenbook")
+    store.add_peer(PeerNode(node_id="poco-amo", base_url="http://100.76.18.75:8787", capabilities=("graph_retrieval",)))
+
+    result = PeerService(settings, store=store).open_room(
+        topic="why did graph_service.py change?",
+        peer_ids=["poco-amo"],
+        send_invites=False,
+    )
+
+    assert result["ok"] is True
+    room = result["room"]
+    room_dir = settings.home / ".peer" / "rooms" / room["room_id"]
+    assert (room_dir / "room.md").exists()
+    assert (room_dir / "rolling_summary.md").exists()
+    assert (room_dir / "transcript.jsonl").exists()
+    room_md = (room_dir / "room.md").read_text(encoding="utf-8")
+    assert "why did graph_service.py change?" in room_md
+    assert "Layer 1: this room.md brief" in room_md
+    assert "Layer 2: initiator-owned rolling_summary.md" in room_md
+    assert "Layer 3: peer sees last 2 initiator-peer exchanges" in room_md
+
+
+def test_peer_config_accepts_libp2p_peer_identity_without_legacy_base_url(tmp_path: Path) -> None:
+    store = PeerStore(make_settings(tmp_path / "initiator"))
+    store.init_config(node_id="zenbook-amo")
+
+    config = store.add_peer(
+        PeerNode(
+            node_id="poco-amo",
+            peer_id="12D3KooWPeer",
+            multiaddrs=("/ip4/127.0.0.1/tcp/9001/p2p/12D3KooWPeer",),
+            relay_addrs=("/ip4/relay/tcp/4001/p2p/relay/p2p-circuit/p2p/12D3KooWPeer",),
+            rendezvous_addr="/ip4/127.0.0.1/tcp/9000/p2p/12D3KooWRendezvous",
+            rendezvous_namespace="amo-team",
+        )
+    )
+
+    peer = config.peer_by_id("poco-amo")
+    assert peer is not None
+    assert peer.base_url == ""
+    assert peer.peer_id == "12D3KooWPeer"
+    assert peer.multiaddrs == ("/ip4/127.0.0.1/tcp/9001/p2p/12D3KooWPeer",)
+    assert peer.rendezvous_namespace == "amo-team"
+
+
+def test_trusted_peer_accepts_invite_and_records_messages(tmp_path: Path) -> None:
+    initiator_store = PeerStore(make_settings(tmp_path / "initiator"))
+    initiator_store.init_config(node_id="zenbook-amo")
+    initiator_store.add_peer(PeerNode(node_id="poco-amo", base_url="http://100.76.18.75:8787"))
+    room = PeerService(initiator_store.settings, store=initiator_store).open_room(
+        topic="find relevant AMO memory",
+        peer_ids=["poco-amo"],
+        send_invites=False,
+    )["room"]
+    invite = initiator_store.invite_payload(room["room_id"])
+
+    peer_store = PeerStore(make_settings(tmp_path / "peer"))
+    peer_store.init_config(node_id="poco-amo")
+    peer_store.add_peer(PeerNode(node_id="zenbook-amo", base_url="http://100.82.177.7:8787", trust="trusted"))
+    peer_service = PeerService(peer_store.settings, store=peer_store)
+
+    accepted = peer_service.receive_invite(invite)
+    assert accepted["ok"] is True
+    assert accepted["accepted"] is True
+
+    message = peer_service.receive_message(
+        {
+            "room_id": room["room_id"],
+            "type": "context_response",
+            "from": "zenbook-amo",
+            "content": "Need packet citations only.",
+            "citations": ["WP0030"],
+            "confidence": 0.8,
+        }
+    )
+
+    assert message["ok"] is True
+    detail = peer_service.room_detail(room["room_id"])["room"]
+    assert [item["type"] for item in detail["messages"]] == ["room_invite_received", "context_response"]
+    assert detail["messages"][1]["citations"] == ["WP0030"]
+
+
+def test_open_room_sends_libp2p_invite_through_netd(tmp_path: Path) -> None:
+    netd = FakeNetdClient()
+    store = PeerStore(make_settings(tmp_path / "initiator"))
+    store.init_config(node_id="zenbook-amo")
+    store.add_peer(
+        PeerNode(
+            node_id="poco-amo",
+            peer_id="12D3KooWPeer",
+            multiaddrs=("/ip4/127.0.0.1/tcp/9001/p2p/12D3KooWPeer",),
+        )
+    )
+
+    result = PeerService(store.settings, store=store, netd_client=netd).open_room(
+        topic="why did graph_service.py change?",
+        peer_ids=["poco-amo"],
+        send_invites=True,
+    )
+
+    assert result["ok"] is True
+    assert result["deliveries"][0]["transport"] == "libp2p"
+    assert netd.connected == ["/ip4/127.0.0.1/tcp/9001/p2p/12D3KooWPeer"]
+    assert netd.sent[0]["to_peer_id"] == "12D3KooWPeer"
+    assert netd.sent[0]["message"]["type"] == "room_invite"
+    assert netd.sent[0]["message"]["payload"]["room_md_sha256"] == result["room"]["room_md_sha256"]
+
+
+def test_process_netd_inbox_accepts_invite_and_deduplicates(tmp_path: Path) -> None:
+    initiator_store = PeerStore(make_settings(tmp_path / "initiator"))
+    initiator_store.init_config(node_id="zenbook-amo")
+    room = PeerService(initiator_store.settings, store=initiator_store).open_room(
+        topic="check local memory",
+        peer_ids=["poco-amo"],
+        send_invites=False,
+    )["room"]
+    invite = initiator_store.invite_payload(room["room_id"])
+
+    peer_store = PeerStore(make_settings(tmp_path / "peer"))
+    peer_store.init_config(node_id="poco-amo")
+    peer_store.add_peer(
+        PeerNode(
+            node_id="zenbook-amo",
+            peer_id="12D3KooWInitiator",
+            trust="trusted",
+            shared_secret_env="AMO_PEER_SECRET_NOT_SET",
+        )
+    )
+    netd = FakeNetdClient(
+        messages=[
+            {
+                "amo_peer_envelope_version": 1,
+                "from_node_id": "zenbook-amo",
+                "created_at": "2026-05-18T00:00:00Z",
+                "payload_sha256": "abc",
+                "signature": "hmac-sha256:test",
+                "message": {
+                    "type": "room_invite",
+                    "room_id": room["room_id"],
+                    "from_node_id": "zenbook-amo",
+                    "to_node_id": "poco-amo",
+                    "payload": invite,
+                },
+            }
+        ]
+    )
+
+    svc = PeerService(peer_store.settings, store=peer_store, netd_client=netd)
+    first = svc.process_netd_inbox()
+    second = svc.process_netd_inbox()
+
+    assert first["results"][0]["accepted"] is True
+    assert second["results"][0]["skipped"] is True
+    accepted = peer_store.get_room(room["room_id"])
+    assert accepted["topic"] == "check local memory"
+
+
+def test_send_message_to_peer_uses_libp2p_netd(tmp_path: Path) -> None:
+    netd = FakeNetdClient()
+    store = PeerStore(make_settings(tmp_path / "initiator"))
+    store.init_config(node_id="zenbook-amo")
+    store.add_peer(PeerNode(node_id="poco-amo", peer_id="12D3KooWPeer"))
+    room = PeerService(store.settings, store=store).open_room(
+        topic="collect answer",
+        peer_ids=["poco-amo"],
+        send_invites=False,
+    )["room"]
+
+    result = PeerService(store.settings, store=store, netd_client=netd).send_message_to_peer(
+        peer_id="poco-amo",
+        room_id=room["room_id"],
+        content="What do you remember?",
+        citations=["WP0030"],
+        confidence=0.7,
+    )
+
+    assert result["ok"] is True
+    assert netd.sent[0]["to_peer_id"] == "12D3KooWPeer"
+    assert netd.sent[0]["message"]["type"] == "context_request"
+    assert netd.sent[0]["message"]["payload"]["content"] == "What do you remember?"
+    assert store.get_room(room["room_id"])["messages"][-1]["content"] == "What do you remember?"
+
+
+def test_peer_service_uses_managed_netd_api_url_from_state(tmp_path: Path) -> None:
+    store = PeerStore(make_settings(tmp_path / "initiator"))
+    store.init_config(node_id="zenbook-amo")
+    netd_dir = store.settings.home / ".peer" / "netd"
+    netd_dir.mkdir(parents=True)
+    (netd_dir / "netd.json").write_text(
+        '{"pid": 999999, "api_url": "http://127.0.0.1:8799"}',
+        encoding="utf-8",
+    )
+
+    client = PeerService(store.settings, store=store)._netd()
+
+    assert client.base_url == "http://127.0.0.1:8799"
+
+
+def test_signed_invite_is_accepted_when_peer_secret_matches(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("AMO_PEER_ZENBOOK_SECRET", "test-secret")
+    initiator_store = PeerStore(make_settings(tmp_path / "initiator"))
+    initiator_store.init_config(node_id="zenbook-amo")
+    room = PeerService(initiator_store.settings, store=initiator_store).open_room(
+        topic="signed room",
+        peer_ids=["poco-amo"],
+        send_invites=False,
+    )["room"]
+    invite = initiator_store.invite_payload(room["room_id"])
+    envelope = wrap_payload(payload=invite, from_node_id="zenbook-amo", secret="test-secret")
+
+    peer_store = PeerStore(make_settings(tmp_path / "peer"))
+    peer_store.init_config(node_id="poco-amo")
+    peer_store.add_peer(
+        PeerNode(
+            node_id="zenbook-amo",
+            base_url="http://100.82.177.7:8787",
+            trust="trusted",
+            shared_secret_env="AMO_PEER_ZENBOOK_SECRET",
+        )
+    )
+
+    accepted = PeerService(peer_store.settings, store=peer_store).receive_invite(envelope)
+
+    assert accepted["ok"] is True
+    assert accepted["auth"]["authenticated"] is True
+    assert accepted["auth"]["auth"] == "hmac-sha256"
+
+
+def test_unsigned_invite_is_denied_when_peer_secret_is_configured(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("AMO_PEER_ZENBOOK_SECRET", "test-secret")
+    peer_store = PeerStore(make_settings(tmp_path / "peer"))
+    peer_store.init_config(node_id="poco-amo")
+    peer_store.add_peer(
+        PeerNode(
+            node_id="zenbook-amo",
+            base_url="http://100.82.177.7:8787",
+            trust="trusted",
+            shared_secret_env="AMO_PEER_ZENBOOK_SECRET",
+        )
+    )
+
+    result = PeerService(peer_store.settings, store=peer_store).receive_invite(
+        {
+            "room_id": "room_test",
+            "topic": "unsigned invite",
+            "initiator_node_id": "zenbook-amo",
+            "participants": ["zenbook-amo", "poco-amo"],
+            "room_md": "# room",
+        }
+    )
+
+    assert result["ok"] is False
+    assert result["accepted"] is False
+    assert "signed envelope required" in result["error"]
+
+
+def test_untrusted_initiator_invite_is_denied(tmp_path: Path) -> None:
+    peer_store = PeerStore(make_settings(tmp_path / "peer"))
+    peer_store.init_config(node_id="poco-amo")
+    service = PeerService(peer_store.settings, store=peer_store)
+
+    result = service.receive_invite(
+        {
+            "room_id": "room_test",
+            "topic": "private memory request",
+            "initiator_node_id": "unknown-amo",
+            "participants": ["unknown-amo", "poco-amo"],
+            "room_md": "# room",
+        }
+    )
+
+    assert result["ok"] is False
+    assert result["accepted"] is False
+    assert "not trusted" in result["error"]
+
+
+def test_context_pack_uses_pairwise_recent_messages_for_peer(tmp_path: Path) -> None:
+    settings = make_settings(tmp_path / "initiator")
+    store = PeerStore(settings)
+    store.init_config(node_id="zenbook-amo")
+    room = PeerService(settings, store=store).open_room(
+        topic="route low-confidence memory question",
+        peer_ids=["poco-amo", "ui-amo"],
+        send_invites=False,
+    )["room"]
+    svc = PeerService(settings, store=store)
+    svc.append_message(
+        room_id=room["room_id"],
+        from_node_id="zenbook-amo",
+        to_node_ids=["poco-amo"],
+        content="Can you check graph retrieval memory?",
+    )
+    svc.append_message(
+        room_id=room["room_id"],
+        from_node_id="ui-amo",
+        to_node_ids=["zenbook-amo"],
+        content="Unrelated UI reply should not enter poco context.",
+    )
+    svc.append_message(
+        room_id=room["room_id"],
+        from_node_id="poco-amo",
+        to_node_ids=["zenbook-amo"],
+        message_type="context_response",
+        content="I found WP0030.",
+        citations=["WP0030"],
+        confidence=0.86,
+    )
+
+    pack = svc.context_pack(room["room_id"], viewer_node_id="poco-amo")["context"]
+
+    assert pack["role"] == "peer"
+    assert "route low-confidence memory question" in pack["layers"]["room_md"]
+    assert "Can you check graph retrieval memory?" in pack["context_text"]
+    assert "I found WP0030." in pack["context_text"]
+    assert "Unrelated UI reply" not in pack["context_text"]
+    assert pack["policy_projection"]["share_boundary"]
+
+
+def test_context_pack_uses_last_three_room_messages_for_initiator(tmp_path: Path) -> None:
+    settings = make_settings(tmp_path / "initiator")
+    store = PeerStore(settings)
+    store.init_config(node_id="zenbook-amo")
+    room = PeerService(settings, store=store).open_room(
+        topic="collect peer answers",
+        peer_ids=["poco-amo"],
+        send_invites=False,
+    )["room"]
+    svc = PeerService(settings, store=store)
+    for idx in range(4):
+        svc.append_message(
+            room_id=room["room_id"],
+            from_node_id=f"peer-{idx}",
+            content=f"message {idx}",
+            message_type="context_response",
+        )
+
+    pack = svc.context_pack(room["room_id"], viewer_node_id="zenbook-amo")["context"]
+    recent_contents = [item["content"] for item in pack["layers"]["recent_messages"]]
+
+    assert pack["role"] == "initiator"
+    assert recent_contents == ["message 1", "message 2", "message 3"]
+
+
+def make_settings(tmp_path: Path) -> Settings:
+    return Settings(
+        home=tmp_path,
+        db_path=tmp_path / "memory.db",
+        export_dir=tmp_path / "exports",
+        local_only=True,
+        mcp_transport="stdio",
+        mcp_host="127.0.0.1",
+        mcp_port=8765,
+        embedding_dims=64,
+        embedding_model="hash-fallback",
+        reranker_model="BAAI/bge-reranker-base",
+        vector_backend="disabled",
+        approval_mode="manual",
+        owner_user_id="local",
+        workspace_id="local",
+        project_id="default",
+        visibility_scope="private",
+        sensitivity_level="normal",
+        consensus_threshold=0.7,
+        max_review_rounds=5,
+        graph_path=tmp_path / "graph" / "amo.kuzu",
+        evidence_dir=tmp_path / "evidence",
+    )
+
+
+class FakeNetdClient:
+    def __init__(self, messages: list[dict] | None = None) -> None:
+        self.connected: list[str] = []
+        self.sent: list[dict] = []
+        self._messages = messages or []
+
+    def connect(self, addr: str) -> dict:
+        self.connected.append(addr)
+        return {"ok": True}
+
+    def send_raw(self, to_peer_id: str, message: dict) -> dict:
+        self.sent.append({"to_peer_id": to_peer_id, "message": message})
+        return {"ok": True, "envelope": {"message": message}}
+
+    def messages(self) -> list[dict]:
+        return list(self._messages)
+
+    def rendezvous_discover(self, addr: str, namespace: str, limit: int = 20, connect: bool = True) -> list[dict]:
+        return [{"peer_id": "12D3KooWPeer", "addrs": [addr], "namespace": namespace, "connect": connect}]
