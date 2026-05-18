@@ -24,6 +24,14 @@ from ..install.service import uninstall as uninstall_targets
 from ..memory import MemoryService
 from ..orchestration import OrchestratorService
 from ..core.privacy import redact_secrets
+from ..peer import PeerService
+from ..peer.netd_runtime import PeerNetdLaunchOptions
+from ..peer.netd_runtime import PeerNetdRuntime
+from ..peer.netd_service import PeerNetdServiceOptions
+from ..peer.netd_service import install_service as install_peer_netd_service
+from ..peer.netd_service import service_status as peer_netd_service_status
+from ..peer.netd_service import uninstall_service as uninstall_peer_netd_service
+from ..peer.server import main as peer_server_main
 from ..llm.models import download_models, list_model_presets, model_status, preflight_models
 from ..llm.qwen import QwenUnavailable
 from ..reasoning_graph.session_runtime import DEFAULT_CODE_EMBEDDING_MODEL
@@ -273,6 +281,90 @@ def _build_parser() -> argparse.ArgumentParser:
     slack_finalize.add_argument("--message-count", type=int, default=0)
     slack_run = slack_sub.add_parser("run", help="Run the local outbound Slack Socket Mode connector")
     slack_run.add_argument("--reply-mode", choices=["disabled", "ack", "answer"], default="answer")
+
+    peer = sub.add_parser("peer", help="Configure AMO peer rooms and the local libp2p sidecar")
+    peer.add_argument("--amo-home", type=Path, help="AMO home directory containing peer config and room state.")
+    peer_sub = peer.add_subparsers(dest="peer_command", required=True)
+    peer_init = peer_sub.add_parser("init", help="Initialize this AMO node's peer identity")
+    peer_init.add_argument("--node-id", required=True)
+    peer_init.add_argument("--display-name", default="")
+    peer_init.add_argument("--capability", action="append", default=[])
+    peer_add = peer_sub.add_parser("add", help="Add a trusted peer identity and optional transport addresses")
+    peer_add.add_argument("--node-id", required=True)
+    peer_add.add_argument("--base-url", default="", help="Legacy direct HTTP URL, e.g. http://100.76.18.75:8787")
+    peer_add.add_argument("--peer-id", default="", help="libp2p peer id for amo-peer-netd delivery.")
+    peer_add.add_argument("--multiaddr", action="append", default=[], help="Dialable libp2p multiaddr. Repeat as needed.")
+    peer_add.add_argument("--relay-addr", action="append", default=[], help="Dialable relay /p2p-circuit multiaddr. Repeat as needed.")
+    peer_add.add_argument("--rendezvous-addr", default="", help="Rendezvous node multiaddr used for discovery.")
+    peer_add.add_argument("--rendezvous-namespace", default="", help="Rendezvous namespace for this peer/group.")
+    peer_add.add_argument("--display-name", default="")
+    peer_add.add_argument("--capability", action="append", default=[])
+    peer_add.add_argument("--trust", choices=["trusted", "limited", "blocked"], default="trusted")
+    peer_add.add_argument(
+        "--shared-secret-env",
+        default="",
+        help="Optional environment variable containing this peer's HMAC shared secret.",
+    )
+    peer_sub.add_parser("status", help="Show peer node, policy, configured peers, and room count")
+    peer_share = peer_sub.add_parser("share-card", help="Print or write this node's importable peer card")
+    peer_share.add_argument("--out", type=Path, help="Optional JSON output path.")
+    peer_share.add_argument("--base-url", default="", help="Optional legacy direct HTTP URL to include.")
+    peer_share.add_argument("--rendezvous-addr", default="", help="Optional rendezvous node multiaddr to include.")
+    peer_share.add_argument("--rendezvous-namespace", default="", help="Optional rendezvous namespace to include.")
+    peer_import = peer_sub.add_parser("import-card", help="Import a trusted peer from a peer-card JSON file")
+    peer_import.add_argument("--file", required=True, type=Path)
+    peer_import.add_argument("--trust", choices=["trusted", "limited", "blocked"], default="trusted")
+    peer_import.add_argument("--shared-secret-env", default="")
+    peer_sub.add_parser("rooms", help="List local peer investigation rooms")
+    peer_context = peer_sub.add_parser("context", help="Build the three-layer context pack for a room")
+    peer_context.add_argument("--room-id", required=True)
+    peer_context.add_argument("--viewer-node-id", default="", help="Defaults to this AMO node id")
+    peer_message = peer_sub.add_parser("append-message", help="Append a local peer-room message for smoke tests/manual use")
+    peer_message.add_argument("--room-id", required=True)
+    peer_message.add_argument("--from-node-id", required=True)
+    peer_message.add_argument("--to-node-id", action="append", default=[])
+    peer_message.add_argument("--type", default="context_request")
+    peer_message.add_argument("--content", required=True)
+    peer_message.add_argument("--citation", action="append", default=[])
+    peer_message.add_argument("--confidence", type=float)
+    peer_send = peer_sub.add_parser("send-message", help="Append and send a room message through amo-peer-netd")
+    peer_send.add_argument("--room-id", required=True)
+    peer_send.add_argument("--peer-id", required=True, help="Configured AMO peer node id, not the libp2p peer id.")
+    peer_send.add_argument("--type", default="context_request")
+    peer_send.add_argument("--content", required=True)
+    peer_send.add_argument("--citation", action="append", default=[])
+    peer_send.add_argument("--confidence", type=float)
+    peer_summary = peer_sub.add_parser("update-summary", help="Replace a room's initiator-owned rolling summary")
+    peer_summary.add_argument("--room-id", required=True)
+    peer_summary.add_argument("--summary", required=True)
+    peer_room = peer_sub.add_parser("open-room", help="Create an investigation room and invite configured peers")
+    peer_room.add_argument("--topic", required=True)
+    peer_room.add_argument("--peer", action="append", default=[], help="Peer node id to invite. Repeat for multiple peers.")
+    peer_room.add_argument("--no-send", action="store_true", help="Create the room locally without sending invites.")
+    peer_enable = peer_sub.add_parser("enable", help="Build if needed and start the managed libp2p sidecar")
+    _add_peer_netd_start_args(peer_enable)
+    peer_netd = peer_sub.add_parser("netd", help="Build, start, stop, and inspect the managed libp2p sidecar")
+    peer_netd_sub = peer_netd.add_subparsers(dest="netd_command", required=True)
+    peer_netd_build = peer_netd_sub.add_parser("build", help="Compile amo-peer-netd into AMO_HOME/.peer/bin")
+    peer_netd_build.add_argument("--out", type=Path, help="Optional output binary path.")
+    peer_netd_start = peer_netd_sub.add_parser("start", help="Start the managed libp2p sidecar")
+    _add_peer_netd_start_args(peer_netd_start)
+    peer_netd_sub.add_parser("stop", help="Stop the managed libp2p sidecar")
+    peer_netd_sub.add_parser("status", help="Show managed libp2p sidecar process and health state")
+    peer_netd_install = peer_netd_sub.add_parser("install-service", help="Plan or install OS startup for peer netd")
+    _add_peer_netd_start_args(peer_netd_install)
+    peer_netd_install.add_argument("--service-name", default="AMO Peer Netd")
+    peer_netd_install.add_argument("--apply", action="store_true", help="Actually create the OS startup entry.")
+    peer_netd_uninstall = peer_netd_sub.add_parser("uninstall-service", help="Plan or remove OS startup for peer netd")
+    peer_netd_uninstall.add_argument("--service-name", default="AMO Peer Netd")
+    peer_netd_uninstall.add_argument("--apply", action="store_true", help="Actually remove the OS startup entry.")
+    peer_netd_service_status_cmd = peer_netd_sub.add_parser("service-status", help="Inspect the OS startup entry for peer netd")
+    peer_netd_service_status_cmd.add_argument("--service-name", default="AMO Peer Netd")
+    peer_poll_netd = peer_sub.add_parser("poll-netd", help="Process delivered sidecar messages into local peer rooms")
+    peer_poll_netd.add_argument("--limit", type=int, default=None)
+    peer_serve = peer_sub.add_parser("serve", help="Run the direct peer listener for Tailscale/private networking")
+    peer_serve.add_argument("--host", default="0.0.0.0")
+    peer_serve.add_argument("--port", type=int, default=8787)
 
     debug = sub.add_parser("debug", help="Debug AMO hook, drain, Qwen, graph, and retrieval stages")
     debug_sub = debug.add_subparsers(dest="debug_command", required=True)
@@ -589,6 +681,153 @@ def main(argv: list[str] | None = None) -> int:
                 return 0
             if args.slack_command == "run":
                 SlackSocketModeRunner(svc, reply_mode=args.reply_mode).run_forever()
+                return 0
+
+        if args.command == "peer":
+            if args.peer_command == "serve":
+                peer_args = ["--host", args.host, "--port", str(args.port)]
+                if args.amo_home:
+                    peer_args.extend(["--amo-home", str(args.amo_home)])
+                return peer_server_main(peer_args)
+            if args.amo_home:
+                os.environ["AMO_HOME"] = str(args.amo_home)
+            settings = Settings.load()
+            if args.peer_command == "enable":
+                runtime = PeerNetdRuntime(settings)
+                _print(
+                    runtime.start(
+                        _peer_netd_options_from_args(args),
+                        build_if_missing=not args.no_build,
+                    )
+                )
+                return 0
+            if args.peer_command == "netd":
+                runtime = PeerNetdRuntime(settings)
+                if args.netd_command == "build":
+                    _print(runtime.build(args.out))
+                    return 0
+                if args.netd_command == "start":
+                    _print(
+                        runtime.start(
+                            _peer_netd_options_from_args(args),
+                            build_if_missing=not args.no_build,
+                        )
+                    )
+                    return 0
+                if args.netd_command == "stop":
+                    _print(runtime.stop())
+                    return 0
+                if args.netd_command == "status":
+                    _print(runtime.status())
+                    return 0
+                if args.netd_command == "install-service":
+                    _print(
+                        install_peer_netd_service(
+                            settings,
+                            _peer_netd_options_from_args(args),
+                            PeerNetdServiceOptions(service_name=args.service_name, apply=args.apply),
+                        )
+                    )
+                    return 0
+                if args.netd_command == "uninstall-service":
+                    _print(
+                        uninstall_peer_netd_service(
+                            settings,
+                            PeerNetdServiceOptions(service_name=args.service_name, apply=args.apply),
+                        )
+                    )
+                    return 0
+                if args.netd_command == "service-status":
+                    result = peer_netd_service_status(PeerNetdServiceOptions(service_name=args.service_name))
+                    _print(result)
+                    return 0 if result.get("ok") else 1
+            svc = PeerService(settings)
+            if args.peer_command == "init":
+                _print(
+                    svc.init_node(
+                        node_id=args.node_id,
+                        display_name=args.display_name,
+                        capabilities=args.capability or None,
+                    )
+                )
+                return 0
+            if args.peer_command == "add":
+                _print(
+                    svc.add_peer(
+                        node_id=args.node_id,
+                        base_url=args.base_url,
+                        peer_id=args.peer_id,
+                        multiaddrs=args.multiaddr,
+                        relay_addrs=args.relay_addr,
+                        rendezvous_addr=args.rendezvous_addr,
+                        rendezvous_namespace=args.rendezvous_namespace,
+                        display_name=args.display_name,
+                        capabilities=args.capability or None,
+                        trust=args.trust,
+                        shared_secret_env=args.shared_secret_env,
+                    )
+                )
+                return 0
+            if args.peer_command == "status":
+                _print(svc.status())
+                return 0
+            if args.peer_command == "share-card":
+                result = svc.share_card(
+                    base_url=args.base_url,
+                    rendezvous_addr=args.rendezvous_addr,
+                    rendezvous_namespace=args.rendezvous_namespace,
+                )
+                if result.get("ok") and args.out:
+                    args.out.parent.mkdir(parents=True, exist_ok=True)
+                    args.out.write_text(json.dumps(result["card"], indent=2), encoding="utf-8")
+                    result = result | {"path": str(args.out.resolve())}
+                _print(result)
+                return 0 if result.get("ok") else 1
+            if args.peer_command == "import-card":
+                card = json.loads(args.file.read_text(encoding="utf-8"))
+                if not isinstance(card, dict):
+                    raise ValueError("peer card file must contain a JSON object")
+                _print(svc.import_card(card, trust=args.trust, shared_secret_env=args.shared_secret_env))
+                return 0
+            if args.peer_command == "rooms":
+                _print(svc.list_rooms())
+                return 0
+            if args.peer_command == "context":
+                _print(svc.context_pack(args.room_id, viewer_node_id=args.viewer_node_id or None))
+                return 0
+            if args.peer_command == "append-message":
+                _print(
+                    svc.append_message(
+                        room_id=args.room_id,
+                        from_node_id=args.from_node_id,
+                        to_node_ids=args.to_node_id,
+                        message_type=args.type,
+                        content=args.content,
+                        citations=args.citation,
+                        confidence=args.confidence,
+                    )
+                )
+                return 0
+            if args.peer_command == "send-message":
+                _print(
+                    svc.send_message_to_peer(
+                        peer_id=args.peer_id,
+                        room_id=args.room_id,
+                        content=args.content,
+                        message_type=args.type,
+                        citations=args.citation,
+                        confidence=args.confidence,
+                    )
+                )
+                return 0
+            if args.peer_command == "update-summary":
+                _print(svc.update_summary(args.room_id, summary_md=args.summary))
+                return 0
+            if args.peer_command == "open-room":
+                _print(svc.open_room(topic=args.topic, peer_ids=args.peer, send_invites=not args.no_send))
+                return 0
+            if args.peer_command == "poll-netd":
+                _print(svc.process_netd_inbox(limit=args.limit))
                 return 0
 
         if args.command in {
@@ -1100,6 +1339,59 @@ def _settings_with_path_overrides(settings: Settings, args: argparse.Namespace) 
         if isinstance(path, Path):
             path.parent.mkdir(parents=True, exist_ok=True)
     return replace(settings, **updates)
+
+
+def _add_peer_netd_start_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--node-id", default="amo-node", help="Stable AMO node id advertised by the sidecar.")
+    parser.add_argument("--listen", default="/ip4/0.0.0.0/tcp/0", help="libp2p listen multiaddr.")
+    parser.add_argument("--api", default="127.0.0.1:8788", help="Local sidecar API host:port. Must be fixed for managed start.")
+    parser.add_argument("--store-path", default="", help="Optional sidecar JSONL inbox path. Defaults under AMO_HOME/.peer/netd.")
+    parser.add_argument(
+        "--shared-secret-env",
+        default="",
+        help="Environment variable containing the shared HMAC secret used by peer-netd.",
+    )
+    parser.add_argument("--require-signature", action="store_true", help="Reject unsigned incoming peer envelopes.")
+    parser.add_argument("--bootstrap", action="append", default=[], help="Bootstrap peer multiaddr. Repeat for multiple peers.")
+    parser.add_argument("--static-relay", action="append", default=[], help="Circuit relay multiaddr. Repeat for multiple relays.")
+    parser.add_argument("--mdns", action="store_true", help="Enable LAN mDNS discovery.")
+    parser.add_argument("--mdns-service", default="_amo-peer._udp", help="mDNS service tag.")
+    parser.add_argument("--rendezvous-server", action="store_true", help="Serve AMO rendezvous registration/discovery streams.")
+    parser.add_argument("--relay-service", action="store_true", help="Serve libp2p circuit relay v2 when reachable.")
+    parser.add_argument("--nat-service", action="store_true", help="Help peers determine reachability.")
+    parser.add_argument("--auto-relay", action="store_true", help="Enable AutoRelay; usually paired with --static-relay.")
+    parser.add_argument("--hole-punching", action="store_true", help="Enable libp2p DCUtR hole punching.")
+    parser.add_argument("--force-private", action="store_true", help="Force private reachability for relay tests.")
+    parser.add_argument("--force-public", action="store_true", help="Force public reachability for relay-service tests.")
+    parser.add_argument(
+        "--advertise-localhost-dns",
+        action="store_true",
+        help="Local smoke only: advertise 127.0.0.1 as dns4/localhost.",
+    )
+    parser.add_argument("--no-build", action="store_true", help="Do not build peer-netd automatically if the binary is missing.")
+
+
+def _peer_netd_options_from_args(args: argparse.Namespace) -> PeerNetdLaunchOptions:
+    return PeerNetdLaunchOptions(
+        node_id=args.node_id,
+        listen_addr=args.listen,
+        api_addr=args.api,
+        store_path=args.store_path,
+        shared_secret_env=args.shared_secret_env,
+        require_signature=args.require_signature,
+        bootstrap_addrs=tuple(args.bootstrap or []),
+        static_relays=tuple(args.static_relay or []),
+        mdns=args.mdns,
+        mdns_service=args.mdns_service,
+        rendezvous_server=args.rendezvous_server,
+        relay_service=args.relay_service,
+        nat_service=args.nat_service,
+        auto_relay=args.auto_relay,
+        hole_punching=args.hole_punching,
+        force_private=args.force_private,
+        force_public=args.force_public,
+        advertise_localhost_dns=args.advertise_localhost_dns,
+    )
 
 
 def _add_model_selection_args(parser: argparse.ArgumentParser) -> None:
