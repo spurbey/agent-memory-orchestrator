@@ -69,6 +69,8 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		"listen_addrs":     s.node.Addrs(),
 		"relay_addrs":      s.node.RelayAddrs(),
 		"api_addr":         s.Addr(),
+		"store_path":       s.store.Path(),
+		"store_error":      s.store.LastError(),
 		"connected_peers":  s.node.ConnectedPeers(),
 		"discovered_peers": s.node.DiscoveredPeers(),
 		"message_count":    s.store.Count(),

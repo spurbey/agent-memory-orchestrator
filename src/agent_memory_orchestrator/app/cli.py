@@ -1318,6 +1318,7 @@ def _add_peer_netd_start_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--node-id", default="amo-node", help="Stable AMO node id advertised by the sidecar.")
     parser.add_argument("--listen", default="/ip4/0.0.0.0/tcp/0", help="libp2p listen multiaddr.")
     parser.add_argument("--api", default="127.0.0.1:8788", help="Local sidecar API host:port. Must be fixed for managed start.")
+    parser.add_argument("--store-path", default="", help="Optional sidecar JSONL inbox path. Defaults under AMO_HOME/.peer/netd.")
     parser.add_argument(
         "--shared-secret-env",
         default="",
@@ -1348,6 +1349,7 @@ def _peer_netd_options_from_args(args: argparse.Namespace) -> PeerNetdLaunchOpti
         node_id=args.node_id,
         listen_addr=args.listen,
         api_addr=args.api,
+        store_path=args.store_path,
         shared_secret_env=args.shared_secret_env,
         require_signature=args.require_signature,
         bootstrap_addrs=tuple(args.bootstrap or []),

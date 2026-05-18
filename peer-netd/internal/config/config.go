@@ -6,6 +6,7 @@ type Config struct {
 	NodeID                string
 	ListenAddr            string
 	APIAddr               string
+	StorePath             string
 	SharedSecret          string
 	RequireSignature      bool
 	DialTimeout           time.Duration
@@ -29,6 +30,7 @@ func Default() Config {
 		NodeID:                "amo-node",
 		ListenAddr:            "/ip4/127.0.0.1/tcp/0",
 		APIAddr:               "127.0.0.1:0",
+		StorePath:             "",
 		DialTimeout:           10 * time.Second,
 		MDNSServiceTag:        "_amo-peer._udp",
 		AutoConnectDiscovered: true,
