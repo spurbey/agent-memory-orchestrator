@@ -27,6 +27,10 @@ from ..core.privacy import redact_secrets
 from ..peer import PeerService
 from ..peer.netd_runtime import PeerNetdLaunchOptions
 from ..peer.netd_runtime import PeerNetdRuntime
+from ..peer.netd_service import PeerNetdServiceOptions
+from ..peer.netd_service import install_service as install_peer_netd_service
+from ..peer.netd_service import service_status as peer_netd_service_status
+from ..peer.netd_service import uninstall_service as uninstall_peer_netd_service
 from ..peer.server import main as peer_server_main
 from ..llm.models import download_models, list_model_presets, model_status, preflight_models
 from ..llm.qwen import QwenUnavailable
@@ -338,6 +342,15 @@ def _build_parser() -> argparse.ArgumentParser:
     _add_peer_netd_start_args(peer_netd_start)
     peer_netd_sub.add_parser("stop", help="Stop the managed libp2p sidecar")
     peer_netd_sub.add_parser("status", help="Show managed libp2p sidecar process and health state")
+    peer_netd_install = peer_netd_sub.add_parser("install-service", help="Plan or install OS startup for peer netd")
+    _add_peer_netd_start_args(peer_netd_install)
+    peer_netd_install.add_argument("--service-name", default="AMO Peer Netd")
+    peer_netd_install.add_argument("--apply", action="store_true", help="Actually create the OS startup entry.")
+    peer_netd_uninstall = peer_netd_sub.add_parser("uninstall-service", help="Plan or remove OS startup for peer netd")
+    peer_netd_uninstall.add_argument("--service-name", default="AMO Peer Netd")
+    peer_netd_uninstall.add_argument("--apply", action="store_true", help="Actually remove the OS startup entry.")
+    peer_netd_service_status_cmd = peer_netd_sub.add_parser("service-status", help="Inspect the OS startup entry for peer netd")
+    peer_netd_service_status_cmd.add_argument("--service-name", default="AMO Peer Netd")
     peer_poll_netd = peer_sub.add_parser("poll-netd", help="Process delivered sidecar messages into local peer rooms")
     peer_poll_netd.add_argument("--limit", type=int, default=None)
     peer_serve = peer_sub.add_parser("serve", help="Run the direct peer listener for Tailscale/private networking")
@@ -698,6 +711,27 @@ def main(argv: list[str] | None = None) -> int:
                 if args.netd_command == "status":
                     _print(runtime.status())
                     return 0
+                if args.netd_command == "install-service":
+                    _print(
+                        install_peer_netd_service(
+                            settings,
+                            _peer_netd_options_from_args(args),
+                            PeerNetdServiceOptions(service_name=args.service_name, apply=args.apply),
+                        )
+                    )
+                    return 0
+                if args.netd_command == "uninstall-service":
+                    _print(
+                        uninstall_peer_netd_service(
+                            settings,
+                            PeerNetdServiceOptions(service_name=args.service_name, apply=args.apply),
+                        )
+                    )
+                    return 0
+                if args.netd_command == "service-status":
+                    result = peer_netd_service_status(PeerNetdServiceOptions(service_name=args.service_name))
+                    _print(result)
+                    return 0 if result.get("ok") else 1
             svc = PeerService(settings)
             if args.peer_command == "init":
                 _print(
