@@ -289,6 +289,11 @@ def _build_parser() -> argparse.ArgumentParser:
     peer_add.add_argument("--display-name", default="")
     peer_add.add_argument("--capability", action="append", default=[])
     peer_add.add_argument("--trust", choices=["trusted", "limited", "blocked"], default="trusted")
+    peer_add.add_argument(
+        "--shared-secret-env",
+        default="",
+        help="Optional environment variable containing this peer's HMAC shared secret.",
+    )
     peer_sub.add_parser("status", help="Show peer node, policy, configured peers, and room count")
     peer_sub.add_parser("rooms", help="List local peer investigation rooms")
     peer_context = peer_sub.add_parser("context", help="Build the three-layer context pack for a room")
@@ -657,6 +662,7 @@ def main(argv: list[str] | None = None) -> int:
                         display_name=args.display_name,
                         capabilities=args.capability or None,
                         trust=args.trust,
+                        shared_secret_env=args.shared_secret_env,
                     )
                 )
                 return 0
