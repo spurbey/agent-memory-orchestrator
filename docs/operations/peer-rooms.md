@@ -1,5 +1,7 @@
 # AMO Peer Rooms over Tailscale
 
+> Status: direct HTTP over Tailscale was the first test transport. The replacement direction is the embedded libp2p sidecar documented in `docs/operations/peer-network-libp2p.md`. Keep this file only as historical setup context for the Tailscale experiment.
+
 Peer rooms are temporary AMO investigation rooms created when a local memory answer is not enough. Tailscale provides the private device-to-device network; AMO owns the room state, context window, policy, and transcript.
 
 ## One-Time Setup
