@@ -17,6 +17,9 @@ def test_peer_netd_client_calls_sidecar_api() -> None:
 
         health = client.health()
         connected = client.connect("/ip4/127.0.0.1/tcp/9000/p2p/peer-a")
+        bootstrapped = client.bootstrap(["/ip4/127.0.0.1/tcp/9001/p2p/peer-b"])
+        registered = client.rendezvous_register("/ip4/127.0.0.1/tcp/9002/p2p/rv", "amo-test")
+        discovered = client.rendezvous_discover("/ip4/127.0.0.1/tcp/9002/p2p/rv", "amo-test")
         sent = client.send_message(
             "peer-a",
             PeerMessage(
@@ -33,6 +36,9 @@ def test_peer_netd_client_calls_sidecar_api() -> None:
 
         assert health["peer_id"] == "fake-peer"
         assert connected["ok"] is True
+        assert bootstrapped["ok"] is True
+        assert registered["ok"] is True
+        assert discovered[0]["peer_id"] == "peer-a"
         assert sent["ok"] is True
         assert messages[0]["message"]["payload"]["content"] == "found matching local memory"
         assert state["connect"][0]["addr"].endswith("/peer-a")
@@ -55,7 +61,7 @@ def test_peer_netd_client_raises_on_sidecar_error() -> None:
 
 
 def start_fake_netd(send_status: int = 200) -> tuple[ThreadingHTTPServer, dict[str, list[dict]]]:
-    state: dict[str, list[dict]] = {"connect": [], "send": []}
+    state: dict[str, list[dict]] = {"bootstrap": [], "connect": [], "register": [], "discover": [], "send": []}
 
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:  # noqa: N802
@@ -65,13 +71,28 @@ def start_fake_netd(send_status: int = 200) -> tuple[ThreadingHTTPServer, dict[s
             if self.path == "/messages":
                 self.respond(200, {"ok": True, "messages": [{"message": state["send"][0]["message"]}]})
                 return
+            if self.path == "/peers":
+                self.respond(200, {"ok": True, "connected_peers": ["peer-a"], "discovered_peers": []})
+                return
             self.respond(404, {"ok": False, "error": "not found"})
 
         def do_POST(self) -> None:  # noqa: N802
             payload = json.loads(self.rfile.read(int(self.headers.get("Content-Length", "0"))).decode("utf-8"))
+            if self.path == "/bootstrap":
+                state["bootstrap"].append(payload)
+                self.respond(200, {"ok": True, "results": [{"ok": True, "addr": payload["addrs"][0]}]})
+                return
             if self.path == "/connect":
                 state["connect"].append(payload)
                 self.respond(200, {"ok": True})
+                return
+            if self.path == "/rendezvous/register":
+                state["register"].append(payload)
+                self.respond(200, {"ok": True})
+                return
+            if self.path == "/rendezvous/discover":
+                state["discover"].append(payload)
+                self.respond(200, {"ok": True, "peers": [{"peer_id": "peer-a", "addrs": ["addr-a"]}]})
                 return
             if self.path == "/send":
                 state["send"].append(payload)
