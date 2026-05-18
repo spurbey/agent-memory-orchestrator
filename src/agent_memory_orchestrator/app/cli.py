@@ -306,6 +306,15 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Optional environment variable containing this peer's HMAC shared secret.",
     )
     peer_sub.add_parser("status", help="Show peer node, policy, configured peers, and room count")
+    peer_share = peer_sub.add_parser("share-card", help="Print or write this node's importable peer card")
+    peer_share.add_argument("--out", type=Path, help="Optional JSON output path.")
+    peer_share.add_argument("--base-url", default="", help="Optional legacy direct HTTP URL to include.")
+    peer_share.add_argument("--rendezvous-addr", default="", help="Optional rendezvous node multiaddr to include.")
+    peer_share.add_argument("--rendezvous-namespace", default="", help="Optional rendezvous namespace to include.")
+    peer_import = peer_sub.add_parser("import-card", help="Import a trusted peer from a peer-card JSON file")
+    peer_import.add_argument("--file", required=True, type=Path)
+    peer_import.add_argument("--trust", choices=["trusted", "limited", "blocked"], default="trusted")
+    peer_import.add_argument("--shared-secret-env", default="")
     peer_sub.add_parser("rooms", help="List local peer investigation rooms")
     peer_context = peer_sub.add_parser("context", help="Build the three-layer context pack for a room")
     peer_context.add_argument("--room-id", required=True)
@@ -761,6 +770,24 @@ def main(argv: list[str] | None = None) -> int:
                 return 0
             if args.peer_command == "status":
                 _print(svc.status())
+                return 0
+            if args.peer_command == "share-card":
+                result = svc.share_card(
+                    base_url=args.base_url,
+                    rendezvous_addr=args.rendezvous_addr,
+                    rendezvous_namespace=args.rendezvous_namespace,
+                )
+                if result.get("ok") and args.out:
+                    args.out.parent.mkdir(parents=True, exist_ok=True)
+                    args.out.write_text(json.dumps(result["card"], indent=2), encoding="utf-8")
+                    result = result | {"path": str(args.out.resolve())}
+                _print(result)
+                return 0 if result.get("ok") else 1
+            if args.peer_command == "import-card":
+                card = json.loads(args.file.read_text(encoding="utf-8"))
+                if not isinstance(card, dict):
+                    raise ValueError("peer card file must contain a JSON object")
+                _print(svc.import_card(card, trust=args.trust, shared_secret_env=args.shared_secret_env))
                 return 0
             if args.peer_command == "rooms":
                 _print(svc.list_rooms())
