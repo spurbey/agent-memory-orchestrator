@@ -57,6 +57,40 @@ def test_peer_add_accepts_libp2p_identity_without_base_url(tmp_path: Path, capsy
     assert payload["peer"]["multiaddrs"] == ["/ip4/127.0.0.1/tcp/9001/p2p/12D3KooWPeer"]
 
 
+def test_peer_share_and_import_card_with_base_url(tmp_path: Path, capsys) -> None:
+    home_a = tmp_path / "node-a"
+    home_b = tmp_path / "node-b"
+    card_path = tmp_path / "node-a.card.json"
+    assert main(["peer", "--amo-home", str(home_a), "init", "--node-id", "node-a", "--display-name", "Node A"]) == 0
+    capsys.readouterr()
+
+    share_code = main(
+        [
+            "peer",
+            "--amo-home",
+            str(home_a),
+            "share-card",
+            "--base-url",
+            "http://127.0.0.1:8787",
+            "--out",
+            str(card_path),
+        ]
+    )
+    share_payload = json.loads(capsys.readouterr().out)
+    assert share_code == 0
+    assert card_path.exists()
+    assert share_payload["card"]["node_id"] == "node-a"
+
+    assert main(["peer", "--amo-home", str(home_b), "init", "--node-id", "node-b"]) == 0
+    capsys.readouterr()
+    import_code = main(["peer", "--amo-home", str(home_b), "import-card", "--file", str(card_path)])
+    import_payload = json.loads(capsys.readouterr().out)
+
+    assert import_code == 0
+    assert import_payload["peer"]["node_id"] == "node-a"
+    assert import_payload["peer"]["base_url"] == "http://127.0.0.1:8787"
+
+
 def test_peer_poll_netd_fails_cleanly_when_sidecar_is_not_running(tmp_path: Path, capsys, monkeypatch) -> None:
     monkeypatch.setenv("AMO_PEER_NETD_URL", "http://127.0.0.1:1")
 

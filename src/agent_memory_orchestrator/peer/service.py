@@ -9,6 +9,7 @@ from urllib.error import HTTPError, URLError
 
 from ..core.config import Settings
 from .auth import PeerAuthError, secret_for_peer, unwrap_payload, wrap_payload
+from .cards import build_peer_card, peer_from_card
 from .models import PeerNode
 from .netd_client import PeerNetdClient, PeerNetdError
 from .netd_runtime import PeerNetdRuntime
@@ -85,6 +86,38 @@ class PeerService:
             "peers": [peer.to_dict() for peer in config.peers],
             "room_count": len(rooms),
         }
+
+    def share_card(
+        self,
+        *,
+        base_url: str = "",
+        rendezvous_addr: str = "",
+        rendezvous_namespace: str = "",
+    ) -> dict[str, Any]:
+        config = self.store.load_config()
+        netd_health = None
+        try:
+            runtime_status = PeerNetdRuntime(self.settings).status()
+            if runtime_status.get("api_ok"):
+                netd_health = runtime_status.get("health")
+        except Exception:
+            netd_health = None
+        card = build_peer_card(
+            config=config,
+            netd_health=netd_health if isinstance(netd_health, dict) else None,
+            base_url=base_url,
+            rendezvous_addr=rendezvous_addr,
+            rendezvous_namespace=rendezvous_namespace,
+        )
+        if not any((card["base_url"], card["peer_id"], card["multiaddrs"], card["relay_addrs"], card["rendezvous_addr"])):
+            return {"ok": False, "error": "no usable peer address available; start peer netd or pass --base-url"}
+        return {"ok": True, "card": card}
+
+    def import_card(self, card: dict[str, Any], *, trust: str = "trusted", shared_secret_env: str = "") -> dict[str, Any]:
+        peer = peer_from_card(card, trust=trust, shared_secret_env=shared_secret_env)
+        config = self.store.add_peer(peer)
+        saved = config.peer_by_id(peer.node_id)
+        return {"ok": True, "peer": saved.to_dict() if saved else None}
 
     def capabilities(self) -> dict[str, Any]:
         config = self.store.load_config()
