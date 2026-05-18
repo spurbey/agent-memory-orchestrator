@@ -31,6 +31,9 @@ class PeerNetdClient:
             raise ValueError("addr is required")
         return self._request("POST", "/connect", {"addr": addr})
 
+    def reserve_relay(self, addrs: list[str] | None = None) -> dict[str, Any]:
+        return self._request("POST", "/relay/reserve", {"addrs": addrs or []})
+
     def bootstrap(self, addrs: list[str] | None = None) -> dict[str, Any]:
         return self._request("POST", "/bootstrap", {"addrs": addrs or []})
 

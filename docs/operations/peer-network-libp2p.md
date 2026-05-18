@@ -60,6 +60,7 @@ peer enable starts amo-peer-netd
 node prints peer_id and listen_addrs
 optional LAN mDNS discovers local peers
 optional rendezvous node registers peers by namespace
+optional relay service lets private peers reserve /p2p-circuit addresses
 AMO discovers and connects to a peer multiaddr
 AMO sends signed peer_response
 remote sidecar verifies envelope
@@ -80,6 +81,19 @@ room messages still use signed AMO envelopes over /amo/peer/1.0.0
 ```
 
 The rendezvous node stores temporary peer addresses only. It does not store room transcripts, raw memory, evidence, summaries, or LLM prompts.
+
+## Relay Shape
+
+```text
+public or always-on node runs: amo-peer-netd --relay-service
+private peer runs locally and calls /relay/reserve with the relay multiaddr
+private peer receives /p2p-circuit address
+other peer dials that relay address
+AMO opens /amo/peer/1.0.0 stream with transient relay fallback enabled
+signed room message is delivered to the private peer
+```
+
+Relay nodes should be treated as transport utilities. They should be rate-limited and monitored, but they should not read AMO memory or own room state.
 
 ## Why libp2p, Not Tailscale
 
@@ -102,6 +116,7 @@ These nodes should not store memory, raw evidence, or LLM prompts. They only mov
 - Go unit/integration tests verify signed envelopes, direct libp2p delivery, and rendezvous discovery followed by delivery.
 - Python tests verify the AMO localhost client can call health, bootstrap, rendezvous, send, and messages APIs.
 - Binary smoke starts three real sidecar processes: rendezvous, node A, and node B. A/B register, B discovers A, B sends a signed response, and A receives it.
+- Binary relay smoke starts three real sidecar processes: relay, private node A, and node B. A reserves a relay slot, B dials A's `/p2p-circuit` address, B sends a signed response, and A receives it.
 
 ## References
 
