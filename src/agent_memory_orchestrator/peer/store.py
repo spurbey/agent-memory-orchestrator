@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import replace
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
 
@@ -14,7 +14,7 @@ from .policy import PeerPolicy
 
 
 def _utc_now() -> str:
-    return datetime.now(UTC).isoformat()
+    return datetime.now(timezone.utc).isoformat()
 
 
 def _sha256(text: str) -> str:
@@ -122,7 +122,7 @@ class PeerStore:
         topic = topic.strip()
         if not topic:
             raise ValueError("topic is required")
-        room_id = f"room_{datetime.now(UTC).strftime('%Y%m%d_%H%M%S')}_{uuid4().hex[:8]}"
+        room_id = f"room_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}_{uuid4().hex[:8]}"
         room_md = self.render_room_md(
             room_id=room_id,
             topic=topic,

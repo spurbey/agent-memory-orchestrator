@@ -4,7 +4,7 @@ import hashlib
 import hmac
 import json
 import os
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
 
@@ -25,7 +25,7 @@ def wrap_payload(*, payload: dict[str, Any], from_node_id: str, secret: str) -> 
     envelope = {
         "amo_peer_envelope_version": ENVELOPE_VERSION,
         "from_node_id": from_node_id,
-        "created_at": datetime.now(UTC).isoformat(),
+        "created_at": datetime.now(timezone.utc).isoformat(),
         "nonce": uuid4().hex,
         "payload_sha256": payload_hash,
         "payload": payload,
