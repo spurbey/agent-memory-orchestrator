@@ -67,3 +67,26 @@ def test_peer_poll_netd_fails_cleanly_when_sidecar_is_not_running(tmp_path: Path
     assert code == 1
     assert payload["ok"] is False
     assert "GET /messages failed" in payload["error"]
+
+
+def test_peer_netd_install_service_is_plan_by_default(tmp_path: Path, capsys) -> None:
+    code = main(
+        [
+            "peer",
+            "--amo-home",
+            str(tmp_path),
+            "netd",
+            "install-service",
+            "--node-id",
+            "zenbook-amo",
+            "--api",
+            "127.0.0.1:8799",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    assert code == 0
+    assert payload["ok"] is True
+    assert payload["apply"] is False
+    assert "enable" in payload["enable_command"]
