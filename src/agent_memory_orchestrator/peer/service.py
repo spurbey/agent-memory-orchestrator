@@ -11,6 +11,7 @@ from ..core.config import Settings
 from .auth import PeerAuthError, secret_for_peer, unwrap_payload, wrap_payload
 from .models import PeerNode
 from .netd_client import PeerNetdClient, PeerNetdError
+from .netd_runtime import PeerNetdRuntime
 from .protocol import PeerMessage
 from .store import PeerStore
 
@@ -345,7 +346,12 @@ class PeerService:
     def _netd(self) -> PeerNetdClient:
         if self.netd_client is not None:
             return self.netd_client
-        return PeerNetdClient(base_url=os.getenv("AMO_PEER_NETD_URL", "http://127.0.0.1:8788"))
+        env_url = os.getenv("AMO_PEER_NETD_URL", "").strip()
+        if env_url:
+            return PeerNetdClient(base_url=env_url)
+        status = PeerNetdRuntime(self.settings).status()
+        api_url = str(status.get("api_url") or "").strip()
+        return PeerNetdClient(base_url=api_url or "http://127.0.0.1:8788")
 
     def _post_json(self, url: str, payload: dict[str, Any], *, timeout: float = 10.0) -> dict[str, Any]:
         data = json.dumps(payload).encode("utf-8")
