@@ -61,6 +61,14 @@ AMO_HOME/.peer/netd/logs/*.log
 
 Use the direct binary commands only for sidecar development and low-level libp2p debugging.
 
+Plan OS startup:
+
+```powershell
+python -m agent_memory_orchestrator.app.cli peer --amo-home <amo_home> netd install-service --node-id zenbook-amo
+```
+
+Add `--apply` only when you want AMO to create the Windows Scheduled Task or user-systemd unit.
+
 ## API
 
 ```text
@@ -90,6 +98,7 @@ Implemented:
 - signed AMO envelope send/receive
 - localhost HTTP API for Python AMO
 - AMO-managed build/start/stop/status runtime
+- AMO startup-service planning through CLI
 - unit tests for envelope verification
 - integration test for node-to-node delivery
 - integration test for rendezvous discovery plus message delivery
@@ -101,5 +110,5 @@ Implemented:
 Not implemented yet:
 
 - NAT reachability status
-- OS service installer packaging
+- packaged installer integration for the service planner
 - persistent inbox storage
