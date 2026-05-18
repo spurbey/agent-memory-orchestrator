@@ -1,0 +1,116 @@
+from __future__ import annotations
+
+from pathlib import Path
+
+from agent_memory_orchestrator.core.config import Settings
+from agent_memory_orchestrator.peer.models import PeerNode
+from agent_memory_orchestrator.peer.service import PeerService
+from agent_memory_orchestrator.peer.store import PeerStore
+
+
+def test_peer_room_invite_creates_three_layer_context_files(tmp_path: Path) -> None:
+    settings = make_settings(tmp_path / "initiator")
+    store = PeerStore(settings)
+    store.init_config(node_id="zenbook-amo", display_name="Zenbook")
+    store.add_peer(PeerNode(node_id="poco-amo", base_url="http://100.76.18.75:8787", capabilities=("graph_retrieval",)))
+
+    result = PeerService(settings, store=store).open_room(
+        topic="why did graph_service.py change?",
+        peer_ids=["poco-amo"],
+        send_invites=False,
+    )
+
+    assert result["ok"] is True
+    room = result["room"]
+    room_dir = settings.home / ".peer" / "rooms" / room["room_id"]
+    assert (room_dir / "room.md").exists()
+    assert (room_dir / "rolling_summary.md").exists()
+    assert (room_dir / "transcript.jsonl").exists()
+    room_md = (room_dir / "room.md").read_text(encoding="utf-8")
+    assert "why did graph_service.py change?" in room_md
+    assert "Layer 1: this room.md brief" in room_md
+    assert "Layer 2: initiator-owned rolling_summary.md" in room_md
+    assert "Layer 3: peer sees last 2 initiator-peer exchanges" in room_md
+
+
+def test_trusted_peer_accepts_invite_and_records_messages(tmp_path: Path) -> None:
+    initiator_store = PeerStore(make_settings(tmp_path / "initiator"))
+    initiator_store.init_config(node_id="zenbook-amo")
+    initiator_store.add_peer(PeerNode(node_id="poco-amo", base_url="http://100.76.18.75:8787"))
+    room = PeerService(initiator_store.settings, store=initiator_store).open_room(
+        topic="find relevant AMO memory",
+        peer_ids=["poco-amo"],
+        send_invites=False,
+    )["room"]
+    invite = initiator_store.invite_payload(room["room_id"])
+
+    peer_store = PeerStore(make_settings(tmp_path / "peer"))
+    peer_store.init_config(node_id="poco-amo")
+    peer_store.add_peer(PeerNode(node_id="zenbook-amo", base_url="http://100.82.177.7:8787", trust="trusted"))
+    peer_service = PeerService(peer_store.settings, store=peer_store)
+
+    accepted = peer_service.receive_invite(invite)
+    assert accepted["ok"] is True
+    assert accepted["accepted"] is True
+
+    message = peer_service.receive_message(
+        {
+            "room_id": room["room_id"],
+            "type": "context_response",
+            "from": "zenbook-amo",
+            "content": "Need packet citations only.",
+            "citations": ["WP0030"],
+            "confidence": 0.8,
+        }
+    )
+
+    assert message["ok"] is True
+    detail = peer_service.room_detail(room["room_id"])["room"]
+    assert [item["type"] for item in detail["messages"]] == ["room_invite_received", "context_response"]
+    assert detail["messages"][1]["citations"] == ["WP0030"]
+
+
+def test_untrusted_initiator_invite_is_denied(tmp_path: Path) -> None:
+    peer_store = PeerStore(make_settings(tmp_path / "peer"))
+    peer_store.init_config(node_id="poco-amo")
+    service = PeerService(peer_store.settings, store=peer_store)
+
+    result = service.receive_invite(
+        {
+            "room_id": "room_test",
+            "topic": "private memory request",
+            "initiator_node_id": "unknown-amo",
+            "participants": ["unknown-amo", "poco-amo"],
+            "room_md": "# room",
+        }
+    )
+
+    assert result["ok"] is False
+    assert result["accepted"] is False
+    assert "not trusted" in result["error"]
+
+
+def make_settings(tmp_path: Path) -> Settings:
+    return Settings(
+        home=tmp_path,
+        db_path=tmp_path / "memory.db",
+        export_dir=tmp_path / "exports",
+        local_only=True,
+        mcp_transport="stdio",
+        mcp_host="127.0.0.1",
+        mcp_port=8765,
+        embedding_dims=64,
+        embedding_model="hash-fallback",
+        reranker_model="BAAI/bge-reranker-base",
+        vector_backend="disabled",
+        approval_mode="manual",
+        owner_user_id="local",
+        workspace_id="local",
+        project_id="default",
+        visibility_scope="private",
+        sensitivity_level="normal",
+        consensus_threshold=0.7,
+        max_review_rounds=5,
+        graph_path=tmp_path / "graph" / "amo.kuzu",
+        evidence_dir=tmp_path / "evidence",
+    )

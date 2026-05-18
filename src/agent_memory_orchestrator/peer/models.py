@@ -1,0 +1,111 @@
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from typing import Any
+
+
+DEFAULT_CAPABILITIES = ("graph_retrieval", "memory_search")
+
+
+@dataclass(slots=True, frozen=True)
+class PeerNode:
+    node_id: str
+    base_url: str = ""
+    display_name: str = ""
+    capabilities: tuple[str, ...] = field(default_factory=tuple)
+    trust: str = "trusted"
+
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any]) -> "PeerNode":
+        return cls(
+            node_id=str(payload.get("node_id") or "").strip(),
+            base_url=str(payload.get("base_url") or "").strip().rstrip("/"),
+            display_name=str(payload.get("display_name") or "").strip(),
+            capabilities=tuple(str(item).strip() for item in payload.get("capabilities", []) if str(item).strip()),
+            trust=str(payload.get("trust") or "trusted").strip() or "trusted",
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "node_id": self.node_id,
+            "base_url": self.base_url,
+            "display_name": self.display_name,
+            "capabilities": list(self.capabilities),
+            "trust": self.trust,
+        }
+
+
+@dataclass(slots=True, frozen=True)
+class PeerConfig:
+    node_id: str
+    display_name: str = ""
+    transport: str = "tailscale"
+    auto_join: str = "trusted_only"
+    share_summaries: bool = True
+    share_citations: bool = True
+    raw_evidence: str = "approval_required"
+    max_active_rooms: int = 4
+    capabilities: tuple[str, ...] = DEFAULT_CAPABILITIES
+    peers: tuple[PeerNode, ...] = field(default_factory=tuple)
+
+    @classmethod
+    def from_dict(cls, payload: dict[str, Any]) -> "PeerConfig":
+        return cls(
+            node_id=str(payload.get("node_id") or "local-amo").strip() or "local-amo",
+            display_name=str(payload.get("display_name") or "").strip(),
+            transport=str(payload.get("transport") or "tailscale").strip() or "tailscale",
+            auto_join=str(payload.get("auto_join") or "trusted_only").strip() or "trusted_only",
+            share_summaries=bool(payload.get("share_summaries", True)),
+            share_citations=bool(payload.get("share_citations", True)),
+            raw_evidence=str(payload.get("raw_evidence") or "approval_required").strip() or "approval_required",
+            max_active_rooms=int(payload.get("max_active_rooms") or 4),
+            capabilities=tuple(
+                str(item).strip() for item in payload.get("capabilities", DEFAULT_CAPABILITIES) if str(item).strip()
+            ),
+            peers=tuple(PeerNode.from_dict(item) for item in payload.get("peers", []) if isinstance(item, dict)),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "node_id": self.node_id,
+            "display_name": self.display_name,
+            "transport": self.transport,
+            "auto_join": self.auto_join,
+            "share_summaries": self.share_summaries,
+            "share_citations": self.share_citations,
+            "raw_evidence": self.raw_evidence,
+            "max_active_rooms": self.max_active_rooms,
+            "capabilities": list(self.capabilities),
+            "peers": [peer.to_dict() for peer in self.peers],
+        }
+
+    def share_boundary(self) -> str:
+        parts = []
+        if self.share_summaries:
+            parts.append("summaries allowed")
+        if self.share_citations:
+            parts.append("citations allowed")
+        parts.append(f"raw evidence {self.raw_evidence.replace('_', ' ')}")
+        return "; ".join(parts)
+
+    def peer_by_id(self, node_id: str) -> PeerNode | None:
+        for peer in self.peers:
+            if peer.node_id == node_id:
+                return peer
+        return None
+
+    def with_peer(self, peer: PeerNode) -> "PeerConfig":
+        peers = [item for item in self.peers if item.node_id != peer.node_id]
+        peers.append(peer)
+        return PeerConfig(
+            node_id=self.node_id,
+            display_name=self.display_name,
+            transport=self.transport,
+            auto_join=self.auto_join,
+            share_summaries=self.share_summaries,
+            share_citations=self.share_citations,
+            raw_evidence=self.raw_evidence,
+            max_active_rooms=self.max_active_rooms,
+            capabilities=self.capabilities,
+            peers=tuple(sorted(peers, key=lambda item: item.node_id)),
+        )

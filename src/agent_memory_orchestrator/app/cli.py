@@ -24,6 +24,8 @@ from ..install.service import uninstall as uninstall_targets
 from ..memory import MemoryService
 from ..orchestration import OrchestratorService
 from ..core.privacy import redact_secrets
+from ..peer import PeerService
+from ..peer.server import main as peer_server_main
 from ..llm.models import download_models, list_model_presets, model_status, preflight_models
 from ..llm.qwen import QwenUnavailable
 from ..reasoning_graph.session_runtime import DEFAULT_CODE_EMBEDDING_MODEL
@@ -273,6 +275,29 @@ def _build_parser() -> argparse.ArgumentParser:
     slack_finalize.add_argument("--message-count", type=int, default=0)
     slack_run = slack_sub.add_parser("run", help="Run the local outbound Slack Socket Mode connector")
     slack_run.add_argument("--reply-mode", choices=["disabled", "ack", "answer"], default="answer")
+
+    peer = sub.add_parser("peer", help="Configure and run direct AMO peer rooms over Tailscale/Web transports")
+    peer.add_argument("--amo-home", type=Path, help="AMO home directory containing peer config and room state.")
+    peer_sub = peer.add_subparsers(dest="peer_command", required=True)
+    peer_init = peer_sub.add_parser("init", help="Initialize this AMO node's peer identity")
+    peer_init.add_argument("--node-id", required=True)
+    peer_init.add_argument("--display-name", default="")
+    peer_init.add_argument("--capability", action="append", default=[])
+    peer_add = peer_sub.add_parser("add", help="Add a trusted peer's Tailscale/direct base URL")
+    peer_add.add_argument("--node-id", required=True)
+    peer_add.add_argument("--base-url", required=True, help="Example: http://100.76.18.75:8787")
+    peer_add.add_argument("--display-name", default="")
+    peer_add.add_argument("--capability", action="append", default=[])
+    peer_add.add_argument("--trust", choices=["trusted", "limited", "blocked"], default="trusted")
+    peer_sub.add_parser("status", help="Show peer node, policy, configured peers, and room count")
+    peer_sub.add_parser("rooms", help="List local peer investigation rooms")
+    peer_room = peer_sub.add_parser("open-room", help="Create an investigation room and invite configured peers")
+    peer_room.add_argument("--topic", required=True)
+    peer_room.add_argument("--peer", action="append", default=[], help="Peer node id to invite. Repeat for multiple peers.")
+    peer_room.add_argument("--no-send", action="store_true", help="Create the room locally without sending invites.")
+    peer_serve = peer_sub.add_parser("serve", help="Run the direct peer listener for Tailscale/private networking")
+    peer_serve.add_argument("--host", default="0.0.0.0")
+    peer_serve.add_argument("--port", type=int, default=8787)
 
     debug = sub.add_parser("debug", help="Debug AMO hook, drain, Qwen, graph, and retrieval stages")
     debug_sub = debug.add_subparsers(dest="debug_command", required=True)
@@ -589,6 +614,46 @@ def main(argv: list[str] | None = None) -> int:
                 return 0
             if args.slack_command == "run":
                 SlackSocketModeRunner(svc, reply_mode=args.reply_mode).run_forever()
+                return 0
+
+        if args.command == "peer":
+            if args.peer_command == "serve":
+                peer_args = ["--host", args.host, "--port", str(args.port)]
+                if args.amo_home:
+                    peer_args.extend(["--amo-home", str(args.amo_home)])
+                return peer_server_main(peer_args)
+            if args.amo_home:
+                os.environ["AMO_HOME"] = str(args.amo_home)
+            settings = Settings.load()
+            svc = PeerService(settings)
+            if args.peer_command == "init":
+                _print(
+                    svc.init_node(
+                        node_id=args.node_id,
+                        display_name=args.display_name,
+                        capabilities=args.capability or None,
+                    )
+                )
+                return 0
+            if args.peer_command == "add":
+                _print(
+                    svc.add_peer(
+                        node_id=args.node_id,
+                        base_url=args.base_url,
+                        display_name=args.display_name,
+                        capabilities=args.capability or None,
+                        trust=args.trust,
+                    )
+                )
+                return 0
+            if args.peer_command == "status":
+                _print(svc.status())
+                return 0
+            if args.peer_command == "rooms":
+                _print(svc.list_rooms())
+                return 0
+            if args.peer_command == "open-room":
+                _print(svc.open_room(topic=args.topic, peer_ids=args.peer, send_invites=not args.no_send))
                 return 0
 
         if args.command in {
