@@ -122,6 +122,72 @@ func TestRendezvousDiscoveryConnectsPeers(t *testing.T) {
 	}
 }
 
+func TestRelayAddressAllowsPeerMessageDelivery(t *testing.T) {
+	ctx := context.Background()
+	secret := "relay-secret"
+
+	relayCfg := testConfig("relay", secret)
+	relayCfg.EnableRelayService = true
+	relayCfg.ForcePublic = true
+	relayCfg.AdvertiseLocalhostDNS = true
+	relayNode, err := New(ctx, relayCfg, store.New())
+	if err != nil {
+		t.Fatalf("New(relay) error = %v", err)
+	}
+	defer relayNode.Close()
+	waitForProtocol(t, relayNode, "/libp2p/circuit/relay/0.2.0/hop")
+
+	storeA := store.New()
+	nodeACfg := testConfig("node-a", secret)
+	nodeACfg.ForcePrivate = true
+	nodeACfg.EnableHolePunching = true
+	nodeACfg.StaticRelayAddrs = []string{relayNode.Addrs()[0]}
+	nodeA, err := New(ctx, nodeACfg, storeA)
+	if err != nil {
+		t.Fatalf("New(node-a) error = %v", err)
+	}
+	defer nodeA.Close()
+	if err := nodeA.Connect(ctx, relayNode.Addrs()[0]); err != nil {
+		t.Fatalf("node-a connect relay error = %v", err)
+	}
+
+	relayAddr, err := nodeA.ReserveRelay(ctx, relayNode.Addrs()[0])
+	if err != nil {
+		t.Fatalf("ReserveRelay() error = %v", err)
+	}
+	if !containsString(nodeA.RelayAddrs(), relayAddr) {
+		t.Fatalf("relay address not tracked: %s in %v", relayAddr, nodeA.RelayAddrs())
+	}
+
+	storeB := store.New()
+	nodeBCfg := testConfig("node-b", secret)
+	nodeBCfg.DialTimeout = 20 * time.Second
+	nodeB, err := New(ctx, nodeBCfg, storeB)
+	if err != nil {
+		t.Fatalf("New(node-b) error = %v", err)
+	}
+	defer nodeB.Close()
+
+	if err := nodeB.Connect(ctx, relayAddr); err != nil {
+		t.Fatalf("Connect(relay addr) error = %v", err)
+	}
+
+	msg := protocol.Message{
+		Type:     "peer_response",
+		RoomID:   "relay-room",
+		FromNode: "node-b",
+		ToNode:   "node-a",
+		Payload:  map[string]any{"answer": "relay path reached node-a"},
+	}
+	if _, err := nodeB.Send(ctx, nodeA.PeerID(), msg); err != nil {
+		t.Fatalf("send through relay path error = %v", err)
+	}
+	received := waitForMessages(t, storeA, 1)
+	if got := received[0].Message.Payload["answer"]; got != "relay path reached node-a" {
+		t.Fatalf("received payload answer = %v", got)
+	}
+}
+
 func testConfig(nodeID string, secret string) config.Config {
 	cfg := config.Default()
 	cfg.NodeID = nodeID
@@ -129,6 +195,20 @@ func testConfig(nodeID string, secret string) config.Config {
 	cfg.RequireSignature = true
 	cfg.DialTimeout = 5 * time.Second
 	return cfg
+}
+
+func waitForProtocol(t *testing.T, node *Node, protocolID string) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		for _, item := range node.host.Mux().Protocols() {
+			if string(item) == protocolID {
+				return
+			}
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for protocol %s", protocolID)
 }
 
 func containsPeer(peers []rendezvous.PeerInfo, peerID string) bool {

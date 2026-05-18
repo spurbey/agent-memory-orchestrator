@@ -49,6 +49,7 @@ POST /send      {"to_peer_id": "...", "message": {...}}
 GET  /messages
 GET  /peers
 POST /bootstrap              {"addrs": ["<peer multiaddr>"]}
+POST /relay/reserve          {"addrs": ["<relay multiaddr>"]}
 POST /rendezvous/register    {"addr": "<rendezvous multiaddr>", "namespace": "amo-team"}
 POST /rendezvous/discover    {"addr": "<rendezvous multiaddr>", "namespace": "amo-team", "connect": true}
 ```
@@ -62,6 +63,7 @@ Implemented:
 - local libp2p host startup
 - explicit peer dialing by multiaddr
 - static bootstrap dialing
+- explicit circuit-v2 relay reservation
 - LAN mDNS discovery
 - AMO rendezvous server/client discovery over libp2p streams
 - signed AMO envelope send/receive
@@ -69,12 +71,13 @@ Implemented:
 - unit tests for envelope verification
 - integration test for node-to-node delivery
 - integration test for rendezvous discovery plus message delivery
+- integration test for relay reservation plus message delivery
 - binary smoke with two sidecar processes
 - binary smoke with rendezvous plus two peer processes
+- binary smoke with relay service plus two peer processes
 
 Not implemented yet:
 
-- relay reservation and relay fallback
 - NAT reachability status
 - service installer packaging
 - persistent inbox storage
