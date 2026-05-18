@@ -20,6 +20,7 @@ type Config struct {
 	EnableHolePunching    bool
 	ForcePrivate          bool
 	ForcePublic           bool
+	AdvertiseLocalhostDNS bool
 	StaticRelayAddrs      []string
 }
 

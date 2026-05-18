@@ -32,6 +32,7 @@ func (s *Server) Start() error {
 	mux.HandleFunc("GET /peers", s.handlePeers)
 	mux.HandleFunc("POST /bootstrap", s.handleBootstrap)
 	mux.HandleFunc("POST /connect", s.handleConnect)
+	mux.HandleFunc("POST /relay/reserve", s.handleRelayReserve)
 	mux.HandleFunc("POST /send", s.handleSend)
 	mux.HandleFunc("GET /messages", s.handleMessages)
 	mux.HandleFunc("POST /rendezvous/register", s.handleRendezvousRegister)
@@ -66,6 +67,7 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		"node_id":          s.cfg.NodeID,
 		"peer_id":          s.node.PeerID(),
 		"listen_addrs":     s.node.Addrs(),
+		"relay_addrs":      s.node.RelayAddrs(),
 		"api_addr":         s.Addr(),
 		"connected_peers":  s.node.ConnectedPeers(),
 		"discovered_peers": s.node.DiscoveredPeers(),
@@ -106,6 +108,18 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+func (s *Server) handleRelayReserve(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Addrs []string `json:"addrs"`
+	}
+	if err := readJSON(r, &req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": err.Error()})
+		return
+	}
+	results := s.node.ReserveRelays(r.Context(), req.Addrs)
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "results": results, "relay_addrs": s.node.RelayAddrs()})
 }
 
 func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {

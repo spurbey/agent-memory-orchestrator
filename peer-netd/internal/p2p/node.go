@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 	"sync"
 	"time"
 
@@ -16,6 +17,8 @@ import (
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/libp2p/go-libp2p/core/peerstore"
 	"github.com/libp2p/go-libp2p/p2p/discovery/mdns"
+	"github.com/libp2p/go-libp2p/p2p/host/autorelay"
+	relayclient "github.com/libp2p/go-libp2p/p2p/protocol/circuitv2/client"
 	"github.com/multiformats/go-multiaddr"
 
 	"github.com/agent-memory-orchestrator/peer-netd/internal/config"
@@ -33,6 +36,8 @@ type Node struct {
 
 	discoveredMu sync.Mutex
 	discovered   map[peer.ID]peer.AddrInfo
+	relayMu      sync.Mutex
+	relayAddrs   map[string]string
 }
 
 type BootstrapResult struct {
@@ -52,8 +57,11 @@ func New(ctx context.Context, cfg config.Config, st *store.Store) (*Node, error)
 	}
 
 	opts := []libp2p.Option{libp2p.ListenAddrs(listen)}
+	if cfg.AdvertiseLocalhostDNS {
+		opts = append(opts, libp2p.AddrsFactory(localhostDNSAddrsFactory))
+	}
 	if cfg.EnableRelayService {
-		opts = append(opts, libp2p.EnableRelayService())
+		opts = append(opts, libp2p.DisableRelay(), libp2p.EnableRelayService())
 	}
 	if cfg.EnableNATService {
 		opts = append(opts, libp2p.EnableNATService())
@@ -72,7 +80,12 @@ func New(ctx context.Context, cfg config.Config, st *store.Store) (*Node, error)
 		if err != nil {
 			return nil, fmt.Errorf("invalid static relay addr: %w", err)
 		}
-		opts = append(opts, libp2p.EnableAutoRelayWithStaticRelays(relays))
+		opts = append(opts, libp2p.EnableAutoRelayWithStaticRelays(
+			relays,
+			autorelay.WithBootDelay(0),
+			autorelay.WithMinCandidates(1),
+			autorelay.WithNumRelays(min(2, len(relays))),
+		))
 	} else if cfg.EnableAutoRelay {
 		return nil, errors.New("auto relay requires at least one --static-relay")
 	}
@@ -87,6 +100,7 @@ func New(ctx context.Context, cfg config.Config, st *store.Store) (*Node, error)
 		store:      st,
 		rendezvous: rendezvous.NewRegistry(),
 		discovered: make(map[peer.ID]peer.AddrInfo),
+		relayAddrs: make(map[string]string),
 	}
 	h.SetStreamHandler(protocol.ProtocolID, n.handleStream)
 	if cfg.EnableRendezvous {
@@ -118,6 +132,31 @@ func (n *Node) Addrs() []string {
 	out := make([]string, 0, len(n.host.Addrs()))
 	for _, addr := range n.host.Addrs() {
 		out = append(out, addr.String()+"/p2p/"+n.host.ID().String())
+	}
+	n.relayMu.Lock()
+	defer n.relayMu.Unlock()
+	for _, addr := range n.relayAddrs {
+		if !containsString(out, addr) {
+			out = append(out, addr)
+		}
+	}
+	return out
+}
+
+func (n *Node) RelayAddrs() []string {
+	addrs := n.Addrs()
+	out := make([]string, 0, len(addrs))
+	for _, addr := range addrs {
+		if strings.Contains(addr, "/p2p-circuit") {
+			out = append(out, addr)
+		}
+	}
+	n.relayMu.Lock()
+	defer n.relayMu.Unlock()
+	for _, addr := range n.relayAddrs {
+		if !containsString(out, addr) {
+			out = append(out, addr)
+		}
 	}
 	return out
 }
@@ -157,6 +196,47 @@ func (n *Node) Bootstrap(ctx context.Context, addrs []string) []BootstrapResult 
 	return results
 }
 
+func (n *Node) ReserveRelays(ctx context.Context, addrs []string) []BootstrapResult {
+	if len(addrs) == 0 {
+		addrs = n.cfg.StaticRelayAddrs
+	}
+	results := make([]BootstrapResult, 0, len(addrs))
+	for _, addr := range addrs {
+		relayAddr, err := n.ReserveRelay(ctx, addr)
+		result := BootstrapResult{Addr: addr, OK: err == nil}
+		if err != nil {
+			result.Error = err.Error()
+		} else {
+			result.Addr = relayAddr
+		}
+		results = append(results, result)
+	}
+	return results
+}
+
+func (n *Node) ReserveRelay(ctx context.Context, addr string) (string, error) {
+	info, err := addrInfoFromString(addr)
+	if err != nil {
+		return "", err
+	}
+	n.addPeerInfo(*info)
+	dialCtx, cancel := context.WithTimeout(ctx, n.cfg.DialTimeout)
+	defer cancel()
+	if err := n.host.Connect(dialCtx, *info); err != nil {
+		return "", err
+	}
+	reserveCtx, reserveCancel := context.WithTimeout(ctx, n.cfg.DialTimeout)
+	defer reserveCancel()
+	if _, err := relayclient.Reserve(reserveCtx, n.host, *info); err != nil {
+		return "", err
+	}
+	relayAddr := addr + "/p2p-circuit/p2p/" + n.host.ID().String()
+	n.relayMu.Lock()
+	n.relayAddrs[info.ID.String()] = relayAddr
+	n.relayMu.Unlock()
+	return relayAddr, nil
+}
+
 func (n *Node) Connect(ctx context.Context, addr string) error {
 	info, err := addrInfoFromString(addr)
 	if err != nil {
@@ -182,6 +262,7 @@ func (n *Node) Send(ctx context.Context, toPeerID string, msg protocol.Message) 
 	}
 	dialCtx, cancel := context.WithTimeout(ctx, n.cfg.DialTimeout)
 	defer cancel()
+	dialCtx = network.WithUseTransient(dialCtx, "amo peer message may use relay fallback")
 	stream, err := n.host.NewStream(dialCtx, pid, protocol.ProtocolID)
 	if err != nil {
 		return protocol.Envelope{}, err
@@ -384,6 +465,34 @@ func addrStrings(addrs []multiaddr.Multiaddr, id peer.ID) []string {
 	out := make([]string, 0, len(addrs))
 	for _, addr := range addrs {
 		out = append(out, addr.String()+"/p2p/"+id.String())
+	}
+	return out
+}
+
+func containsString(items []string, target string) bool {
+	for _, item := range items {
+		if item == target {
+			return true
+		}
+	}
+	return false
+}
+
+func min(a int, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+func localhostDNSAddrsFactory(addrs []multiaddr.Multiaddr) []multiaddr.Multiaddr {
+	out := make([]multiaddr.Multiaddr, len(addrs))
+	copy(out, addrs)
+	for i, addr := range out {
+		text := addr.String()
+		if strings.HasPrefix(text, "/ip4/127.0.0.1/") {
+			out[i] = multiaddr.StringCast("/dns4/localhost" + strings.TrimPrefix(text, "/ip4/127.0.0.1"))
+		}
 	}
 	return out
 }

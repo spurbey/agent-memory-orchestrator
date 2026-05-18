@@ -34,6 +34,7 @@ func main() {
 	flag.BoolVar(&cfg.EnableHolePunching, "hole-punching", cfg.EnableHolePunching, "enable libp2p DCUtR hole punching")
 	flag.BoolVar(&cfg.ForcePrivate, "force-private", cfg.ForcePrivate, "force private reachability for AutoRelay tests")
 	flag.BoolVar(&cfg.ForcePublic, "force-public", cfg.ForcePublic, "force public reachability for relay-service tests")
+	flag.BoolVar(&cfg.AdvertiseLocalhostDNS, "advertise-localhost-dns", cfg.AdvertiseLocalhostDNS, "advertise 127.0.0.1 listener as dns4/localhost for local relay smoke tests")
 	flag.Var((*stringList)(&cfg.StaticRelayAddrs), "static-relay", "static relay multiaddr; can be repeated")
 	flag.Parse()
 
@@ -57,14 +58,17 @@ func main() {
 		_ = api.Close(shutdownCtx)
 	}()
 	bootstrapResults := node.Bootstrap(ctx, nil)
+	relayReservationResults := node.ReserveRelays(ctx, nil)
 
 	info := map[string]any{
-		"ok":                true,
-		"node_id":           cfg.NodeID,
-		"peer_id":           node.PeerID(),
-		"listen_addrs":      node.Addrs(),
-		"api_addr":          api.Addr(),
-		"bootstrap_results": bootstrapResults,
+		"ok":                        true,
+		"node_id":                   cfg.NodeID,
+		"peer_id":                   node.PeerID(),
+		"listen_addrs":              node.Addrs(),
+		"relay_addrs":               node.RelayAddrs(),
+		"api_addr":                  api.Addr(),
+		"bootstrap_results":         bootstrapResults,
+		"relay_reservation_results": relayReservationResults,
 		"features": map[string]bool{
 			"mdns":              cfg.EnableMDNS,
 			"rendezvous_server": cfg.EnableRendezvous,
