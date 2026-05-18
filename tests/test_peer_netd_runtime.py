@@ -19,6 +19,7 @@ def test_peer_netd_runtime_builds_expected_args(tmp_path: Path, monkeypatch: pyt
             node_id="zenbook-amo",
             listen_addr="/ip4/0.0.0.0/tcp/9000",
             api_addr="127.0.0.1:8799",
+            store_path=str(tmp_path / "custom-inbox.jsonl"),
             shared_secret_env="AMO_PEER_SECRET",
             require_signature=True,
             bootstrap_addrs=("/ip4/127.0.0.1/tcp/9100/p2p/bootstrap",),
@@ -43,6 +44,7 @@ def test_peer_netd_runtime_builds_expected_args(tmp_path: Path, monkeypatch: pyt
         "--api",
         "127.0.0.1:8799",
     ]
+    assert args[args.index("--store-path") + 1] == str(tmp_path / "custom-inbox.jsonl")
     assert ["--shared-secret", "test-secret"] == args[args.index("--shared-secret") : args.index("--shared-secret") + 2]
     for flag in [
         "--require-signature",

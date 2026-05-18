@@ -21,6 +21,7 @@ func main() {
 	flag.StringVar(&cfg.NodeID, "node-id", cfg.NodeID, "stable AMO node id")
 	flag.StringVar(&cfg.ListenAddr, "listen", cfg.ListenAddr, "libp2p listen multiaddr")
 	flag.StringVar(&cfg.APIAddr, "api", cfg.APIAddr, "local HTTP API bind address")
+	flag.StringVar(&cfg.StorePath, "store-path", cfg.StorePath, "optional JSONL inbox path for delivered envelopes")
 	flag.StringVar(&cfg.SharedSecret, "shared-secret", os.Getenv("AMO_PEER_NETD_SECRET"), "optional shared HMAC secret for AMO envelopes")
 	flag.BoolVar(&cfg.RequireSignature, "require-signature", false, "reject unsigned incoming envelopes")
 	flag.Var((*stringList)(&cfg.BootstrapAddrs), "bootstrap", "bootstrap peer multiaddr; can be repeated")
@@ -41,7 +42,7 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	st := store.New()
+	st := store.New(cfg.StorePath)
 	node, err := p2p.New(ctx, cfg, st)
 	if err != nil {
 		fatal(err)
@@ -67,6 +68,8 @@ func main() {
 		"listen_addrs":              node.Addrs(),
 		"relay_addrs":               node.RelayAddrs(),
 		"api_addr":                  api.Addr(),
+		"store_path":                st.Path(),
+		"store_error":               st.LastError(),
 		"bootstrap_results":         bootstrapResults,
 		"relay_reservation_results": relayReservationResults,
 		"features": map[string]bool{

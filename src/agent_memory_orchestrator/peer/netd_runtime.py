@@ -24,6 +24,7 @@ class PeerNetdLaunchOptions:
     node_id: str = "amo-node"
     listen_addr: str = "/ip4/0.0.0.0/tcp/0"
     api_addr: str = "127.0.0.1:8788"
+    store_path: str = ""
     shared_secret_env: str = ""
     require_signature: bool = False
     bootstrap_addrs: tuple[str, ...] = ()
@@ -124,6 +125,7 @@ class PeerNetdRuntime:
             "api_addr": options.api_addr,
             "api_url": self.api_url(options.api_addr),
             "binary": str(binary),
+            "store_path": str(self.store_path(options)),
             "started_at": timestamp,
             "args": args,
             "stdout_log": str(stdout_path),
@@ -201,6 +203,7 @@ class PeerNetdRuntime:
             "api_url": api_url or None,
             "health": health,
             "api_error": api_error,
+            "store_path": state.get("store_path") or str(self.store_path(PeerNetdLaunchOptions())),
             "state_path": str(self.state_path),
             "binary": state.get("binary"),
             "logs": {
@@ -230,6 +233,8 @@ class PeerNetdRuntime:
             options.listen_addr,
             "--api",
             options.api_addr,
+            "--store-path",
+            str(self.store_path(options)),
             "--mdns-service",
             options.mdns_service,
         ]
@@ -282,6 +287,11 @@ class PeerNetdRuntime:
     @property
     def state_path(self) -> Path:
         return self.runtime_dir / self.state_filename
+
+    def store_path(self, options: PeerNetdLaunchOptions) -> Path:
+        if options.store_path:
+            return Path(options.store_path).expanduser().resolve()
+        return self.runtime_dir / "inbox.jsonl"
 
     def default_binary_path(self) -> Path:
         return self.bin_dir / binary_name()

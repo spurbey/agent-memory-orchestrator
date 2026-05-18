@@ -130,6 +130,8 @@ def _enable_command(settings: Settings, launch: PeerNetdLaunchOptions) -> list[s
         "--mdns-service",
         launch.mdns_service,
     ]
+    if launch.store_path:
+        command.extend(["--store-path", launch.store_path])
     if launch.shared_secret_env:
         command.extend(["--shared-secret-env", launch.shared_secret_env])
     if launch.require_signature:
