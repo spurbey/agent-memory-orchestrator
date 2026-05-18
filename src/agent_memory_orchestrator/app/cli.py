@@ -285,9 +285,14 @@ def _build_parser() -> argparse.ArgumentParser:
     peer_init.add_argument("--node-id", required=True)
     peer_init.add_argument("--display-name", default="")
     peer_init.add_argument("--capability", action="append", default=[])
-    peer_add = peer_sub.add_parser("add", help="Add a trusted peer's Tailscale/direct base URL")
+    peer_add = peer_sub.add_parser("add", help="Add a trusted peer identity and optional transport addresses")
     peer_add.add_argument("--node-id", required=True)
-    peer_add.add_argument("--base-url", required=True, help="Example: http://100.76.18.75:8787")
+    peer_add.add_argument("--base-url", default="", help="Legacy direct HTTP URL, e.g. http://100.76.18.75:8787")
+    peer_add.add_argument("--peer-id", default="", help="libp2p peer id for amo-peer-netd delivery.")
+    peer_add.add_argument("--multiaddr", action="append", default=[], help="Dialable libp2p multiaddr. Repeat as needed.")
+    peer_add.add_argument("--relay-addr", action="append", default=[], help="Dialable relay /p2p-circuit multiaddr. Repeat as needed.")
+    peer_add.add_argument("--rendezvous-addr", default="", help="Rendezvous node multiaddr used for discovery.")
+    peer_add.add_argument("--rendezvous-namespace", default="", help="Rendezvous namespace for this peer/group.")
     peer_add.add_argument("--display-name", default="")
     peer_add.add_argument("--capability", action="append", default=[])
     peer_add.add_argument("--trust", choices=["trusted", "limited", "blocked"], default="trusted")
@@ -309,6 +314,13 @@ def _build_parser() -> argparse.ArgumentParser:
     peer_message.add_argument("--content", required=True)
     peer_message.add_argument("--citation", action="append", default=[])
     peer_message.add_argument("--confidence", type=float)
+    peer_send = peer_sub.add_parser("send-message", help="Append and send a room message through amo-peer-netd")
+    peer_send.add_argument("--room-id", required=True)
+    peer_send.add_argument("--peer-id", required=True, help="Configured AMO peer node id, not the libp2p peer id.")
+    peer_send.add_argument("--type", default="context_request")
+    peer_send.add_argument("--content", required=True)
+    peer_send.add_argument("--citation", action="append", default=[])
+    peer_send.add_argument("--confidence", type=float)
     peer_summary = peer_sub.add_parser("update-summary", help="Replace a room's initiator-owned rolling summary")
     peer_summary.add_argument("--room-id", required=True)
     peer_summary.add_argument("--summary", required=True)
@@ -326,6 +338,8 @@ def _build_parser() -> argparse.ArgumentParser:
     _add_peer_netd_start_args(peer_netd_start)
     peer_netd_sub.add_parser("stop", help="Stop the managed libp2p sidecar")
     peer_netd_sub.add_parser("status", help="Show managed libp2p sidecar process and health state")
+    peer_poll_netd = peer_sub.add_parser("poll-netd", help="Process delivered sidecar messages into local peer rooms")
+    peer_poll_netd.add_argument("--limit", type=int, default=None)
     peer_serve = peer_sub.add_parser("serve", help="Run the direct peer listener for Tailscale/private networking")
     peer_serve.add_argument("--host", default="0.0.0.0")
     peer_serve.add_argument("--port", type=int, default=8787)
@@ -699,6 +713,11 @@ def main(argv: list[str] | None = None) -> int:
                     svc.add_peer(
                         node_id=args.node_id,
                         base_url=args.base_url,
+                        peer_id=args.peer_id,
+                        multiaddrs=args.multiaddr,
+                        relay_addrs=args.relay_addr,
+                        rendezvous_addr=args.rendezvous_addr,
+                        rendezvous_namespace=args.rendezvous_namespace,
                         display_name=args.display_name,
                         capabilities=args.capability or None,
                         trust=args.trust,
@@ -728,11 +747,26 @@ def main(argv: list[str] | None = None) -> int:
                     )
                 )
                 return 0
+            if args.peer_command == "send-message":
+                _print(
+                    svc.send_message_to_peer(
+                        peer_id=args.peer_id,
+                        room_id=args.room_id,
+                        content=args.content,
+                        message_type=args.type,
+                        citations=args.citation,
+                        confidence=args.confidence,
+                    )
+                )
+                return 0
             if args.peer_command == "update-summary":
                 _print(svc.update_summary(args.room_id, summary_md=args.summary))
                 return 0
             if args.peer_command == "open-room":
                 _print(svc.open_room(topic=args.topic, peer_ids=args.peer, send_invites=not args.no_send))
+                return 0
+            if args.peer_command == "poll-netd":
+                _print(svc.process_netd_inbox(limit=args.limit))
                 return 0
 
         if args.command in {
