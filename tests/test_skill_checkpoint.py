@@ -2,8 +2,13 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from agent_memory_orchestrator.core.config import Settings
+from agent_memory_orchestrator.evidence.raw_store import RawEvidenceStore
 from agent_memory_orchestrator.skill_checkpoint import build_skill_checkpoint_prompt
 from agent_memory_orchestrator.skill_checkpoint import finalize_skill_checkpoint_result
+from agent_memory_orchestrator.skill_checkpoint import infer_latest_session_id
+from agent_memory_orchestrator.skill_checkpoint import list_skill_checkpoints
+from agent_memory_orchestrator.skill_checkpoint import mark_skill_checkpoint
 from agent_memory_orchestrator.skill_checkpoint import write_skill_checkpoint_outputs
 
 
@@ -114,3 +119,36 @@ def test_write_skill_checkpoint_outputs_writes_rendered_skill_and_provenance(tmp
     assert (tmp_path / "skill_provenance.json").exists()
     assert (tmp_path / "stage8_qwen_result_corrected.json").exists()
     assert (tmp_path / "stage8_post_validation_report.json").exists()
+
+
+def test_mark_skill_checkpoint_infers_latest_session_and_writes_marker(tmp_path: Path, monkeypatch) -> None:
+    amo_home = tmp_path / "amo"
+    monkeypatch.setenv("AMO_HOME", str(amo_home))
+    settings = Settings.load()
+    RawEvidenceStore(settings.evidence_dir).append(
+        {"hook_event_name": "UserPromptSubmit", "session_id": "codex-session-1"},
+        session_id="codex-session-1",
+        source_app="codex",
+        event_name="user_prompt_submit",
+    )
+
+    assert infer_latest_session_id(settings.evidence_dir, source_app="codex") == "codex-session-1"
+
+    result = mark_skill_checkpoint(
+        settings=settings,
+        agent="codex",
+        note="turn this workflow into a skill",
+        mode="workflow",
+        cwd=tmp_path,
+    )
+
+    marker_path = Path(result["marker_path"])
+    marker = marker_path.read_text(encoding="utf-8")
+    assert result["checkpoint"]["session_id"] == "codex-session-1"
+    assert result["checkpoint"]["status"] == "pending_packet"
+    assert "turn this workflow into a skill" in marker
+    assert result["checkpoint"]["evidence"]["event_name"] == "skill_checkpoint"
+
+    listed = list_skill_checkpoints(settings)
+    assert listed["count"] == 1
+    assert listed["checkpoints"][0]["checkpoint_id"] == result["checkpoint"]["checkpoint_id"]
