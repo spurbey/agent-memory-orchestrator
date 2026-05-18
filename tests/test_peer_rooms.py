@@ -195,6 +195,21 @@ def test_send_message_to_peer_uses_libp2p_netd(tmp_path: Path) -> None:
     assert store.get_room(room["room_id"])["messages"][-1]["content"] == "What do you remember?"
 
 
+def test_peer_service_uses_managed_netd_api_url_from_state(tmp_path: Path) -> None:
+    store = PeerStore(make_settings(tmp_path / "initiator"))
+    store.init_config(node_id="zenbook-amo")
+    netd_dir = store.settings.home / ".peer" / "netd"
+    netd_dir.mkdir(parents=True)
+    (netd_dir / "netd.json").write_text(
+        '{"pid": 999999, "api_url": "http://127.0.0.1:8799"}',
+        encoding="utf-8",
+    )
+
+    client = PeerService(store.settings, store=store)._netd()
+
+    assert client.base_url == "http://127.0.0.1:8799"
+
+
 def test_signed_invite_is_accepted_when_peer_secret_matches(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("AMO_PEER_ZENBOOK_SECRET", "test-secret")
     initiator_store = PeerStore(make_settings(tmp_path / "initiator"))
