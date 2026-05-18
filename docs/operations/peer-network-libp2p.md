@@ -49,9 +49,37 @@ peer-netd/
 
 src/agent_memory_orchestrator/peer/
   netd_client.py
+  netd_runtime.py
 ```
 
 `netd_client.py` is the Python bridge. It talks to `amo-peer-netd` over localhost HTTP and converts AMO peer-room messages into sidecar send requests.
+
+`netd_runtime.py` is the managed sidecar lifecycle layer. It builds the Go binary into `AMO_HOME/.peer/bin`, starts/stops it, writes PID/API/log state under `AMO_HOME/.peer/netd`, and refuses unsafe managed starts where the local API port is dynamic.
+
+## Managed User Flow
+
+The intended user path is AMO-owned, not Tailscale-owned:
+
+```powershell
+python -m agent_memory_orchestrator.app.cli peer --amo-home <amo_home> init --node-id zenbook-amo
+$env:AMO_PEER_NETD_SECRET="<shared-secret>"
+python -m agent_memory_orchestrator.app.cli peer --amo-home <amo_home> enable `
+  --node-id zenbook-amo `
+  --api 127.0.0.1:8788 `
+  --shared-secret-env AMO_PEER_NETD_SECRET `
+  --require-signature
+```
+
+Operational commands:
+
+```powershell
+python -m agent_memory_orchestrator.app.cli peer --amo-home <amo_home> netd build
+python -m agent_memory_orchestrator.app.cli peer --amo-home <amo_home> netd start --node-id zenbook-amo
+python -m agent_memory_orchestrator.app.cli peer --amo-home <amo_home> netd status
+python -m agent_memory_orchestrator.app.cli peer --amo-home <amo_home> netd stop
+```
+
+`peer enable` is the one-command normal path. It builds the sidecar if needed, starts it, waits for `/health`, and returns the peer id/listen addresses. Future install work should wire this into a background OS service, but the process state is already AMO-owned.
 
 ## Implemented Flow
 
@@ -67,7 +95,7 @@ remote sidecar verifies envelope
 remote AMO reads /messages and processes room response
 ```
 
-The current implementation supports explicit multiaddr dialing, static bootstrap dialing, LAN mDNS, and an AMO rendezvous stream protocol. The production UX still needs installer/service wiring so users do not copy addresses manually.
+The current implementation supports explicit multiaddr dialing, static bootstrap dialing, LAN mDNS, managed process start/stop, relay reservation, and an AMO rendezvous stream protocol. Full installer/service wiring is still the next packaging step.
 
 ## Rendezvous Shape
 
@@ -115,8 +143,11 @@ These nodes should not store memory, raw evidence, or LLM prompts. They only mov
 
 - Go unit/integration tests verify signed envelopes, direct libp2p delivery, and rendezvous discovery followed by delivery.
 - Python tests verify the AMO localhost client can call health, bootstrap, rendezvous, send, and messages APIs.
+- Python runtime tests verify managed sidecar command construction, state paths, missing-secret safety, and fixed API-port validation.
+- CLI tests verify `peer netd status` uses `--amo-home` and `peer enable` rejects dynamic API ports before building.
 - Binary smoke starts three real sidecar processes: rendezvous, node A, and node B. A/B register, B discovers A, B sends a signed response, and A receives it.
 - Binary relay smoke starts three real sidecar processes: relay, private node A, and node B. A reserves a relay slot, B dials A's `/p2p-circuit` address, B sends a signed response, and A receives it.
+- Managed runtime smoke starts the sidecar through `python -m agent_memory_orchestrator.app.cli peer enable`, checks `peer netd status`, then stops it through `peer netd stop`.
 
 ## References
 

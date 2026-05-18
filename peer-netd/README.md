@@ -40,6 +40,27 @@ Run a node:
 
 The first stdout line is JSON containing the libp2p `peer_id`, dialable `listen_addrs`, and local `api_addr`.
 
+## Managed From AMO
+
+Normal users should not launch this binary directly. AMO owns the process lifecycle:
+
+```powershell
+python -m agent_memory_orchestrator.app.cli peer --amo-home <amo_home> netd build
+python -m agent_memory_orchestrator.app.cli peer --amo-home <amo_home> enable --node-id zenbook-amo
+python -m agent_memory_orchestrator.app.cli peer --amo-home <amo_home> netd status
+python -m agent_memory_orchestrator.app.cli peer --amo-home <amo_home> netd stop
+```
+
+The managed runtime writes:
+
+```text
+AMO_HOME/.peer/bin/amo-peer-netd(.exe)
+AMO_HOME/.peer/netd/netd.json
+AMO_HOME/.peer/netd/logs/*.log
+```
+
+Use the direct binary commands only for sidecar development and low-level libp2p debugging.
+
 ## API
 
 ```text
@@ -68,6 +89,7 @@ Implemented:
 - AMO rendezvous server/client discovery over libp2p streams
 - signed AMO envelope send/receive
 - localhost HTTP API for Python AMO
+- AMO-managed build/start/stop/status runtime
 - unit tests for envelope verification
 - integration test for node-to-node delivery
 - integration test for rendezvous discovery plus message delivery
@@ -79,5 +101,5 @@ Implemented:
 Not implemented yet:
 
 - NAT reachability status
-- service installer packaging
+- OS service installer packaging
 - persistent inbox storage
