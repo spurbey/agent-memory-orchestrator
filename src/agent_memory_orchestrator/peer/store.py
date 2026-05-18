@@ -40,6 +40,7 @@ class PeerStore:
         self.root = settings.home / ".peer"
         self.config_path = self.root / "peers.json"
         self.rooms_dir = self.root / "rooms"
+        self.netd_processed_path = self.root / "netd_processed.json"
         self.root.mkdir(parents=True, exist_ok=True)
         self.rooms_dir.mkdir(parents=True, exist_ok=True)
 
@@ -289,6 +290,25 @@ class PeerStore:
     def read_text(self, room_id: str, name: str) -> str:
         path = self.rooms_dir / _safe_room_id(room_id) / name
         return path.read_text(encoding="utf-8") if path.exists() else ""
+
+    def load_processed_netd_ids(self) -> set[str]:
+        if not self.netd_processed_path.exists():
+            return set()
+        try:
+            payload = json.loads(self.netd_processed_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            return set()
+        if not isinstance(payload, list):
+            return set()
+        return {str(item) for item in payload if str(item).strip()}
+
+    def mark_processed_netd_id(self, envelope_id: str) -> None:
+        envelope_id = envelope_id.strip()
+        if not envelope_id:
+            return
+        processed = self.load_processed_netd_ids()
+        processed.add(envelope_id)
+        self.netd_processed_path.write_text(json.dumps(sorted(processed), indent=2), encoding="utf-8")
 
     def render_room_md(
         self,
