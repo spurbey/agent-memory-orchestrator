@@ -14,6 +14,7 @@ class PeerNode:
     display_name: str = ""
     capabilities: tuple[str, ...] = field(default_factory=tuple)
     trust: str = "trusted"
+    shared_secret_env: str = ""
 
     @classmethod
     def from_dict(cls, payload: dict[str, Any]) -> "PeerNode":
@@ -23,6 +24,7 @@ class PeerNode:
             display_name=str(payload.get("display_name") or "").strip(),
             capabilities=tuple(str(item).strip() for item in payload.get("capabilities", []) if str(item).strip()),
             trust=str(payload.get("trust") or "trusted").strip() or "trusted",
+            shared_secret_env=str(payload.get("shared_secret_env") or "").strip(),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -32,6 +34,7 @@ class PeerNode:
             "display_name": self.display_name,
             "capabilities": list(self.capabilities),
             "trust": self.trust,
+            "shared_secret_env": self.shared_secret_env,
         }
 
 

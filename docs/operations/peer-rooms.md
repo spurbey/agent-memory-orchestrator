@@ -17,6 +17,15 @@ On another device, add the peer by its Tailscale address:
 amo-cli peer add --node-id poco-f1 --base-url http://100.76.18.75:8787 --capability graph_retrieval
 ```
 
+For app-level message authentication over Tailscale, set the same shared secret on both devices and store only the environment variable name in AMO config:
+
+```bash
+$env:AMO_PEER_POCO_SECRET="<shared-secret>"
+amo-cli peer add --node-id poco-f1 --base-url http://100.76.18.75:8787 --capability graph_retrieval --shared-secret-env AMO_PEER_POCO_SECRET
+```
+
+If a peer has `shared_secret_env` configured, unsigned invites/messages from that peer are rejected. The secret itself is not written to `peers.json`.
+
 ## Open A Room
 
 Create a local investigation room and invite one or more configured peers:
@@ -66,6 +75,7 @@ The modular production layout is:
 ```text
 src/agent_memory_orchestrator/peer/
   models.py      # peer config, node roster, and share-boundary settings
+  auth.py        # optional HMAC envelopes for signed peer messages
   policy.py      # auto-join/trust decisions and safe LLM policy projection
   protocol.py    # normalized peer-room message records
   context.py     # three-layer context-pack assembly

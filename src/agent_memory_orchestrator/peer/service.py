@@ -6,6 +6,7 @@ from urllib import request
 from urllib.error import HTTPError, URLError
 
 from ..core.config import Settings
+from .auth import PeerAuthError, secret_for_peer, unwrap_payload, wrap_payload
 from .models import PeerNode
 from .protocol import PeerMessage
 from .store import PeerStore
@@ -32,6 +33,7 @@ class PeerService:
         display_name: str = "",
         capabilities: list[str] | None = None,
         trust: str = "trusted",
+        shared_secret_env: str = "",
     ) -> dict[str, Any]:
         config = self.store.add_peer(
             PeerNode(
@@ -40,6 +42,7 @@ class PeerService:
                 display_name=display_name,
                 capabilities=tuple(capabilities or ()),
                 trust=trust,
+                shared_secret_env=shared_secret_env,
             )
         )
         return {"ok": True, "peer": config.peer_by_id(node_id).to_dict() if config.peer_by_id(node_id) else None}
@@ -91,22 +94,33 @@ class PeerService:
         if not peer.base_url:
             return {"peer_id": peer.node_id, "ok": False, "error": "peer base_url is not configured"}
         payload = self.store.invite_payload(room_id)
-        result = self._post_json(f"{peer.base_url}/peer/rooms/invite", payload)
-        return {"peer_id": peer.node_id, **result}
+        prepared = self._prepare_outgoing_payload(peer, payload)
+        if not prepared.get("ok"):
+            return {"peer_id": peer.node_id, **prepared}
+        result = self._post_json(f"{peer.base_url}/peer/rooms/invite", prepared["payload"])
+        return {"peer_id": peer.node_id, "auth": prepared.get("auth", {}), **result}
 
     def receive_invite(self, payload: dict[str, Any]) -> dict[str, Any]:
+        auth: dict[str, Any] = {}
         try:
+            payload, auth = self._unwrap_incoming_payload(payload)
             room = self.store.accept_invite(payload)
+        except PeerAuthError as exc:
+            return {"ok": False, "accepted": False, "error": str(exc), "auth": {"authenticated": False}}
         except PermissionError as exc:
-            return {"ok": False, "accepted": False, "error": str(exc)}
-        return {"ok": True, "accepted": True, "room": room}
+            return {"ok": False, "accepted": False, "error": str(exc), "auth": auth}
+        return {"ok": True, "accepted": True, "room": room, "auth": auth}
 
     def receive_message(self, payload: dict[str, Any]) -> dict[str, Any]:
+        try:
+            payload, auth = self._unwrap_incoming_payload(payload)
+        except PeerAuthError as exc:
+            return {"ok": False, "error": str(exc), "auth": {"authenticated": False}}
         message = PeerMessage.from_payload(payload)
         if not message.room_id:
             return {"ok": False, "error": "room_id is required"}
         stored = self.store.append_message(message.room_id, message.to_record())
-        return {"ok": True, "message": stored}
+        return {"ok": True, "message": stored, "auth": auth}
 
     def append_message(
         self,
@@ -141,6 +155,25 @@ class PeerService:
 
     def update_summary(self, room_id: str, *, summary_md: str) -> dict[str, Any]:
         return {"ok": True, "message": self.store.update_rolling_summary(room_id, summary_md)}
+
+    def _prepare_outgoing_payload(self, peer: PeerNode, payload: dict[str, Any]) -> dict[str, Any]:
+        if not peer.shared_secret_env:
+            return {"ok": True, "payload": payload, "auth": {"signed": False}}
+        secret = secret_for_peer(peer)
+        if not secret:
+            return {
+                "ok": False,
+                "error": f"shared secret env is not set for peer {peer.node_id}: {peer.shared_secret_env}",
+            }
+        config = self.store.load_config()
+        return {
+            "ok": True,
+            "payload": wrap_payload(payload=payload, from_node_id=config.node_id, secret=secret),
+            "auth": {"signed": True, "algorithm": "hmac-sha256"},
+        }
+
+    def _unwrap_incoming_payload(self, payload: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+        return unwrap_payload(payload=payload, config=self.store.load_config())
 
     def _post_json(self, url: str, payload: dict[str, Any], *, timeout: float = 10.0) -> dict[str, Any]:
         data = json.dumps(payload).encode("utf-8")

@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from agent_memory_orchestrator.core.config import Settings
+from agent_memory_orchestrator.peer.auth import wrap_payload
 from agent_memory_orchestrator.peer.models import PeerNode
 from agent_memory_orchestrator.peer.service import PeerService
 from agent_memory_orchestrator.peer.store import PeerStore
@@ -68,6 +69,64 @@ def test_trusted_peer_accepts_invite_and_records_messages(tmp_path: Path) -> Non
     detail = peer_service.room_detail(room["room_id"])["room"]
     assert [item["type"] for item in detail["messages"]] == ["room_invite_received", "context_response"]
     assert detail["messages"][1]["citations"] == ["WP0030"]
+
+
+def test_signed_invite_is_accepted_when_peer_secret_matches(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("AMO_PEER_ZENBOOK_SECRET", "test-secret")
+    initiator_store = PeerStore(make_settings(tmp_path / "initiator"))
+    initiator_store.init_config(node_id="zenbook-amo")
+    room = PeerService(initiator_store.settings, store=initiator_store).open_room(
+        topic="signed room",
+        peer_ids=["poco-amo"],
+        send_invites=False,
+    )["room"]
+    invite = initiator_store.invite_payload(room["room_id"])
+    envelope = wrap_payload(payload=invite, from_node_id="zenbook-amo", secret="test-secret")
+
+    peer_store = PeerStore(make_settings(tmp_path / "peer"))
+    peer_store.init_config(node_id="poco-amo")
+    peer_store.add_peer(
+        PeerNode(
+            node_id="zenbook-amo",
+            base_url="http://100.82.177.7:8787",
+            trust="trusted",
+            shared_secret_env="AMO_PEER_ZENBOOK_SECRET",
+        )
+    )
+
+    accepted = PeerService(peer_store.settings, store=peer_store).receive_invite(envelope)
+
+    assert accepted["ok"] is True
+    assert accepted["auth"]["authenticated"] is True
+    assert accepted["auth"]["auth"] == "hmac-sha256"
+
+
+def test_unsigned_invite_is_denied_when_peer_secret_is_configured(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("AMO_PEER_ZENBOOK_SECRET", "test-secret")
+    peer_store = PeerStore(make_settings(tmp_path / "peer"))
+    peer_store.init_config(node_id="poco-amo")
+    peer_store.add_peer(
+        PeerNode(
+            node_id="zenbook-amo",
+            base_url="http://100.82.177.7:8787",
+            trust="trusted",
+            shared_secret_env="AMO_PEER_ZENBOOK_SECRET",
+        )
+    )
+
+    result = PeerService(peer_store.settings, store=peer_store).receive_invite(
+        {
+            "room_id": "room_test",
+            "topic": "unsigned invite",
+            "initiator_node_id": "zenbook-amo",
+            "participants": ["zenbook-amo", "poco-amo"],
+            "room_md": "# room",
+        }
+    )
+
+    assert result["ok"] is False
+    assert result["accepted"] is False
+    assert "signed envelope required" in result["error"]
 
 
 def test_untrusted_initiator_invite_is_denied(tmp_path: Path) -> None:
