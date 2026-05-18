@@ -12,7 +12,7 @@ peer-netd/
   internal/p2p/             # go-libp2p host, connect, send, receive
   internal/protocol/        # AMO message envelope, hash, HMAC verification
   internal/rendezvous/      # AMO namespace registration and peer discovery
-  internal/store/           # local in-memory inbox for delivered messages
+  internal/store/           # local JSONL-backed inbox for delivered messages
 ```
 
 ## Local Smoke
@@ -56,6 +56,7 @@ The managed runtime writes:
 ```text
 AMO_HOME/.peer/bin/amo-peer-netd(.exe)
 AMO_HOME/.peer/netd/netd.json
+AMO_HOME/.peer/netd/inbox.jsonl
 AMO_HOME/.peer/netd/logs/*.log
 ```
 
@@ -85,6 +86,8 @@ POST /rendezvous/discover    {"addr": "<rendezvous multiaddr>", "namespace": "am
 
 Messages are wrapped in AMO envelopes. When a shared secret is configured, outbound envelopes are signed with HMAC-SHA256 and inbound messages can require signatures.
 
+The sidecar persists delivered envelopes when `--store-path` is set. AMO's managed runtime sets this automatically to `AMO_HOME/.peer/netd/inbox.jsonl`, so messages survive sidecar restart until AMO processes them with `peer poll-netd`.
+
 ## Current Scope
 
 Implemented:
@@ -97,6 +100,7 @@ Implemented:
 - AMO rendezvous server/client discovery over libp2p streams
 - signed AMO envelope send/receive
 - localhost HTTP API for Python AMO
+- JSONL-backed persistent inbox
 - AMO-managed build/start/stop/status runtime
 - AMO startup-service planning through CLI
 - unit tests for envelope verification
@@ -106,9 +110,9 @@ Implemented:
 - binary smoke with two sidecar processes
 - binary smoke with rendezvous plus two peer processes
 - binary smoke with relay service plus two peer processes
+- restart smoke proving inbox reload before `poll-netd`
 
 Not implemented yet:
 
 - NAT reachability status
 - packaged installer integration for the service planner
-- persistent inbox storage
