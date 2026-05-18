@@ -50,11 +50,14 @@ peer-netd/
 src/agent_memory_orchestrator/peer/
   netd_client.py
   netd_runtime.py
+  netd_service.py
 ```
 
 `netd_client.py` is the Python bridge. It talks to `amo-peer-netd` over localhost HTTP and converts AMO peer-room messages into sidecar send requests.
 
 `netd_runtime.py` is the managed sidecar lifecycle layer. It builds the Go binary into `AMO_HOME/.peer/bin`, starts/stops it, writes PID/API/log state under `AMO_HOME/.peer/netd`, and refuses unsafe managed starts where the local API port is dynamic.
+
+`netd_service.py` plans OS startup integration. It returns a Windows Scheduled Task plan or user-systemd unit plan by default, and only mutates the host when `--apply` is explicitly used.
 
 ## Managed User Flow
 
@@ -81,6 +84,39 @@ python -m agent_memory_orchestrator.app.cli peer --amo-home <amo_home> netd stop
 
 `peer enable` is the one-command normal path. It builds the sidecar if needed, starts it, waits for `/health`, and returns the peer id/listen addresses. Future install work should wire this into a background OS service, but the process state is already AMO-owned.
 
+Startup planning:
+
+```powershell
+python -m agent_memory_orchestrator.app.cli peer --amo-home <amo_home> netd install-service --node-id zenbook-amo
+python -m agent_memory_orchestrator.app.cli peer --amo-home <amo_home> netd install-service --node-id zenbook-amo --apply
+python -m agent_memory_orchestrator.app.cli peer --amo-home <amo_home> netd service-status
+python -m agent_memory_orchestrator.app.cli peer --amo-home <amo_home> netd uninstall-service --apply
+```
+
+The default is a plan, not mutation. On Windows the apply path creates a per-user Scheduled Task at logon. On Linux it writes a user systemd unit and enables it.
+
+## Room Flow Over Netd
+
+Configure peers with AMO node ids plus libp2p identity:
+
+```powershell
+python -m agent_memory_orchestrator.app.cli peer --amo-home <home_a> add `
+  --node-id node-b `
+  --peer-id <node_b_libp2p_peer_id> `
+  --multiaddr <node_b_multiaddr>
+```
+
+Then the normal room path is:
+
+```powershell
+python -m agent_memory_orchestrator.app.cli peer --amo-home <home_a> open-room --topic "..." --peer node-b
+python -m agent_memory_orchestrator.app.cli peer --amo-home <home_b> poll-netd
+python -m agent_memory_orchestrator.app.cli peer --amo-home <home_b> send-message --room-id <room_id> --peer-id node-a --type context_response --content "..." --citation E0001 --confidence 0.91
+python -m agent_memory_orchestrator.app.cli peer --amo-home <home_a> poll-netd
+```
+
+`poll-netd` uses the managed sidecar API URL from `AMO_HOME/.peer/netd/netd.json`, so each AMO home can run on a different local API port without extra environment variables.
+
 ## Implemented Flow
 
 ```text
@@ -95,7 +131,7 @@ remote sidecar verifies envelope
 remote AMO reads /messages and processes room response
 ```
 
-The current implementation supports explicit multiaddr dialing, static bootstrap dialing, LAN mDNS, managed process start/stop, relay reservation, and an AMO rendezvous stream protocol. Full installer/service wiring is still the next packaging step.
+The current implementation supports explicit multiaddr dialing, static bootstrap dialing, LAN mDNS, managed process start/stop, sidecar-backed room invites/messages, relay reservation, an AMO rendezvous stream protocol, and OS startup planning. Full installer integration is still the next packaging step.
 
 ## Rendezvous Shape
 
@@ -145,9 +181,31 @@ These nodes should not store memory, raw evidence, or LLM prompts. They only mov
 - Python tests verify the AMO localhost client can call health, bootstrap, rendezvous, send, and messages APIs.
 - Python runtime tests verify managed sidecar command construction, state paths, missing-secret safety, and fixed API-port validation.
 - CLI tests verify `peer netd status` uses `--amo-home` and `peer enable` rejects dynamic API ports before building.
+- CLI tests verify libp2p peer config, inbox polling failure behavior, and startup service planning.
 - Binary smoke starts three real sidecar processes: rendezvous, node A, and node B. A/B register, B discovers A, B sends a signed response, and A receives it.
 - Binary relay smoke starts three real sidecar processes: relay, private node A, and node B. A reserves a relay slot, B dials A's `/p2p-circuit` address, B sends a signed response, and A receives it.
 - Managed runtime smoke starts the sidecar through `python -m agent_memory_orchestrator.app.cli peer enable`, checks `peer netd status`, then stops it through `peer netd stop`.
+- Two-node room smoke starts two sidecars with two separate AMO homes, sends `open-room` invite over libp2p, accepts it with `poll-netd`, sends a `context_response`, and ingests it on the initiator with `poll-netd`.
+
+Latest two-node smoke result:
+
+```json
+{
+  "ok": true,
+  "invite_delivery_ok": true,
+  "peer_accept_ok": true,
+  "response_delivery_ok": true,
+  "initiator_received_ok": true,
+  "last_message": {
+    "type": "context_response",
+    "from": "node-b",
+    "to": ["node-a"],
+    "content": "node-b found useful memory",
+    "citations": ["E-SMOKE"],
+    "confidence": 0.91
+  }
+}
+```
 
 ## References
 
