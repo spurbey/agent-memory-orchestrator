@@ -44,6 +44,7 @@ peer-netd/
   internal/localapi/server.go
   internal/p2p/node.go
   internal/protocol/protocol.go
+  internal/rendezvous/rendezvous.go
   internal/store/store.go
 
 src/agent_memory_orchestrator/peer/
@@ -57,13 +58,28 @@ src/agent_memory_orchestrator/peer/
 ```text
 peer enable starts amo-peer-netd
 node prints peer_id and listen_addrs
-AMO connects to a peer multiaddr
+optional LAN mDNS discovers local peers
+optional rendezvous node registers peers by namespace
+AMO discovers and connects to a peer multiaddr
 AMO sends signed peer_response
 remote sidecar verifies envelope
 remote AMO reads /messages and processes room response
 ```
 
-The first implemented slice intentionally uses explicit multiaddrs. The next slice should add discovery so users do not copy addresses.
+The current implementation supports explicit multiaddr dialing, static bootstrap dialing, LAN mDNS, and an AMO rendezvous stream protocol. The production UX still needs installer/service wiring so users do not copy addresses manually.
+
+## Rendezvous Shape
+
+```text
+public or always-on AMO node runs: amo-peer-netd --rendezvous-server
+peer A registers namespace: amo-team
+peer B registers namespace: amo-team
+peer B discovers namespace: amo-team
+peer B receives peer A multiaddrs and dials directly when possible
+room messages still use signed AMO envelopes over /amo/peer/1.0.0
+```
+
+The rendezvous node stores temporary peer addresses only. It does not store room transcripts, raw memory, evidence, summaries, or LLM prompts.
 
 ## Why libp2p, Not Tailscale
 
@@ -80,6 +96,12 @@ For real-world devices, AMO will still need lightweight public nodes:
 - auth/trust: only trusted nodes should join rooms or request memory.
 
 These nodes should not store memory, raw evidence, or LLM prompts. They only move encrypted/signed envelopes and help peers discover/dial each other.
+
+## Current Validation
+
+- Go unit/integration tests verify signed envelopes, direct libp2p delivery, and rendezvous discovery followed by delivery.
+- Python tests verify the AMO localhost client can call health, bootstrap, rendezvous, send, and messages APIs.
+- Binary smoke starts three real sidecar processes: rendezvous, node A, and node B. A/B register, B discovers A, B sends a signed response, and A receives it.
 
 ## References
 

@@ -31,6 +31,42 @@ class PeerNetdClient:
             raise ValueError("addr is required")
         return self._request("POST", "/connect", {"addr": addr})
 
+    def bootstrap(self, addrs: list[str] | None = None) -> dict[str, Any]:
+        return self._request("POST", "/bootstrap", {"addrs": addrs or []})
+
+    def peers(self) -> dict[str, Any]:
+        return self._request("GET", "/peers")
+
+    def rendezvous_register(self, addr: str, namespace: str, ttl_seconds: int = 7200) -> dict[str, Any]:
+        if not addr:
+            raise ValueError("addr is required")
+        if not namespace:
+            raise ValueError("namespace is required")
+        return self._request(
+            "POST",
+            "/rendezvous/register",
+            {"addr": addr, "namespace": namespace, "ttl_seconds": ttl_seconds},
+        )
+
+    def rendezvous_discover(
+        self,
+        addr: str,
+        namespace: str,
+        limit: int = 20,
+        connect: bool = True,
+    ) -> list[dict[str, Any]]:
+        if not addr:
+            raise ValueError("addr is required")
+        if not namespace:
+            raise ValueError("namespace is required")
+        payload = self._request(
+            "POST",
+            "/rendezvous/discover",
+            {"addr": addr, "namespace": namespace, "limit": limit, "connect": connect},
+        )
+        peers = payload.get("peers", [])
+        return peers if isinstance(peers, list) else []
+
     def send_message(self, to_peer_id: str, message: PeerMessage) -> dict[str, Any]:
         if not to_peer_id:
             raise ValueError("to_peer_id is required")
