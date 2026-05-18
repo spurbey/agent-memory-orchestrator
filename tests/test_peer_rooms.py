@@ -34,6 +34,29 @@ def test_peer_room_invite_creates_three_layer_context_files(tmp_path: Path) -> N
     assert "Layer 3: peer sees last 2 initiator-peer exchanges" in room_md
 
 
+def test_peer_config_accepts_libp2p_peer_identity_without_legacy_base_url(tmp_path: Path) -> None:
+    store = PeerStore(make_settings(tmp_path / "initiator"))
+    store.init_config(node_id="zenbook-amo")
+
+    config = store.add_peer(
+        PeerNode(
+            node_id="poco-amo",
+            peer_id="12D3KooWPeer",
+            multiaddrs=("/ip4/127.0.0.1/tcp/9001/p2p/12D3KooWPeer",),
+            relay_addrs=("/ip4/relay/tcp/4001/p2p/relay/p2p-circuit/p2p/12D3KooWPeer",),
+            rendezvous_addr="/ip4/127.0.0.1/tcp/9000/p2p/12D3KooWRendezvous",
+            rendezvous_namespace="amo-team",
+        )
+    )
+
+    peer = config.peer_by_id("poco-amo")
+    assert peer is not None
+    assert peer.base_url == ""
+    assert peer.peer_id == "12D3KooWPeer"
+    assert peer.multiaddrs == ("/ip4/127.0.0.1/tcp/9001/p2p/12D3KooWPeer",)
+    assert peer.rendezvous_namespace == "amo-team"
+
+
 def test_trusted_peer_accepts_invite_and_records_messages(tmp_path: Path) -> None:
     initiator_store = PeerStore(make_settings(tmp_path / "initiator"))
     initiator_store.init_config(node_id="zenbook-amo")

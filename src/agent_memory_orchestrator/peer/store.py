@@ -4,7 +4,6 @@ import hashlib
 import json
 from dataclasses import replace
 from datetime import UTC, datetime
-from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
@@ -76,8 +75,10 @@ class PeerStore:
     def add_peer(self, peer: PeerNode) -> PeerConfig:
         if not peer.node_id:
             raise ValueError("peer node_id is required")
-        if not peer.base_url.startswith(("http://", "https://")):
+        if peer.base_url and not peer.base_url.startswith(("http://", "https://")):
             raise ValueError("peer base_url must be http:// or https://")
+        if not any((peer.base_url, peer.peer_id, peer.multiaddrs, peer.relay_addrs, peer.rendezvous_addr)):
+            raise ValueError("peer requires base_url, peer_id, multiaddrs, relay_addrs, or rendezvous_addr")
         config = self.load_config()
         return self.save_config(config.with_peer(peer))
 
@@ -234,7 +235,7 @@ class PeerStore:
             "room_md_sha256": room["room_md_sha256"],
             "room_md_version": room["room_md_version"],
             "share_boundary": room.get("share_boundary", ""),
-            "transport": room.get("transport", "tailscale"),
+            "transport": room.get("transport", "libp2p"),
             "created_at": room["created_at"],
         }
 
