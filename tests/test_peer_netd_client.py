@@ -18,6 +18,7 @@ def test_peer_netd_client_calls_sidecar_api() -> None:
         health = client.health()
         connected = client.connect("/ip4/127.0.0.1/tcp/9000/p2p/peer-a")
         bootstrapped = client.bootstrap(["/ip4/127.0.0.1/tcp/9001/p2p/peer-b"])
+        relay_reserved = client.reserve_relay(["/ip4/127.0.0.1/tcp/9003/p2p/relay"])
         registered = client.rendezvous_register("/ip4/127.0.0.1/tcp/9002/p2p/rv", "amo-test")
         discovered = client.rendezvous_discover("/ip4/127.0.0.1/tcp/9002/p2p/rv", "amo-test")
         sent = client.send_message(
@@ -37,6 +38,7 @@ def test_peer_netd_client_calls_sidecar_api() -> None:
         assert health["peer_id"] == "fake-peer"
         assert connected["ok"] is True
         assert bootstrapped["ok"] is True
+        assert relay_reserved["relay_addrs"] == ["/ip4/127.0.0.1/tcp/9003/p2p/relay/p2p-circuit/p2p/fake-peer"]
         assert registered["ok"] is True
         assert discovered[0]["peer_id"] == "peer-a"
         assert sent["ok"] is True
@@ -61,7 +63,14 @@ def test_peer_netd_client_raises_on_sidecar_error() -> None:
 
 
 def start_fake_netd(send_status: int = 200) -> tuple[ThreadingHTTPServer, dict[str, list[dict]]]:
-    state: dict[str, list[dict]] = {"bootstrap": [], "connect": [], "register": [], "discover": [], "send": []}
+    state: dict[str, list[dict]] = {
+        "bootstrap": [],
+        "connect": [],
+        "relay": [],
+        "register": [],
+        "discover": [],
+        "send": [],
+    }
 
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:  # noqa: N802
@@ -85,6 +94,17 @@ def start_fake_netd(send_status: int = 200) -> tuple[ThreadingHTTPServer, dict[s
             if self.path == "/connect":
                 state["connect"].append(payload)
                 self.respond(200, {"ok": True})
+                return
+            if self.path == "/relay/reserve":
+                state["relay"].append(payload)
+                self.respond(
+                    200,
+                    {
+                        "ok": True,
+                        "results": [{"ok": True, "addr": payload["addrs"][0]}],
+                        "relay_addrs": [payload["addrs"][0] + "/p2p-circuit/p2p/fake-peer"],
+                    },
+                )
                 return
             if self.path == "/rendezvous/register":
                 state["register"].append(payload)
