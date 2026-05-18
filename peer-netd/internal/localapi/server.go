@@ -29,9 +29,13 @@ func New(cfg config.Config, node *p2p.Node, st *store.Store) *Server {
 func (s *Server) Start() error {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", s.handleHealth)
+	mux.HandleFunc("GET /peers", s.handlePeers)
+	mux.HandleFunc("POST /bootstrap", s.handleBootstrap)
 	mux.HandleFunc("POST /connect", s.handleConnect)
 	mux.HandleFunc("POST /send", s.handleSend)
 	mux.HandleFunc("GET /messages", s.handleMessages)
+	mux.HandleFunc("POST /rendezvous/register", s.handleRendezvousRegister)
+	mux.HandleFunc("POST /rendezvous/discover", s.handleRendezvousDiscover)
 	listener, err := net.Listen("tcp", s.cfg.APIAddr)
 	if err != nil {
 		return err
@@ -58,14 +62,35 @@ func (s *Server) Close(ctx context.Context) error {
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
-		"ok":              true,
-		"node_id":         s.cfg.NodeID,
-		"peer_id":         s.node.PeerID(),
-		"listen_addrs":    s.node.Addrs(),
-		"api_addr":        s.Addr(),
-		"connected_peers": s.node.ConnectedPeers(),
-		"message_count":   s.store.Count(),
+		"ok":               true,
+		"node_id":          s.cfg.NodeID,
+		"peer_id":          s.node.PeerID(),
+		"listen_addrs":     s.node.Addrs(),
+		"api_addr":         s.Addr(),
+		"connected_peers":  s.node.ConnectedPeers(),
+		"discovered_peers": s.node.DiscoveredPeers(),
+		"message_count":    s.store.Count(),
 	})
+}
+
+func (s *Server) handlePeers(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok":               true,
+		"connected_peers":  s.node.ConnectedPeers(),
+		"discovered_peers": s.node.DiscoveredPeers(),
+	})
+}
+
+func (s *Server) handleBootstrap(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Addrs []string `json:"addrs"`
+	}
+	if err := readJSON(r, &req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": err.Error()})
+		return
+	}
+	results := s.node.Bootstrap(r.Context(), req.Addrs)
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "results": results})
 }
 
 func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
@@ -102,6 +127,42 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleMessages(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "messages": s.store.List()})
+}
+
+func (s *Server) handleRendezvousRegister(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Addr       string `json:"addr"`
+		Namespace  string `json:"namespace"`
+		TTLSeconds int    `json:"ttl_seconds"`
+	}
+	if err := readJSON(r, &req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": err.Error()})
+		return
+	}
+	if err := s.node.RegisterWithRendezvous(r.Context(), req.Addr, req.Namespace, time.Duration(req.TTLSeconds)*time.Second); err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]any{"ok": false, "error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+func (s *Server) handleRendezvousDiscover(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Addr      string `json:"addr"`
+		Namespace string `json:"namespace"`
+		Limit     int    `json:"limit"`
+		Connect   bool   `json:"connect"`
+	}
+	if err := readJSON(r, &req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": err.Error()})
+		return
+	}
+	peers, err := s.node.DiscoverViaRendezvous(r.Context(), req.Addr, req.Namespace, req.Limit, req.Connect)
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]any{"ok": false, "error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "peers": peers})
 }
 
 func readJSON(r *http.Request, dst any) error {

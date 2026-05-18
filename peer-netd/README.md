@@ -11,6 +11,7 @@ peer-netd/
   internal/localapi/        # localhost API used by Python AMO
   internal/p2p/             # go-libp2p host, connect, send, receive
   internal/protocol/        # AMO message envelope, hash, HMAC verification
+  internal/rendezvous/      # AMO namespace registration and peer discovery
   internal/store/           # local in-memory inbox for delivered messages
 ```
 
@@ -46,6 +47,10 @@ GET  /health
 POST /connect   {"addr": "<multiaddr-with-/p2p/<peer_id>>"}
 POST /send      {"to_peer_id": "...", "message": {...}}
 GET  /messages
+GET  /peers
+POST /bootstrap              {"addrs": ["<peer multiaddr>"]}
+POST /rendezvous/register    {"addr": "<rendezvous multiaddr>", "namespace": "amo-team"}
+POST /rendezvous/discover    {"addr": "<rendezvous multiaddr>", "namespace": "amo-team", "connect": true}
 ```
 
 Messages are wrapped in AMO envelopes. When a shared secret is configured, outbound envelopes are signed with HMAC-SHA256 and inbound messages can require signatures.
@@ -56,15 +61,19 @@ Implemented:
 
 - local libp2p host startup
 - explicit peer dialing by multiaddr
+- static bootstrap dialing
+- LAN mDNS discovery
+- AMO rendezvous server/client discovery over libp2p streams
 - signed AMO envelope send/receive
 - localhost HTTP API for Python AMO
 - unit tests for envelope verification
 - integration test for node-to-node delivery
+- integration test for rendezvous discovery plus message delivery
 - binary smoke with two sidecar processes
+- binary smoke with rendezvous plus two peer processes
 
 Not implemented yet:
 
-- bootstrap/rendezvous discovery
 - relay reservation and relay fallback
 - NAT reachability status
 - service installer packaging
