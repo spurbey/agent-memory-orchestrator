@@ -131,6 +131,16 @@ python -m agent_memory_orchestrator.app.cli peer --amo-home <home_b> share-card 
 python -m agent_memory_orchestrator.app.cli peer --amo-home <home_a> import-card --file node-b.card.json
 ```
 
+For lower-friction onboarding, use an invite code/bundle:
+
+```powershell
+python -m agent_memory_orchestrator.app.cli peer --amo-home <home_a> create-invite --out node-a.invite.json
+python -m agent_memory_orchestrator.app.cli peer --amo-home <home_b> accept-invite --file node-a.invite.json --response-out node-b.card.json
+python -m agent_memory_orchestrator.app.cli peer --amo-home <home_a> import-card --file node-b.card.json
+```
+
+The invite wraps the inviter's public peer card, recommended trust level, and a card hash. It never contains a shared-secret value. If `accept-invite` runs while the peer sidecar is active, it can emit the accepting node's response card so the inviter can trust it.
+
 Manual config still exists for smoke tests and advanced use:
 
 ```powershell

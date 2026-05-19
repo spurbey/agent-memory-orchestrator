@@ -94,7 +94,7 @@ def peer_doctor(settings: Settings) -> dict[str, Any]:
             "trusted_peers",
             "warn",
             "no trusted peers imported yet",
-            "amo-cli peer import-card --file <peer.card.json>",
+            "amo-cli peer accept-invite --file <peer.invite.json> --response-out <device>.card.json",
         )
 
     missing_secret_envs = sorted(
@@ -136,17 +136,17 @@ def peer_doctor(settings: Settings) -> dict[str, Any]:
 def _next_commands(node_id: str, *, config_exists: bool, ready: bool) -> list[str]:
     if ready:
         return [
-            "amo-cli peer share-card --out <device>.card.json",
+            "amo-cli peer create-invite --out <device>.invite.json",
             'amo-cli peer open-room --topic "<topic>" --peer <peer-node-id>',
         ]
     if not config_exists:
         return [
             'amo-cli peer init --node-id <device-name> --display-name "<Device Name>"',
             "amo-cli peer enable --node-id <device-name>",
-            "amo-cli peer share-card --out <device>.card.json",
+            "amo-cli peer create-invite --out <device>.invite.json",
         ]
     return [
         f"amo-cli peer enable --node-id {node_id}",
-        "amo-cli peer share-card --out <device>.card.json",
-        "amo-cli peer import-card --file <peer.card.json>",
+        "amo-cli peer create-invite --out <device>.invite.json",
+        "amo-cli peer accept-invite --file <peer.invite.json> --response-out <device>.card.json",
     ]

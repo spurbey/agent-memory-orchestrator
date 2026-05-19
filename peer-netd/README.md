@@ -95,6 +95,18 @@ Messages are wrapped in AMO envelopes. When a shared secret is configured, outbo
 
 The sidecar persists delivered envelopes when `--store-path` is set. AMO's managed runtime sets this automatically to `AMO_HOME/.peer/netd/inbox.jsonl`, so messages survive sidecar restart until AMO processes them with `peer poll-netd`.
 
+## Invite Flow
+
+Use invite bundles/codes to avoid hand-editing peer-card JSON:
+
+```powershell
+python -m agent_memory_orchestrator.app.cli peer --amo-home <home_a> create-invite --out node-a.invite.json
+python -m agent_memory_orchestrator.app.cli peer --amo-home <home_b> accept-invite --file node-a.invite.json --response-out node-b.card.json
+python -m agent_memory_orchestrator.app.cli peer --amo-home <home_a> import-card --file node-b.card.json
+```
+
+The invite contains public reachability details and a card hash, not private memory or secret values. `accept-invite` imports the inviter under the recommended trust policy and writes a response card when this node has a usable sidecar address.
+
 ## Current Scope
 
 Implemented:
