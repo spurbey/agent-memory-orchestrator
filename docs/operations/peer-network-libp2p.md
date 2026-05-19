@@ -158,6 +158,8 @@ remote AMO reads /messages and processes room response
 
 The current implementation supports explicit multiaddr dialing, peer-card export/import, packaged sidecar source discovery, readiness diagnostics, static bootstrap dialing, LAN mDNS, managed process start/stop, persistent sidecar inbox, watched inbox draining, sidecar-backed room invites/messages, relay reservation, an AMO rendezvous stream protocol, and OS startup planning. Prebuilt sidecar binaries and OS-managed watcher startup are still the next packaging/UX steps.
 
+Incoming room invites and messages remain local-policy gated. Invites require a trusted initiator under `trusted_only`; messages require a trusted configured sender that is already a room participant. If a peer has `shared_secret_env` configured, netd-delivered messages from that peer must be authenticated or AMO rejects them before mutating room state.
+
 ## Rendezvous Shape
 
 ```text
@@ -207,6 +209,7 @@ These nodes should not store memory, raw evidence, or LLM prompts. They only mov
 - Python runtime tests verify managed sidecar command construction, state paths, missing-secret safety, and fixed API-port validation.
 - CLI tests verify `peer netd status` uses `--amo-home`, `peer doctor` reports readiness, and `peer enable` rejects dynamic API ports before building.
 - CLI tests verify libp2p peer config, peer-card export/import, inbox polling/watch behavior, and startup service planning.
+- Peer-room policy tests verify untrusted senders, non-participant senders, and unsigned netd messages for secret-required peers are rejected.
 - Wheel install smoke verifies packaged installs contain the `peer-netd` Go source tree and `PeerNetdRuntime` can discover it outside the repo.
 - Go store tests verify delivered envelopes persist to JSONL and reload after restart.
 - Binary smoke starts three real sidecar processes: rendezvous, node A, and node B. A/B register, B discovers A, B sends a signed response, and A receives it.
