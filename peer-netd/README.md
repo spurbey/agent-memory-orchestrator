@@ -49,10 +49,13 @@ python -m agent_memory_orchestrator.app.cli peer --amo-home <amo_home> doctor
 python -m agent_memory_orchestrator.app.cli peer --amo-home <amo_home> netd build
 python -m agent_memory_orchestrator.app.cli peer --amo-home <amo_home> enable --node-id zenbook-amo
 python -m agent_memory_orchestrator.app.cli peer --amo-home <amo_home> netd status
+python -m agent_memory_orchestrator.app.cli peer --amo-home <amo_home> poll-netd --watch
 python -m agent_memory_orchestrator.app.cli peer --amo-home <amo_home> netd stop
 ```
 
 Packaged AMO installs include this `peer-netd` source tree as Python wheel data. That means `peer enable` can build the sidecar from an installed package without cloning the repo, as long as Go is available on PATH. `peer doctor` reports whether the installed source, Go toolchain, binary, trusted peers, and sidecar API are ready.
+
+Run `poll-netd --watch` in the AMO process that should accept peer room invites/responses automatically. The sidecar only delivers envelopes into the local JSONL inbox; AMO still owns policy checks and room-state mutation.
 
 The managed runtime writes:
 
