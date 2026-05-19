@@ -49,6 +49,7 @@ peer-netd/
 
 src/agent_memory_orchestrator/peer/
   cards.py
+  doctor.py
   netd_client.py
   netd_runtime.py
   netd_service.py
@@ -56,9 +57,11 @@ src/agent_memory_orchestrator/peer/
 
 `cards.py` builds and imports peer-card JSON so users do not manually copy libp2p ids and multiaddrs into commands.
 
+`doctor.py` produces the operator readiness report for peer identity, packaged `peer-netd` source, binary/build state, sidecar health, trusted peers, and shared-secret environment variables.
+
 `netd_client.py` is the Python bridge. It talks to `amo-peer-netd` over localhost HTTP and converts AMO peer-room messages into sidecar send requests.
 
-`netd_runtime.py` is the managed sidecar lifecycle layer. It builds the Go binary into `AMO_HOME/.peer/bin`, starts/stops it, writes PID/API/log state under `AMO_HOME/.peer/netd`, and refuses unsafe managed starts where the local API port is dynamic.
+`netd_runtime.py` is the managed sidecar lifecycle layer. It locates repo or packaged `peer-netd` source, builds the Go binary into `AMO_HOME/.peer/bin`, starts/stops it, writes PID/API/log state under `AMO_HOME/.peer/netd`, and refuses unsafe managed starts where the local API port is dynamic.
 
 `netd_service.py` plans OS startup integration. It returns a Windows Scheduled Task plan or user-systemd unit plan by default, and only mutates the host when `--apply` is explicitly used.
 
@@ -68,6 +71,7 @@ The intended user path is AMO-owned, not Tailscale-owned:
 
 ```powershell
 python -m agent_memory_orchestrator.app.cli peer --amo-home <amo_home> init --node-id zenbook-amo
+python -m agent_memory_orchestrator.app.cli peer --amo-home <amo_home> doctor
 $env:AMO_PEER_NETD_SECRET="<shared-secret>"
 python -m agent_memory_orchestrator.app.cli peer --amo-home <amo_home> enable `
   --node-id zenbook-amo `
@@ -79,13 +83,16 @@ python -m agent_memory_orchestrator.app.cli peer --amo-home <amo_home> enable `
 Operational commands:
 
 ```powershell
+python -m agent_memory_orchestrator.app.cli peer --amo-home <amo_home> doctor --strict
 python -m agent_memory_orchestrator.app.cli peer --amo-home <amo_home> netd build
 python -m agent_memory_orchestrator.app.cli peer --amo-home <amo_home> netd start --node-id zenbook-amo
 python -m agent_memory_orchestrator.app.cli peer --amo-home <amo_home> netd status
 python -m agent_memory_orchestrator.app.cli peer --amo-home <amo_home> netd stop
 ```
 
-`peer enable` is the one-command normal path. It builds the sidecar if needed, starts it, waits for `/health`, and returns the peer id/listen addresses. Future install work should wire this into a background OS service, but the process state is already AMO-owned.
+`peer doctor` is the first diagnostic command for a new machine. It separates blocking install/config failures from normal next steps like starting the sidecar or importing peer cards.
+
+`peer enable` is the one-command normal path. It builds the sidecar if needed, starts it, waits for `/health`, and returns the peer id/listen addresses. Packaged installs now include the Go sidecar source so users should not need a repo clone just to build `amo-peer-netd`; they still need Go on PATH until prebuilt sidecar binaries are shipped. Future install work should wire this into a background OS service, but the process state is already AMO-owned.
 
 Delivered envelopes are persisted by default:
 
@@ -146,7 +153,7 @@ remote sidecar verifies envelope
 remote AMO reads /messages and processes room response
 ```
 
-The current implementation supports explicit multiaddr dialing, peer-card export/import, static bootstrap dialing, LAN mDNS, managed process start/stop, persistent sidecar inbox, sidecar-backed room invites/messages, relay reservation, an AMO rendezvous stream protocol, and OS startup planning. Full installer integration is still the next packaging step.
+The current implementation supports explicit multiaddr dialing, peer-card export/import, packaged sidecar source discovery, readiness diagnostics, static bootstrap dialing, LAN mDNS, managed process start/stop, persistent sidecar inbox, sidecar-backed room invites/messages, relay reservation, an AMO rendezvous stream protocol, and OS startup planning. Prebuilt sidecar binaries and background polling are still the next packaging/UX steps.
 
 ## Rendezvous Shape
 
@@ -195,8 +202,9 @@ These nodes should not store memory, raw evidence, or LLM prompts. They only mov
 - Go unit/integration tests verify signed envelopes, direct libp2p delivery, and rendezvous discovery followed by delivery.
 - Python tests verify the AMO localhost client can call health, bootstrap, rendezvous, send, and messages APIs.
 - Python runtime tests verify managed sidecar command construction, state paths, missing-secret safety, and fixed API-port validation.
-- CLI tests verify `peer netd status` uses `--amo-home` and `peer enable` rejects dynamic API ports before building.
+- CLI tests verify `peer netd status` uses `--amo-home`, `peer doctor` reports readiness, and `peer enable` rejects dynamic API ports before building.
 - CLI tests verify libp2p peer config, peer-card export/import, inbox polling failure behavior, and startup service planning.
+- Wheel install smoke verifies packaged installs contain the `peer-netd` Go source tree and `PeerNetdRuntime` can discover it outside the repo.
 - Go store tests verify delivered envelopes persist to JSONL and reload after restart.
 - Binary smoke starts three real sidecar processes: rendezvous, node A, and node B. A/B register, B discovers A, B sends a signed response, and A receives it.
 - Binary relay smoke starts three real sidecar processes: relay, private node A, and node B. A reserves a relay slot, B dials A's `/p2p-circuit` address, B sends a signed response, and A receives it.
@@ -204,6 +212,7 @@ These nodes should not store memory, raw evidence, or LLM prompts. They only mov
 - Two-node room smoke starts two sidecars with two separate AMO homes, sends `open-room` invite over libp2p, accepts it with `poll-netd`, sends a `context_response`, and ingests it on the initiator with `poll-netd`.
 - Persistent inbox smoke sends an invite, stops the receiver before polling, restarts the sidecar, and confirms the receiver still accepts the invite from `inbox.jsonl`.
 - Peer-card CLI smoke starts a real sidecar, exports a card from live health, imports it into another AMO home, and verifies the peer id/multiaddr are saved.
+- Real device smoke on the same LAN delivered a Windows host room invite to a macOS peer over direct libp2p, accepted it with `poll-netd`, sent a `context_response`, and rendered it in the initiator's three-layer room context.
 
 Latest two-node smoke result:
 

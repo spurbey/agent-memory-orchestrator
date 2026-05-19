@@ -45,11 +45,14 @@ The first stdout line is JSON containing the libp2p `peer_id`, dialable `listen_
 Normal users should not launch this binary directly. AMO owns the process lifecycle:
 
 ```powershell
+python -m agent_memory_orchestrator.app.cli peer --amo-home <amo_home> doctor
 python -m agent_memory_orchestrator.app.cli peer --amo-home <amo_home> netd build
 python -m agent_memory_orchestrator.app.cli peer --amo-home <amo_home> enable --node-id zenbook-amo
 python -m agent_memory_orchestrator.app.cli peer --amo-home <amo_home> netd status
 python -m agent_memory_orchestrator.app.cli peer --amo-home <amo_home> netd stop
 ```
+
+Packaged AMO installs include this `peer-netd` source tree as Python wheel data. That means `peer enable` can build the sidecar from an installed package without cloning the repo, as long as Go is available on PATH. `peer doctor` reports whether the installed source, Go toolchain, binary, trusted peers, and sidecar API are ready.
 
 The managed runtime writes:
 
