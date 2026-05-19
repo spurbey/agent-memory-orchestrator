@@ -134,12 +134,17 @@ python -m agent_memory_orchestrator.app.cli peer --amo-home <home_a> import-card
 For lower-friction onboarding, use an invite code/bundle:
 
 ```powershell
-python -m agent_memory_orchestrator.app.cli peer --amo-home <home_a> create-invite --out node-a.invite.json
-python -m agent_memory_orchestrator.app.cli peer --amo-home <home_b> accept-invite --file node-a.invite.json --response-out node-b.card.json
-python -m agent_memory_orchestrator.app.cli peer --amo-home <home_a> import-card --file node-b.card.json
+python -m agent_memory_orchestrator.app.cli peer --amo-home <home_a> create-invite --auto-approve --out node-a.invite.json
+python -m agent_memory_orchestrator.app.cli peer --amo-home <home_b> accept-invite --file node-a.invite.json
+python -m agent_memory_orchestrator.app.cli peer --amo-home <home_a> poll-netd
 ```
 
-The invite wraps the inviter's public peer card, recommended trust level, and a card hash. It never contains a shared-secret value. If `accept-invite` runs while the peer sidecar is active, it can emit the accepting node's response card so the inviter can trust it.
+The invite wraps the inviter's public peer card, recommended trust level, one-time invite token, and a card hash. It never contains a shared-secret value. If both sidecars are running, `accept-invite` sends a `peer_join_request` back to the inviter. With `--auto-approve`, the inviter imports the accepting peer after token validation. Without `--auto-approve`, review the request explicitly:
+
+```powershell
+python -m agent_memory_orchestrator.app.cli peer --amo-home <home_a> join-requests --status pending
+python -m agent_memory_orchestrator.app.cli peer --amo-home <home_a> approve-join --request-id <request_id>
+```
 
 Manual config still exists for smoke tests and advanced use:
 
