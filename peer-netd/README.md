@@ -100,12 +100,12 @@ The sidecar persists delivered envelopes when `--store-path` is set. AMO's manag
 Use invite bundles/codes to avoid hand-editing peer-card JSON:
 
 ```powershell
-python -m agent_memory_orchestrator.app.cli peer --amo-home <home_a> create-invite --out node-a.invite.json
-python -m agent_memory_orchestrator.app.cli peer --amo-home <home_b> accept-invite --file node-a.invite.json --response-out node-b.card.json
-python -m agent_memory_orchestrator.app.cli peer --amo-home <home_a> import-card --file node-b.card.json
+python -m agent_memory_orchestrator.app.cli peer --amo-home <home_a> create-invite --auto-approve --out node-a.invite.json
+python -m agent_memory_orchestrator.app.cli peer --amo-home <home_b> accept-invite --file node-a.invite.json
+python -m agent_memory_orchestrator.app.cli peer --amo-home <home_a> poll-netd
 ```
 
-The invite contains public reachability details and a card hash, not private memory or secret values. `accept-invite` imports the inviter under the recommended trust policy and writes a response card when this node has a usable sidecar address.
+The invite contains public reachability details, a one-time invite token, and a card hash, not private memory or secret values. `accept-invite` imports the inviter under the recommended trust policy and sends a `peer_join_request` back through netd when both sidecars are reachable. If the invite was not created with `--auto-approve`, use `peer join-requests` and `peer approve-join` on the inviter.
 
 ## Current Scope
 
@@ -123,6 +123,7 @@ Implemented:
 - AMO-managed build/start/stop/status runtime
 - AMO startup-service planning through CLI
 - AMO watcher startup-service planning through CLI
+- tokenized peer invite and join-request handshake
 - unit tests for envelope verification
 - integration test for node-to-node delivery
 - integration test for rendezvous discovery plus message delivery

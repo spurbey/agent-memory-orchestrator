@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import base64
+import hmac
 import hashlib
 import json
+import secrets
 import zlib
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import uuid4
 
@@ -21,6 +23,10 @@ def build_peer_invite(
     trust: str = "trusted",
     shared_secret_env: str = "",
     label: str = "",
+    auto_approve: bool = False,
+    expires_minutes: int = 1440,
+    max_uses: int = 1,
+    token: str = "",
 ) -> dict[str, Any]:
     """Build a portable invite bundle around a peer card.
 
@@ -33,14 +39,22 @@ def build_peer_invite(
         raise ValueError("invite card node_id is required")
     # Reuse card validation so unusable transport addresses fail before sharing.
     peer_from_card(card, trust=trust, shared_secret_env=shared_secret_env)
+    token = token.strip() or generate_invite_token()
+    expires_minutes = max(1, int(expires_minutes or 1))
+    max_uses = max(1, int(max_uses or 1))
+    now = datetime.now(timezone.utc)
     return {
         "amo_peer_invite_version": PEER_INVITE_VERSION,
-        "invite_id": f"invite_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}_{uuid4().hex[:8]}",
-        "created_at": datetime.now(timezone.utc).isoformat(),
+        "invite_id": f"invite_{now.strftime('%Y%m%d_%H%M%S')}_{uuid4().hex[:8]}",
+        "created_at": now.isoformat(),
+        "expires_at": (now + timedelta(minutes=expires_minutes)).isoformat(),
         "created_by_node_id": node_id,
         "label": label.strip(),
         "recommended_trust": trust,
         "shared_secret_env": shared_secret_env.strip(),
+        "auto_approve": bool(auto_approve),
+        "max_uses": max_uses,
+        "invite_token": token,
         "card_sha256": peer_card_sha256(card),
         "card": card,
     }
@@ -60,7 +74,18 @@ def parse_peer_invite(invite: dict[str, Any]) -> dict[str, Any]:
     _validate_trust(trust)
     shared_secret_env = str(invite.get("shared_secret_env") or "").strip()
     peer_from_card(card, trust=trust, shared_secret_env=shared_secret_env)
-    return {"card": card, "trust": trust, "shared_secret_env": shared_secret_env, "card_sha256": actual_hash}
+    return {
+        "invite_id": str(invite.get("invite_id") or "").strip(),
+        "card": card,
+        "trust": trust,
+        "shared_secret_env": shared_secret_env,
+        "card_sha256": actual_hash,
+        "invite_token": str(invite.get("invite_token") or "").strip(),
+        "token_proof": invite_token_proof(str(invite.get("invite_token") or "").strip()),
+        "auto_approve": bool(invite.get("auto_approve", False)),
+        "expires_at": str(invite.get("expires_at") or "").strip(),
+        "max_uses": max(1, int(invite.get("max_uses") or 1)),
+    }
 
 
 def encode_invite_code(invite: dict[str, Any]) -> str:
@@ -87,6 +112,26 @@ def decode_invite_code(code: str) -> dict[str, Any]:
 
 def peer_card_sha256(card: dict[str, Any]) -> str:
     return hashlib.sha256(_canonical_json(card).encode("utf-8")).hexdigest()
+
+
+def generate_invite_token() -> str:
+    return secrets.token_urlsafe(32)
+
+
+def invite_token_hash(token: str) -> str:
+    if not token:
+        raise ValueError("invite token is required")
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def invite_token_proof(token: str) -> str:
+    return invite_token_hash(token) if token else ""
+
+
+def verify_invite_token_proof(*, token_hash: str, token_proof: str) -> bool:
+    if not token_hash or not token_proof:
+        return False
+    return hmac.compare_digest(token_hash, token_proof)
 
 
 def _canonical_json(payload: dict[str, Any]) -> str:

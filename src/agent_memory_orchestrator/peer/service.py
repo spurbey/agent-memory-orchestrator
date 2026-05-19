@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+from datetime import datetime, timezone
 from typing import Any
 from urllib import request
 from urllib.error import HTTPError, URLError
@@ -10,7 +11,12 @@ from urllib.error import HTTPError, URLError
 from ..core.config import Settings
 from .auth import PeerAuthError, secret_for_peer, unwrap_payload, wrap_payload
 from .cards import build_peer_card, peer_from_card
-from .invites import build_peer_invite, encode_invite_code, parse_peer_invite
+from .invites import build_peer_invite
+from .invites import encode_invite_code
+from .invites import invite_token_hash
+from .invites import parse_peer_invite
+from .invites import peer_card_sha256
+from .invites import verify_invite_token_proof
 from .models import PeerNode
 from .netd_client import PeerNetdClient, PeerNetdError
 from .netd_runtime import PeerNetdRuntime
@@ -99,9 +105,12 @@ class PeerService:
         config = self.store.load_config()
         netd_health = None
         try:
-            runtime_status = PeerNetdRuntime(self.settings).status()
-            if runtime_status.get("api_ok"):
-                netd_health = runtime_status.get("health")
+            if self.netd_client is not None:
+                netd_health = self.netd_client.health()
+            else:
+                runtime_status = PeerNetdRuntime(self.settings).status()
+                if runtime_status.get("api_ok"):
+                    netd_health = runtime_status.get("health")
         except Exception:
             netd_health = None
         card = build_peer_card(
@@ -130,6 +139,9 @@ class PeerService:
         base_url: str = "",
         rendezvous_addr: str = "",
         rendezvous_namespace: str = "",
+        auto_approve: bool = False,
+        expires_minutes: int = 1440,
+        max_uses: int = 1,
     ) -> dict[str, Any]:
         card_result = self.share_card(
             base_url=base_url,
@@ -143,6 +155,26 @@ class PeerService:
             trust=trust,
             shared_secret_env=shared_secret_env,
             label=label,
+            auto_approve=auto_approve,
+            expires_minutes=expires_minutes,
+            max_uses=max_uses,
+        )
+        self.store.save_peer_invite_record(
+            {
+                "invite_id": invite["invite_id"],
+                "created_at": invite["created_at"],
+                "expires_at": invite["expires_at"],
+                "created_by_node_id": invite["created_by_node_id"],
+                "label": invite["label"],
+                "recommended_trust": invite["recommended_trust"],
+                "shared_secret_env": invite["shared_secret_env"],
+                "auto_approve": invite["auto_approve"],
+                "max_uses": invite["max_uses"],
+                "used_count": 0,
+                "status": "pending",
+                "token_hash": invite_token_hash(str(invite["invite_token"])),
+                "card_sha256": invite["card_sha256"],
+            }
         )
         return {
             "ok": True,
@@ -157,6 +189,7 @@ class PeerService:
         *,
         trust: str = "",
         shared_secret_env: str = "",
+        send_join_request: bool = True,
     ) -> dict[str, Any]:
         parsed = parse_peer_invite(invite)
         effective_trust = trust.strip() or str(parsed["trust"])
@@ -172,14 +205,146 @@ class PeerService:
                 response_error = str(response.get("error") or "could not create response card")
         except Exception as exc:
             response_error = str(exc)
+        join_request_delivery = None
+        if send_join_request and response_card and parsed.get("invite_token"):
+            peer = self.store.load_config().peer_by_id(str(imported.get("peer", {}).get("node_id") or ""))
+            if peer is not None and peer.peer_id:
+                join_request_delivery = self._send_payload_via_netd(
+                    peer,
+                    {
+                        "type": "peer_join_request",
+                        "invite_id": parsed["invite_id"],
+                        "token_proof": parsed["token_proof"],
+                        "peer_card": response_card,
+                        "peer_card_sha256": peer_card_sha256(response_card),
+                        "requested_trust": effective_trust,
+                    },
+                    message_type="peer_join_request",
+                    room_id="",
+                )
         return {
             "ok": True,
             "imported_peer": imported.get("peer"),
             "card_sha256": parsed["card_sha256"],
             "response_card": response_card,
             "response_card_error": response_error,
-            "next_step": "Return response_card to the inviter so they can import this node.",
+            "join_request_delivery": join_request_delivery,
+            "next_step": (
+                "Join request sent to inviter."
+                if join_request_delivery and join_request_delivery.get("ok")
+                else "Return response_card to the inviter or ensure both sidecars are running for auto-handshake."
+            ),
         }
+
+    def receive_join_request(
+        self,
+        payload: dict[str, Any],
+        *,
+        transport_auth: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        try:
+            invite_id = str(payload.get("invite_id") or "").strip()
+            token_proof = str(payload.get("token_proof") or "").strip()
+            peer_card = payload.get("peer_card")
+            if not invite_id:
+                return {"ok": False, "accepted": False, "error": "invite_id is required", "auth": transport_auth or {}}
+            if not isinstance(peer_card, dict):
+                return {"ok": False, "accepted": False, "error": "peer_card is required", "auth": transport_auth or {}}
+            provided_card_hash = str(payload.get("peer_card_sha256") or "").strip()
+            actual_card_hash = peer_card_sha256(peer_card)
+            if provided_card_hash and provided_card_hash != actual_card_hash:
+                return {
+                    "ok": False,
+                    "accepted": False,
+                    "error": "peer_card hash mismatch",
+                    "auth": transport_auth or {},
+                }
+            record = self.store.get_peer_invite_record(invite_id)
+            validation = self._validate_join_request(record=record, token_proof=token_proof, peer_card=peer_card)
+            if not validation.get("ok"):
+                return validation | {"auth": transport_auth or {}}
+            requested_trust = str(payload.get("requested_trust") or record.get("recommended_trust") or "trusted")
+            if record.get("auto_approve"):
+                imported = self.import_card(
+                    peer_card,
+                    trust=requested_trust,
+                    shared_secret_env=str(record.get("shared_secret_env") or ""),
+                )
+                updated_invite = self._mark_invite_used(record)
+                delivery = self._send_join_accepted(imported.get("peer"), invite_id)
+                return {
+                    "ok": True,
+                    "accepted": True,
+                    "mode": "auto_approved",
+                    "peer": imported.get("peer"),
+                    "invite": updated_invite,
+                    "join_accepted_delivery": delivery,
+                    "auth": transport_auth or {},
+                }
+            request_record = self.store.save_join_request(
+                {
+                    "invite_id": invite_id,
+                    "peer_card": peer_card,
+                    "peer_card_sha256": actual_card_hash,
+                    "token_proof": token_proof,
+                    "requested_trust": requested_trust,
+                    "status": "pending",
+                    "auth": transport_auth or {},
+                }
+            )
+            return {
+                "ok": True,
+                "accepted": False,
+                "mode": "pending_approval",
+                "request": request_record,
+                "auth": transport_auth or {},
+            }
+        except (FileNotFoundError, ValueError, PermissionError) as exc:
+            return {"ok": False, "accepted": False, "error": str(exc), "auth": transport_auth or {}}
+
+    def list_join_requests(self, *, status: str = "") -> dict[str, Any]:
+        return {"ok": True, "requests": self.store.list_join_requests(status=status)}
+
+    def approve_join_request(self, request_id: str) -> dict[str, Any]:
+        request_record = self.store.get_join_request(request_id)
+        if request_record.get("status") != "pending":
+            return {"ok": False, "error": f"join request is not pending: {request_record.get('status')}"}
+        invite = self.store.get_peer_invite_record(str(request_record.get("invite_id") or ""))
+        validation = self._validate_join_request(
+            record=invite,
+            token_proof=str(request_record.get("token_proof") or invite.get("token_hash") or ""),
+            peer_card=request_record.get("peer_card"),
+            allow_stored_token_hash=True,
+        )
+        if not validation.get("ok"):
+            return validation
+        expected_card_hash = str(request_record.get("peer_card_sha256") or "")
+        actual_card_hash = peer_card_sha256(request_record["peer_card"])
+        if expected_card_hash and expected_card_hash != actual_card_hash:
+            return {"ok": False, "error": "peer_card hash mismatch"}
+        imported = self.import_card(
+            request_record["peer_card"],
+            trust=str(request_record.get("requested_trust") or invite.get("recommended_trust") or "trusted"),
+            shared_secret_env=str(invite.get("shared_secret_env") or ""),
+        )
+        updated_invite = self._mark_invite_used(invite)
+        updated_request = self.store.update_join_request(request_id, {"status": "approved", "approved_at": _utc_now()})
+        delivery = self._send_join_accepted(imported.get("peer"), str(invite.get("invite_id") or ""))
+        return {
+            "ok": True,
+            "request": updated_request,
+            "peer": imported.get("peer"),
+            "invite": updated_invite,
+            "join_accepted_delivery": delivery,
+        }
+
+    def reject_join_request(self, request_id: str, *, reason: str = "") -> dict[str, Any]:
+        request_record = self.store.get_join_request(request_id)
+        updated = self.store.update_join_request(
+            request_id,
+            {"status": "rejected", "rejected_at": _utc_now(), "reject_reason": reason.strip()},
+        )
+        return {"ok": True, "request": updated, "previous_status": request_record.get("status")}
 
     def capabilities(self) -> dict[str, Any]:
         config = self.store.load_config()
@@ -354,6 +519,10 @@ class PeerService:
         }
         if message_type == "room_invite":
             return self.receive_invite(payload, transport_auth=auth)
+        if message_type == "peer_join_request":
+            return self.receive_join_request(payload, transport_auth=auth)
+        if message_type == "peer_join_accepted":
+            return {"ok": True, "accepted": True, "type": "peer_join_accepted", "payload": payload, "auth": auth}
         payload.setdefault("type", message_type)
         payload.setdefault("room_id", message.get("room_id"))
         payload.setdefault("from_node_id", message.get("from_node_id"))
@@ -361,6 +530,64 @@ class PeerService:
         payload.setdefault("citations", message.get("citations") or [])
         payload.setdefault("created_at", message.get("created_at") or "")
         return self.receive_message(payload, transport_auth=auth)
+
+    def _validate_join_request(
+        self,
+        *,
+        record: dict[str, Any],
+        token_proof: str,
+        peer_card: Any,
+        allow_stored_token_hash: bool = False,
+    ) -> dict[str, Any]:
+        if not isinstance(peer_card, dict):
+            return {"ok": False, "accepted": False, "error": "peer_card is required"}
+        status = str(record.get("status") or "pending")
+        if status in {"revoked", "expired", "accepted"}:
+            return {"ok": False, "accepted": False, "error": f"invite is {status}"}
+        expires_at = _parse_datetime(str(record.get("expires_at") or ""))
+        if expires_at and expires_at < datetime.now(timezone.utc):
+            self.store.update_peer_invite_record(str(record.get("invite_id") or ""), {"status": "expired"})
+            return {"ok": False, "accepted": False, "error": "invite is expired"}
+        used_count = int(record.get("used_count") or 0)
+        max_uses = max(1, int(record.get("max_uses") or 1))
+        if used_count >= max_uses:
+            return {"ok": False, "accepted": False, "error": "invite use limit reached"}
+        token_hash = str(record.get("token_hash") or "")
+        token_ok = verify_invite_token_proof(token_hash=token_hash, token_proof=token_proof)
+        if allow_stored_token_hash and token_proof == token_hash:
+            token_ok = True
+        if not token_ok:
+            return {"ok": False, "accepted": False, "error": "invite token proof mismatch"}
+        existing = self.store.load_config().peer_by_id(str(peer_card.get("node_id") or ""))
+        if existing is not None and existing.trust == "blocked":
+            return {"ok": False, "accepted": False, "error": f"peer is blocked: {existing.node_id}"}
+        return {"ok": True}
+
+    def _mark_invite_used(self, record: dict[str, Any]) -> dict[str, Any]:
+        used_count = int(record.get("used_count") or 0) + 1
+        max_uses = max(1, int(record.get("max_uses") or 1))
+        status = "accepted" if used_count >= max_uses else "pending"
+        return self.store.update_peer_invite_record(
+            str(record.get("invite_id") or ""),
+            {"used_count": used_count, "status": status},
+        )
+
+    def _send_join_accepted(self, peer_payload: Any, invite_id: str) -> dict[str, Any] | None:
+        if not isinstance(peer_payload, dict):
+            return None
+        peer = self.store.load_config().peer_by_id(str(peer_payload.get("node_id") or ""))
+        if peer is None or not peer.peer_id:
+            return None
+        return self._send_payload_via_netd(
+            peer,
+            {
+                "type": "peer_join_accepted",
+                "invite_id": invite_id,
+                "trusted_as": peer.trust,
+            },
+            message_type="peer_join_accepted",
+            room_id="",
+        )
 
     def list_rooms(self) -> dict[str, Any]:
         return {"ok": True, "rooms": self.store.list_rooms()}
@@ -490,3 +717,19 @@ def _netd_envelope_id(envelope: dict[str, Any]) -> str:
         return signature
     canonical = json.dumps(envelope, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _parse_datetime(value: str) -> datetime | None:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)

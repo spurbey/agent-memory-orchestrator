@@ -4,7 +4,9 @@ from pathlib import Path
 
 from agent_memory_orchestrator.core.config import Settings
 from agent_memory_orchestrator.peer.auth import wrap_payload
-from agent_memory_orchestrator.peer.models import PeerNode
+from agent_memory_orchestrator.peer.cards import build_peer_card
+from agent_memory_orchestrator.peer.invites import build_peer_invite, invite_token_hash, invite_token_proof, peer_card_sha256
+from agent_memory_orchestrator.peer.models import PeerConfig, PeerNode
 from agent_memory_orchestrator.peer.service import PeerService
 from agent_memory_orchestrator.peer.store import PeerStore
 
@@ -55,6 +57,61 @@ def test_peer_config_accepts_libp2p_peer_identity_without_legacy_base_url(tmp_pa
     assert peer.peer_id == "12D3KooWPeer"
     assert peer.multiaddrs == ("/ip4/127.0.0.1/tcp/9001/p2p/12D3KooWPeer",)
     assert peer.rendezvous_namespace == "amo-team"
+
+
+def test_peer_join_request_auto_approves_with_valid_invite_token(tmp_path: Path) -> None:
+    store = PeerStore(make_settings(tmp_path / "initiator"))
+    store.init_config(node_id="zenbook-amo")
+    invite = _save_test_invite(store, auto_approve=True, token="join-secret")
+    peer_card = _peer_card("mac-amo", "12D3KooWMac")
+    netd = FakeNetdClient()
+
+    result = PeerService(store.settings, store=store, netd_client=netd).receive_netd_envelope(
+        _join_request_envelope(invite=invite, peer_card=peer_card, token="join-secret")
+    )
+
+    assert result["ok"] is True
+    assert result["accepted"] is True
+    assert result["mode"] == "auto_approved"
+    peer = store.load_config().peer_by_id("mac-amo")
+    assert peer is not None
+    assert peer.peer_id == "12D3KooWMac"
+    assert store.get_peer_invite_record(invite["invite_id"])["status"] == "accepted"
+    assert netd.sent[-1]["message"]["type"] == "peer_join_accepted"
+
+
+def test_peer_join_request_can_wait_for_manual_approval(tmp_path: Path) -> None:
+    store = PeerStore(make_settings(tmp_path / "initiator"))
+    store.init_config(node_id="zenbook-amo")
+    invite = _save_test_invite(store, auto_approve=False, token="join-secret")
+    peer_card = _peer_card("mac-amo", "12D3KooWMac")
+
+    result = PeerService(store.settings, store=store).receive_netd_envelope(
+        _join_request_envelope(invite=invite, peer_card=peer_card, token="join-secret")
+    )
+
+    assert result["ok"] is True
+    assert result["accepted"] is False
+    assert result["mode"] == "pending_approval"
+    assert store.load_config().peer_by_id("mac-amo") is None
+    pending = store.list_join_requests(status="pending")
+    assert len(pending) == 1
+    assert pending[0]["peer_card"]["node_id"] == "mac-amo"
+
+
+def test_peer_join_request_rejects_bad_token(tmp_path: Path) -> None:
+    store = PeerStore(make_settings(tmp_path / "initiator"))
+    store.init_config(node_id="zenbook-amo")
+    invite = _save_test_invite(store, auto_approve=True, token="join-secret")
+    peer_card = _peer_card("mac-amo", "12D3KooWMac")
+
+    result = PeerService(store.settings, store=store).receive_netd_envelope(
+        _join_request_envelope(invite=invite, peer_card=peer_card, token="wrong-secret")
+    )
+
+    assert result["ok"] is False
+    assert "token proof" in result["error"]
+    assert store.load_config().peer_by_id("mac-amo") is None
 
 
 def test_trusted_peer_accepts_invite_and_records_messages(tmp_path: Path) -> None:
@@ -491,3 +548,67 @@ class FakeNetdClient:
 
     def rendezvous_discover(self, addr: str, namespace: str, limit: int = 20, connect: bool = True) -> list[dict]:
         return [{"peer_id": "12D3KooWPeer", "addrs": [addr], "namespace": namespace, "connect": connect}]
+
+    def health(self) -> dict:
+        return {
+            "peer_id": "12D3KooWFake",
+            "listen_addrs": ["/ip4/127.0.0.1/tcp/9001/p2p/12D3KooWFake"],
+            "relay_addrs": [],
+        }
+
+
+def _save_test_invite(store: PeerStore, *, auto_approve: bool, token: str) -> dict:
+    card = build_peer_card(
+        config=PeerConfig(node_id="zenbook-amo"),
+        netd_health={
+            "peer_id": "12D3KooWHost",
+            "listen_addrs": ["/ip4/127.0.0.1/tcp/9000/p2p/12D3KooWHost"],
+        },
+    )
+    invite = build_peer_invite(card=card, auto_approve=auto_approve, token=token)
+    store.save_peer_invite_record(
+        {
+            "invite_id": invite["invite_id"],
+            "created_at": invite["created_at"],
+            "expires_at": invite["expires_at"],
+            "created_by_node_id": invite["created_by_node_id"],
+            "recommended_trust": invite["recommended_trust"],
+            "shared_secret_env": invite["shared_secret_env"],
+            "auto_approve": invite["auto_approve"],
+            "max_uses": invite["max_uses"],
+            "used_count": 0,
+            "status": "pending",
+            "token_hash": invite_token_hash(token),
+            "card_sha256": invite["card_sha256"],
+        }
+    )
+    return invite
+
+
+def _peer_card(node_id: str, peer_id: str) -> dict:
+    return build_peer_card(
+        config=PeerConfig(node_id=node_id, capabilities=("graph_retrieval",)),
+        netd_health={
+            "peer_id": peer_id,
+            "listen_addrs": [f"/ip4/127.0.0.1/tcp/9002/p2p/{peer_id}"],
+        },
+    )
+
+
+def _join_request_envelope(*, invite: dict, peer_card: dict, token: str) -> dict:
+    return {
+        "from_node_id": peer_card["node_id"],
+        "payload_sha256": "test",
+        "message": {
+            "type": "peer_join_request",
+            "from_node_id": peer_card["node_id"],
+            "payload": {
+                "type": "peer_join_request",
+                "invite_id": invite["invite_id"],
+                "token_proof": invite_token_proof(token),
+                "peer_card": peer_card,
+                "peer_card_sha256": peer_card_sha256(peer_card),
+                "requested_trust": "trusted",
+            },
+        },
+    }

@@ -28,6 +28,13 @@ def _safe_room_id(room_id: str) -> str:
     return clean
 
 
+def _safe_peer_record_id(value: str) -> str:
+    clean = "".join(ch for ch in value.strip() if ch.isalnum() or ch in {"-", "_"})
+    if not clean:
+        raise ValueError("record id is required")
+    return clean
+
+
 class PeerStore:
     """Filesystem-backed peer room state.
 
@@ -40,9 +47,13 @@ class PeerStore:
         self.root = settings.home / ".peer"
         self.config_path = self.root / "peers.json"
         self.rooms_dir = self.root / "rooms"
+        self.invites_dir = self.root / "invites"
+        self.join_requests_dir = self.root / "join_requests"
         self.netd_processed_path = self.root / "netd_processed.json"
         self.root.mkdir(parents=True, exist_ok=True)
         self.rooms_dir.mkdir(parents=True, exist_ok=True)
+        self.invites_dir.mkdir(parents=True, exist_ok=True)
+        self.join_requests_dir.mkdir(parents=True, exist_ok=True)
 
     def load_config(self) -> PeerConfig:
         if not self.config_path.exists():
@@ -82,6 +93,77 @@ class PeerStore:
             raise ValueError("peer requires base_url, peer_id, multiaddrs, relay_addrs, or rendezvous_addr")
         config = self.load_config()
         return self.save_config(config.with_peer(peer))
+
+    def save_peer_invite_record(self, record: dict[str, Any]) -> dict[str, Any]:
+        invite_id = _safe_peer_record_id(str(record.get("invite_id") or ""))
+        payload = dict(record)
+        payload["invite_id"] = invite_id
+        payload.setdefault("created_at", _utc_now())
+        payload.setdefault("updated_at", _utc_now())
+        payload.setdefault("status", "pending")
+        payload.setdefault("used_count", 0)
+        self._write_json(self.invites_dir / f"{invite_id}.json", payload)
+        return payload
+
+    def get_peer_invite_record(self, invite_id: str) -> dict[str, Any]:
+        path = self.invites_dir / f"{_safe_peer_record_id(invite_id)}.json"
+        if not path.exists():
+            raise FileNotFoundError(f"peer invite not found: {invite_id}")
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict):
+            raise ValueError(f"peer invite must be an object: {path}")
+        return payload
+
+    def update_peer_invite_record(self, invite_id: str, updates: dict[str, Any]) -> dict[str, Any]:
+        record = self.get_peer_invite_record(invite_id)
+        record.update(updates)
+        record["updated_at"] = _utc_now()
+        return self.save_peer_invite_record(record)
+
+    def save_join_request(self, request: dict[str, Any]) -> dict[str, Any]:
+        request_id = str(request.get("request_id") or "").strip()
+        if not request_id:
+            invite_id = str(request.get("invite_id") or "invite").strip() or "invite"
+            node_id = str((request.get("peer_card") or {}).get("node_id") or "peer").strip() or "peer"
+            request_id = f"join_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}_{_sha256(invite_id + ':' + node_id)[:8]}"
+        request_id = _safe_peer_record_id(request_id)
+        payload = dict(request)
+        payload["request_id"] = request_id
+        payload.setdefault("created_at", _utc_now())
+        payload.setdefault("updated_at", _utc_now())
+        payload.setdefault("status", "pending")
+        self._write_json(self.join_requests_dir / f"{request_id}.json", payload)
+        return payload
+
+    def get_join_request(self, request_id: str) -> dict[str, Any]:
+        path = self.join_requests_dir / f"{_safe_peer_record_id(request_id)}.json"
+        if not path.exists():
+            raise FileNotFoundError(f"peer join request not found: {request_id}")
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict):
+            raise ValueError(f"peer join request must be an object: {path}")
+        return payload
+
+    def update_join_request(self, request_id: str, updates: dict[str, Any]) -> dict[str, Any]:
+        request = self.get_join_request(request_id)
+        request.update(updates)
+        request["updated_at"] = _utc_now()
+        return self.save_join_request(request)
+
+    def list_join_requests(self, status: str = "") -> list[dict[str, Any]]:
+        rows: list[dict[str, Any]] = []
+        for path in sorted(self.join_requests_dir.glob("*.json")):
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            if not isinstance(payload, dict):
+                continue
+            if status and payload.get("status") != status:
+                continue
+            rows.append(payload)
+        rows.sort(key=lambda item: str(item.get("updated_at") or item.get("created_at") or ""), reverse=True)
+        return rows
 
     def list_rooms(self) -> list[dict[str, Any]]:
         rooms: list[dict[str, Any]] = []
@@ -309,6 +391,10 @@ class PeerStore:
         processed = self.load_processed_netd_ids()
         processed.add(envelope_id)
         self.netd_processed_path.write_text(json.dumps(sorted(processed), indent=2), encoding="utf-8")
+
+    def _write_json(self, path: Any, payload: dict[str, Any]) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
 
     def render_room_md(
         self,

@@ -333,6 +333,9 @@ def _build_parser() -> argparse.ArgumentParser:
     peer_invite.add_argument("--base-url", default="", help="Optional legacy direct HTTP URL to include.")
     peer_invite.add_argument("--rendezvous-addr", default="", help="Optional rendezvous node multiaddr to include.")
     peer_invite.add_argument("--rendezvous-namespace", default="", help="Optional rendezvous namespace to include.")
+    peer_invite.add_argument("--auto-approve", action="store_true", help="Auto-import the accepting peer after token proof.")
+    peer_invite.add_argument("--expires-minutes", type=int, default=1440, help="Invite validity window.")
+    peer_invite.add_argument("--max-uses", type=int, default=1, help="Maximum accepted join requests.")
     peer_accept = peer_sub.add_parser("accept-invite", help="Import an invite and optionally write this node's response card")
     peer_accept_source = peer_accept.add_mutually_exclusive_group(required=True)
     peer_accept_source.add_argument("--file", type=Path, help="Invite JSON file to accept.")
@@ -340,6 +343,14 @@ def _build_parser() -> argparse.ArgumentParser:
     peer_accept.add_argument("--trust", choices=["trusted", "limited", "blocked"], default="")
     peer_accept.add_argument("--shared-secret-env", default="")
     peer_accept.add_argument("--response-out", type=Path, help="Optional response peer-card JSON path to send back.")
+    peer_accept.add_argument("--no-send-join-request", action="store_true", help="Do not send the automatic return join request.")
+    peer_join_requests = peer_sub.add_parser("join-requests", help="List pending peer join requests")
+    peer_join_requests.add_argument("--status", default="", choices=["", "pending", "approved", "rejected"])
+    peer_approve_join = peer_sub.add_parser("approve-join", help="Approve a pending peer join request")
+    peer_approve_join.add_argument("--request-id", required=True)
+    peer_reject_join = peer_sub.add_parser("reject-join", help="Reject a pending peer join request")
+    peer_reject_join.add_argument("--request-id", required=True)
+    peer_reject_join.add_argument("--reason", default="")
     peer_sub.add_parser("rooms", help="List local peer investigation rooms")
     peer_context = peer_sub.add_parser("context", help="Build the three-layer context pack for a room")
     peer_context.add_argument("--room-id", required=True)
@@ -844,6 +855,9 @@ def main(argv: list[str] | None = None) -> int:
                     base_url=args.base_url,
                     rendezvous_addr=args.rendezvous_addr,
                     rendezvous_namespace=args.rendezvous_namespace,
+                    auto_approve=args.auto_approve,
+                    expires_minutes=args.expires_minutes,
+                    max_uses=args.max_uses,
                 )
                 if result.get("ok") and args.out:
                     args.out.write_text(json.dumps(result["invite"], indent=2), encoding="utf-8")
@@ -858,10 +872,22 @@ def main(argv: list[str] | None = None) -> int:
                     invite,
                     trust=args.trust,
                     shared_secret_env=args.shared_secret_env,
+                    send_join_request=not args.no_send_join_request,
                 )
                 if result.get("ok") and args.response_out and result.get("response_card"):
                     args.response_out.write_text(json.dumps(result["response_card"], indent=2), encoding="utf-8")
                     result["response_out"] = str(args.response_out)
+                _print(result)
+                return 0 if result.get("ok") else 1
+            if args.peer_command == "join-requests":
+                _print(svc.list_join_requests(status=args.status))
+                return 0
+            if args.peer_command == "approve-join":
+                result = svc.approve_join_request(args.request_id)
+                _print(result)
+                return 0 if result.get("ok") else 1
+            if args.peer_command == "reject-join":
+                result = svc.reject_join_request(args.request_id, reason=args.reason)
                 _print(result)
                 return 0 if result.get("ok") else 1
             if args.peer_command == "rooms":
