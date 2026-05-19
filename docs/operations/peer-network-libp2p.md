@@ -87,6 +87,7 @@ python -m agent_memory_orchestrator.app.cli peer --amo-home <amo_home> doctor --
 python -m agent_memory_orchestrator.app.cli peer --amo-home <amo_home> netd build
 python -m agent_memory_orchestrator.app.cli peer --amo-home <amo_home> netd start --node-id zenbook-amo
 python -m agent_memory_orchestrator.app.cli peer --amo-home <amo_home> netd status
+python -m agent_memory_orchestrator.app.cli peer --amo-home <amo_home> poll-netd --watch
 python -m agent_memory_orchestrator.app.cli peer --amo-home <amo_home> netd stop
 ```
 
@@ -101,6 +102,8 @@ AMO_HOME/.peer/netd/inbox.jsonl
 ```
 
 If the sidecar receives a message and restarts before AMO runs `poll-netd`, the inbox reloads from this JSONL file.
+
+For active participation, run `poll-netd --watch` beside the sidecar. It continuously drains delivered sidecar messages into AMO peer-room state, so room invites and responses are accepted without manual one-shot polling.
 
 Startup planning:
 
@@ -132,12 +135,12 @@ Then the normal room path is:
 
 ```powershell
 python -m agent_memory_orchestrator.app.cli peer --amo-home <home_a> open-room --topic "..." --peer node-b
-python -m agent_memory_orchestrator.app.cli peer --amo-home <home_b> poll-netd
+python -m agent_memory_orchestrator.app.cli peer --amo-home <home_b> poll-netd --watch
 python -m agent_memory_orchestrator.app.cli peer --amo-home <home_b> send-message --room-id <room_id> --peer-id node-a --type context_response --content "..." --citation E0001 --confidence 0.91
 python -m agent_memory_orchestrator.app.cli peer --amo-home <home_a> poll-netd
 ```
 
-`poll-netd` uses the managed sidecar API URL from `AMO_HOME/.peer/netd/netd.json`, so each AMO home can run on a different local API port without extra environment variables.
+`poll-netd` uses the managed sidecar API URL from `AMO_HOME/.peer/netd/netd.json`, so each AMO home can run on a different local API port without extra environment variables. In watch mode it emits one compact JSON result per poll.
 
 ## Implemented Flow
 
@@ -153,7 +156,7 @@ remote sidecar verifies envelope
 remote AMO reads /messages and processes room response
 ```
 
-The current implementation supports explicit multiaddr dialing, peer-card export/import, packaged sidecar source discovery, readiness diagnostics, static bootstrap dialing, LAN mDNS, managed process start/stop, persistent sidecar inbox, sidecar-backed room invites/messages, relay reservation, an AMO rendezvous stream protocol, and OS startup planning. Prebuilt sidecar binaries and background polling are still the next packaging/UX steps.
+The current implementation supports explicit multiaddr dialing, peer-card export/import, packaged sidecar source discovery, readiness diagnostics, static bootstrap dialing, LAN mDNS, managed process start/stop, persistent sidecar inbox, watched inbox draining, sidecar-backed room invites/messages, relay reservation, an AMO rendezvous stream protocol, and OS startup planning. Prebuilt sidecar binaries and OS-managed watcher startup are still the next packaging/UX steps.
 
 ## Rendezvous Shape
 
@@ -203,7 +206,7 @@ These nodes should not store memory, raw evidence, or LLM prompts. They only mov
 - Python tests verify the AMO localhost client can call health, bootstrap, rendezvous, send, and messages APIs.
 - Python runtime tests verify managed sidecar command construction, state paths, missing-secret safety, and fixed API-port validation.
 - CLI tests verify `peer netd status` uses `--amo-home`, `peer doctor` reports readiness, and `peer enable` rejects dynamic API ports before building.
-- CLI tests verify libp2p peer config, peer-card export/import, inbox polling failure behavior, and startup service planning.
+- CLI tests verify libp2p peer config, peer-card export/import, inbox polling/watch behavior, and startup service planning.
 - Wheel install smoke verifies packaged installs contain the `peer-netd` Go source tree and `PeerNetdRuntime` can discover it outside the repo.
 - Go store tests verify delivered envelopes persist to JSONL and reload after restart.
 - Binary smoke starts three real sidecar processes: rendezvous, node A, and node B. A/B register, B discovers A, B sends a signed response, and A receives it.
