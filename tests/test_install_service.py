@@ -171,6 +171,7 @@ def test_cli_install_dry_run_does_not_write(tmp_path: Path, capsys) -> None:
             "--amo-home",
             str(amo_home),
             "--dry-run",
+            "--json",
         ]
     )
 
@@ -178,4 +179,30 @@ def test_cli_install_dry_run_does_not_write(tmp_path: Path, capsys) -> None:
     output = json.loads(capsys.readouterr().out)
     assert output["ok"] is True
     assert output["dry_run"] is True
+    assert not (user_home / ".codex" / "config.toml").exists()
+
+
+def test_cli_install_dry_run_is_human_readable_by_default(tmp_path: Path, capsys) -> None:
+    user_home = tmp_path / "home"
+    amo_home = tmp_path / "amo"
+
+    exit_code = main(
+        [
+            "install",
+            "--target",
+            "codex",
+            "--user-home",
+            str(user_home),
+            "--amo-home",
+            str(amo_home),
+            "--dry-run",
+        ]
+    )
+
+    assert exit_code == 0
+    output = capsys.readouterr().out
+    assert "AMO install dry run" in output
+    assert "Codex MCP config" in output
+    assert "after_preview" not in output
+    assert "amo_hook_launcher.py" not in output
     assert not (user_home / ".codex" / "config.toml").exists()
