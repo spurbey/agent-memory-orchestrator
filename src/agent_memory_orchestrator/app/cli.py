@@ -80,6 +80,7 @@ def _build_parser() -> argparse.ArgumentParser:
     install.add_argument("--skip-init-db", action="store_true", help="Do not initialize the AMO SQLite database.")
     install.add_argument("--dry-run", action="store_true", help="Show planned changes without writing files.")
     install.add_argument("--yes", action="store_true", help="Apply without interactive confirmation.")
+    install.add_argument("--json", action="store_true", help="Print machine-readable install details.")
     install.add_argument("--force", action="store_true", help="Overwrite existing AMO target entries when safe.")
 
     doctor_cmd = sub.add_parser("doctor", help="Check AMO install/config status")
@@ -498,12 +499,21 @@ def main(argv: list[str] | None = None) -> int:
             plan = build_install_plan(options)
             summary = _summarize_install_plan(plan)
             if args.dry_run:
-                _print({"ok": True, "dry_run": True, "plan": summary})
+                if args.json:
+                    _print({"ok": True, "dry_run": True, "plan": summary})
+                else:
+                    print(_format_install_plan(summary, dry_run=True))
                 return 0
             if not args.yes:
-                _print({"ok": True, "pending_plan": summary})
+                if args.json:
+                    _print({"ok": True, "pending_plan": summary})
+                else:
+                    print(_format_install_plan(summary))
                 if not _confirm("Apply AMO install changes?"):
-                    _print({"ok": False, "cancelled": True, "plan": summary})
+                    if args.json:
+                        _print({"ok": False, "cancelled": True, "plan": summary})
+                    else:
+                        print("Install cancelled. No files changed.")
                     return 1
             result = apply_install_plan(plan)
             model_result = None
@@ -531,16 +541,18 @@ def main(argv: list[str] | None = None) -> int:
                     init_graph = {"ok": True, "graph_path": str(init_settings.graph_path)}
                 except GraphBackendUnavailable as exc:
                     init_graph = {"ok": False, "error": str(exc)}
-            _print(
-                {
-                    "ok": True,
-                    "plan": summary,
-                    "apply": result,
-                    "models": model_result,
-                    "init_db": init_result,
-                    "init_graph": init_graph,
-                }
-            )
+            payload = {
+                "ok": True,
+                "plan": summary,
+                "apply": result,
+                "models": model_result,
+                "init_db": init_result,
+                "init_graph": init_graph,
+            }
+            if args.json:
+                _print(payload)
+            else:
+                print(_format_install_result(payload))
             return 0
 
         if args.command == "doctor":
@@ -1440,6 +1452,105 @@ def _summarize_install_plan(plan: dict) -> dict:
         "operations": operations,
         "notes": plan["notes"],
     }
+
+
+def _format_install_plan(summary: dict, *, dry_run: bool = False) -> str:
+    models = summary.get("models", {})
+    operations = summary.get("operations", [])
+    changed = [op for op in operations if op.get("changed")]
+    unchanged = [op for op in operations if not op.get("changed")]
+
+    lines = ["AMO install plan"]
+    if dry_run:
+        lines[0] = "AMO install dry run"
+    lines.extend(
+        [
+            f"- Target: {', '.join(summary.get('targets', [])) or summary.get('target', 'all')}",
+            f"- AMO home: {summary.get('amo_home', '')}",
+            f"- Preset: {models.get('preset', '')}",
+            f"- Qwen model: {models.get('qwen_model', '')}",
+            f"- Embeddings: {models.get('embedding_model', '')}",
+            f"- Reranker: {models.get('reranker_model', '')}",
+            "",
+            "Changes to apply:",
+        ]
+    )
+    if changed:
+        lines.extend(f"- {_operation_label(op)}" for op in changed)
+    else:
+        lines.append("- No file changes needed.")
+    if unchanged:
+        lines.append(f"- {len(unchanged)} item(s) already up to date.")
+    lines.extend(
+        [
+            "",
+            "Existing files are backed up before they are changed.",
+            "Use --json to inspect exact paths and generated config.",
+        ]
+    )
+    if dry_run:
+        lines.append("No files changed.")
+    return "\n".join(lines)
+
+
+def _format_install_result(payload: dict) -> str:
+    plan = payload.get("plan", {})
+    results = payload.get("apply", {}).get("results", [])
+    changed = [item for item in results if item.get("changed")]
+    unchanged = [item for item in results if not item.get("changed")]
+    targets = ", ".join(plan.get("targets", [])) or plan.get("target", "all")
+
+    lines = [
+        "AMO install complete.",
+        f"- Target: {targets}",
+        f"- AMO home: {plan.get('amo_home', '')}",
+    ]
+    if changed:
+        lines.append("")
+        lines.append("Updated:")
+        lines.extend(f"- {_operation_label(item)}" for item in changed)
+    if unchanged:
+        lines.append(f"- {len(unchanged)} item(s) already up to date.")
+
+    init_db = payload.get("init_db")
+    init_graph = payload.get("init_graph")
+    if init_db or init_graph:
+        lines.append("")
+        lines.append("Initialized:")
+        if init_db:
+            lines.append(f"- SQLite memory DB: {init_db.get('db_path', '')}")
+        if init_graph:
+            status = "ready" if init_graph.get("ok") else f"skipped: {init_graph.get('error', '')}"
+            lines.append(f"- Kuzu graph: {status}")
+
+    model_result = payload.get("models")
+    if model_result:
+        lines.append("")
+        lines.append(f"Model cache: {'ready' if model_result.get('ok') else 'check required'}")
+
+    lines.extend(
+        [
+            "",
+            "Next:",
+            "1. Restart Codex or Claude so hooks and MCP config reload.",
+            "2. Run: amo-cli doctor --target codex",
+            "3. Run: amo-daemon",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def _operation_label(operation: dict) -> str:
+    labels = {
+        "amo": "AMO runtime config",
+        "amo-hook-launcher": "hook launcher",
+        "codex": "Codex MCP config",
+        "codex-hooks": "Codex command hooks",
+        "codex-skill-checkpoint": "Codex skill-checkpoint helper",
+        "claude": "Claude MCP and hook config",
+        "claude-skill-checkpoint": "Claude skill-checkpoint command",
+    }
+    return labels.get(str(operation.get("target", "")), str(operation.get("target", "config")))
 
 
 def _rebuild_clean_db(settings: Settings, out_path: Path, codex_root: Path, limit: int, force: bool) -> dict:
