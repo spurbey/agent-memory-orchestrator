@@ -6,7 +6,13 @@ from pathlib import Path
 import pytest
 
 from agent_memory_orchestrator.core.config import Settings
-from agent_memory_orchestrator.peer.netd_runtime import PeerNetdLaunchOptions, PeerNetdRuntime, PeerNetdRuntimeError
+from agent_memory_orchestrator.peer.netd_runtime import (
+    PeerNetdLaunchOptions,
+    PeerNetdRuntime,
+    PeerNetdRuntimeError,
+    binary_name,
+    platform_binary_dir_name,
+)
 
 
 def test_peer_netd_runtime_builds_expected_args(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -96,6 +102,28 @@ def test_peer_netd_runtime_lists_packaged_source_candidates(tmp_path: Path) -> N
 
     assert any(candidate.name == "peer-netd" for candidate in candidates)
     assert len(candidates) == len(set(candidates))
+
+
+def test_peer_netd_runtime_lists_packaged_binary_candidates(tmp_path: Path) -> None:
+    runtime = PeerNetdRuntime(make_settings(tmp_path))
+    candidates = runtime.packaged_binary_candidates()
+
+    assert any(platform_binary_dir_name() in str(candidate) for candidate in candidates)
+    assert all(candidate.name == binary_name() for candidate in candidates)
+    assert len(candidates) == len(set(candidates))
+
+
+def test_peer_netd_runtime_installs_packaged_binary(tmp_path: Path) -> None:
+    repo_root = tmp_path / "repo"
+    packaged = repo_root / "peer-netd" / "bin" / platform_binary_dir_name() / binary_name()
+    packaged.parent.mkdir(parents=True)
+    packaged.write_bytes(b"fake-binary")
+    runtime = PeerNetdRuntime(make_settings(tmp_path / "home"), repo_root=repo_root)
+
+    installed = runtime.install_packaged_binary(packaged)
+
+    assert installed == tmp_path / "home" / ".peer" / "bin" / binary_name()
+    assert installed.read_bytes() == b"fake-binary"
 
 
 def test_peer_netd_runtime_reads_and_clears_state(tmp_path: Path) -> None:

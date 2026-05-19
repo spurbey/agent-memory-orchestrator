@@ -53,6 +53,9 @@ src/agent_memory_orchestrator/peer/
   netd_client.py
   netd_runtime.py
   netd_service.py
+
+scripts/
+  build_peer_netd_binaries.py
 ```
 
 `cards.py` builds and imports peer-card JSON so users do not manually copy libp2p ids and multiaddrs into commands.
@@ -64,6 +67,8 @@ src/agent_memory_orchestrator/peer/
 `netd_runtime.py` is the managed sidecar lifecycle layer. It locates repo or packaged `peer-netd` source, builds the Go binary into `AMO_HOME/.peer/bin`, starts/stops it, writes PID/API/log state under `AMO_HOME/.peer/netd`, and refuses unsafe managed starts where the local API port is dynamic.
 
 `netd_service.py` plans OS startup integration. It returns a Windows Scheduled Task plan or user-systemd unit plan by default, and only mutates the host when `--apply` is explicitly used.
+
+`scripts/build_peer_netd_binaries.py` builds release binaries into `src/agent_memory_orchestrator/bin/<goos-goarch>/`. Wheel/package builds include those files when present, so normal users do not need Go once release packaging generates platform binaries.
 
 ## Managed User Flow
 
@@ -93,7 +98,7 @@ python -m agent_memory_orchestrator.app.cli peer --amo-home <amo_home> netd stop
 
 `peer doctor` is the first diagnostic command for a new machine. It separates blocking install/config failures from normal next steps like starting the sidecar or importing peer cards.
 
-`peer enable` is the one-command normal path. It builds the sidecar if needed, starts it, waits for `/health`, and returns the peer id/listen addresses. Packaged installs now include the Go sidecar source so users should not need a repo clone just to build `amo-peer-netd`; they still need Go on PATH until prebuilt sidecar binaries are shipped. Future install work should wire this into a background OS service, but the process state is already AMO-owned.
+`peer enable` is the one-command normal path. It uses a packaged prebuilt sidecar when available, otherwise builds the sidecar if Go is available, starts it, waits for `/health`, and returns the peer id/listen addresses. Packaged installs also include the Go sidecar source so users do not need a repo clone just to build `amo-peer-netd`. Future install work should wire this into a background OS service, but the process state is already AMO-owned.
 
 Delivered envelopes are persisted by default:
 
@@ -156,7 +161,7 @@ remote sidecar verifies envelope
 remote AMO reads /messages and processes room response
 ```
 
-The current implementation supports explicit multiaddr dialing, peer-card export/import, packaged sidecar source discovery, readiness diagnostics, static bootstrap dialing, LAN mDNS, managed process start/stop, persistent sidecar inbox, watched inbox draining, sidecar-backed room invites/messages, relay reservation, an AMO rendezvous stream protocol, and OS startup planning. Prebuilt sidecar binaries and OS-managed watcher startup are still the next packaging/UX steps.
+The current implementation supports explicit multiaddr dialing, peer-card export/import, packaged sidecar source discovery, packaged prebuilt binary discovery, readiness diagnostics, static bootstrap dialing, LAN mDNS, managed process start/stop, persistent sidecar inbox, watched inbox draining, sidecar-backed room invites/messages, relay reservation, an AMO rendezvous stream protocol, and OS startup planning. OS-managed watcher startup and invite-code trust exchange are still the next UX steps.
 
 Incoming room invites and messages remain local-policy gated. Invites require a trusted initiator under `trusted_only`; messages require a trusted configured sender that is already a room participant. If a peer has `shared_secret_env` configured, netd-delivered messages from that peer must be authenticated or AMO rejects them before mutating room state.
 
@@ -211,6 +216,7 @@ These nodes should not store memory, raw evidence, or LLM prompts. They only mov
 - CLI tests verify libp2p peer config, peer-card export/import, inbox polling/watch behavior, and startup service planning.
 - Peer-room policy tests verify untrusted senders, non-participant senders, and unsigned netd messages for secret-required peers are rejected.
 - Wheel install smoke verifies packaged installs contain the `peer-netd` Go source tree and `PeerNetdRuntime` can discover it outside the repo.
+- Prebuilt wheel smoke verifies a generated `amo-peer-netd` binary is included in the wheel and discovered by installed runtime.
 - Go store tests verify delivered envelopes persist to JSONL and reload after restart.
 - Binary smoke starts three real sidecar processes: rendezvous, node A, and node B. A/B register, B discovers A, B sends a signed response, and A receives it.
 - Binary relay smoke starts three real sidecar processes: relay, private node A, and node B. A reserves a relay slot, B dials A's `/p2p-circuit` address, B sends a signed response, and A receives it.
