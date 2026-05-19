@@ -62,6 +62,39 @@ def test_peer_netd_client_raises_on_sidecar_error() -> None:
         server.server_close()
 
 
+def test_peer_netd_client_preserves_peer_card_payloads() -> None:
+    server, state = start_fake_netd()
+    try:
+        client = PeerNetdClient(base_url=f"http://127.0.0.1:{server.server_port}", timeout_seconds=2)
+        client.send_raw(
+            "peer-a",
+            {
+                "type": "peer_join_request",
+                "payload": {
+                    "peer_card": {
+                        "node_id": "node-b",
+                        "base_url": "",
+                        "relay_addrs": [],
+                        "rendezvous_addr": "",
+                    },
+                    "empty_field": "",
+                },
+            },
+        )
+
+        payload = state["send"][0]["message"]["payload"]
+        assert "empty_field" not in payload
+        assert payload["peer_card"] == {
+            "node_id": "node-b",
+            "base_url": "",
+            "relay_addrs": [],
+            "rendezvous_addr": "",
+        }
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
 def start_fake_netd(send_status: int = 200) -> tuple[ThreadingHTTPServer, dict[str, list[dict]]]:
     state: dict[str, list[dict]] = {
         "bootstrap": [],
