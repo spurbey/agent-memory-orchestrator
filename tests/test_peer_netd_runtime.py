@@ -80,6 +80,24 @@ def test_peer_netd_runtime_reports_missing_state_as_stopped(tmp_path: Path) -> N
     assert status["pid"] is None
 
 
+def test_peer_netd_runtime_prefers_explicit_repo_root(tmp_path: Path) -> None:
+    repo_root = tmp_path / "repo"
+    source_dir = repo_root / "peer-netd"
+    source_dir.mkdir(parents=True)
+    runtime = PeerNetdRuntime(make_settings(tmp_path), repo_root=repo_root)
+
+    assert runtime.source_dir() == source_dir
+    assert runtime.source_dir_candidates() == [source_dir]
+
+
+def test_peer_netd_runtime_lists_packaged_source_candidates(tmp_path: Path) -> None:
+    runtime = PeerNetdRuntime(make_settings(tmp_path))
+    candidates = runtime.source_dir_candidates()
+
+    assert any(candidate.name == "peer-netd" for candidate in candidates)
+    assert len(candidates) == len(set(candidates))
+
+
 def test_peer_netd_runtime_reads_and_clears_state(tmp_path: Path) -> None:
     runtime = PeerNetdRuntime(make_settings(tmp_path))
     state = {

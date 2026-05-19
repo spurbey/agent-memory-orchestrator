@@ -5,6 +5,7 @@ import os
 import shutil
 import signal
 import subprocess
+import sys
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -311,8 +312,24 @@ class PeerNetdRuntime:
         return default_path
 
     def source_dir(self) -> Path:
-        root = self.repo_root or Path(__file__).resolve().parents[3]
-        return root / "peer-netd"
+        for candidate in self.source_dir_candidates():
+            if candidate.exists():
+                return candidate
+        return self.source_dir_candidates()[0]
+
+    def source_dir_candidates(self) -> list[Path]:
+        if self.repo_root:
+            return [self.repo_root / "peer-netd"]
+
+        package_root = Path(__file__).resolve().parents[3]
+        prefix_root = Path(sys.prefix).resolve()
+        candidates = [
+            package_root / "peer-netd",
+            prefix_root / "peer-netd",
+            prefix_root / "Lib" / "peer-netd",
+            prefix_root / "share" / "peer-netd",
+        ]
+        return list(dict.fromkeys(candidates))
 
     def go_path(self) -> str:
         found = shutil.which("go")
