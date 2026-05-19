@@ -362,12 +362,15 @@ def _build_parser() -> argparse.ArgumentParser:
     peer_netd_install = peer_netd_sub.add_parser("install-service", help="Plan or install OS startup for peer netd")
     _add_peer_netd_start_args(peer_netd_install)
     peer_netd_install.add_argument("--service-name", default="AMO Peer Netd")
+    _add_peer_netd_watch_service_args(peer_netd_install)
     peer_netd_install.add_argument("--apply", action="store_true", help="Actually create the OS startup entry.")
     peer_netd_uninstall = peer_netd_sub.add_parser("uninstall-service", help="Plan or remove OS startup for peer netd")
     peer_netd_uninstall.add_argument("--service-name", default="AMO Peer Netd")
+    _add_peer_netd_watch_service_args(peer_netd_uninstall)
     peer_netd_uninstall.add_argument("--apply", action="store_true", help="Actually remove the OS startup entry.")
     peer_netd_service_status_cmd = peer_netd_sub.add_parser("service-status", help="Inspect the OS startup entry for peer netd")
     peer_netd_service_status_cmd.add_argument("--service-name", default="AMO Peer Netd")
+    _add_peer_netd_watch_service_args(peer_netd_service_status_cmd)
     peer_poll_netd = peer_sub.add_parser("poll-netd", help="Process delivered sidecar messages into local peer rooms")
     peer_poll_netd.add_argument("--limit", type=int, default=None)
     peer_poll_netd.add_argument("--watch", action="store_true", help="Keep polling the sidecar inbox until interrupted.")
@@ -737,7 +740,7 @@ def main(argv: list[str] | None = None) -> int:
                         install_peer_netd_service(
                             settings,
                             _peer_netd_options_from_args(args),
-                            PeerNetdServiceOptions(service_name=args.service_name, apply=args.apply),
+                            _peer_netd_service_options_from_args(args),
                         )
                     )
                     return 0
@@ -745,12 +748,12 @@ def main(argv: list[str] | None = None) -> int:
                     _print(
                         uninstall_peer_netd_service(
                             settings,
-                            PeerNetdServiceOptions(service_name=args.service_name, apply=args.apply),
+                            _peer_netd_service_options_from_args(args),
                         )
                     )
                     return 0
                 if args.netd_command == "service-status":
-                    result = peer_netd_service_status(PeerNetdServiceOptions(service_name=args.service_name))
+                    result = peer_netd_service_status(_peer_netd_service_options_from_args(args))
                     _print(result)
                     return 0 if result.get("ok") else 1
             if args.peer_command == "doctor":
@@ -1423,6 +1426,19 @@ def _add_peer_netd_start_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--no-build", action="store_true", help="Do not build peer-netd automatically if the binary is missing.")
 
 
+def _add_peer_netd_watch_service_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--with-watch",
+        action="store_true",
+        help="Also install, uninstall, or inspect the poll-netd --watch startup entry.",
+    )
+    parser.add_argument(
+        "--watch-service-name",
+        default="",
+        help="Optional OS startup name for the poll-netd --watch entry.",
+    )
+
+
 def _peer_netd_options_from_args(args: argparse.Namespace) -> PeerNetdLaunchOptions:
     return PeerNetdLaunchOptions(
         node_id=args.node_id,
@@ -1443,6 +1459,15 @@ def _peer_netd_options_from_args(args: argparse.Namespace) -> PeerNetdLaunchOpti
         force_private=args.force_private,
         force_public=args.force_public,
         advertise_localhost_dns=args.advertise_localhost_dns,
+    )
+
+
+def _peer_netd_service_options_from_args(args: argparse.Namespace) -> PeerNetdServiceOptions:
+    return PeerNetdServiceOptions(
+        service_name=args.service_name,
+        apply=getattr(args, "apply", False),
+        with_watcher=getattr(args, "with_watch", False),
+        watch_service_name=getattr(args, "watch_service_name", ""),
     )
 
 

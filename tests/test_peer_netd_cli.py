@@ -256,3 +256,27 @@ def test_peer_netd_install_service_is_plan_by_default(tmp_path: Path, capsys) ->
     assert payload["ok"] is True
     assert payload["apply"] is False
     assert "enable" in payload["enable_command"]
+
+
+def test_peer_netd_install_service_can_plan_watcher(tmp_path: Path, capsys) -> None:
+    code = main(
+        [
+            "peer",
+            "--amo-home",
+            str(tmp_path),
+            "netd",
+            "install-service",
+            "--node-id",
+            "zenbook-amo",
+            "--with-watch",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    assert code == 0
+    assert payload["ok"] is True
+    assert payload["apply"] is False
+    assert "enable" in payload["enable_command"]
+    assert "poll-netd" in payload["watcher"]["watch_command"]
+    assert "--watch" in payload["watcher"]["watch_command"]
