@@ -8,7 +8,8 @@ version = "0.1.3"
 description = "Shared persistent memory and multi-agent orchestration over local MCP."
 readme = "README.md"
 requires-python = ">=3.10"
-license = { text = "MIT" }
+license = "MIT"
+license-files = ["LICENSE"]
 authors = [
   { name = "Agent Memory Orchestrator Contributors" }
 ]
@@ -46,7 +47,35 @@ package-dir = {"" = "src"}
 where = ["src"]
 
 [tool.setuptools.package-data]
-agent_memory_orchestrator = ["web/*.html", "web/*.css", "web/*.js"]
+agent_memory_orchestrator = ["web/*.html", "web/*.css", "web/*.js", "bin/*/amo-peer-netd", "bin/*/amo-peer-netd.exe"]
+
+[tool.setuptools.data-files]
+"peer-netd" = [
+  "peer-netd/README.md",
+  "peer-netd/go.mod",
+  "peer-netd/go.sum",
+]
+"peer-netd/cmd/amo-peer-netd" = [
+  "peer-netd/cmd/amo-peer-netd/main.go",
+]
+"peer-netd/internal/config" = [
+  "peer-netd/internal/config/config.go",
+]
+"peer-netd/internal/localapi" = [
+  "peer-netd/internal/localapi/server.go",
+]
+"peer-netd/internal/p2p" = [
+  "peer-netd/internal/p2p/node.go",
+]
+"peer-netd/internal/protocol" = [
+  "peer-netd/internal/protocol/protocol.go",
+]
+"peer-netd/internal/rendezvous" = [
+  "peer-netd/internal/rendezvous/rendezvous.go",
+]
+"peer-netd/internal/store" = [
+  "peer-netd/internal/store/store.go",
+]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]

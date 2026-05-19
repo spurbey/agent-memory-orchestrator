@@ -36,6 +36,27 @@ def test_peer_netd_service_plan_contains_enable_command(tmp_path: Path) -> None:
     assert "--mdns" in command
 
 
+def test_peer_netd_service_plan_can_include_watcher(tmp_path: Path) -> None:
+    settings = make_settings(tmp_path)
+
+    plan = install_service_plan(
+        settings,
+        PeerNetdLaunchOptions(node_id="zenbook-amo"),
+        PeerNetdServiceOptions(service_name="AMO Test Peer", with_watcher=True),
+    )
+
+    watcher = plan["watcher"]
+    watch_command = watcher["watch_command"]
+    assert watcher["service_name"]
+    assert "agent_memory_orchestrator.app.cli" in watch_command
+    assert "--amo-home" in watch_command
+    assert str(tmp_path) in watch_command
+    assert "poll-netd" in watch_command
+    assert "--watch" in watch_command
+    assert watcher["install_command"]
+    assert watcher["uninstall_command"]
+
+
 def make_settings(tmp_path: Path) -> Settings:
     return Settings(
         home=tmp_path,

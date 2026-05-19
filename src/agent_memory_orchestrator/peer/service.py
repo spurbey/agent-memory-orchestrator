@@ -10,9 +10,11 @@ from urllib.error import HTTPError, URLError
 from ..core.config import Settings
 from .auth import PeerAuthError, secret_for_peer, unwrap_payload, wrap_payload
 from .cards import build_peer_card, peer_from_card
+from .invites import build_peer_invite, encode_invite_code, parse_peer_invite
 from .models import PeerNode
 from .netd_client import PeerNetdClient, PeerNetdError
 from .netd_runtime import PeerNetdRuntime
+from .policy import PeerPolicy
 from .protocol import PeerMessage
 from .store import PeerStore
 
@@ -119,6 +121,66 @@ class PeerService:
         saved = config.peer_by_id(peer.node_id)
         return {"ok": True, "peer": saved.to_dict() if saved else None}
 
+    def create_peer_invite(
+        self,
+        *,
+        trust: str = "trusted",
+        shared_secret_env: str = "",
+        label: str = "",
+        base_url: str = "",
+        rendezvous_addr: str = "",
+        rendezvous_namespace: str = "",
+    ) -> dict[str, Any]:
+        card_result = self.share_card(
+            base_url=base_url,
+            rendezvous_addr=rendezvous_addr,
+            rendezvous_namespace=rendezvous_namespace,
+        )
+        if not card_result.get("ok"):
+            return card_result
+        invite = build_peer_invite(
+            card=card_result["card"],
+            trust=trust,
+            shared_secret_env=shared_secret_env,
+            label=label,
+        )
+        return {
+            "ok": True,
+            "invite": invite,
+            "invite_code": encode_invite_code(invite),
+            "next_step": "Send invite_code or the invite JSON to the peer. The peer runs peer accept-invite.",
+        }
+
+    def accept_peer_invite(
+        self,
+        invite: dict[str, Any],
+        *,
+        trust: str = "",
+        shared_secret_env: str = "",
+    ) -> dict[str, Any]:
+        parsed = parse_peer_invite(invite)
+        effective_trust = trust.strip() or str(parsed["trust"])
+        effective_secret_env = shared_secret_env.strip() or str(parsed["shared_secret_env"])
+        imported = self.import_card(parsed["card"], trust=effective_trust, shared_secret_env=effective_secret_env)
+        response_card = None
+        response_error = ""
+        try:
+            response = self.share_card()
+            if response.get("ok"):
+                response_card = response.get("card")
+            else:
+                response_error = str(response.get("error") or "could not create response card")
+        except Exception as exc:
+            response_error = str(exc)
+        return {
+            "ok": True,
+            "imported_peer": imported.get("peer"),
+            "card_sha256": parsed["card_sha256"],
+            "response_card": response_card,
+            "response_card_error": response_error,
+            "next_step": "Return response_card to the inviter so they can import this node.",
+        }
+
     def capabilities(self) -> dict[str, Any]:
         config = self.store.load_config()
         return {
@@ -161,6 +223,10 @@ class PeerService:
         try:
             if transport_auth:
                 auth = transport_auth
+                self._enforce_transport_auth(
+                    str(payload.get("initiator_node_id") or payload.get("initiator") or "").strip(),
+                    auth,
+                )
             else:
                 payload, auth = self._unwrap_incoming_payload(payload)
             room = self.store.accept_invite(payload)
@@ -176,13 +242,25 @@ class PeerService:
                 auth = transport_auth
             else:
                 payload, auth = self._unwrap_incoming_payload(payload)
+            config = self.store.load_config()
+            policy = PeerPolicy(config)
+            message = PeerMessage.from_payload(payload)
+            if not message.room_id:
+                return {"ok": False, "error": "room_id is required", "auth": auth}
+            self._enforce_transport_auth(message.from_node_id, auth)
+            room = self.store.get_room(message.room_id)
+            decision = policy.decide_message(
+                message.from_node_id,
+                participants=[str(item) for item in room.get("participants", [])],
+            )
+            if not decision.allowed:
+                return {"ok": False, "error": decision.reason, "auth": auth}
+            stored = self.store.append_message(message.room_id, message.to_record())
+            return {"ok": True, "message": stored, "auth": auth}
         except PeerAuthError as exc:
             return {"ok": False, "error": str(exc), "auth": {"authenticated": False}}
-        message = PeerMessage.from_payload(payload)
-        if not message.room_id:
-            return {"ok": False, "error": "room_id is required"}
-        stored = self.store.append_message(message.room_id, message.to_record())
-        return {"ok": True, "message": stored, "auth": auth}
+        except FileNotFoundError as exc:
+            return {"ok": False, "error": str(exc), "auth": auth}
 
     def append_message(
         self,
@@ -314,6 +392,11 @@ class PeerService:
 
     def _unwrap_incoming_payload(self, payload: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
         return unwrap_payload(payload=payload, config=self.store.load_config())
+
+    def _enforce_transport_auth(self, sender_node_id: str, auth: dict[str, Any]) -> None:
+        peer = self.store.load_config().peer_by_id(sender_node_id)
+        if peer is not None and peer.shared_secret_env and not auth.get("authenticated"):
+            raise PeerAuthError(f"signed envelope required for peer: {sender_node_id}")
 
     def _send_payload_via_netd(
         self,

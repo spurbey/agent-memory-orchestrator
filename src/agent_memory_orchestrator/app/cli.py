@@ -4,6 +4,7 @@ import argparse
 import json
 import os
 import sys
+import time
 from dataclasses import asdict, replace
 from pathlib import Path
 
@@ -25,6 +26,8 @@ from ..memory import MemoryService
 from ..orchestration import OrchestratorService
 from ..core.privacy import redact_secrets
 from ..peer import PeerService
+from ..peer.doctor import peer_doctor
+from ..peer.invites import decode_invite_code
 from ..peer.netd_runtime import PeerNetdLaunchOptions
 from ..peer.netd_runtime import PeerNetdRuntime
 from ..peer.netd_service import PeerNetdServiceOptions
@@ -52,6 +55,10 @@ from .client import DaemonClient, DaemonUnavailable
 
 def _print(payload: object) -> None:
     print(json.dumps(payload, indent=2))
+
+
+def _print_line(payload: object) -> None:
+    print(json.dumps(payload), flush=True)
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -286,6 +293,8 @@ def _build_parser() -> argparse.ArgumentParser:
     peer = sub.add_parser("peer", help="Configure AMO peer rooms and the local libp2p sidecar")
     peer.add_argument("--amo-home", type=Path, help="AMO home directory containing peer config and room state.")
     peer_sub = peer.add_subparsers(dest="peer_command", required=True)
+    peer_doctor_cmd = peer_sub.add_parser("doctor", help="Check peer identity, netd source, binary, sidecar, and peers")
+    peer_doctor_cmd.add_argument("--strict", action="store_true", help="Return non-zero unless peer rooms are ready now.")
     peer_init = peer_sub.add_parser("init", help="Initialize this AMO node's peer identity")
     peer_init.add_argument("--node-id", required=True)
     peer_init.add_argument("--display-name", default="")
@@ -316,6 +325,21 @@ def _build_parser() -> argparse.ArgumentParser:
     peer_import.add_argument("--file", required=True, type=Path)
     peer_import.add_argument("--trust", choices=["trusted", "limited", "blocked"], default="trusted")
     peer_import.add_argument("--shared-secret-env", default="")
+    peer_invite = peer_sub.add_parser("create-invite", help="Create a shareable peer invite bundle/code")
+    peer_invite.add_argument("--out", type=Path, help="Optional JSON invite output path.")
+    peer_invite.add_argument("--trust", choices=["trusted", "limited", "blocked"], default="trusted")
+    peer_invite.add_argument("--shared-secret-env", default="")
+    peer_invite.add_argument("--label", default="", help="Optional human-readable invite label.")
+    peer_invite.add_argument("--base-url", default="", help="Optional legacy direct HTTP URL to include.")
+    peer_invite.add_argument("--rendezvous-addr", default="", help="Optional rendezvous node multiaddr to include.")
+    peer_invite.add_argument("--rendezvous-namespace", default="", help="Optional rendezvous namespace to include.")
+    peer_accept = peer_sub.add_parser("accept-invite", help="Import an invite and optionally write this node's response card")
+    peer_accept_source = peer_accept.add_mutually_exclusive_group(required=True)
+    peer_accept_source.add_argument("--file", type=Path, help="Invite JSON file to accept.")
+    peer_accept_source.add_argument("--code", default="", help="amo-peer-invite: code to accept.")
+    peer_accept.add_argument("--trust", choices=["trusted", "limited", "blocked"], default="")
+    peer_accept.add_argument("--shared-secret-env", default="")
+    peer_accept.add_argument("--response-out", type=Path, help="Optional response peer-card JSON path to send back.")
     peer_sub.add_parser("rooms", help="List local peer investigation rooms")
     peer_context = peer_sub.add_parser("context", help="Build the three-layer context pack for a room")
     peer_context.add_argument("--room-id", required=True)
@@ -355,14 +379,21 @@ def _build_parser() -> argparse.ArgumentParser:
     peer_netd_install = peer_netd_sub.add_parser("install-service", help="Plan or install OS startup for peer netd")
     _add_peer_netd_start_args(peer_netd_install)
     peer_netd_install.add_argument("--service-name", default="AMO Peer Netd")
+    _add_peer_netd_watch_service_args(peer_netd_install)
     peer_netd_install.add_argument("--apply", action="store_true", help="Actually create the OS startup entry.")
     peer_netd_uninstall = peer_netd_sub.add_parser("uninstall-service", help="Plan or remove OS startup for peer netd")
     peer_netd_uninstall.add_argument("--service-name", default="AMO Peer Netd")
+    _add_peer_netd_watch_service_args(peer_netd_uninstall)
     peer_netd_uninstall.add_argument("--apply", action="store_true", help="Actually remove the OS startup entry.")
     peer_netd_service_status_cmd = peer_netd_sub.add_parser("service-status", help="Inspect the OS startup entry for peer netd")
     peer_netd_service_status_cmd.add_argument("--service-name", default="AMO Peer Netd")
+    _add_peer_netd_watch_service_args(peer_netd_service_status_cmd)
     peer_poll_netd = peer_sub.add_parser("poll-netd", help="Process delivered sidecar messages into local peer rooms")
     peer_poll_netd.add_argument("--limit", type=int, default=None)
+    peer_poll_netd.add_argument("--watch", action="store_true", help="Keep polling the sidecar inbox until interrupted.")
+    peer_poll_netd.add_argument("--interval-seconds", type=float, default=2.0)
+    peer_poll_netd.add_argument("--max-iterations", type=int, default=0, help="Testing/debug guard for --watch. 0 means forever.")
+    peer_poll_netd.add_argument("--fail-fast", action="store_true", help="In watch mode, exit on the first poll error.")
     peer_serve = peer_sub.add_parser("serve", help="Run the direct peer listener for Tailscale/private networking")
     peer_serve.add_argument("--host", default="0.0.0.0")
     peer_serve.add_argument("--port", type=int, default=8787)
@@ -737,7 +768,7 @@ def main(argv: list[str] | None = None) -> int:
                         install_peer_netd_service(
                             settings,
                             _peer_netd_options_from_args(args),
-                            PeerNetdServiceOptions(service_name=args.service_name, apply=args.apply),
+                            _peer_netd_service_options_from_args(args),
                         )
                     )
                     return 0
@@ -745,14 +776,18 @@ def main(argv: list[str] | None = None) -> int:
                     _print(
                         uninstall_peer_netd_service(
                             settings,
-                            PeerNetdServiceOptions(service_name=args.service_name, apply=args.apply),
+                            _peer_netd_service_options_from_args(args),
                         )
                     )
                     return 0
                 if args.netd_command == "service-status":
-                    result = peer_netd_service_status(PeerNetdServiceOptions(service_name=args.service_name))
+                    result = peer_netd_service_status(_peer_netd_service_options_from_args(args))
                     _print(result)
                     return 0 if result.get("ok") else 1
+            if args.peer_command == "doctor":
+                result = peer_doctor(settings)
+                _print(result)
+                return 0 if result.get("ready") or not args.strict else 1
             svc = PeerService(settings)
             if args.peer_command == "init":
                 _print(
@@ -801,6 +836,34 @@ def main(argv: list[str] | None = None) -> int:
                     raise ValueError("peer card file must contain a JSON object")
                 _print(svc.import_card(card, trust=args.trust, shared_secret_env=args.shared_secret_env))
                 return 0
+            if args.peer_command == "create-invite":
+                result = svc.create_peer_invite(
+                    trust=args.trust,
+                    shared_secret_env=args.shared_secret_env,
+                    label=args.label,
+                    base_url=args.base_url,
+                    rendezvous_addr=args.rendezvous_addr,
+                    rendezvous_namespace=args.rendezvous_namespace,
+                )
+                if result.get("ok") and args.out:
+                    args.out.write_text(json.dumps(result["invite"], indent=2), encoding="utf-8")
+                    result["out"] = str(args.out)
+                _print(result)
+                return 0 if result.get("ok") else 1
+            if args.peer_command == "accept-invite":
+                invite = decode_invite_code(args.code) if args.code else json.loads(args.file.read_text(encoding="utf-8"))
+                if not isinstance(invite, dict):
+                    raise ValueError("peer invite must contain a JSON object")
+                result = svc.accept_peer_invite(
+                    invite,
+                    trust=args.trust,
+                    shared_secret_env=args.shared_secret_env,
+                )
+                if result.get("ok") and args.response_out and result.get("response_card"):
+                    args.response_out.write_text(json.dumps(result["response_card"], indent=2), encoding="utf-8")
+                    result["response_out"] = str(args.response_out)
+                _print(result)
+                return 0 if result.get("ok") else 1
             if args.peer_command == "rooms":
                 _print(svc.list_rooms())
                 return 0
@@ -839,6 +902,14 @@ def main(argv: list[str] | None = None) -> int:
                 _print(svc.open_room(topic=args.topic, peer_ids=args.peer, send_invites=not args.no_send))
                 return 0
             if args.peer_command == "poll-netd":
+                if args.watch:
+                    return _watch_peer_netd_inbox(
+                        svc,
+                        limit=args.limit,
+                        interval_seconds=args.interval_seconds,
+                        max_iterations=args.max_iterations,
+                        fail_fast=args.fail_fast,
+                    )
                 _print(svc.process_netd_inbox(limit=args.limit))
                 return 0
 
@@ -1353,6 +1424,34 @@ def _settings_with_path_overrides(settings: Settings, args: argparse.Namespace) 
     return replace(settings, **updates)
 
 
+def _watch_peer_netd_inbox(
+    svc: PeerService,
+    *,
+    limit: int | None,
+    interval_seconds: float,
+    max_iterations: int = 0,
+    fail_fast: bool = False,
+) -> int:
+    if interval_seconds <= 0:
+        raise ValueError("--interval-seconds must be positive")
+    iterations = 0
+    try:
+        while True:
+            try:
+                _print_line(svc.process_netd_inbox(limit=limit))
+            except Exception as exc:
+                _print_line({"ok": False, "error": str(exc), "watching": not fail_fast})
+                if fail_fast:
+                    return 1
+            iterations += 1
+            if max_iterations and iterations >= max_iterations:
+                return 0
+            time.sleep(interval_seconds)
+    except KeyboardInterrupt:
+        _print_line({"ok": True, "stopped": True, "reason": "interrupted"})
+        return 0
+
+
 def _add_peer_netd_start_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--node-id", default="amo-node", help="Stable AMO node id advertised by the sidecar.")
     parser.add_argument("--listen", default="/ip4/0.0.0.0/tcp/0", help="libp2p listen multiaddr.")
@@ -1383,6 +1482,19 @@ def _add_peer_netd_start_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--no-build", action="store_true", help="Do not build peer-netd automatically if the binary is missing.")
 
 
+def _add_peer_netd_watch_service_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--with-watch",
+        action="store_true",
+        help="Also install, uninstall, or inspect the poll-netd --watch startup entry.",
+    )
+    parser.add_argument(
+        "--watch-service-name",
+        default="",
+        help="Optional OS startup name for the poll-netd --watch entry.",
+    )
+
+
 def _peer_netd_options_from_args(args: argparse.Namespace) -> PeerNetdLaunchOptions:
     return PeerNetdLaunchOptions(
         node_id=args.node_id,
@@ -1403,6 +1515,15 @@ def _peer_netd_options_from_args(args: argparse.Namespace) -> PeerNetdLaunchOpti
         force_private=args.force_private,
         force_public=args.force_public,
         advertise_localhost_dns=args.advertise_localhost_dns,
+    )
+
+
+def _peer_netd_service_options_from_args(args: argparse.Namespace) -> PeerNetdServiceOptions:
+    return PeerNetdServiceOptions(
+        service_name=args.service_name,
+        apply=getattr(args, "apply", False),
+        with_watcher=getattr(args, "with_watch", False),
+        watch_service_name=getattr(args, "watch_service_name", ""),
     )
 
 

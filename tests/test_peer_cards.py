@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 
 from agent_memory_orchestrator.peer.cards import build_peer_card, peer_from_card
+from agent_memory_orchestrator.peer.invites import build_peer_invite, decode_invite_code, encode_invite_code, parse_peer_invite
 from agent_memory_orchestrator.peer.models import PeerConfig
 
 
@@ -35,3 +36,27 @@ def test_peer_card_rejects_empty_transport() -> None:
 
     with pytest.raises(ValueError, match="usable transport"):
         peer_from_card(card)
+
+
+def test_peer_invite_code_round_trip() -> None:
+    card = build_peer_card(
+        config=PeerConfig(node_id="node-a", display_name="Node A"),
+        base_url="http://127.0.0.1:8787",
+    )
+    invite = build_peer_invite(card=card, trust="trusted", label="Node A invite")
+
+    decoded = decode_invite_code(encode_invite_code(invite))
+    parsed = parse_peer_invite(decoded)
+
+    assert decoded["invite_id"] == invite["invite_id"]
+    assert parsed["card"]["node_id"] == "node-a"
+    assert parsed["trust"] == "trusted"
+
+
+def test_peer_invite_rejects_card_hash_mismatch() -> None:
+    card = build_peer_card(config=PeerConfig(node_id="node-a"), base_url="http://127.0.0.1:8787")
+    invite = build_peer_invite(card=card)
+    invite["card"]["node_id"] = "node-b"
+
+    with pytest.raises(ValueError, match="hash mismatch"):
+        parse_peer_invite(invite)
