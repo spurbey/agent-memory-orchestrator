@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 from agent_memory_orchestrator.app.cli import main
+from agent_memory_orchestrator.peer.netd_runtime import binary_name
 
 
 def test_peer_netd_status_uses_amo_home(tmp_path: Path, capsys) -> None:
@@ -15,6 +16,43 @@ def test_peer_netd_status_uses_amo_home(tmp_path: Path, capsys) -> None:
     assert payload["ok"] is True
     assert payload["running"] is False
     assert payload["state_path"].startswith(str(tmp_path))
+
+
+def test_peer_doctor_reports_missing_identity_without_failing_command(tmp_path: Path, capsys) -> None:
+    code = main(["peer", "--amo-home", str(tmp_path), "doctor"])
+
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    assert code == 0
+    assert payload["ok"] is True
+    assert payload["ready"] is False
+    assert any(check["name"] == "peer_identity" and check["status"] == "fail" for check in payload["checks"])
+
+
+def test_peer_doctor_strict_returns_nonzero_until_runtime_ready(tmp_path: Path, capsys) -> None:
+    code = main(["peer", "--amo-home", str(tmp_path), "doctor", "--strict"])
+
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    assert code == 1
+    assert payload["ready"] is False
+
+
+def test_peer_doctor_accepts_initialized_node_with_existing_binary(tmp_path: Path, capsys) -> None:
+    assert main(["peer", "--amo-home", str(tmp_path), "init", "--node-id", "node-a"]) == 0
+    capsys.readouterr()
+    binary_path = tmp_path / ".peer" / "bin" / binary_name()
+    binary_path.parent.mkdir(parents=True)
+    binary_path.write_text("fake", encoding="utf-8")
+
+    code = main(["peer", "--amo-home", str(tmp_path), "doctor"])
+
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    assert code == 0
+    assert payload["blocking_count"] == 0
+    assert any(check["name"] == "netd_binary" and check["status"] == "pass" for check in payload["checks"])
+    assert any(check["name"] == "netd_runtime" and check["status"] == "warn" for check in payload["checks"])
 
 
 def test_peer_enable_rejects_dynamic_api_port_without_building(tmp_path: Path, capsys) -> None:
