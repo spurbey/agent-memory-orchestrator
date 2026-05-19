@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 from agent_memory_orchestrator.app.cli import main
+from agent_memory_orchestrator.peer import PeerService
 from agent_memory_orchestrator.peer.netd_runtime import binary_name
 
 
@@ -139,6 +140,38 @@ def test_peer_poll_netd_fails_cleanly_when_sidecar_is_not_running(tmp_path: Path
     assert code == 1
     assert payload["ok"] is False
     assert "GET /messages failed" in payload["error"]
+
+
+def test_peer_poll_netd_watch_streams_json_lines(tmp_path: Path, capsys, monkeypatch) -> None:
+    calls: list[int | None] = []
+
+    def fake_process_netd_inbox(self: PeerService, limit: int | None = None) -> dict:
+        calls.append(limit)
+        return {"ok": True, "count": len(calls)}
+
+    monkeypatch.setattr(PeerService, "process_netd_inbox", fake_process_netd_inbox)
+
+    code = main(
+        [
+            "peer",
+            "--amo-home",
+            str(tmp_path),
+            "poll-netd",
+            "--watch",
+            "--interval-seconds",
+            "0.01",
+            "--max-iterations",
+            "2",
+            "--limit",
+            "5",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    lines = [json.loads(line) for line in captured.out.splitlines() if line.strip()]
+    assert code == 0
+    assert calls == [5, 5]
+    assert lines == [{"ok": True, "count": 1}, {"ok": True, "count": 2}]
 
 
 def test_peer_netd_install_service_is_plan_by_default(tmp_path: Path, capsys) -> None:
