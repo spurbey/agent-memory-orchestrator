@@ -130,6 +130,54 @@ def test_peer_share_and_import_card_with_base_url(tmp_path: Path, capsys) -> Non
     assert import_payload["peer"]["base_url"] == "http://127.0.0.1:8787"
 
 
+def test_peer_create_and_accept_invite_code(tmp_path: Path, capsys) -> None:
+    home_a = tmp_path / "node-a"
+    home_b = tmp_path / "node-b"
+    invite_path = tmp_path / "node-a.invite.json"
+    assert main(["peer", "--amo-home", str(home_a), "init", "--node-id", "node-a", "--display-name", "Node A"]) == 0
+    capsys.readouterr()
+
+    create_code = main(
+        [
+            "peer",
+            "--amo-home",
+            str(home_a),
+            "create-invite",
+            "--base-url",
+            "http://127.0.0.1:8787",
+            "--label",
+            "Node A invite",
+            "--out",
+            str(invite_path),
+        ]
+    )
+    create_payload = json.loads(capsys.readouterr().out)
+    assert create_code == 0
+    assert invite_path.exists()
+    assert create_payload["invite"]["card"]["node_id"] == "node-a"
+    assert create_payload["invite_code"].startswith("amo-peer-invite:")
+
+    assert main(["peer", "--amo-home", str(home_b), "init", "--node-id", "node-b"]) == 0
+    capsys.readouterr()
+    accept_code = main(
+        [
+            "peer",
+            "--amo-home",
+            str(home_b),
+            "accept-invite",
+            "--code",
+            create_payload["invite_code"],
+        ]
+    )
+    accept_payload = json.loads(capsys.readouterr().out)
+
+    assert accept_code == 0
+    assert accept_payload["imported_peer"]["node_id"] == "node-a"
+    assert accept_payload["imported_peer"]["trust"] == "trusted"
+    assert accept_payload["response_card"] is None
+    assert "no usable peer address" in accept_payload["response_card_error"]
+
+
 def test_peer_poll_netd_fails_cleanly_when_sidecar_is_not_running(tmp_path: Path, capsys, monkeypatch) -> None:
     monkeypatch.setenv("AMO_PEER_NETD_URL", "http://127.0.0.1:1")
 

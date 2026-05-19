@@ -27,6 +27,7 @@ from ..orchestration import OrchestratorService
 from ..core.privacy import redact_secrets
 from ..peer import PeerService
 from ..peer.doctor import peer_doctor
+from ..peer.invites import decode_invite_code
 from ..peer.netd_runtime import PeerNetdLaunchOptions
 from ..peer.netd_runtime import PeerNetdRuntime
 from ..peer.netd_service import PeerNetdServiceOptions
@@ -323,6 +324,21 @@ def _build_parser() -> argparse.ArgumentParser:
     peer_import.add_argument("--file", required=True, type=Path)
     peer_import.add_argument("--trust", choices=["trusted", "limited", "blocked"], default="trusted")
     peer_import.add_argument("--shared-secret-env", default="")
+    peer_invite = peer_sub.add_parser("create-invite", help="Create a shareable peer invite bundle/code")
+    peer_invite.add_argument("--out", type=Path, help="Optional JSON invite output path.")
+    peer_invite.add_argument("--trust", choices=["trusted", "limited", "blocked"], default="trusted")
+    peer_invite.add_argument("--shared-secret-env", default="")
+    peer_invite.add_argument("--label", default="", help="Optional human-readable invite label.")
+    peer_invite.add_argument("--base-url", default="", help="Optional legacy direct HTTP URL to include.")
+    peer_invite.add_argument("--rendezvous-addr", default="", help="Optional rendezvous node multiaddr to include.")
+    peer_invite.add_argument("--rendezvous-namespace", default="", help="Optional rendezvous namespace to include.")
+    peer_accept = peer_sub.add_parser("accept-invite", help="Import an invite and optionally write this node's response card")
+    peer_accept_source = peer_accept.add_mutually_exclusive_group(required=True)
+    peer_accept_source.add_argument("--file", type=Path, help="Invite JSON file to accept.")
+    peer_accept_source.add_argument("--code", default="", help="amo-peer-invite: code to accept.")
+    peer_accept.add_argument("--trust", choices=["trusted", "limited", "blocked"], default="")
+    peer_accept.add_argument("--shared-secret-env", default="")
+    peer_accept.add_argument("--response-out", type=Path, help="Optional response peer-card JSON path to send back.")
     peer_sub.add_parser("rooms", help="List local peer investigation rooms")
     peer_context = peer_sub.add_parser("context", help="Build the three-layer context pack for a room")
     peer_context.add_argument("--room-id", required=True)
@@ -808,6 +824,34 @@ def main(argv: list[str] | None = None) -> int:
                     raise ValueError("peer card file must contain a JSON object")
                 _print(svc.import_card(card, trust=args.trust, shared_secret_env=args.shared_secret_env))
                 return 0
+            if args.peer_command == "create-invite":
+                result = svc.create_peer_invite(
+                    trust=args.trust,
+                    shared_secret_env=args.shared_secret_env,
+                    label=args.label,
+                    base_url=args.base_url,
+                    rendezvous_addr=args.rendezvous_addr,
+                    rendezvous_namespace=args.rendezvous_namespace,
+                )
+                if result.get("ok") and args.out:
+                    args.out.write_text(json.dumps(result["invite"], indent=2), encoding="utf-8")
+                    result["out"] = str(args.out)
+                _print(result)
+                return 0 if result.get("ok") else 1
+            if args.peer_command == "accept-invite":
+                invite = decode_invite_code(args.code) if args.code else json.loads(args.file.read_text(encoding="utf-8"))
+                if not isinstance(invite, dict):
+                    raise ValueError("peer invite must contain a JSON object")
+                result = svc.accept_peer_invite(
+                    invite,
+                    trust=args.trust,
+                    shared_secret_env=args.shared_secret_env,
+                )
+                if result.get("ok") and args.response_out and result.get("response_card"):
+                    args.response_out.write_text(json.dumps(result["response_card"], indent=2), encoding="utf-8")
+                    result["response_out"] = str(args.response_out)
+                _print(result)
+                return 0 if result.get("ok") else 1
             if args.peer_command == "rooms":
                 _print(svc.list_rooms())
                 return 0
