@@ -25,6 +25,7 @@ from ..memory import MemoryService
 from ..orchestration import OrchestratorService
 from ..core.privacy import redact_secrets
 from ..peer import PeerService
+from ..peer.doctor import peer_doctor
 from ..peer.netd_runtime import PeerNetdLaunchOptions
 from ..peer.netd_runtime import PeerNetdRuntime
 from ..peer.netd_service import PeerNetdServiceOptions
@@ -285,6 +286,8 @@ def _build_parser() -> argparse.ArgumentParser:
     peer = sub.add_parser("peer", help="Configure AMO peer rooms and the local libp2p sidecar")
     peer.add_argument("--amo-home", type=Path, help="AMO home directory containing peer config and room state.")
     peer_sub = peer.add_subparsers(dest="peer_command", required=True)
+    peer_doctor_cmd = peer_sub.add_parser("doctor", help="Check peer identity, netd source, binary, sidecar, and peers")
+    peer_doctor_cmd.add_argument("--strict", action="store_true", help="Return non-zero unless peer rooms are ready now.")
     peer_init = peer_sub.add_parser("init", help="Initialize this AMO node's peer identity")
     peer_init.add_argument("--node-id", required=True)
     peer_init.add_argument("--display-name", default="")
@@ -741,6 +744,10 @@ def main(argv: list[str] | None = None) -> int:
                     result = peer_netd_service_status(PeerNetdServiceOptions(service_name=args.service_name))
                     _print(result)
                     return 0 if result.get("ok") else 1
+            if args.peer_command == "doctor":
+                result = peer_doctor(settings)
+                _print(result)
+                return 0 if result.get("ready") or not args.strict else 1
             svc = PeerService(settings)
             if args.peer_command == "init":
                 _print(
