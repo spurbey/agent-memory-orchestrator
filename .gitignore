@@ -16,6 +16,7 @@ venv/
 build/
 dist/
 *.egg-info/
+src/agent_memory_orchestrator/bin/*/amo-peer-netd*
 
 # Local runtime data
 .data/
