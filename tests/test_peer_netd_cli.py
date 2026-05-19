@@ -147,6 +147,9 @@ def test_peer_create_and_accept_invite_code(tmp_path: Path, capsys) -> None:
             "http://127.0.0.1:8787",
             "--label",
             "Node A invite",
+            "--auto-approve",
+            "--expires-minutes",
+            "60",
             "--out",
             str(invite_path),
         ]
@@ -155,6 +158,8 @@ def test_peer_create_and_accept_invite_code(tmp_path: Path, capsys) -> None:
     assert create_code == 0
     assert invite_path.exists()
     assert create_payload["invite"]["card"]["node_id"] == "node-a"
+    assert create_payload["invite"]["auto_approve"] is True
+    assert create_payload["invite"]["invite_token"]
     assert create_payload["invite_code"].startswith("amo-peer-invite:")
 
     assert main(["peer", "--amo-home", str(home_b), "init", "--node-id", "node-b"]) == 0
