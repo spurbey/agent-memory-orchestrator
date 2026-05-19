@@ -3,7 +3,11 @@ from __future__ import annotations
 import pytest
 
 from agent_memory_orchestrator.peer.cards import build_peer_card, peer_from_card
-from agent_memory_orchestrator.peer.invites import build_peer_invite, decode_invite_code, encode_invite_code, parse_peer_invite
+from agent_memory_orchestrator.peer.invites import build_peer_invite
+from agent_memory_orchestrator.peer.invites import decode_invite_code
+from agent_memory_orchestrator.peer.invites import encode_invite_code
+from agent_memory_orchestrator.peer.invites import invite_token_hash
+from agent_memory_orchestrator.peer.invites import parse_peer_invite
 from agent_memory_orchestrator.peer.models import PeerConfig
 
 
@@ -51,6 +55,8 @@ def test_peer_invite_code_round_trip() -> None:
     assert decoded["invite_id"] == invite["invite_id"]
     assert parsed["card"]["node_id"] == "node-a"
     assert parsed["trust"] == "trusted"
+    assert parsed["invite_token"]
+    assert invite_token_hash(parsed["invite_token"]) == parsed["token_proof"]
 
 
 def test_peer_invite_rejects_card_hash_mismatch() -> None:
