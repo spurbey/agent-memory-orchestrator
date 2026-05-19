@@ -48,6 +48,34 @@ where = ["src"]
 [tool.setuptools.package-data]
 agent_memory_orchestrator = ["web/*.html", "web/*.css", "web/*.js"]
 
+[tool.setuptools.data-files]
+"peer-netd" = [
+  "peer-netd/README.md",
+  "peer-netd/go.mod",
+  "peer-netd/go.sum",
+]
+"peer-netd/cmd/amo-peer-netd" = [
+  "peer-netd/cmd/amo-peer-netd/main.go",
+]
+"peer-netd/internal/config" = [
+  "peer-netd/internal/config/config.go",
+]
+"peer-netd/internal/localapi" = [
+  "peer-netd/internal/localapi/server.go",
+]
+"peer-netd/internal/p2p" = [
+  "peer-netd/internal/p2p/node.go",
+]
+"peer-netd/internal/protocol" = [
+  "peer-netd/internal/protocol/protocol.go",
+]
+"peer-netd/internal/rendezvous" = [
+  "peer-netd/internal/rendezvous/rendezvous.go",
+]
+"peer-netd/internal/store" = [
+  "peer-netd/internal/store/store.go",
+]
+
 [tool.pytest.ini_options]
 pythonpath = ["src"]
 norecursedirs = [".git", ".venv", "venv", ".data", ".tmp", ".pytest_cache", "pytest-cache-files-*"]
