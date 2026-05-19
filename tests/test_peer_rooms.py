@@ -288,6 +288,97 @@ def test_untrusted_initiator_invite_is_denied(tmp_path: Path) -> None:
     assert "not trusted" in result["error"]
 
 
+def test_untrusted_message_sender_is_denied(tmp_path: Path) -> None:
+    peer_store = PeerStore(make_settings(tmp_path / "peer"))
+    peer_store.init_config(node_id="poco-amo")
+    peer_store.add_peer(PeerNode(node_id="zenbook-amo", base_url="http://100.82.177.7:8787", trust="trusted"))
+    service = PeerService(peer_store.settings, store=peer_store)
+    accepted = service.receive_invite(
+        {
+            "room_id": "room_test",
+            "topic": "trusted room",
+            "initiator_node_id": "zenbook-amo",
+            "participants": ["zenbook-amo", "poco-amo"],
+            "room_md": "# room",
+        }
+    )
+    assert accepted["ok"] is True
+
+    result = service.receive_message(
+        {
+            "room_id": "room_test",
+            "type": "context_response",
+            "from": "unknown-amo",
+            "content": "spoofed response",
+        }
+    )
+
+    assert result["ok"] is False
+    assert "sender is not trusted" in result["error"]
+
+
+def test_non_participant_message_sender_is_denied(tmp_path: Path) -> None:
+    peer_store = PeerStore(make_settings(tmp_path / "peer"))
+    peer_store.init_config(node_id="poco-amo")
+    peer_store.add_peer(PeerNode(node_id="zenbook-amo", base_url="http://100.82.177.7:8787", trust="trusted"))
+    peer_store.add_peer(PeerNode(node_id="ui-amo", base_url="http://100.82.177.8:8787", trust="trusted"))
+    service = PeerService(peer_store.settings, store=peer_store)
+    accepted = service.receive_invite(
+        {
+            "room_id": "room_test",
+            "topic": "trusted room",
+            "initiator_node_id": "zenbook-amo",
+            "participants": ["zenbook-amo", "poco-amo"],
+            "room_md": "# room",
+        }
+    )
+    assert accepted["ok"] is True
+
+    result = service.receive_message(
+        {
+            "room_id": "room_test",
+            "type": "context_response",
+            "from": "ui-amo",
+            "content": "not in this room",
+        }
+    )
+
+    assert result["ok"] is False
+    assert "not a room participant" in result["error"]
+
+
+def test_unsigned_netd_message_is_denied_when_peer_requires_secret(tmp_path: Path) -> None:
+    peer_store = PeerStore(make_settings(tmp_path / "peer"))
+    peer_store.init_config(node_id="poco-amo")
+    peer_store.add_peer(
+        PeerNode(
+            node_id="zenbook-amo",
+            peer_id="12D3KooWPeer",
+            trust="trusted",
+            shared_secret_env="AMO_PEER_ZENBOOK_SECRET",
+        )
+    )
+    room = peer_store.create_room(
+        topic="trusted room",
+        participants=["zenbook-amo", "poco-amo"],
+        initiator_node_id="zenbook-amo",
+    )
+    service = PeerService(peer_store.settings, store=peer_store)
+
+    result = service.receive_message(
+        {
+            "room_id": room["room_id"],
+            "type": "context_response",
+            "from": "zenbook-amo",
+            "content": "unsigned response",
+        },
+        transport_auth={"authenticated": False, "auth": "netd:none", "from_node_id": "zenbook-amo"},
+    )
+
+    assert result["ok"] is False
+    assert "signed envelope required" in result["error"]
+
+
 def test_context_pack_uses_pairwise_recent_messages_for_peer(tmp_path: Path) -> None:
     settings = make_settings(tmp_path / "initiator")
     store = PeerStore(settings)

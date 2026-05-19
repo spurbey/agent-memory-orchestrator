@@ -13,6 +13,7 @@ from .cards import build_peer_card, peer_from_card
 from .models import PeerNode
 from .netd_client import PeerNetdClient, PeerNetdError
 from .netd_runtime import PeerNetdRuntime
+from .policy import PeerPolicy
 from .protocol import PeerMessage
 from .store import PeerStore
 
@@ -161,6 +162,10 @@ class PeerService:
         try:
             if transport_auth:
                 auth = transport_auth
+                self._enforce_transport_auth(
+                    str(payload.get("initiator_node_id") or payload.get("initiator") or "").strip(),
+                    auth,
+                )
             else:
                 payload, auth = self._unwrap_incoming_payload(payload)
             room = self.store.accept_invite(payload)
@@ -176,13 +181,25 @@ class PeerService:
                 auth = transport_auth
             else:
                 payload, auth = self._unwrap_incoming_payload(payload)
+            config = self.store.load_config()
+            policy = PeerPolicy(config)
+            message = PeerMessage.from_payload(payload)
+            if not message.room_id:
+                return {"ok": False, "error": "room_id is required", "auth": auth}
+            self._enforce_transport_auth(message.from_node_id, auth)
+            room = self.store.get_room(message.room_id)
+            decision = policy.decide_message(
+                message.from_node_id,
+                participants=[str(item) for item in room.get("participants", [])],
+            )
+            if not decision.allowed:
+                return {"ok": False, "error": decision.reason, "auth": auth}
+            stored = self.store.append_message(message.room_id, message.to_record())
+            return {"ok": True, "message": stored, "auth": auth}
         except PeerAuthError as exc:
             return {"ok": False, "error": str(exc), "auth": {"authenticated": False}}
-        message = PeerMessage.from_payload(payload)
-        if not message.room_id:
-            return {"ok": False, "error": "room_id is required"}
-        stored = self.store.append_message(message.room_id, message.to_record())
-        return {"ok": True, "message": stored, "auth": auth}
+        except FileNotFoundError as exc:
+            return {"ok": False, "error": str(exc), "auth": auth}
 
     def append_message(
         self,
@@ -314,6 +331,11 @@ class PeerService:
 
     def _unwrap_incoming_payload(self, payload: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
         return unwrap_payload(payload=payload, config=self.store.load_config())
+
+    def _enforce_transport_auth(self, sender_node_id: str, auth: dict[str, Any]) -> None:
+        peer = self.store.load_config().peer_by_id(sender_node_id)
+        if peer is not None and peer.shared_secret_env and not auth.get("authenticated"):
+            raise PeerAuthError(f"signed envelope required for peer: {sender_node_id}")
 
     def _send_payload_via_netd(
         self,
