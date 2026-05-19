@@ -174,6 +174,67 @@ def test_peer_poll_netd_watch_streams_json_lines(tmp_path: Path, capsys, monkeyp
     assert lines == [{"ok": True, "count": 1}, {"ok": True, "count": 2}]
 
 
+def test_peer_poll_netd_watch_continues_after_transient_error(tmp_path: Path, capsys, monkeypatch) -> None:
+    calls = 0
+
+    def fake_process_netd_inbox(self: PeerService, limit: int | None = None) -> dict:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise RuntimeError("sidecar not ready")
+        return {"ok": True, "count": 0}
+
+    monkeypatch.setattr(PeerService, "process_netd_inbox", fake_process_netd_inbox)
+
+    code = main(
+        [
+            "peer",
+            "--amo-home",
+            str(tmp_path),
+            "poll-netd",
+            "--watch",
+            "--interval-seconds",
+            "0.01",
+            "--max-iterations",
+            "2",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    lines = [json.loads(line) for line in captured.out.splitlines() if line.strip()]
+    assert code == 0
+    assert lines[0]["ok"] is False
+    assert lines[0]["watching"] is True
+    assert lines[1] == {"ok": True, "count": 0}
+
+
+def test_peer_poll_netd_watch_fail_fast_returns_nonzero(tmp_path: Path, capsys, monkeypatch) -> None:
+    def fake_process_netd_inbox(self: PeerService, limit: int | None = None) -> dict:
+        raise RuntimeError("sidecar not ready")
+
+    monkeypatch.setattr(PeerService, "process_netd_inbox", fake_process_netd_inbox)
+
+    code = main(
+        [
+            "peer",
+            "--amo-home",
+            str(tmp_path),
+            "poll-netd",
+            "--watch",
+            "--interval-seconds",
+            "0.01",
+            "--max-iterations",
+            "2",
+            "--fail-fast",
+        ]
+    )
+
+    captured = capsys.readouterr()
+    lines = [json.loads(line) for line in captured.out.splitlines() if line.strip()]
+    assert code == 1
+    assert lines == [{"ok": False, "error": "sidecar not ready", "watching": False}]
+
+
 def test_peer_netd_install_service_is_plan_by_default(tmp_path: Path, capsys) -> None:
     code = main(
         [

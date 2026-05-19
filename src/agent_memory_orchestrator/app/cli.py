@@ -373,6 +373,7 @@ def _build_parser() -> argparse.ArgumentParser:
     peer_poll_netd.add_argument("--watch", action="store_true", help="Keep polling the sidecar inbox until interrupted.")
     peer_poll_netd.add_argument("--interval-seconds", type=float, default=2.0)
     peer_poll_netd.add_argument("--max-iterations", type=int, default=0, help="Testing/debug guard for --watch. 0 means forever.")
+    peer_poll_netd.add_argument("--fail-fast", action="store_true", help="In watch mode, exit on the first poll error.")
     peer_serve = peer_sub.add_parser("serve", help="Run the direct peer listener for Tailscale/private networking")
     peer_serve.add_argument("--host", default="0.0.0.0")
     peer_serve.add_argument("--port", type=int, default=8787)
@@ -848,6 +849,7 @@ def main(argv: list[str] | None = None) -> int:
                         limit=args.limit,
                         interval_seconds=args.interval_seconds,
                         max_iterations=args.max_iterations,
+                        fail_fast=args.fail_fast,
                     )
                 _print(svc.process_netd_inbox(limit=args.limit))
                 return 0
@@ -1369,13 +1371,19 @@ def _watch_peer_netd_inbox(
     limit: int | None,
     interval_seconds: float,
     max_iterations: int = 0,
+    fail_fast: bool = False,
 ) -> int:
     if interval_seconds <= 0:
         raise ValueError("--interval-seconds must be positive")
     iterations = 0
     try:
         while True:
-            _print_line(svc.process_netd_inbox(limit=limit))
+            try:
+                _print_line(svc.process_netd_inbox(limit=limit))
+            except Exception as exc:
+                _print_line({"ok": False, "error": str(exc), "watching": not fail_fast})
+                if fail_fast:
+                    return 1
             iterations += 1
             if max_iterations and iterations >= max_iterations:
                 return 0
