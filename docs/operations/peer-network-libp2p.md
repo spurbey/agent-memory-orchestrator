@@ -172,7 +172,7 @@ remote sidecar verifies envelope
 remote AMO reads /messages and processes room response
 ```
 
-The current implementation supports explicit multiaddr dialing, peer-card export/import, packaged sidecar source discovery, packaged prebuilt binary discovery, readiness diagnostics, static bootstrap dialing, LAN mDNS, managed process start/stop, persistent sidecar inbox, watched inbox draining, sidecar-backed room invites/messages, relay reservation, an AMO rendezvous stream protocol, and OS startup planning for both netd and the AMO inbox watcher. Invite-code trust exchange is still the next UX step.
+The current implementation supports explicit multiaddr dialing, peer-card export/import, invite bundle/code trust exchange, packaged sidecar source discovery, packaged prebuilt binary discovery, readiness diagnostics, static bootstrap dialing, LAN mDNS, managed process start/stop, persistent sidecar inbox, watched inbox draining, sidecar-backed room invites/messages, relay reservation, an AMO rendezvous stream protocol, and OS startup planning for both netd and the AMO inbox watcher.
 
 Incoming room invites and messages remain local-policy gated. Invites require a trusted initiator under `trusted_only`; messages require a trusted configured sender that is already a room participant. If a peer has `shared_secret_env` configured, netd-delivered messages from that peer must be authenticated or AMO rejects them before mutating room state.
 
