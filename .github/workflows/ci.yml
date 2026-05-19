@@ -59,3 +59,68 @@ jobs:
       - name: Verify npm package contents
         working-directory: npm/agent-memory-orchestrator-cli
         run: npm pack --dry-run
+
+  peer-netd:
+    name: peer-netd Go
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: "1.24.6"
+          cache-dependency-path: peer-netd/go.sum
+
+      - name: Test peer-netd
+        working-directory: peer-netd
+        run: go test ./...
+
+      - name: Build peer-netd
+        working-directory: peer-netd
+        run: go build -trimpath -o ../.tmp/amo-peer-netd ./cmd/amo-peer-netd
+
+  peer-netd-package:
+    name: peer-netd packaged binary smoke
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: "1.24.6"
+          cache-dependency-path: peer-netd/go.sum
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Build one packaged peer-netd binary
+        run: python scripts/build_peer_netd_binaries.py --target linux/amd64
+
+      - name: Build Python package
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install build
+          python -m build
+
+      - name: Verify wheel includes peer-netd binary
+        shell: python
+        run: |
+          import sys
+          import zipfile
+          from pathlib import Path
+
+          wheels = sorted(Path("dist").glob("*.whl"))
+          if not wheels:
+              raise SystemExit("no wheel built")
+          with zipfile.ZipFile(wheels[-1]) as wheel:
+              names = set(wheel.namelist())
+          expected = "agent_memory_orchestrator/bin/linux-amd64/amo-peer-netd"
+          if expected not in names:
+              raise SystemExit(f"missing {expected}")
