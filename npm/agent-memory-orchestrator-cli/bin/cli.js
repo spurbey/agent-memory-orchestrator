@@ -27,8 +27,8 @@ function printUsage() {
 Agent Memory Orchestrator installer
 
 Usage:
-  npx agent-memory-orchestrator-cli -- install [--from <pip_spec>] [wrapper flags] [amo install flags]
-  npx agent-memory-orchestrator-cli -- doctor [--target codex|claude|all]
+  npx -y agent-memory-orchestrator-cli -- install [--from <pip_spec>] [wrapper flags] [amo install flags]
+  npx -y agent-memory-orchestrator-cli -- doctor [--target codex|claude|all]
   npx agent-memory-orchestrator-cli --help
 
 Wrapper flags:
@@ -38,10 +38,10 @@ Wrapper flags:
   --with-all-extras     Enable all optional runtime extras.
 
 Examples:
-  npx agent-memory-orchestrator-cli -- install --target codex --preset cpu-balanced --qwen-model qwen3.5:9b
-  npx agent-memory-orchestrator-cli -- install --with-models --download-models --target all
-  npx agent-memory-orchestrator-cli -- install --with-slack --target claude
-  npx agent-memory-orchestrator-cli -- doctor --target codex
+  npx -y agent-memory-orchestrator-cli -- install --target codex --preset cpu-balanced --qwen-model qwen3.5:9b
+  npx -y agent-memory-orchestrator-cli -- install --with-models --download-models --target all
+  npx -y agent-memory-orchestrator-cli -- install --with-slack --target claude
+  npx -y agent-memory-orchestrator-cli -- doctor --target codex
   `);
 }
 
@@ -50,12 +50,30 @@ function run(cmd, args, options = {}) {
     stdio: options.silent ? "pipe" : "inherit",
     encoding: "utf-8",
     shell: false,
+    env: { ...process.env, ...(options.env || {}) },
   });
 
   if (result.error) {
     return { ok: false, error: result.error.message, status: result.status ?? 1 };
   }
   return { ok: result.status === 0, status: result.status ?? 0, stdout: result.stdout, stderr: result.stderr };
+}
+
+function outputTail(text, maxChars = 4000) {
+  const value = String(text || "").trim();
+  if (!value) {
+    return "";
+  }
+  return value.length > maxChars ? value.slice(value.length - maxChars) : value;
+}
+
+function runQuietOrThrow(cmd, args, message, options = {}) {
+  const result = run(cmd, args, { ...options, silent: true });
+  if (result.ok) {
+    return result;
+  }
+  const detail = outputTail(`${result.stdout || ""}\n${result.stderr || ""}`);
+  throw new Error(detail ? `${message}\n${detail}` : message);
 }
 
 function commandExists(cmd) {
@@ -148,13 +166,15 @@ function parseInstallArgs(argv) {
 
 function bootstrapPipx(pyCmd) {
   console.log("[1/5] Installing pipx...");
-  const installPipx = run(pyCmd, ["-m", "pip", "install", "--user", "pipx"]);
-  if (!installPipx.ok) {
-    throw new Error("Failed to install pipx with python -m pip install --user pipx");
-  }
+  runQuietOrThrow(
+    pyCmd,
+    ["-m", "pip", "install", "--disable-pip-version-check", "--user", "pipx"],
+    "Failed to install pipx with python -m pip install --user pipx.",
+    { env: { PIP_DISABLE_PIP_VERSION_CHECK: "1" } }
+  );
 
   console.log("[2/5] Ensuring pipx app path...");
-  run(pyCmd, ["-m", "pipx", "ensurepath"]);
+  runQuietOrThrow(pyCmd, ["-m", "pipx", "ensurepath"], "Failed to update the pipx app path.");
 }
 
 function injectOptionalPackages(runner, extras) {
@@ -170,10 +190,11 @@ function injectOptionalPackages(runner, extras) {
   }
 
   console.log(`[4/5] Installing optional runtime packages: ${packages.join(", ")}...`);
-  const result = run(runner.cmd, pipxArgs(runner, ["inject", PIPX_PACKAGE, ...packages]));
-  if (!result.ok) {
-    throw new Error("pipx inject failed for optional AMO runtime packages.");
-  }
+  runQuietOrThrow(
+    runner.cmd,
+    pipxArgs(runner, ["inject", PIPX_PACKAGE, ...packages]),
+    "pipx inject failed for optional AMO runtime packages."
+  );
 }
 
 function pipxBinDirs(runner) {
@@ -225,10 +246,7 @@ function runInstall(argv) {
   }
 
   console.log("[3/5] Installing Agent Memory Orchestrator with pipx...");
-  const install = run(runner.cmd, pipxArgs(runner, ["install", "--force", spec]));
-  if (!install.ok) {
-    throw new Error("pipx install failed.");
-  }
+  runQuietOrThrow(runner.cmd, pipxArgs(runner, ["install", "--force", spec]), "pipx install failed.");
 
   injectOptionalPackages(runner, extras);
 
@@ -247,11 +265,7 @@ function runInstall(argv) {
     process.exit(installConfig.status || 1);
   }
 
-  console.log("Install complete.");
-  console.log("Next:");
-  console.log("  1) Restart Claude/Codex so they reload hooks and MCP config.");
-  console.log(`  2) Run: ${amoCli} doctor --target codex`);
-  console.log("  3) Run: amo-daemon");
+  console.log("Installer finished.");
 }
 
 function runDoctor(args) {
@@ -268,7 +282,7 @@ function runDoctor(args) {
         python: py || null,
         pipx_available: Boolean(runner),
         amo_cli_available: false,
-        hint: "Run `npx agent-memory-orchestrator-cli -- install --target codex --preset cpu-balanced --qwen-model qwen3.5:9b`.",
+        hint: "Run `npx -y agent-memory-orchestrator-cli -- install --target codex --preset cpu-balanced --qwen-model qwen3.5:9b`.",
       },
       null,
       2
