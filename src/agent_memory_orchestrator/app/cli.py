@@ -4,6 +4,7 @@ import argparse
 import json
 import os
 import sys
+import time
 from dataclasses import asdict, replace
 from pathlib import Path
 
@@ -53,6 +54,10 @@ from .client import DaemonClient, DaemonUnavailable
 
 def _print(payload: object) -> None:
     print(json.dumps(payload, indent=2))
+
+
+def _print_line(payload: object) -> None:
+    print(json.dumps(payload), flush=True)
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -365,6 +370,9 @@ def _build_parser() -> argparse.ArgumentParser:
     peer_netd_service_status_cmd.add_argument("--service-name", default="AMO Peer Netd")
     peer_poll_netd = peer_sub.add_parser("poll-netd", help="Process delivered sidecar messages into local peer rooms")
     peer_poll_netd.add_argument("--limit", type=int, default=None)
+    peer_poll_netd.add_argument("--watch", action="store_true", help="Keep polling the sidecar inbox until interrupted.")
+    peer_poll_netd.add_argument("--interval-seconds", type=float, default=2.0)
+    peer_poll_netd.add_argument("--max-iterations", type=int, default=0, help="Testing/debug guard for --watch. 0 means forever.")
     peer_serve = peer_sub.add_parser("serve", help="Run the direct peer listener for Tailscale/private networking")
     peer_serve.add_argument("--host", default="0.0.0.0")
     peer_serve.add_argument("--port", type=int, default=8787)
@@ -834,6 +842,13 @@ def main(argv: list[str] | None = None) -> int:
                 _print(svc.open_room(topic=args.topic, peer_ids=args.peer, send_invites=not args.no_send))
                 return 0
             if args.peer_command == "poll-netd":
+                if args.watch:
+                    return _watch_peer_netd_inbox(
+                        svc,
+                        limit=args.limit,
+                        interval_seconds=args.interval_seconds,
+                        max_iterations=args.max_iterations,
+                    )
                 _print(svc.process_netd_inbox(limit=args.limit))
                 return 0
 
@@ -1346,6 +1361,28 @@ def _settings_with_path_overrides(settings: Settings, args: argparse.Namespace) 
         if isinstance(path, Path):
             path.parent.mkdir(parents=True, exist_ok=True)
     return replace(settings, **updates)
+
+
+def _watch_peer_netd_inbox(
+    svc: PeerService,
+    *,
+    limit: int | None,
+    interval_seconds: float,
+    max_iterations: int = 0,
+) -> int:
+    if interval_seconds <= 0:
+        raise ValueError("--interval-seconds must be positive")
+    iterations = 0
+    try:
+        while True:
+            _print_line(svc.process_netd_inbox(limit=limit))
+            iterations += 1
+            if max_iterations and iterations >= max_iterations:
+                return 0
+            time.sleep(interval_seconds)
+    except KeyboardInterrupt:
+        _print_line({"ok": True, "stopped": True, "reason": "interrupted"})
+        return 0
 
 
 def _add_peer_netd_start_args(parser: argparse.ArgumentParser) -> None:
