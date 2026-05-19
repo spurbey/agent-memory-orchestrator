@@ -114,12 +114,13 @@ Startup planning:
 
 ```powershell
 python -m agent_memory_orchestrator.app.cli peer --amo-home <amo_home> netd install-service --node-id zenbook-amo
-python -m agent_memory_orchestrator.app.cli peer --amo-home <amo_home> netd install-service --node-id zenbook-amo --apply
-python -m agent_memory_orchestrator.app.cli peer --amo-home <amo_home> netd service-status
-python -m agent_memory_orchestrator.app.cli peer --amo-home <amo_home> netd uninstall-service --apply
+python -m agent_memory_orchestrator.app.cli peer --amo-home <amo_home> netd install-service --node-id zenbook-amo --with-watch
+python -m agent_memory_orchestrator.app.cli peer --amo-home <amo_home> netd install-service --node-id zenbook-amo --with-watch --apply
+python -m agent_memory_orchestrator.app.cli peer --amo-home <amo_home> netd service-status --with-watch
+python -m agent_memory_orchestrator.app.cli peer --amo-home <amo_home> netd uninstall-service --with-watch --apply
 ```
 
-The default is a plan, not mutation. On Windows the apply path creates a per-user Scheduled Task at logon. On Linux it writes a user systemd unit and enables it.
+The default is a plan, not mutation. On Windows the apply path creates per-user Scheduled Tasks at logon. On Linux it writes user systemd units and enables them. Use `--with-watch` for the normal bot-participation setup: one startup entry keeps `amo-peer-netd` online, and the second drains `poll-netd --watch` so trusted room invites/responses are processed without manual polling.
 
 ## Room Flow Over Netd
 
@@ -161,7 +162,7 @@ remote sidecar verifies envelope
 remote AMO reads /messages and processes room response
 ```
 
-The current implementation supports explicit multiaddr dialing, peer-card export/import, packaged sidecar source discovery, packaged prebuilt binary discovery, readiness diagnostics, static bootstrap dialing, LAN mDNS, managed process start/stop, persistent sidecar inbox, watched inbox draining, sidecar-backed room invites/messages, relay reservation, an AMO rendezvous stream protocol, and OS startup planning. OS-managed watcher startup and invite-code trust exchange are still the next UX steps.
+The current implementation supports explicit multiaddr dialing, peer-card export/import, packaged sidecar source discovery, packaged prebuilt binary discovery, readiness diagnostics, static bootstrap dialing, LAN mDNS, managed process start/stop, persistent sidecar inbox, watched inbox draining, sidecar-backed room invites/messages, relay reservation, an AMO rendezvous stream protocol, and OS startup planning for both netd and the AMO inbox watcher. Invite-code trust exchange is still the next UX step.
 
 Incoming room invites and messages remain local-policy gated. Invites require a trusted initiator under `trusted_only`; messages require a trusted configured sender that is already a room participant. If a peer has `shared_secret_env` configured, netd-delivered messages from that peer must be authenticated or AMO rejects them before mutating room state.
 

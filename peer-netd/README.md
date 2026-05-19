@@ -72,9 +72,10 @@ Plan OS startup:
 
 ```powershell
 python -m agent_memory_orchestrator.app.cli peer --amo-home <amo_home> netd install-service --node-id zenbook-amo
+python -m agent_memory_orchestrator.app.cli peer --amo-home <amo_home> netd install-service --node-id zenbook-amo --with-watch
 ```
 
-Add `--apply` only when you want AMO to create the Windows Scheduled Task or user-systemd unit.
+Add `--apply` only when you want AMO to create the Windows Scheduled Task or user-systemd unit. Use `--with-watch` for the normal unattended peer setup: it adds a second startup entry for `peer poll-netd --watch`, which turns delivered sidecar envelopes into local AMO room state.
 
 ## API
 
@@ -109,6 +110,7 @@ Implemented:
 - JSONL-backed persistent inbox
 - AMO-managed build/start/stop/status runtime
 - AMO startup-service planning through CLI
+- AMO watcher startup-service planning through CLI
 - unit tests for envelope verification
 - integration test for node-to-node delivery
 - integration test for rendezvous discovery plus message delivery
@@ -121,4 +123,4 @@ Implemented:
 Not implemented yet:
 
 - NAT reachability status
-- packaged installer integration for the service planner
+- packaged installer integration for automatically applying startup services
