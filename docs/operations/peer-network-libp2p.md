@@ -49,18 +49,26 @@ peer-netd/
 
 src/agent_memory_orchestrator/peer/
   cards.py
+  doctor.py
   netd_client.py
   netd_runtime.py
   netd_service.py
+
+scripts/
+  build_peer_netd_binaries.py
 ```
 
 `cards.py` builds and imports peer-card JSON so users do not manually copy libp2p ids and multiaddrs into commands.
 
+`doctor.py` produces the operator readiness report for peer identity, packaged `peer-netd` source, binary/build state, sidecar health, trusted peers, and shared-secret environment variables.
+
 `netd_client.py` is the Python bridge. It talks to `amo-peer-netd` over localhost HTTP and converts AMO peer-room messages into sidecar send requests.
 
-`netd_runtime.py` is the managed sidecar lifecycle layer. It builds the Go binary into `AMO_HOME/.peer/bin`, starts/stops it, writes PID/API/log state under `AMO_HOME/.peer/netd`, and refuses unsafe managed starts where the local API port is dynamic.
+`netd_runtime.py` is the managed sidecar lifecycle layer. It locates repo or packaged `peer-netd` source, builds the Go binary into `AMO_HOME/.peer/bin`, starts/stops it, writes PID/API/log state under `AMO_HOME/.peer/netd`, and refuses unsafe managed starts where the local API port is dynamic.
 
 `netd_service.py` plans OS startup integration. It returns a Windows Scheduled Task plan or user-systemd unit plan by default, and only mutates the host when `--apply` is explicitly used.
+
+`scripts/build_peer_netd_binaries.py` builds release binaries into `src/agent_memory_orchestrator/bin/<goos-goarch>/`. Wheel/package builds include those files when present, so normal users do not need Go once release packaging generates platform binaries.
 
 ## Managed User Flow
 
@@ -68,6 +76,7 @@ The intended user path is AMO-owned, not Tailscale-owned:
 
 ```powershell
 python -m agent_memory_orchestrator.app.cli peer --amo-home <amo_home> init --node-id zenbook-amo
+python -m agent_memory_orchestrator.app.cli peer --amo-home <amo_home> doctor
 $env:AMO_PEER_NETD_SECRET="<shared-secret>"
 python -m agent_memory_orchestrator.app.cli peer --amo-home <amo_home> enable `
   --node-id zenbook-amo `
@@ -79,13 +88,17 @@ python -m agent_memory_orchestrator.app.cli peer --amo-home <amo_home> enable `
 Operational commands:
 
 ```powershell
+python -m agent_memory_orchestrator.app.cli peer --amo-home <amo_home> doctor --strict
 python -m agent_memory_orchestrator.app.cli peer --amo-home <amo_home> netd build
 python -m agent_memory_orchestrator.app.cli peer --amo-home <amo_home> netd start --node-id zenbook-amo
 python -m agent_memory_orchestrator.app.cli peer --amo-home <amo_home> netd status
+python -m agent_memory_orchestrator.app.cli peer --amo-home <amo_home> poll-netd --watch
 python -m agent_memory_orchestrator.app.cli peer --amo-home <amo_home> netd stop
 ```
 
-`peer enable` is the one-command normal path. It builds the sidecar if needed, starts it, waits for `/health`, and returns the peer id/listen addresses. Future install work should wire this into a background OS service, but the process state is already AMO-owned.
+`peer doctor` is the first diagnostic command for a new machine. It separates blocking install/config failures from normal next steps like starting the sidecar or importing peer cards.
+
+`peer enable` is the one-command normal path. It uses a packaged prebuilt sidecar when available, otherwise builds the sidecar if Go is available, starts it, waits for `/health`, and returns the peer id/listen addresses. Packaged installs also include the Go sidecar source so users do not need a repo clone just to build `amo-peer-netd`. Future install work should wire this into a background OS service, but the process state is already AMO-owned.
 
 Delivered envelopes are persisted by default:
 
@@ -95,16 +108,19 @@ AMO_HOME/.peer/netd/inbox.jsonl
 
 If the sidecar receives a message and restarts before AMO runs `poll-netd`, the inbox reloads from this JSONL file.
 
+For active participation, run `poll-netd --watch` beside the sidecar. It continuously drains delivered sidecar messages into AMO peer-room state, so room invites and responses are accepted without manual one-shot polling.
+
 Startup planning:
 
 ```powershell
 python -m agent_memory_orchestrator.app.cli peer --amo-home <amo_home> netd install-service --node-id zenbook-amo
-python -m agent_memory_orchestrator.app.cli peer --amo-home <amo_home> netd install-service --node-id zenbook-amo --apply
-python -m agent_memory_orchestrator.app.cli peer --amo-home <amo_home> netd service-status
-python -m agent_memory_orchestrator.app.cli peer --amo-home <amo_home> netd uninstall-service --apply
+python -m agent_memory_orchestrator.app.cli peer --amo-home <amo_home> netd install-service --node-id zenbook-amo --with-watch
+python -m agent_memory_orchestrator.app.cli peer --amo-home <amo_home> netd install-service --node-id zenbook-amo --with-watch --apply
+python -m agent_memory_orchestrator.app.cli peer --amo-home <amo_home> netd service-status --with-watch
+python -m agent_memory_orchestrator.app.cli peer --amo-home <amo_home> netd uninstall-service --with-watch --apply
 ```
 
-The default is a plan, not mutation. On Windows the apply path creates a per-user Scheduled Task at logon. On Linux it writes a user systemd unit and enables it.
+The default is a plan, not mutation. On Windows the apply path creates per-user Scheduled Tasks at logon. On Linux it writes user systemd units and enables them. Use `--with-watch` for the normal bot-participation setup: one startup entry keeps `amo-peer-netd` online, and the second drains `poll-netd --watch` so trusted room invites/responses are processed without manual polling.
 
 ## Room Flow Over Netd
 
@@ -114,6 +130,16 @@ Configure peers with peer cards where possible:
 python -m agent_memory_orchestrator.app.cli peer --amo-home <home_b> share-card --out node-b.card.json
 python -m agent_memory_orchestrator.app.cli peer --amo-home <home_a> import-card --file node-b.card.json
 ```
+
+For lower-friction onboarding, use an invite code/bundle:
+
+```powershell
+python -m agent_memory_orchestrator.app.cli peer --amo-home <home_a> create-invite --out node-a.invite.json
+python -m agent_memory_orchestrator.app.cli peer --amo-home <home_b> accept-invite --file node-a.invite.json --response-out node-b.card.json
+python -m agent_memory_orchestrator.app.cli peer --amo-home <home_a> import-card --file node-b.card.json
+```
+
+The invite wraps the inviter's public peer card, recommended trust level, and a card hash. It never contains a shared-secret value. If `accept-invite` runs while the peer sidecar is active, it can emit the accepting node's response card so the inviter can trust it.
 
 Manual config still exists for smoke tests and advanced use:
 
@@ -125,12 +151,12 @@ Then the normal room path is:
 
 ```powershell
 python -m agent_memory_orchestrator.app.cli peer --amo-home <home_a> open-room --topic "..." --peer node-b
-python -m agent_memory_orchestrator.app.cli peer --amo-home <home_b> poll-netd
+python -m agent_memory_orchestrator.app.cli peer --amo-home <home_b> poll-netd --watch
 python -m agent_memory_orchestrator.app.cli peer --amo-home <home_b> send-message --room-id <room_id> --peer-id node-a --type context_response --content "..." --citation E0001 --confidence 0.91
 python -m agent_memory_orchestrator.app.cli peer --amo-home <home_a> poll-netd
 ```
 
-`poll-netd` uses the managed sidecar API URL from `AMO_HOME/.peer/netd/netd.json`, so each AMO home can run on a different local API port without extra environment variables.
+`poll-netd` uses the managed sidecar API URL from `AMO_HOME/.peer/netd/netd.json`, so each AMO home can run on a different local API port without extra environment variables. In watch mode it emits one compact JSON result per poll.
 
 ## Implemented Flow
 
@@ -146,7 +172,9 @@ remote sidecar verifies envelope
 remote AMO reads /messages and processes room response
 ```
 
-The current implementation supports explicit multiaddr dialing, peer-card export/import, static bootstrap dialing, LAN mDNS, managed process start/stop, persistent sidecar inbox, sidecar-backed room invites/messages, relay reservation, an AMO rendezvous stream protocol, and OS startup planning. Full installer integration is still the next packaging step.
+The current implementation supports explicit multiaddr dialing, peer-card export/import, invite bundle/code trust exchange, packaged sidecar source discovery, packaged prebuilt binary discovery, readiness diagnostics, static bootstrap dialing, LAN mDNS, managed process start/stop, persistent sidecar inbox, watched inbox draining, sidecar-backed room invites/messages, relay reservation, an AMO rendezvous stream protocol, and OS startup planning for both netd and the AMO inbox watcher.
+
+Incoming room invites and messages remain local-policy gated. Invites require a trusted initiator under `trusted_only`; messages require a trusted configured sender that is already a room participant. If a peer has `shared_secret_env` configured, netd-delivered messages from that peer must be authenticated or AMO rejects them before mutating room state.
 
 ## Rendezvous Shape
 
@@ -195,8 +223,11 @@ These nodes should not store memory, raw evidence, or LLM prompts. They only mov
 - Go unit/integration tests verify signed envelopes, direct libp2p delivery, and rendezvous discovery followed by delivery.
 - Python tests verify the AMO localhost client can call health, bootstrap, rendezvous, send, and messages APIs.
 - Python runtime tests verify managed sidecar command construction, state paths, missing-secret safety, and fixed API-port validation.
-- CLI tests verify `peer netd status` uses `--amo-home` and `peer enable` rejects dynamic API ports before building.
-- CLI tests verify libp2p peer config, peer-card export/import, inbox polling failure behavior, and startup service planning.
+- CLI tests verify `peer netd status` uses `--amo-home`, `peer doctor` reports readiness, and `peer enable` rejects dynamic API ports before building.
+- CLI tests verify libp2p peer config, peer-card export/import, inbox polling/watch behavior, and startup service planning.
+- Peer-room policy tests verify untrusted senders, non-participant senders, and unsigned netd messages for secret-required peers are rejected.
+- Wheel install smoke verifies packaged installs contain the `peer-netd` Go source tree and `PeerNetdRuntime` can discover it outside the repo.
+- Prebuilt wheel smoke verifies a generated `amo-peer-netd` binary is included in the wheel and discovered by installed runtime.
 - Go store tests verify delivered envelopes persist to JSONL and reload after restart.
 - Binary smoke starts three real sidecar processes: rendezvous, node A, and node B. A/B register, B discovers A, B sends a signed response, and A receives it.
 - Binary relay smoke starts three real sidecar processes: relay, private node A, and node B. A reserves a relay slot, B dials A's `/p2p-circuit` address, B sends a signed response, and A receives it.
@@ -204,6 +235,7 @@ These nodes should not store memory, raw evidence, or LLM prompts. They only mov
 - Two-node room smoke starts two sidecars with two separate AMO homes, sends `open-room` invite over libp2p, accepts it with `poll-netd`, sends a `context_response`, and ingests it on the initiator with `poll-netd`.
 - Persistent inbox smoke sends an invite, stops the receiver before polling, restarts the sidecar, and confirms the receiver still accepts the invite from `inbox.jsonl`.
 - Peer-card CLI smoke starts a real sidecar, exports a card from live health, imports it into another AMO home, and verifies the peer id/multiaddr are saved.
+- Real device smoke on the same LAN delivered a Windows host room invite to a macOS peer over direct libp2p, accepted it with `poll-netd`, sent a `context_response`, and rendered it in the initiator's three-layer room context.
 
 Latest two-node smoke result:
 

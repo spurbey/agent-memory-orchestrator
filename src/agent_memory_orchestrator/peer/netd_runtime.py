@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import json
 import os
+import platform
 import shutil
 import signal
 import subprocess
+import sys
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -93,10 +95,18 @@ class PeerNetdRuntime:
             return {"ok": True, "already_running": True, "status": current}
 
         binary = self.resolve_binary()
-        if not binary.exists():
-            if not build_if_missing:
+        packaged = self.packaged_binary_path()
+        if packaged is not None and binary.resolve() == packaged.resolve():
+            binary = self.install_packaged_binary(packaged)
+        elif not binary.exists():
+            if packaged is not None:
+                binary = self.install_packaged_binary(packaged, binary)
+            elif not build_if_missing:
                 raise PeerNetdRuntimeError(f"peer-netd binary not found: {binary}")
-            self.build(binary)
+            else:
+                self.build(binary)
+        elif not binary.is_file():
+            raise PeerNetdRuntimeError(f"peer-netd binary path is not a file: {binary}")
 
         self.runtime_dir.mkdir(parents=True, exist_ok=True)
         self.log_dir.mkdir(parents=True, exist_ok=True)
@@ -308,11 +318,61 @@ class PeerNetdRuntime:
         found = shutil.which(binary_name())
         if found:
             return Path(found).resolve()
+        packaged = self.packaged_binary_path()
+        if packaged is not None:
+            return packaged
         return default_path
 
+    def install_packaged_binary(self, source: Path, target: Path | None = None) -> Path:
+        target = target or self.default_binary_path()
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if source.resolve() != target.resolve():
+            shutil.copy2(source, target)
+        if os.name != "nt":
+            target.chmod(target.stat().st_mode | 0o111)
+        return target
+
+    def packaged_binary_path(self) -> Path | None:
+        for candidate in self.packaged_binary_candidates():
+            if candidate.exists() and candidate.is_file():
+                return candidate
+        return None
+
+    def packaged_binary_candidates(self) -> list[Path]:
+        candidates: list[Path] = []
+        installed_package_root = Path(__file__).resolve().parents[1]
+        candidates.append(installed_package_root / "bin" / platform_binary_dir_name() / binary_name())
+        for source_dir in self.source_dir_candidates():
+            candidates.append(source_dir / "bin" / platform_binary_dir_name() / binary_name())
+
+        prefix_root = Path(sys.prefix).resolve()
+        candidates.extend(
+            [
+                prefix_root / "bin" / platform_binary_dir_name() / binary_name(),
+                prefix_root / "Scripts" / platform_binary_dir_name() / binary_name(),
+            ]
+        )
+        return list(dict.fromkeys(candidates))
+
     def source_dir(self) -> Path:
-        root = self.repo_root or Path(__file__).resolve().parents[3]
-        return root / "peer-netd"
+        for candidate in self.source_dir_candidates():
+            if candidate.exists():
+                return candidate
+        return self.source_dir_candidates()[0]
+
+    def source_dir_candidates(self) -> list[Path]:
+        if self.repo_root:
+            return [self.repo_root / "peer-netd"]
+
+        package_root = Path(__file__).resolve().parents[3]
+        prefix_root = Path(sys.prefix).resolve()
+        candidates = [
+            package_root / "peer-netd",
+            prefix_root / "peer-netd",
+            prefix_root / "Lib" / "peer-netd",
+            prefix_root / "share" / "peer-netd",
+        ]
+        return list(dict.fromkeys(candidates))
 
     def go_path(self) -> str:
         found = shutil.which("go")
@@ -362,6 +422,31 @@ class PeerNetdRuntime:
 
 def binary_name() -> str:
     return "amo-peer-netd.exe" if os.name == "nt" else "amo-peer-netd"
+
+
+def platform_binary_dir_name() -> str:
+    system = platform.system().lower()
+    if system.startswith("windows"):
+        goos = "windows"
+    elif system == "darwin":
+        goos = "darwin"
+    elif system == "linux":
+        goos = "linux"
+    else:
+        goos = system or "unknown"
+
+    machine = platform.machine().lower()
+    if machine in {"amd64", "x86_64"}:
+        goarch = "amd64"
+    elif machine in {"arm64", "aarch64"}:
+        goarch = "arm64"
+    elif machine in {"armv7l", "armv7"}:
+        goarch = "arm"
+    elif machine in {"i386", "i686", "x86"}:
+        goarch = "386"
+    else:
+        goarch = machine or "unknown"
+    return f"{goos}-{goarch}"
 
 
 def _creation_flags() -> int:
