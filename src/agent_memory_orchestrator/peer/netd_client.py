@@ -130,7 +130,11 @@ class PeerNetdClient:
 
 def _strip_empty(value: Any) -> Any:
     if isinstance(value, dict):
-        return {key: _strip_empty(item) for key, item in value.items() if item not in ("", None, [], {})}
+        return {
+            key: item if key == "peer_card" else _strip_empty(item)
+            for key, item in value.items()
+            if key == "peer_card" or item not in ("", None, [], {})
+        }
     if isinstance(value, list):
         return [_strip_empty(item) for item in value]
     return value
