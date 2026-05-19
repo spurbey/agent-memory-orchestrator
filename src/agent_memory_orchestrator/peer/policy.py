@@ -36,6 +36,23 @@ class PeerPolicy:
             return PolicyDecision(False, f"initiator is not trusted: {initiator_node_id}")
         return PolicyDecision(True, f"initiator trust is {peer.trust}")
 
+    def decide_message(self, sender_node_id: str, *, participants: list[str] | tuple[str, ...]) -> PolicyDecision:
+        sender_node_id = sender_node_id.strip()
+        if not sender_node_id:
+            return PolicyDecision(False, "sender node_id is required")
+        if sender_node_id == self.config.node_id:
+            return PolicyDecision(True, "self message")
+        peer = self.config.peer_by_id(sender_node_id)
+        if peer is None:
+            return PolicyDecision(False, f"sender is not trusted: {sender_node_id}")
+        if peer.trust == "blocked":
+            return PolicyDecision(False, f"sender is blocked: {sender_node_id}")
+        if self.config.auto_join == "trusted_only" and peer.trust != "trusted":
+            return PolicyDecision(False, f"sender is not trusted: {sender_node_id}")
+        if participants and sender_node_id not in set(participants):
+            return PolicyDecision(False, f"sender is not a room participant: {sender_node_id}")
+        return PolicyDecision(True, f"sender trust is {peer.trust}")
+
     def llm_projection(self) -> dict[str, Any]:
         return {
             "node_id": self.config.node_id,
