@@ -52,6 +52,9 @@ amo-cli v2-reset-production --backup --clean-graph --clean-retrieval
 The command backs up production graph/retrieval/vector stores first, verifies a
 backup manifest, then cleans only graph/retrieval/vector/FAISS storage. Raw JSONL
 evidence, config, and V2 job tables are preserved.
+The production reset marker is written only after both graph and retrieval
+cleanup complete, and the runner refuses production Kuzu/retrieval stages if the
+marker is missing, version-mismatched, or incomplete.
 
 Legacy `GraphDelta` generation is available only for `graph-drain-smoke`, which
 writes to a disposable smoke graph. Production closed-session processing writes

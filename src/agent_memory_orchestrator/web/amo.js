@@ -44,12 +44,12 @@ const VERSION_EDGES = new Set([
 ]);
 const PIPELINE = [
   ["Raw", "Captured hook events", "raw"],
-  ["Clean", "Bounded evidence windows", "clean"],
-  ["Extract", "Qwen or deterministic GraphDelta", "delta"],
-  ["Draft", "Session graph nodes", "draft"],
-  ["Merge", "Commit/finalize promotion", "merge"],
-  ["Central", "Committed graph memory", "central"],
-  ["Cache", "Retrieval cache", "cache"],
+  ["Queue", "Closed sessions enqueued", "queue"],
+  ["Reason", "Packet-wise Qwen + review", "reason"],
+  ["Graph", "V2 Kuzu graph writes", "graph"],
+  ["Index", "V2 retrieval documents", "index"],
+  ["Vector", "Embeddings / FAISS", "vector"],
+  ["Trace", "Answer provenance", "trace"],
 ];
 
 function $(id) { return document.getElementById(id); }
@@ -236,7 +236,16 @@ function renderDashboard() {
     metric("Graph nodes", nodes.length, graphCaption),
     metric("Edges", edges.length, "visible central relations"),
   ].join("");
-  renderPipeline($("pipelineStrip"), { raw: rawEvents, clean: sessions.reduce((sum, s) => sum + Number(s.graph_counts?.draft || 0), 0), delta: nodes.filter(n => nodeKind(n) === "GraphDelta").length, draft, merge: edges.filter(e => VERSION_EDGES.has(edgeKind(e))).length, central: committed + sessionFinal + nodes.filter(n => n.scope === "central").length, cache: nodes.length });
+  const jobs = AMO.jobs?.jobs || [];
+  renderPipeline($("pipelineStrip"), {
+    raw: rawEvents,
+    queue: jobs.length,
+    reason: nodes.filter(n => ["ReasoningNode", "Problem", "Decision", "Cause", "Fix", "Constraint", "OpenQuestion"].includes(nodeKind(n))).length,
+    graph: nodes.filter(n => metadata(n).graph_schema_version === "v2").length,
+    index: nodes.filter(n => ["Packet", "Commit", "EvidenceRef", "CodeHunk", "CodeNode", "CodeVersion", "Symbol"].includes(nodeKind(n))).length,
+    vector: jobs.some(j => ["embeddings", "faiss", "quality_eval"].includes(text(j.last_successful_stage || j.current_stage))) ? "ready" : "pending",
+    trace: edges.filter(e => VERSION_EDGES.has(edgeKind(e))).length,
+  });
   $("recentSessions").innerHTML = sessions.slice(0, 7).map(sessionCard).join("") || empty("No captured sessions yet.");
 }
 function metric(label, value, caption) { return `<div class="metric"><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong><span>${escapeHtml(caption)}</span></div>`; }
@@ -373,9 +382,17 @@ function renderSessionDetail(data) {
   $("sessionSummary").textContent = contextNode?.summary || `${timeline.length} captured events, ${nodes.length} graph nodes, ${edges.length} graph edges.`;
   const windows = data.windows || [];
   const preview = data.merge_preview || {};
-  renderPipeline($("sessionPipeline"), { raw: timeline.length, clean: windows.length, delta: nodes.filter(n => nodeKind(n) === "GraphDelta").length, draft: nodes.filter(n => nodeStatus(n) === "draft").length, merge: (preview.promotions || []).length + (preview.version_edges || []).length, central: nodes.filter(n => nodeStatus(n) === "committed" || n.scope === "central").length, cache: data.pending?.count ? "pending" : "ready" });
+  renderPipeline($("sessionPipeline"), {
+    raw: timeline.length,
+    queue: AMO.jobs?.jobs?.filter(j => j.session_id === data.session_id).length || 0,
+    reason: nodes.filter(n => ["ReasoningNode", "Problem", "Decision", "Cause", "Fix", "Constraint", "OpenQuestion"].includes(nodeKind(n))).length,
+    graph: nodes.filter(n => metadata(n).graph_schema_version === "v2").length,
+    index: nodes.filter(n => ["Packet", "Commit", "EvidenceRef", "CodeHunk", "CodeNode", "CodeVersion", "Symbol"].includes(nodeKind(n))).length,
+    vector: data.pending?.count ? "pending" : "ready",
+    trace: edges.filter(e => VERSION_EDGES.has(edgeKind(e))).length,
+  });
   $("timelineList").innerHTML = timeline.map(renderTimeline).join("") || empty("No raw evidence for this session.");
-  $("cleanedWindows").innerHTML = windows.map(renderWindow).join("") || empty("No cleaned evidence windows yet. A write/test/git/finalize trigger must be drained first.");
+  $("cleanedWindows").innerHTML = windows.map(renderWindow).join("") || empty("No evidence view artifacts yet. A closed-session V2 job must run first.");
   $("draftNodes").innerHTML = nodes.map(renderNodeCard).join("") || empty("No session graph nodes yet.");
   $("mergePreview").innerHTML = renderMergePreview(preview);
 }

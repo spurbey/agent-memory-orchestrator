@@ -72,6 +72,10 @@ drain/enqueue closed sessions
 -> faiss
 ```
 
+The V2 job runner builds retrieval documents only from graph nodes carrying the
+current `pipeline_version` and `graph_schema_version`. This keeps any legacy
+manual/smoke graph output out of the production retrieval ledger.
+
 If the embedding model is unavailable after graph and retrieval docs are built,
 the job pauses as `pending_model`. Graph and lexical retrieval remain available;
 vectors and FAISS resume after the model/runtime is restored and the job is
