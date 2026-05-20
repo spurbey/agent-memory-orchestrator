@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 from agent_memory_orchestrator.config import Settings
@@ -21,7 +22,7 @@ class _StaticGitBackend:
 def test_session_cockpit_exposes_timeline_and_cleaned_windows(tmp_path: Path) -> None:
     store = InMemoryGraphStore()
     svc = GraphRagService(
-        make_settings(tmp_path),
+        replace(make_settings(tmp_path), drain_token_threshold=30),
         store=store,
         planner=DeterministicPlanner(),
         version_backend=_StaticGitBackend(),
@@ -54,7 +55,7 @@ def test_session_cockpit_exposes_timeline_and_cleaned_windows(tmp_path: Path) ->
     assert overview["sessions"][0]["raw_events"] == 2
     assert len(detail["timeline"]) == 2
     assert detail["windows"]
-    assert detail["windows"][0]["trigger"]["trigger_type"] == "write"
+    assert detail["windows"][0]["trigger"]["trigger_type"] == "token_threshold"
     encoded_window = str(detail["windows"][0]["cleaned_evidence"])
     assert "show cleaned session artifacts" in encoded_window
     assert "src/ui.py" in encoded_window
@@ -283,16 +284,16 @@ def test_daemon_exposes_dependency_free_3d_graph_view() -> None:
     assert "AMO Control Room" in SESSION_COCKPIT_HTML
     assert "/web/amo.css" in SESSION_COCKPIT_HTML
     assert "/web/amo.js" in SESSION_COCKPIT_HTML
+    assert "data-route=\"/graph\"" in SESSION_COCKPIT_HTML
     assert '<canvas id="graphCanvas"' in GRAPH3D_HTML
-    assert "Spatial graph explorer" in GRAPH3D_HTML
+    assert "3D Memory Workbench" in GRAPH3D_HTML
+    assert "/web/js/graph/workbench.js" in GRAPH3D_HTML
+    assert "/web/css/graph-workbench.css" in GRAPH3D_HTML
     assert "Knowledge creation flow" in GRAPH3D_HTML
-    assert "cleaned evidence sent to graph extraction" in GRAPH3D_HTML.lower()
-    assert "Connectors" in GRAPH3D_HTML
-    assert "Slack mention answers" in GRAPH3D_HTML
+    assert "Causal replay" in GRAPH3D_HTML
+    assert "Similarity lens" in GRAPH3D_HTML
+    assert "Retrieval Trace" in GRAPH3D_HTML
     assert "provenance" in GRAPH3D_HTML
-    assert "Graph query inspector" in GRAPH3D_HTML
-    assert "V2 indexed GraphRAG" in GRAPH3D_HTML
-    assert "Legacy search" not in GRAPH3D_HTML
     assert "3d-force-graph" not in GRAPH3D_HTML
 
 
