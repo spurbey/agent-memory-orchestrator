@@ -273,7 +273,6 @@ def _runtime_config_payload(resolved_models: dict[str, str]) -> dict[str, Any]:
         "qwen_compress_timeout_seconds": 12,
         "qwen_num_ctx": 2048,
         "drain_max_windows_per_run": 3,
-        "drain_token_threshold": 6000,
         "auto_drain_enabled": True,
         "auto_drain_interval_seconds": 8,
         "auto_drain_record_limit": 500,

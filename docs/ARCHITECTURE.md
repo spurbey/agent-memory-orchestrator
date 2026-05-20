@@ -18,7 +18,7 @@ AMO is local-first graph memory for AI coding sessions.
 hook evidence
 -> append-only JSONL
 -> daemon drain loop
--> trigger only on pending session token threshold
+-> trigger only when a later session starts
 -> cleaned evidence window
 -> graph extraction
 -> Kuzu graph write
@@ -26,7 +26,7 @@ hook evidence
 -> bounded embedding/FAISS refresh
 ```
 
-Hooks never perform graph work directly. Pending evidence windows are persisted under `.state/` so the token threshold works across daemon cycles. Write, git, test, stop, and connector-finalize events are evidence, not processing triggers.
+Hooks never perform graph work directly. Pending evidence windows are persisted under `.state/` so a session can be closed across daemon cycles when the next `session_start` appears. Write, git, test, stop, and connector-finalize events are evidence, not processing triggers.
 
 ## Retrieval Shape
 

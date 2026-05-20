@@ -170,14 +170,14 @@ The daemon processes captured sessions in the background:
 ```text
 hook JSONL capture
 -> daemon drain
--> cleaned evidence window when the pending session crosses the token threshold
+-> cleaned evidence window when the next session starts
 -> local Qwen extraction with deterministic fallback
 -> Kuzu graph updates
 -> retrieval document rebuild
 -> small resumable embedding/FAISS refresh batch
 ```
 
-The only raw-to-processing trigger is `drain_token_threshold=6000` approximate tokens. Write, git, test, stop, connector finalize, and "remember this" events remain evidence inside the eventual window; they do not trigger processing by themselves. The automatic loop can be controlled with `auto_drain_enabled`, `auto_drain_interval_seconds`, `auto_drain_record_limit`, and `auto_embedding_batch_size` in `~/.agent-memory-orchestrator/config.json`.
+The only raw-to-processing trigger is a new `session_start` for a different session. The daemon keeps the previous session's pending evidence in `.state/`, closes that session when the next one starts, then builds the cleaned window and graph update. Write, git, test, stop, connector finalize, and "remember this" events remain evidence inside the eventual session window; they do not trigger processing by themselves. The automatic loop can be controlled with `auto_drain_enabled`, `auto_drain_interval_seconds`, `auto_drain_record_limit`, and `auto_embedding_batch_size` in `~/.agent-memory-orchestrator/config.json`.
 
 Retrieval is explicit through CLI or MCP tools such as:
 

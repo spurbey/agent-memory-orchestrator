@@ -142,7 +142,6 @@ class AmoHandler(BaseHTTPRequestHandler):
                     "qwen_compress_timeout_seconds": self.settings.qwen_compress_timeout_seconds,
                     "qwen_num_ctx": self.settings.qwen_num_ctx,
                     "drain_max_windows_per_run": self.settings.drain_max_windows_per_run,
-                    "drain_token_threshold": self.settings.drain_token_threshold,
                     "auto_drain_enabled": self.settings.auto_drain_enabled,
                     "auto_drain_interval_seconds": self.settings.auto_drain_interval_seconds,
                     "auto_drain_record_limit": self.settings.auto_drain_record_limit,
@@ -599,7 +598,6 @@ def _start_auto_drain_worker(settings: Settings) -> threading.Thread | None:
         settings,
         "auto_drain_started",
         interval_seconds=settings.auto_drain_interval_seconds,
-        token_threshold=settings.drain_token_threshold,
         embedding_batch_size=settings.auto_embedding_batch_size,
     )
     return worker
