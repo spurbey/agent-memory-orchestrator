@@ -17,8 +17,9 @@ from ..evidence.drain import EvidenceDrain
 from ..evidence.drain import _read_jsonl_from
 from ..evidence.raw_store import RawEvidenceRef, RawEvidenceStore
 from ..evidence.triggers import TriggerDecision
-from ..evidence.triggers import detect_trigger
-from ..evidence.triggers import estimate_record_tokens
+from ..evidence.triggers import is_session_start
+from ..evidence.triggers import record_session_id
+from ..evidence.triggers import session_boundary_trigger
 from ..evidence.window import clean_evidence_window
 from ..llm.embeddings import embed_text
 from ..llm.qwen import DeterministicPlanner, OllamaQwenClient, QueryPlan, QwenPlanner, QwenUnavailable
@@ -577,7 +578,7 @@ class GraphRagService:
         nodes = [_sanitize_output_node(node) for node in self.store.list_nodes(session_id=session_id, limit=300)]
         edges = self.store.list_edges(session_id=session_id, limit=500)
         pending = self.pending_evidence(session_id=session_id)
-        windows = _reconstruct_clean_windows(records, nodes, token_threshold=self.settings.drain_token_threshold)
+        windows = _reconstruct_clean_windows(records, nodes)
         merge_preview = CommitMergeEngine(self.settings, self.store, self.version_backend, classifier=None).finalize_session(
             session_id=session_id,
             commit="HEAD",
@@ -1796,25 +1797,27 @@ def _timeline_row(record: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _reconstruct_clean_windows(
-    records: list[dict[str, Any]], nodes: list[dict[str, Any]], *, token_threshold: int
-) -> list[dict[str, Any]]:
-    pending_records: list[dict[str, Any]] = []
-    pending_approx_tokens = 0
+def _reconstruct_clean_windows(records: list[dict[str, Any]], nodes: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    pending_by_session: dict[str, list[dict[str, Any]]] = {}
+    last_active_session_id = ""
     windows: list[dict[str, Any]] = []
     for record in records:
-        pending_approx_tokens += estimate_record_tokens(record)
-        decision = detect_trigger(
-            record,
-            pending_approx_tokens=pending_approx_tokens,
-            token_threshold=token_threshold,
-        )
-        pending_records.append(record)
-        if decision.should_process:
-            windows.append(_window_row(len(windows) + 1, pending_records, decision, nodes))
-            pending_records = []
-            pending_approx_tokens = 0
-    if pending_records:
+        current_session = record_session_id(record)
+        if is_session_start(record):
+            if last_active_session_id and last_active_session_id != current_session:
+                pending = pending_by_session.get(last_active_session_id, [])
+                if pending:
+                    decision = session_boundary_trigger(last_active_session_id, current_session)
+                    windows.append(_window_row(len(windows) + 1, pending, decision, nodes))
+                    pending_by_session[last_active_session_id] = []
+            last_active_session_id = current_session
+        elif not last_active_session_id:
+            last_active_session_id = current_session
+        pending_by_session.setdefault(current_session, []).append(record)
+
+    for pending_records in pending_by_session.values():
+        if not pending_records:
+            continue
         preview_trigger = TriggerDecision(False, "pending", "pending raw evidence window")
         windows.append(
             {

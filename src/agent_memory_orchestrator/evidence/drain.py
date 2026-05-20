@@ -12,14 +12,15 @@ from ..graph.session import SessionGraphBuilder
 from ..graph.store import GraphStore
 from ..versioning import VersionBackend
 from .triggers import detect_trigger
-from .triggers import estimate_record_tokens
+from .triggers import is_session_start
+from .triggers import record_session_id
+from .triggers import session_boundary_trigger
 
 
 @dataclass(slots=True)
 class DrainSessionState:
     pending_records: list[dict[str, Any]] = field(default_factory=list)
     processed_windows: int = 0
-    pending_approx_tokens: int = 0
 
 
 @dataclass(slots=True, frozen=True)
@@ -74,7 +75,7 @@ class EvidenceDrain:
         safe_max_windows = max(1, int(max_windows or self.settings.drain_max_windows_per_run))
         cursors = self._load_cursors()
         session_filter = str(session_id or "")
-        states = self._load_pending_states()
+        states, last_active_session_id = self._load_pending_states()
         stats: dict[str, Any] = {
             "ok": True,
             "records_seen": 0,
@@ -87,7 +88,7 @@ class EvidenceDrain:
             "skipped": [],
             "cursor_path": str(self.cursor_path),
             "pending_path": str(self.pending_path),
-            "token_threshold": int(self.settings.drain_token_threshold),
+            "processing_trigger": "session_boundary",
         }
         for path in self._evidence_files():
             key = _cursor_key(path, session_filter)
@@ -106,63 +107,81 @@ class EvidenceDrain:
                 if record is None:
                     continue
                 stats["records_seen"] += 1
-                if session_filter and str(record.get("session_id") or "") != session_filter:
+
+                current_session = record_session_id(record)
+                boundary_processed = False
+                if is_session_start(record):
+                    previous_session = last_active_session_id
+                    if previous_session and previous_session != current_session:
+                        previous_state = states.get(previous_session)
+                        if (
+                            previous_state is not None
+                            and previous_state.pending_records
+                            and (not session_filter or previous_session == session_filter)
+                        ):
+                            decision = session_boundary_trigger(previous_session, current_session)
+                            result = self.builder.process_window(
+                                session_id=previous_session,
+                                records=previous_state.pending_records,
+                                trigger=decision,
+                            )
+                            previous_state.processed_windows += 1
+                            previous_state.pending_records = []
+                            stats["windows_processed"] += 1
+                            stats["triggered"].append(
+                                {
+                                    "session_id": previous_session,
+                                    "trigger": decision.as_dict(),
+                                    "result": _compact_result(result),
+                                    "latest_event": {
+                                        "boundary_event_id": record.get("id"),
+                                        "new_session_id": current_session,
+                                    },
+                                }
+                            )
+                            boundary_processed = True
+                    last_active_session_id = current_session
+                elif not last_active_session_id:
+                    last_active_session_id = current_session
+
+                if session_filter and current_session != session_filter:
                     stats["records_skipped"] += 1
-                    continue
-                current_session = str(record.get("session_id") or "default")
-                state = states.setdefault(current_session, DrainSessionState())
-                ingest = self.builder.ingest_basic_record(record)
-                stats["records_ingested"] += 1
-                record_tokens = estimate_record_tokens(record)
-                projected_tokens = state.pending_approx_tokens + record_tokens
-                decision = detect_trigger(
-                    record,
-                    pending_approx_tokens=projected_tokens,
-                    token_threshold=self.settings.drain_token_threshold,
-                )
-                state.pending_records.append(record)
-                state.pending_approx_tokens = projected_tokens
-                if decision.should_process:
-                    result = self.builder.process_window(
-                        session_id=current_session,
-                        records=state.pending_records,
-                        trigger=decision,
-                    )
-                    state.processed_windows += 1
-                    state.pending_records = []
-                    state.pending_approx_tokens = 0
-                    stats["windows_processed"] += 1
-                    stats["triggered"].append(
-                        {
-                            "session_id": current_session,
-                            "trigger": decision.as_dict(),
-                            "result": _compact_result(result),
-                            "latest_event": ingest,
-                        }
-                    )
-                    if stats["windows_processed"] >= safe_max_windows:
-                        self._save_state(cursors, states)
+                    if boundary_processed and stats["windows_processed"] >= safe_max_windows:
+                        self._save_state(cursors, states, last_active_session_id)
                         stats["stopped_reason"] = "max_windows_reached"
                         stats["max_windows"] = safe_max_windows
                         stats["pending_sessions"] = _pending_session_count(states)
                         stats["elapsed_ms"] = int((time.monotonic() - start) * 1000)
                         return stats
-                else:
-                    stats["skipped"].append(
-                        {
-                            "session_id": current_session,
-                            "evidence_id": record.get("id"),
-                            "decision": decision.as_dict(),
-                        }
-                    )
+                    continue
+
+                state = states.setdefault(current_session, DrainSessionState())
+                self.builder.ingest_basic_record(record)
+                stats["records_ingested"] += 1
+                decision = detect_trigger(record)
+                state.pending_records.append(record)
+                stats["skipped"].append(
+                    {
+                        "session_id": current_session,
+                        "evidence_id": record.get("id"),
+                        "decision": decision.as_dict(),
+                    }
+                )
+                if boundary_processed and stats["windows_processed"] >= safe_max_windows:
+                    self._save_state(cursors, states, last_active_session_id)
+                    stats["stopped_reason"] = "max_windows_reached"
+                    stats["max_windows"] = safe_max_windows
+                    stats["pending_sessions"] = _pending_session_count(states)
+                    stats["elapsed_ms"] = int((time.monotonic() - start) * 1000)
+                    return stats
                 if stats["records_ingested"] >= max(1, int(limit)):
-                    self._save_state(cursors, states)
+                    self._save_state(cursors, states, last_active_session_id)
                     stats["stopped_reason"] = "record_limit_reached"
                     stats["max_windows"] = safe_max_windows
                     stats["pending_sessions"] = _pending_session_count(states)
                     stats["elapsed_ms"] = int((time.monotonic() - start) * 1000)
                     return stats
-        self._save_state(cursors, states)
+        self._save_state(cursors, states, last_active_session_id)
         stats["stopped_reason"] = "evidence_exhausted"
         stats["max_windows"] = safe_max_windows
         stats["pending_sessions"] = _pending_session_count(states)
@@ -213,16 +232,16 @@ class EvidenceDrain:
         self.cursor_path.parent.mkdir(parents=True, exist_ok=True)
         self.cursor_path.write_text(json.dumps(cursors, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
-    def _load_pending_states(self) -> dict[str, DrainSessionState]:
+    def _load_pending_states(self) -> tuple[dict[str, DrainSessionState], str]:
         if not self.pending_path.exists():
-            return {}
+            return {}, ""
         try:
             payload = json.loads(self.pending_path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
-            return {}
+            return {}, ""
         sessions = payload.get("sessions") if isinstance(payload, dict) else {}
         if not isinstance(sessions, dict):
-            return {}
+            return {}, ""
         states: dict[str, DrainSessionState] = {}
         for session_id, row in sessions.items():
             if not isinstance(row, dict):
@@ -230,25 +249,40 @@ class EvidenceDrain:
             records = row.get("pending_records")
             states[str(session_id)] = DrainSessionState(
                 pending_records=records if isinstance(records, list) else [],
-                pending_approx_tokens=max(0, int(row.get("pending_approx_tokens") or 0)),
             )
-        return states
+        last_active_session_id = str(payload.get("last_active_session_id") or "") if isinstance(payload, dict) else ""
+        return states, last_active_session_id
 
-    def _save_pending_states(self, states: dict[str, DrainSessionState]) -> None:
+    def _save_pending_states(self, states: dict[str, DrainSessionState], last_active_session_id: str) -> None:
         sessions = {
             session_id: {
                 "pending_records": state.pending_records,
-                "pending_approx_tokens": state.pending_approx_tokens,
             }
             for session_id, state in sorted(states.items())
             if state.pending_records
         }
         self.pending_path.parent.mkdir(parents=True, exist_ok=True)
-        self.pending_path.write_text(json.dumps({"sessions": sessions}, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        self.pending_path.write_text(
+            json.dumps(
+                {
+                    "last_active_session_id": last_active_session_id,
+                    "sessions": sessions,
+                },
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
 
-    def _save_state(self, cursors: dict[str, int], states: dict[str, DrainSessionState]) -> None:
+    def _save_state(
+        self,
+        cursors: dict[str, int],
+        states: dict[str, DrainSessionState],
+        last_active_session_id: str,
+    ) -> None:
         self._save_cursors(cursors)
-        self._save_pending_states(states)
+        self._save_pending_states(states, last_active_session_id)
 
 
 def _read_jsonl_from(path: Path, offset: int) -> list[tuple[int, dict[str, Any]]]:
