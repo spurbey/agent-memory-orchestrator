@@ -1,36 +1,8 @@
 from __future__ import annotations
 
 import json
-import re
 from dataclasses import dataclass
 from typing import Any
-
-
-WRITE_PATTERNS = (
-    "apply_patch",
-    "set-content",
-    "add-content",
-    "out-file",
-    "new-item",
-    "copy-item",
-    "move-item",
-    "remove-item",
-    "write_text",
-    "write_bytes",
-)
-TEST_PATTERNS = (
-    "pytest",
-    "ruff check",
-    "npm test",
-    "pnpm test",
-    "yarn test",
-    "cargo test",
-    "go test",
-    "flutter test",
-)
-GIT_PATTERNS = ("git status", "git diff", "git add", "git commit", "git show", "git log")
-FINALIZE_PATTERNS = ("remember this", "save this decision", "this is final", "final decision", "finalize")
-CONNECTOR_FINALIZE_EVENTS = {"connector_session_finalize", "slack_session_finalize"}
 
 
 @dataclass(slots=True, frozen=True)
@@ -42,6 +14,7 @@ class TriggerDecision:
     is_test: bool = False
     is_git: bool = False
     is_commit: bool = False
+    approx_tokens: int = 0
 
     def as_dict(self) -> dict[str, object]:
         return {
@@ -52,28 +25,36 @@ class TriggerDecision:
             "is_test": self.is_test,
             "is_git": self.is_git,
             "is_commit": self.is_commit,
+            "approx_tokens": self.approx_tokens,
         }
 
 
-def detect_trigger(record: dict[str, Any], *, pending_write: bool = False) -> TriggerDecision:
-    payload = _payload(record)
-    event_name = str(record.get("event_name") or payload.get("hook_event_name") or "").lower()
-    text = _record_text(record)
+def detect_trigger(
+    record: dict[str, Any],
+    *,
+    pending_approx_tokens: int = 0,
+    token_threshold: int = 0,
+) -> TriggerDecision:
+    safe_tokens = max(0, int(pending_approx_tokens))
 
-    if _contains_any(text, WRITE_PATTERNS):
-        return TriggerDecision(True, "write", "write/edit tool detected", is_write=True)
-    if _contains_any(text, GIT_PATTERNS):
-        is_commit = "git commit" in text or bool(re.search(r"\[[^\]]+ [0-9a-f]{7,}\]", text))
-        return TriggerDecision(True, "git_commit" if is_commit else "git", "git operation detected", is_git=True, is_commit=is_commit)
-    if pending_write and _contains_any(text, TEST_PATTERNS):
-        return TriggerDecision(True, "test", "test command after write detected", is_test=True)
-    if event_name in {"stop", "session_stop"} and pending_write:
-        return TriggerDecision(True, "stop_finalize", "session stopped with unsummarized writes")
-    if event_name in CONNECTOR_FINALIZE_EVENTS:
-        return TriggerDecision(True, "connector_finalize", "connector session finalized")
-    if event_name in {"userpromptsubmit", "user_prompt_submit", "prompt"} and _contains_any(text, FINALIZE_PATTERNS):
-        return TriggerDecision(True, "explicit_finalize", "explicit memory/finalize request")
-    return TriggerDecision(False, "none", "raw evidence only")
+    if token_threshold > 0 and safe_tokens >= token_threshold:
+        return TriggerDecision(
+            True,
+            "token_threshold",
+            f"pending evidence window reached {safe_tokens} approx tokens",
+            approx_tokens=safe_tokens,
+        )
+    return TriggerDecision(False, "none", "raw evidence only", approx_tokens=safe_tokens)
+
+
+def estimate_record_tokens(record: dict[str, Any]) -> int:
+    """Cheap token estimate for daemon trigger thresholds.
+
+    We only need a stable boundary signal here; exact tokenizer accounting would
+    make hooks/drain depend on model packages and slow down background capture.
+    """
+
+    return max(1, len(_record_text(record)) // 4)
 
 
 def _payload(record: dict[str, Any]) -> dict[str, Any]:
@@ -99,7 +80,3 @@ def _record_text(record: dict[str, Any]) -> str:
         elif value:
             chunks.append(json.dumps(value, ensure_ascii=False, sort_keys=True))
     return "\n".join(chunks).lower()
-
-
-def _contains_any(text: str, patterns: tuple[str, ...]) -> bool:
-    return any(pattern in text for pattern in patterns)
