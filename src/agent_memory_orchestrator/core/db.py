@@ -278,6 +278,66 @@ CREATE TABLE IF NOT EXISTS orchestration_decisions (
   FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS v2_session_jobs (
+  job_id TEXT PRIMARY KEY,
+  session_id TEXT NOT NULL,
+  pipeline_version TEXT NOT NULL DEFAULT 'v2-reset-2026-05',
+  graph_schema_version TEXT NOT NULL DEFAULT 'v2',
+  status TEXT NOT NULL DEFAULT 'pending',
+  current_stage TEXT NOT NULL DEFAULT '',
+  last_successful_stage TEXT NOT NULL DEFAULT '',
+  artifact_dir TEXT NOT NULL DEFAULT '',
+  source_app TEXT NOT NULL DEFAULT '',
+  repo_path TEXT NOT NULL DEFAULT '',
+  boundary_event_id TEXT NOT NULL DEFAULT '',
+  source_evidence_day TEXT NOT NULL DEFAULT '',
+  source_evidence_days_json TEXT NOT NULL DEFAULT '[]',
+  lock_owner TEXT NOT NULL DEFAULT '',
+  lock_expires_at TEXT NOT NULL DEFAULT '',
+  attempt_count INTEGER NOT NULL DEFAULT 0,
+  last_attempt_at TEXT NOT NULL DEFAULT '',
+  forced_at TEXT NOT NULL DEFAULT '',
+  forced_by TEXT NOT NULL DEFAULT '',
+  error_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE(session_id, pipeline_version)
+);
+
+CREATE TABLE IF NOT EXISTS v2_session_job_stages (
+  job_id TEXT NOT NULL,
+  stage TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending',
+  input_artifact TEXT NOT NULL DEFAULT '',
+  output_artifact TEXT NOT NULL DEFAULT '',
+  input_hash TEXT NOT NULL DEFAULT '',
+  output_hash TEXT NOT NULL DEFAULT '',
+  stage_config_hash TEXT NOT NULL DEFAULT '',
+  diagnostics_json TEXT NOT NULL DEFAULT '{}',
+  started_at TEXT NOT NULL DEFAULT '',
+  finished_at TEXT NOT NULL DEFAULT '',
+  PRIMARY KEY(job_id, stage),
+  FOREIGN KEY (job_id) REFERENCES v2_session_jobs(job_id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS v2_session_job_events (
+  event_id TEXT PRIMARY KEY,
+  job_id TEXT NOT NULL,
+  event_type TEXT NOT NULL,
+  stage TEXT NOT NULL DEFAULT '',
+  message TEXT NOT NULL DEFAULT '',
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL,
+  FOREIGN KEY (job_id) REFERENCES v2_session_jobs(job_id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS v2_production_markers (
+  marker_key TEXT PRIMARY KEY,
+  value_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_sessions_updated
 ON sessions(updated_at DESC);
 
@@ -325,6 +385,15 @@ ON retrieval_runs(started_at DESC);
 
 CREATE INDEX IF NOT EXISTS idx_rounds_session_round
 ON orchestration_rounds(session_id, round_index DESC);
+
+CREATE INDEX IF NOT EXISTS idx_v2_session_jobs_status
+ON v2_session_jobs(status, updated_at);
+
+CREATE INDEX IF NOT EXISTS idx_v2_session_jobs_session
+ON v2_session_jobs(session_id, pipeline_version);
+
+CREATE INDEX IF NOT EXISTS idx_v2_session_job_events_job
+ON v2_session_job_events(job_id, created_at DESC);
 """
 
 
@@ -381,6 +450,13 @@ def _run_light_migrations(conn: sqlite3.Connection) -> None:
 
     _add_column_if_missing(conn, "memory_vectors", "model", "model TEXT NOT NULL DEFAULT 'hash-fallback'")
     _add_column_if_missing(conn, "memory_vectors", "backend", "backend TEXT NOT NULL DEFAULT 'sqlite'")
+
+    _add_column_if_missing(conn, "v2_session_jobs", "last_successful_stage", "last_successful_stage TEXT NOT NULL DEFAULT ''")
+    _add_column_if_missing(conn, "v2_session_jobs", "source_app", "source_app TEXT NOT NULL DEFAULT ''")
+    _add_column_if_missing(conn, "v2_session_jobs", "repo_path", "repo_path TEXT NOT NULL DEFAULT ''")
+    _add_column_if_missing(conn, "v2_session_jobs", "forced_at", "forced_at TEXT NOT NULL DEFAULT ''")
+    _add_column_if_missing(conn, "v2_session_jobs", "forced_by", "forced_by TEXT NOT NULL DEFAULT ''")
+    _add_column_if_missing(conn, "v2_session_job_stages", "stage_config_hash", "stage_config_hash TEXT NOT NULL DEFAULT ''")
 
 
 def init_schema(conn: sqlite3.Connection) -> None:

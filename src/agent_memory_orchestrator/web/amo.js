@@ -5,6 +5,7 @@ const AMO = {
   selectedSessionId: "",
   selectedSession: null,
   health: null,
+  jobs: { jobs: [], reset_marker: null },
   connectors: { slack: null },
   centralGraph: { nodes: [], edges: [], warnings: [], full: false, limit: 360 },
   versionFlow: { flows: [], nodes: [], edges: [], warnings: [] },
@@ -43,12 +44,12 @@ const VERSION_EDGES = new Set([
 ]);
 const PIPELINE = [
   ["Raw", "Captured hook events", "raw"],
-  ["Clean", "Bounded evidence windows", "clean"],
-  ["Extract", "Qwen or deterministic GraphDelta", "delta"],
-  ["Draft", "Session graph nodes", "draft"],
-  ["Merge", "Commit/finalize promotion", "merge"],
-  ["Central", "Committed graph memory", "central"],
-  ["Cache", "Retrieval cache", "cache"],
+  ["Queue", "Closed sessions enqueued", "queue"],
+  ["Reason", "Packet-wise Qwen + review", "reason"],
+  ["Graph", "V2 Kuzu graph writes", "graph"],
+  ["Index", "V2 retrieval documents", "index"],
+  ["Vector", "Embeddings / FAISS", "vector"],
+  ["Trace", "Answer provenance", "trace"],
 ];
 
 function $(id) { return document.getElementById(id); }
@@ -188,8 +189,16 @@ async function loadConnectorStatus() {
   }
   renderConnectorStatus();
 }
+async function loadJobs() {
+  try {
+    AMO.jobs = await apiGet("/api/jobs?limit=50");
+  } catch (error) {
+    AMO.jobs = { ok: false, error: error.message, jobs: [], reset_marker: null };
+  }
+  renderJobs();
+}
 async function refreshAll() {
-  await Promise.allSettled([loadHealth(), loadSessions(), loadCentralGraph(), loadVersionFlow(), loadConnectorStatus()]);
+  await Promise.allSettled([loadHealth(), loadSessions(), loadCentralGraph(), loadVersionFlow(), loadConnectorStatus(), loadJobs()]);
   if (AMO.selectedSessionId) await selectSession(AMO.selectedSessionId, { silent: true });
 }
 function setView(view) {
@@ -227,7 +236,16 @@ function renderDashboard() {
     metric("Graph nodes", nodes.length, graphCaption),
     metric("Edges", edges.length, "visible central relations"),
   ].join("");
-  renderPipeline($("pipelineStrip"), { raw: rawEvents, clean: sessions.reduce((sum, s) => sum + Number(s.graph_counts?.draft || 0), 0), delta: nodes.filter(n => nodeKind(n) === "GraphDelta").length, draft, merge: edges.filter(e => VERSION_EDGES.has(edgeKind(e))).length, central: committed + sessionFinal + nodes.filter(n => n.scope === "central").length, cache: nodes.length });
+  const jobs = AMO.jobs?.jobs || [];
+  renderPipeline($("pipelineStrip"), {
+    raw: rawEvents,
+    queue: jobs.length,
+    reason: nodes.filter(n => ["ReasoningNode", "Problem", "Decision", "Cause", "Fix", "Constraint", "OpenQuestion"].includes(nodeKind(n))).length,
+    graph: nodes.filter(n => metadata(n).graph_schema_version === "v2").length,
+    index: nodes.filter(n => ["Packet", "Commit", "EvidenceRef", "CodeHunk", "CodeNode", "CodeVersion", "Symbol"].includes(nodeKind(n))).length,
+    vector: jobs.some(j => ["embeddings", "faiss", "quality_eval"].includes(text(j.last_successful_stage || j.current_stage))) ? "ready" : "pending",
+    trace: edges.filter(e => VERSION_EDGES.has(edgeKind(e))).length,
+  });
   $("recentSessions").innerHTML = sessions.slice(0, 7).map(sessionCard).join("") || empty("No captured sessions yet.");
 }
 function metric(label, value, caption) { return `<div class="metric"><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong><span>${escapeHtml(caption)}</span></div>`; }
@@ -269,6 +287,58 @@ function renderConnectorStatus() {
   </div>`;
   const command = $("slackCommandPanel");
   if (command) command.textContent = data.run_command ? `amo-cli slack setup-wizard\n${data.run_command}` : command.textContent;
+}
+function renderJobs() {
+  const list = $("v2JobsList");
+  if (!list) return;
+  const marker = AMO.jobs?.reset_marker;
+  const markerTarget = $("v2ResetMarker");
+  if (markerTarget) {
+    markerTarget.innerHTML = marker
+      ? `<span class="pill good">V2 reset ${escapeHtml(marker.production_v2_reset_applied_at || marker.updated_at || "applied")}</span><span class="pill blue">${escapeHtml(marker.pipeline_version || "v2")}</span>`
+      : `<span class="pill warn">V2 production reset marker missing</span><span class="pill">run explicit backup-first reset before V2 graph writes</span>`;
+  }
+  if (!AMO.jobs?.ok) {
+    list.innerHTML = `<pre class="code-block">${escapeHtml(AMO.jobs?.error || "Unable to load jobs")}</pre>`;
+    return;
+  }
+  const jobs = AMO.jobs.jobs || [];
+  list.innerHTML = jobs.map(renderJobCard).join("") || empty("No V2 session jobs yet.");
+}
+function renderJobCard(job) {
+  const status = text(job.status || "unknown");
+  const cls = status === "complete" ? "good" : status === "failed" ? "bad" : status === "pending_model" ? "warn" : "blue";
+  const retry = ["failed", "pending_model"].includes(status)
+    ? `<button class="btn ghost retry-job-btn" data-job-id="${escapeHtml(job.job_id)}">Retry</button>`
+    : "";
+  const error = job.error && Object.keys(job.error).length ? `<pre class="code-block small">${escapeHtml(formatJson(job.error))}</pre>` : "";
+  return `<article class="job-card">
+    <div class="panel-head">
+      <div>
+        <p class="eyebrow">${escapeHtml(job.source_app || "session")}</p>
+        <h3>${escapeHtml(job.session_id || job.job_id)}</h3>
+      </div>
+      <div class="button-row"><span class="pill ${cls}">${escapeHtml(status)}</span>${retry}</div>
+    </div>
+    <div class="job-meta">
+      <span>stage ${escapeHtml(job.current_stage || "-")}</span>
+      <span>last ${escapeHtml(job.last_successful_stage || "-")}</span>
+      <span>attempts ${escapeHtml(job.attempt_count || 0)}</span>
+      <span>${escapeHtml(truncate(job.repo_path || job.artifact_dir || "", 92))}</span>
+    </div>
+    ${error}
+  </article>`;
+}
+async function retryJob(jobId) {
+  const output = $("adminOutput");
+  if (output) output.textContent = `Retrying ${jobId}...`;
+  try {
+    const result = await apiPost(`/api/jobs/${encodeURIComponent(jobId)}/retry`, { forced_by: "dashboard" });
+    if (output) output.textContent = formatJson(result);
+    await loadJobs();
+  } catch (error) {
+    if (output) output.textContent = error.stack || error.message;
+  }
 }
 function renderPipeline(target, counts) {
   target.innerHTML = PIPELINE.map(([name, desc, key]) => `<div class="stage-card"><strong>${escapeHtml(name)}</strong><div class="count">${escapeHtml(counts[key] ?? 0)}</div><small>${escapeHtml(desc)}</small></div>`).join("");
@@ -312,9 +382,17 @@ function renderSessionDetail(data) {
   $("sessionSummary").textContent = contextNode?.summary || `${timeline.length} captured events, ${nodes.length} graph nodes, ${edges.length} graph edges.`;
   const windows = data.windows || [];
   const preview = data.merge_preview || {};
-  renderPipeline($("sessionPipeline"), { raw: timeline.length, clean: windows.length, delta: nodes.filter(n => nodeKind(n) === "GraphDelta").length, draft: nodes.filter(n => nodeStatus(n) === "draft").length, merge: (preview.promotions || []).length + (preview.version_edges || []).length, central: nodes.filter(n => nodeStatus(n) === "committed" || n.scope === "central").length, cache: data.pending?.count ? "pending" : "ready" });
+  renderPipeline($("sessionPipeline"), {
+    raw: timeline.length,
+    queue: AMO.jobs?.jobs?.filter(j => j.session_id === data.session_id).length || 0,
+    reason: nodes.filter(n => ["ReasoningNode", "Problem", "Decision", "Cause", "Fix", "Constraint", "OpenQuestion"].includes(nodeKind(n))).length,
+    graph: nodes.filter(n => metadata(n).graph_schema_version === "v2").length,
+    index: nodes.filter(n => ["Packet", "Commit", "EvidenceRef", "CodeHunk", "CodeNode", "CodeVersion", "Symbol"].includes(nodeKind(n))).length,
+    vector: data.pending?.count ? "pending" : "ready",
+    trace: edges.filter(e => VERSION_EDGES.has(edgeKind(e))).length,
+  });
   $("timelineList").innerHTML = timeline.map(renderTimeline).join("") || empty("No raw evidence for this session.");
-  $("cleanedWindows").innerHTML = windows.map(renderWindow).join("") || empty("No cleaned evidence windows yet. A write/test/git/finalize trigger must be drained first.");
+  $("cleanedWindows").innerHTML = windows.map(renderWindow).join("") || empty("No evidence view artifacts yet. A closed-session V2 job must run first.");
   $("draftNodes").innerHTML = nodes.map(renderNodeCard).join("") || empty("No session graph nodes yet.");
   $("mergePreview").innerHTML = renderMergePreview(preview);
 }
@@ -1005,6 +1083,7 @@ function bindEvents() {
   $("cacheBtn").addEventListener("click", () => runAdminJob("cache"));
   $("debugGraphBtn").addEventListener("click", () => runAdminJob("debugGraph"));
   $("debugQwenBtn").addEventListener("click", () => runAdminJob("debugQwen"));
+  $("refreshJobsBtn")?.addEventListener("click", loadJobs);
   document.body.addEventListener("click", event => {
     const sessionEl = event.target.closest(".session-card");
     if (sessionEl) selectSession(sessionEl.dataset.sessionId);
@@ -1024,6 +1103,8 @@ function bindEvents() {
       selectGraphNode(versionNode.dataset.nodeId);
       focusSelectedNeighbors();
     }
+    const retryJobEl = event.target.closest(".retry-job-btn");
+    if (retryJobEl?.dataset.jobId) retryJob(retryJobEl.dataset.jobId);
   });
 }
 async function init() {
@@ -1037,5 +1118,6 @@ async function init() {
   else if (path.includes("dashboard")) setView("dashboard");
   await refreshAll();
   setInterval(() => { if (AMO.view === "dashboard" || AMO.view === "sessions") loadSessions().catch(() => {}); }, 15000);
+  setInterval(() => { if (AMO.view === "admin") loadJobs().catch(() => {}); }, 12000);
 }
 init().catch(error => { setDaemon(false, "ui failed"); console.error(error); });
