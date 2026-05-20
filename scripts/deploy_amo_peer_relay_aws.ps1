@@ -195,6 +195,10 @@ if (-not $instanceId) {
 $relayInfo = $null
 if (-not $SkipSsmCheck) {
     Wait-ForSsmOnline -InstanceId $instanceId -ProfileName $Profile -AwsRegion $Region
+    Invoke-SsmShell -InstanceId $instanceId -ProfileName $Profile -AwsRegion $Region -Commands @(
+        "cloud-init status --wait",
+        "cloud-init status --long"
+    ) | Out-Null
     $relayJson = Invoke-SsmShell -InstanceId $instanceId -ProfileName $Profile -AwsRegion $Region -Commands @(
         "set -e",
         "systemctl is-active amo-peer-relay.service",

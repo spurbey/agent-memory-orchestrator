@@ -147,6 +147,9 @@ Resources:
 
           dnf update -y
           dnf install -y git golang python3
+          export GOPATH=/root/go
+          export GOMODCACHE=/root/go/pkg/mod
+          install -d -m 0755 "$GOMODCACHE"
 
           id -u amo-relay >/dev/null 2>&1 || useradd --system --create-home --home-dir /var/lib/amo-relay --shell /sbin/nologin amo-relay
           install -d -m 0755 /opt/amo-relay
