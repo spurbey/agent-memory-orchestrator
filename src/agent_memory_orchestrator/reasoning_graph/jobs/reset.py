@@ -26,6 +26,8 @@ def reset_production_v2_storage(
 ) -> dict[str, Any]:
     if not backup:
         raise ValueError("--backup is required for v2-reset-production")
+    if not clean_graph or not clean_retrieval:
+        raise ValueError("--clean-graph and --clean-retrieval are required to apply production V2 reset")
     daemon = _daemon_status(settings)
     if daemon.get("running") and not force_if_daemon_running:
         raise RuntimeError("daemon_running: stop amo-daemon or pass --force-if-daemon-running")

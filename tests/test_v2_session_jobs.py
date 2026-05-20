@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from agent_memory_orchestrator.config import Settings
+from agent_memory_orchestrator.app import daemon as daemon_module
 from agent_memory_orchestrator.core.db import connect
 from agent_memory_orchestrator.reasoning_graph.embedding_store import GraphEmbeddingRecord
 from agent_memory_orchestrator.reasoning_graph.embedding_store import GraphEmbeddingStore
@@ -12,6 +13,10 @@ from agent_memory_orchestrator.reasoning_graph.jobs import V2SessionJobStore
 from agent_memory_orchestrator.reasoning_graph.jobs.constants import GRAPH_SCHEMA_VERSION
 from agent_memory_orchestrator.reasoning_graph.jobs.constants import PIPELINE_VERSION
 from agent_memory_orchestrator.reasoning_graph.jobs.reset import reset_production_v2_storage
+from agent_memory_orchestrator.reasoning_graph.jobs.runner import require_complete_v2_reset_marker
+from agent_memory_orchestrator.reasoning_graph.stage4_contract import STAGE4_CONTRACT_VERSION
+from agent_memory_orchestrator.reasoning_graph.stage4_contract import build_stage4_packet_prompt
+from agent_memory_orchestrator.reasoning_graph.stage4_contract import stage4_contract_hash
 from agent_memory_orchestrator.reasoning_graph.retrieval import RetrievalDocument
 from agent_memory_orchestrator.reasoning_graph.retrieval import RetrievalIndexStore
 from agent_memory_orchestrator.graph.service import GraphRagService
@@ -183,6 +188,22 @@ def test_v2_reset_requires_backup_and_preserves_raw_config_and_job_tables(tmp_pa
 
     with pytest.raises(ValueError):
         reset_production_v2_storage(settings, backup=False, clean_graph=True, clean_retrieval=True)
+    with pytest.raises(ValueError, match="clean-graph and --clean-retrieval"):
+        reset_production_v2_storage(
+            settings,
+            backup=True,
+            clean_graph=False,
+            clean_retrieval=True,
+            force_if_daemon_running=True,
+        )
+    with pytest.raises(ValueError, match="clean-graph and --clean-retrieval"):
+        reset_production_v2_storage(
+            settings,
+            backup=True,
+            clean_graph=True,
+            clean_retrieval=False,
+            force_if_daemon_running=True,
+        )
 
     result = reset_production_v2_storage(
         settings,
@@ -219,6 +240,81 @@ def test_v2_reset_requires_backup_and_preserves_raw_config_and_job_tables(tmp_pa
     assert marker is not None
     assert marker["pipeline_version"] == PIPELINE_VERSION
     assert marker["graph_schema_version"] == GRAPH_SCHEMA_VERSION
+    assert marker["cleaned"] == {"graph": True, "retrieval": True, "faiss": True}
+
+
+def test_v2_runner_rejects_missing_incomplete_or_wrong_reset_marker() -> None:
+    complete_marker = {
+        "pipeline_version": PIPELINE_VERSION,
+        "graph_schema_version": GRAPH_SCHEMA_VERSION,
+        "cleaned": {"graph": True, "retrieval": True, "faiss": True},
+    }
+
+    assert require_complete_v2_reset_marker(complete_marker) == complete_marker
+    with pytest.raises(RuntimeError, match="missing"):
+        require_complete_v2_reset_marker(None)
+    with pytest.raises(RuntimeError, match="version_mismatch"):
+        require_complete_v2_reset_marker({**complete_marker, "pipeline_version": "old"})
+    with pytest.raises(RuntimeError, match="incomplete"):
+        require_complete_v2_reset_marker({**complete_marker, "cleaned": {"graph": True, "retrieval": False}})
+
+
+def test_stage4_prompt_uses_reset_contract_module() -> None:
+    prompt = build_stage4_packet_prompt(
+        {
+            "packet_id": "WP0001",
+            "commit": {"short_sha": "abc1234"},
+            "problem_refs": [{"ref": "E00001", "excerpt": "problem"}],
+            "rationale_refs": [],
+            "validation_refs": [],
+        }
+    )
+
+    assert STAGE4_CONTRACT_VERSION == "stage4-reset-2026-05-14"
+    assert len(stage4_contract_hash()) == 64
+    assert "Support refs are provenance only" in prompt
+    assert "Input packet:" in prompt
+
+
+def test_auto_drain_closes_graph_before_v2_runner_opens(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = make_settings(tmp_path)
+    events: list[str] = []
+
+    class FakeGraph:
+        def __init__(self, settings: Settings) -> None:
+            del settings
+            events.append("graph_open")
+
+        def drain_evidence(self, **kwargs: object) -> dict[str, object]:
+            del kwargs
+            events.append("drain")
+            return {"records_ingested": 1, "windows_processed": 0, "stopped_reason": "done", "pending_sessions": []}
+
+        def close(self) -> None:
+            events.append("graph_close")
+
+    class FakeRunner:
+        def __init__(self, settings: Settings) -> None:
+            del settings
+            events.append("runner_open")
+
+        def run_next(self) -> dict[str, object]:
+            events.append("runner_run")
+            return {"ok": True, "ran": False}
+
+        def close(self) -> None:
+            events.append("runner_close")
+
+    monkeypatch.setattr(daemon_module, "GraphRagService", FakeGraph)
+    monkeypatch.setattr(daemon_module, "V2SessionJobRunner", FakeRunner)
+
+    result = daemon_module._run_auto_drain_once(settings)
+
+    assert result["records_ingested"] == 1
+    assert events == ["graph_open", "drain", "graph_close", "runner_open", "runner_run", "runner_close"]
 
 
 def test_legacy_graphdelta_smoke_uses_disposable_graph_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

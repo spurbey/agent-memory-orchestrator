@@ -680,21 +680,21 @@ def _run_auto_drain_once(settings: Settings) -> dict[str, Any]:
                 limit=settings.auto_drain_record_limit,
                 max_windows=settings.drain_max_windows_per_run,
             )
-            runner = V2SessionJobRunner(settings)
-            try:
-                job_run = runner.run_next()
-            finally:
-                runner.close()
-            result: dict[str, Any] = {
-                "records_ingested": int(drain.get("records_ingested") or 0),
-                "windows_processed": int(drain.get("windows_processed") or 0),
-                "stopped_reason": drain.get("stopped_reason"),
-                "pending_sessions": drain.get("pending_sessions"),
-                "v2_job_run": job_run,
-            }
-            return result
         finally:
             graph.close()
+        runner = V2SessionJobRunner(settings)
+        try:
+            job_run = runner.run_next()
+        finally:
+            runner.close()
+        result: dict[str, Any] = {
+            "records_ingested": int(drain.get("records_ingested") or 0),
+            "windows_processed": int(drain.get("windows_processed") or 0),
+            "stopped_reason": drain.get("stopped_reason"),
+            "pending_sessions": drain.get("pending_sessions"),
+            "v2_job_run": job_run,
+        }
+        return result
 
 
 def _daemon_log(settings: Settings, event: str, **fields: object) -> None:
