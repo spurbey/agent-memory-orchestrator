@@ -186,6 +186,8 @@ def _enable_command(settings: Settings, launch: PeerNetdLaunchOptions) -> list[s
     ]
     if launch.store_path:
         command.extend(["--store-path", launch.store_path])
+    if launch.identity_key_path:
+        command.extend(["--identity-key", launch.identity_key_path])
     if launch.shared_secret_env:
         command.extend(["--shared-secret-env", launch.shared_secret_env])
     if launch.require_signature:
@@ -194,6 +196,14 @@ def _enable_command(settings: Settings, launch: PeerNetdLaunchOptions) -> list[s
         command.extend(["--bootstrap", addr])
     for addr in launch.static_relays:
         command.extend(["--static-relay", addr])
+    for addr in launch.advertise_addrs:
+        command.extend(["--advertise-addr", addr])
+    if launch.rendezvous_addr:
+        command.extend(["--rendezvous-addr", launch.rendezvous_addr])
+    if launch.rendezvous_namespace:
+        command.extend(["--rendezvous-namespace", launch.rendezvous_namespace])
+    if launch.rendezvous_ttl_seconds != 7200:
+        command.extend(["--rendezvous-ttl-seconds", str(launch.rendezvous_ttl_seconds)])
     for flag, enabled in [
         ("--mdns", launch.mdns),
         ("--rendezvous-server", launch.rendezvous_server),

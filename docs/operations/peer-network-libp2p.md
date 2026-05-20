@@ -66,6 +66,8 @@ scripts/
 
 `netd_runtime.py` is the managed sidecar lifecycle layer. It locates repo or packaged `peer-netd` source, builds the Go binary into `AMO_HOME/.peer/bin`, starts/stops it, writes PID/API/log state under `AMO_HOME/.peer/netd`, and refuses unsafe managed starts where the local API port is dynamic.
 
+Managed starts persist the libp2p private key at `AMO_HOME/.peer/netd/identity.key` by default. This keeps peer IDs and relay multiaddrs stable across restarts.
+
 `netd_service.py` plans OS startup integration. It returns a Windows Scheduled Task plan or user-systemd unit plan by default, and only mutates the host when `--apply` is explicitly used.
 
 `scripts/build_peer_netd_binaries.py` builds release binaries into `src/agent_memory_orchestrator/bin/<goos-goarch>/`. Wheel/package builds include those files when present, so normal users do not need Go once release packaging generates platform binaries.
@@ -206,6 +208,50 @@ signed room message is delivered to the private peer
 ```
 
 Relay nodes should be treated as transport utilities. They should be rate-limited and monitored, but they should not read AMO memory or own room state.
+
+## Public Relay/Rendezvous Deployment
+
+For peers on different routers or subnets, run one small always-on helper node. This is the AMO equivalent of the minimum Tailscale control-plane replacement: it does discovery and relay only, not memory or room state.
+
+On a public VPS or always-on machine with inbound TCP open:
+
+```powershell
+amo-cli peer relay start `
+  --node-id amo-relay-prod `
+  --listen /ip4/0.0.0.0/tcp/4001 `
+  --advertise-addr /ip4/<public_ip>/tcp/4001 `
+  --namespace <team_namespace>
+```
+
+Use `/dns4/<domain>/tcp/4001` instead of `/ip4/<public_ip>/tcp/4001` if DNS is stable. The command starts `amo-peer-netd` with rendezvous, relay service, NAT service, and public reachability defaults. It prints the relay multiaddr that clients should use.
+
+On each user device, start its local peer sidecar with the relay before creating or accepting invites:
+
+```powershell
+amo-cli peer enable `
+  --node-id <device_node_id> `
+  --static-relay <relay_multiaddr> `
+  --auto-relay `
+  --hole-punching `
+  --rendezvous-addr <relay_multiaddr> `
+  --rendezvous-namespace <team_namespace>
+```
+
+Then create invites with the same rendezvous hint:
+
+```powershell
+amo-cli peer create-invite `
+  --auto-approve `
+  --rendezvous-addr <relay_multiaddr> `
+  --rendezvous-namespace <team_namespace> `
+  --out host.invite.json
+```
+
+The important ordering is: start the local sidecar with `--static-relay`, confirm `peer netd status` shows `relay_addrs`, then create or accept invites. The peer card inside the invite/response will include `/p2p-circuit` relay addresses, so the join request can return even when direct LAN dialing fails.
+
+For production operations, run at least two helper nodes and pass both as `--static-relay` values. Monitor process liveness, open TCP port reachability, relay reservation failures, and bandwidth. The helper should reject broad public access later with invite/group-level admission rules; until then, treat it as a private beta service.
+
+AWS deployment automation lives in `docs/operations/aws-peer-relay.md` and `infra/aws/peer-relay/cloudformation.yaml`. It creates the small EC2/EIP/SSM helper node and prints the relay/rendezvous flags clients should use.
 
 ## Why libp2p, Not Tailscale
 

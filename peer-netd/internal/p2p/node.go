@@ -3,15 +3,19 @@ package p2p
 import (
 	"bufio"
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 
 	libp2p "github.com/libp2p/go-libp2p"
+	libp2pcrypto "github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
@@ -57,8 +61,21 @@ func New(ctx context.Context, cfg config.Config, st *store.Store) (*Node, error)
 	}
 
 	opts := []libp2p.Option{libp2p.ListenAddrs(listen)}
-	if cfg.AdvertiseLocalhostDNS {
-		opts = append(opts, libp2p.AddrsFactory(localhostDNSAddrsFactory))
+	if strings.TrimSpace(cfg.IdentityKeyPath) != "" {
+		privateKey, err := loadOrCreateIdentityKey(cfg.IdentityKeyPath)
+		if err != nil {
+			return nil, fmt.Errorf("identity key: %w", err)
+		}
+		opts = append(opts, libp2p.Identity(privateKey))
+	}
+	if cfg.AdvertiseLocalhostDNS || len(cfg.AdvertiseAddrs) > 0 {
+		advertiseAddrs, err := multiaddrsFromStrings(cfg.AdvertiseAddrs)
+		if err != nil {
+			return nil, fmt.Errorf("invalid advertise addr: %w", err)
+		}
+		opts = append(opts, libp2p.AddrsFactory(func(addrs []multiaddr.Multiaddr) []multiaddr.Multiaddr {
+			return advertiseAddrsFactory(addrs, advertiseAddrs, cfg.AdvertiseLocalhostDNS)
+		}))
 	}
 	if cfg.EnableRelayService {
 		opts = append(opts, libp2p.DisableRelay(), libp2p.EnableRelayService())
@@ -441,6 +458,18 @@ func addrInfosFromStrings(addrs []string) ([]peer.AddrInfo, error) {
 	return out, nil
 }
 
+func multiaddrsFromStrings(addrs []string) ([]multiaddr.Multiaddr, error) {
+	out := make([]multiaddr.Multiaddr, 0, len(addrs))
+	for _, addr := range addrs {
+		ma, err := multiaddr.NewMultiaddr(addr)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, ma)
+	}
+	return out, nil
+}
+
 func peerInfoFromRendezvous(item rendezvous.PeerInfo) (*peer.AddrInfo, error) {
 	id, err := peer.Decode(item.ID)
 	if err != nil {
@@ -485,14 +514,62 @@ func min(a int, b int) int {
 	return b
 }
 
-func localhostDNSAddrsFactory(addrs []multiaddr.Multiaddr) []multiaddr.Multiaddr {
+func advertiseAddrsFactory(addrs []multiaddr.Multiaddr, advertised []multiaddr.Multiaddr, localhostDNS bool) []multiaddr.Multiaddr {
 	out := make([]multiaddr.Multiaddr, len(addrs))
 	copy(out, addrs)
-	for i, addr := range out {
-		text := addr.String()
-		if strings.HasPrefix(text, "/ip4/127.0.0.1/") {
-			out[i] = multiaddr.StringCast("/dns4/localhost" + strings.TrimPrefix(text, "/ip4/127.0.0.1"))
+	if localhostDNS {
+		for i, addr := range out {
+			text := addr.String()
+			if strings.HasPrefix(text, "/ip4/127.0.0.1/") {
+				out[i] = multiaddr.StringCast("/dns4/localhost" + strings.TrimPrefix(text, "/ip4/127.0.0.1"))
+			}
+		}
+	}
+	for _, addr := range advertised {
+		if !containsMultiaddr(out, addr) {
+			out = append(out, addr)
 		}
 	}
 	return out
+}
+
+func containsMultiaddr(items []multiaddr.Multiaddr, target multiaddr.Multiaddr) bool {
+	for _, item := range items {
+		if item.Equal(target) {
+			return true
+		}
+	}
+	return false
+}
+
+func loadOrCreateIdentityKey(path string) (libp2pcrypto.PrivKey, error) {
+	clean := strings.TrimSpace(path)
+	if clean == "" {
+		return nil, errors.New("identity key path is empty")
+	}
+	if data, err := os.ReadFile(clean); err == nil {
+		key, err := libp2pcrypto.UnmarshalPrivateKey(data)
+		if err != nil {
+			return nil, err
+		}
+		return key, nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return nil, err
+	}
+
+	privateKey, _, err := libp2pcrypto.GenerateEd25519Key(rand.Reader)
+	if err != nil {
+		return nil, err
+	}
+	data, err := libp2pcrypto.MarshalPrivateKey(privateKey)
+	if err != nil {
+		return nil, err
+	}
+	if err := os.MkdirAll(filepath.Dir(clean), 0o700); err != nil {
+		return nil, err
+	}
+	if err := os.WriteFile(clean, data, 0o600); err != nil {
+		return nil, err
+	}
+	return privateKey, nil
 }

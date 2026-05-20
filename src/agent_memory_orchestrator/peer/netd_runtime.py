@@ -27,6 +27,7 @@ class PeerNetdLaunchOptions:
     listen_addr: str = "/ip4/0.0.0.0/tcp/0"
     api_addr: str = "127.0.0.1:8788"
     store_path: str = ""
+    identity_key_path: str = ""
     shared_secret_env: str = ""
     require_signature: bool = False
     bootstrap_addrs: tuple[str, ...] = ()
@@ -42,6 +43,10 @@ class PeerNetdLaunchOptions:
     force_private: bool = False
     force_public: bool = False
     advertise_localhost_dns: bool = False
+    advertise_addrs: tuple[str, ...] = ()
+    rendezvous_addr: str = ""
+    rendezvous_namespace: str = ""
+    rendezvous_ttl_seconds: int = 7200
 
 
 @dataclass(slots=True)
@@ -92,7 +97,11 @@ class PeerNetdRuntime:
 
         current = self.status()
         if current.get("running") and current.get("api_ok"):
-            return {"ok": True, "already_running": True, "status": current}
+            api_url = str(current.get("api_url") or self.api_url(options.api_addr))
+            post_start = self.post_start(options, api_url)
+            if post_start:
+                current["health"] = PeerNetdClient(base_url=api_url, timeout_seconds=1.0).health()
+            return {"ok": True, "already_running": True, "status": current, "post_start": post_start}
 
         binary = self.resolve_binary()
         packaged = self.packaged_binary_path()
@@ -145,6 +154,9 @@ class PeerNetdRuntime:
 
         try:
             health = self.wait_for_health(options.api_addr)
+            post_start = self.post_start(options, state["api_url"])
+            if post_start:
+                health = PeerNetdClient(base_url=state["api_url"], timeout_seconds=1.0).health()
         except Exception as exc:
             tail = _tail_text(stderr_path)
             self.stop()
@@ -156,6 +168,7 @@ class PeerNetdRuntime:
             "pid": process.pid,
             "api_url": state["api_url"],
             "health": health,
+            "post_start": post_start,
             "logs": {"stdout": str(stdout_path), "stderr": str(stderr_path)},
         }
 
@@ -234,6 +247,18 @@ class PeerNetdRuntime:
                 time.sleep(0.15)
         raise PeerNetdRuntimeError(last_error or "health check timed out")
 
+    def post_start(self, options: PeerNetdLaunchOptions, api_url: str) -> dict[str, Any]:
+        if not (options.rendezvous_addr and options.rendezvous_namespace):
+            return {}
+        client = PeerNetdClient(base_url=api_url, timeout_seconds=3.0)
+        return {
+            "rendezvous_registration": client.rendezvous_register(
+                options.rendezvous_addr,
+                options.rendezvous_namespace,
+                ttl_seconds=options.rendezvous_ttl_seconds,
+            )
+        }
+
     def args_for(self, binary: Path, options: PeerNetdLaunchOptions) -> list[str]:
         args = [
             str(binary),
@@ -245,6 +270,8 @@ class PeerNetdRuntime:
             options.api_addr,
             "--store-path",
             str(self.store_path(options)),
+            "--identity-key",
+            str(self.identity_key_path(options)),
             "--mdns-service",
             options.mdns_service,
         ]
@@ -276,6 +303,8 @@ class PeerNetdRuntime:
             args.append("--force-public")
         if options.advertise_localhost_dns:
             args.append("--advertise-localhost-dns")
+        for addr in options.advertise_addrs:
+            args.extend(["--advertise-addr", addr])
         for addr in options.bootstrap_addrs:
             args.extend(["--bootstrap", addr])
         for addr in options.static_relays:
@@ -302,6 +331,11 @@ class PeerNetdRuntime:
         if options.store_path:
             return Path(options.store_path).expanduser().resolve()
         return self.runtime_dir / "inbox.jsonl"
+
+    def identity_key_path(self, options: PeerNetdLaunchOptions) -> Path:
+        if options.identity_key_path:
+            return Path(options.identity_key_path).expanduser().resolve()
+        return self.runtime_dir / "identity.key"
 
     def default_binary_path(self) -> Path:
         return self.bin_dir / binary_name()
@@ -450,7 +484,12 @@ def platform_binary_dir_name() -> str:
 
 
 def _creation_flags() -> int:
-    return int(getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    if os.name != "nt":
+        return 0
+    flags = 0
+    for name in ("CREATE_NO_WINDOW", "CREATE_NEW_PROCESS_GROUP", "DETACHED_PROCESS"):
+        flags |= int(getattr(subprocess, name, 0))
+    return flags
 
 
 def _tail_text(path: Path, limit: int = 2000) -> str:

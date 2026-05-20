@@ -7,6 +7,7 @@ type Config struct {
 	ListenAddr            string
 	APIAddr               string
 	StorePath             string
+	IdentityKeyPath       string
 	SharedSecret          string
 	RequireSignature      bool
 	DialTimeout           time.Duration
@@ -22,6 +23,7 @@ type Config struct {
 	ForcePrivate          bool
 	ForcePublic           bool
 	AdvertiseLocalhostDNS bool
+	AdvertiseAddrs        []string
 	StaticRelayAddrs      []string
 }
 
