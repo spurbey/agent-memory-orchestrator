@@ -455,6 +455,8 @@ def build_retrieval_documents_from_graph(
     kinds: list[str] | None = None,
     node_limit: int = 10000,
     max_doc_chars: int = 5000,
+    pipeline_version: str = "",
+    graph_schema_version: str = "",
 ) -> list[RetrievalDocument]:
     nodes = graph_store.list_nodes(
         limit=node_limit,
@@ -463,6 +465,10 @@ def build_retrieval_documents_from_graph(
     )
     docs: list[RetrievalDocument] = []
     for node in nodes:
+        if pipeline_version and _node_version_value(node, "pipeline_version") != pipeline_version:
+            continue
+        if graph_schema_version and _node_version_value(node, "graph_schema_version") != graph_schema_version:
+            continue
         docs.extend(_documents_for_node(node, max_doc_chars=max_doc_chars))
     return docs
 
@@ -802,8 +808,15 @@ def _retrieval_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
         "evidence_refs",
         "version_count",
         "status",
+        "pipeline_version",
+        "graph_schema_version",
     }
     return {key: metadata[key] for key in keep if key in metadata}
+
+
+def _node_version_value(node: dict[str, Any], key: str) -> str:
+    metadata = node.get("metadata") if isinstance(node.get("metadata"), dict) else {}
+    return str(node.get(key) or metadata.get(key) or "")
 
 
 def _compact_output_node(node: dict[str, Any]) -> dict[str, Any]:

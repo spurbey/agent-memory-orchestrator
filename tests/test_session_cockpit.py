@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from dataclasses import replace
 from pathlib import Path
 
 from agent_memory_orchestrator.config import Settings
@@ -22,7 +21,7 @@ class _StaticGitBackend:
 def test_session_cockpit_exposes_timeline_and_cleaned_windows(tmp_path: Path) -> None:
     store = InMemoryGraphStore()
     svc = GraphRagService(
-        replace(make_settings(tmp_path), drain_token_threshold=30),
+        make_settings(tmp_path),
         store=store,
         planner=DeterministicPlanner(),
         version_backend=_StaticGitBackend(),
@@ -55,7 +54,7 @@ def test_session_cockpit_exposes_timeline_and_cleaned_windows(tmp_path: Path) ->
     assert overview["sessions"][0]["raw_events"] == 2
     assert len(detail["timeline"]) == 2
     assert detail["windows"]
-    assert detail["windows"][0]["trigger"]["trigger_type"] == "token_threshold"
+    assert detail["windows"][0]["trigger"]["trigger_type"] == "pending"
     encoded_window = str(detail["windows"][0]["cleaned_evidence"])
     assert "show cleaned session artifacts" in encoded_window
     assert "src/ui.py" in encoded_window
