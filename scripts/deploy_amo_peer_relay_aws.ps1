@@ -130,6 +130,34 @@ if ($LASTEXITCODE -eq 0 -and $upstream) {
 $identity = Invoke-AwsJson -Arguments @("sts", "get-caller-identity", "--profile", $Profile, "--region", $Region)
 Write-Host "Using AWS account $($identity.Account) via profile '$Profile' in $Region"
 
+if (-not $VpcId) {
+    $VpcId = Invoke-AwsText -Arguments @(
+        "ec2", "describe-vpcs",
+        "--profile", $Profile,
+        "--region", $Region,
+        "--filters", "Name=isDefault,Values=true",
+        "--query", "Vpcs[0].VpcId"
+    )
+    if (-not $VpcId -or $VpcId -eq "None") {
+        throw "No default VPC found in $Region. Pass -VpcId and -SubnetId explicitly."
+    }
+    Write-Host "Using default VPC $VpcId"
+}
+
+if (-not $SubnetId) {
+    $SubnetId = Invoke-AwsText -Arguments @(
+        "ec2", "describe-subnets",
+        "--profile", $Profile,
+        "--region", $Region,
+        "--filters", "Name=vpc-id,Values=$VpcId", "Name=default-for-az,Values=true",
+        "--query", "Subnets[0].SubnetId"
+    )
+    if (-not $SubnetId -or $SubnetId -eq "None") {
+        throw "No default subnet found for VPC $VpcId. Pass -SubnetId explicitly."
+    }
+    Write-Host "Using default subnet $SubnetId"
+}
+
 $parameterOverrides = @(
     "RepositoryUrl=$RepositoryUrl",
     "RepositoryRef=$RepositoryRef",
