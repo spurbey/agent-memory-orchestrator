@@ -6,6 +6,7 @@ from pathlib import Path
 
 from agent_memory_orchestrator.config import Settings
 from agent_memory_orchestrator.evidence.drain import EvidenceDrain
+from agent_memory_orchestrator.evidence.drain import _read_jsonl_from
 from agent_memory_orchestrator.graph.store import InMemoryGraphStore
 from agent_memory_orchestrator.evidence.raw_store import RawEvidenceStore
 from agent_memory_orchestrator.graph.session import DeterministicGraphExtractor, SessionGraphBuilder
@@ -66,6 +67,54 @@ def test_drain_read_only_prompt_is_evidence_only_and_idempotent(tmp_path: Path) 
     assert second["records_seen"] == 0
     assert store.list_nodes(kinds=["Prompt"], session_id="s1")
     assert not store.list_nodes(kinds=["WorkChange"], session_id="s1")
+
+
+def test_drain_skips_and_quarantines_malformed_jsonl_lines(tmp_path: Path) -> None:
+    settings = make_settings(tmp_path)
+    store = InMemoryGraphStore()
+    backend = _StaticGitBackend()
+    path = settings.evidence_dir / "2026-05-20.jsonl"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    valid_1 = {
+        "id": "raw_good_1",
+        "hash": "h1",
+        "session_id": "s1",
+        "source_app": "codex",
+        "event_name": "user_prompt_submit",
+        "created_at": "2026-05-20T00:00:00+00:00",
+        "payload": {"hook_event_name": "UserPromptSubmit", "session_id": "s1", "prompt": "first valid row"},
+    }
+    valid_2 = {
+        "id": "raw_good_2",
+        "hash": "h2",
+        "session_id": "s1",
+        "source_app": "codex",
+        "event_name": "user_prompt_submit",
+        "created_at": "2026-05-20T00:00:01+00:00",
+        "payload": {"hook_event_name": "UserPromptSubmit", "session_id": "s1", "prompt": "second valid row"},
+    }
+    path.write_bytes(
+        (
+            json.dumps(valid_1)
+            + "\n"
+            + 'broken tool_response fragment", "session_id": "s1"}\n'
+            + json.dumps(valid_2)
+            + "\n"
+        ).encode("utf-8")
+    )
+
+    first = _drain(settings, store, backend).drain()
+    second = _drain(settings, store, backend).drain()
+
+    assert first["records_ingested"] == 2
+    assert first["malformed_records"] == 1
+    assert first["malformed"][0]["error_type"] == "JSONDecodeError"
+    assert first["malformed"][0]["quarantine_path"]
+    assert Path(first["malformed"][0]["quarantine_path"]).exists()
+    assert "broken tool_response fragment" in Path(first["malformed"][0]["quarantine_path"]).read_text(encoding="utf-8")
+    assert second["records_seen"] == 0
+    assert second["malformed_records"] == 0
+    assert [row["id"] for _, row in _read_jsonl_from(path, 0)] == ["raw_good_1", "raw_good_2"]
 
 
 def test_drain_token_threshold_persists_pending_window_across_runs(tmp_path: Path) -> None:

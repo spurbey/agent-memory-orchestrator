@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import time
 from dataclasses import dataclass, field
@@ -19,6 +20,30 @@ class DrainSessionState:
     pending_records: list[dict[str, Any]] = field(default_factory=list)
     processed_windows: int = 0
     pending_approx_tokens: int = 0
+
+
+@dataclass(slots=True, frozen=True)
+class JsonlReadIssue:
+    path: str
+    offset: int
+    next_offset: int
+    error_type: str
+    error: str
+    raw_sha256: str
+    preview: str
+    quarantine_path: str = ""
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "path": self.path,
+            "offset": self.offset,
+            "next_offset": self.next_offset,
+            "error_type": self.error_type,
+            "error": self.error,
+            "raw_sha256": self.raw_sha256,
+            "preview": self.preview,
+            "quarantine_path": self.quarantine_path,
+        }
 
 
 class EvidenceDrain:
@@ -55,6 +80,8 @@ class EvidenceDrain:
             "records_seen": 0,
             "records_ingested": 0,
             "records_skipped": 0,
+            "malformed_records": 0,
+            "malformed": [],
             "windows_processed": 0,
             "triggered": [],
             "skipped": [],
@@ -65,8 +92,19 @@ class EvidenceDrain:
         for path in self._evidence_files():
             key = _cursor_key(path, session_filter)
             offset = int(cursors.get(key, 0))
-            for next_offset, record in _read_jsonl_from(path, offset):
+            for next_offset, record, issue in _iter_jsonl_from(
+                path,
+                offset,
+                quarantine_dir=self.settings.home / ".state" / "malformed_evidence",
+            ):
                 cursors[key] = next_offset
+                if issue is not None:
+                    stats["malformed_records"] += 1
+                    if len(stats["malformed"]) < 20:
+                        stats["malformed"].append(issue.as_dict())
+                    continue
+                if record is None:
+                    continue
                 stats["records_seen"] += 1
                 if session_filter and str(record.get("session_id") or "") != session_filter:
                     stats["records_skipped"] += 1
@@ -214,7 +252,26 @@ class EvidenceDrain:
 
 
 def _read_jsonl_from(path: Path, offset: int) -> list[tuple[int, dict[str, Any]]]:
-    rows: list[tuple[int, dict[str, Any]]] = []
+    """Read valid JSONL rows from an offset.
+
+    Malformed rows are skipped by design. Drain callers use `_iter_jsonl_from`
+    directly so they can advance cursors and quarantine bad lines.
+    """
+
+    return [
+        (next_offset, record)
+        for next_offset, record, issue in _iter_jsonl_from(path, offset)
+        if issue is None and record is not None
+    ]
+
+
+def _iter_jsonl_from(
+    path: Path,
+    offset: int,
+    *,
+    quarantine_dir: Path | None = None,
+) -> list[tuple[int, dict[str, Any] | None, JsonlReadIssue | None]]:
+    rows: list[tuple[int, dict[str, Any] | None, JsonlReadIssue | None]] = []
     with path.open("rb") as handle:
         handle.seek(offset)
         while True:
@@ -225,14 +282,82 @@ def _read_jsonl_from(path: Path, offset: int) -> list[tuple[int, dict[str, Any]]
             next_offset = handle.tell()
             try:
                 payload = json.loads(line.decode("utf-8"))
-            except (UnicodeDecodeError, json.JSONDecodeError):
-                rows.append((next_offset, {"id": "", "hash": "", "offset": start, "path": str(path), "payload": {}}))
+            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                issue = _jsonl_issue(
+                    path=path,
+                    offset=start,
+                    next_offset=next_offset,
+                    raw=line,
+                    exc=exc,
+                    quarantine_dir=quarantine_dir,
+                )
+                rows.append((next_offset, None, issue))
                 continue
-            if isinstance(payload, dict):
-                payload.setdefault("path", str(path.resolve()))
-                payload.setdefault("offset", start)
-                rows.append((next_offset, payload))
+            if not isinstance(payload, dict):
+                issue = _jsonl_issue(
+                    path=path,
+                    offset=start,
+                    next_offset=next_offset,
+                    raw=line,
+                    exc=TypeError(f"JSONL row must be an object, got {type(payload).__name__}"),
+                    quarantine_dir=quarantine_dir,
+                )
+                rows.append((next_offset, None, issue))
+                continue
+            payload.setdefault("path", str(path.resolve()))
+            payload.setdefault("offset", start)
+            rows.append((next_offset, payload, None))
     return rows
+
+
+def _jsonl_issue(
+    *,
+    path: Path,
+    offset: int,
+    next_offset: int,
+    raw: bytes,
+    exc: BaseException,
+    quarantine_dir: Path | None,
+) -> JsonlReadIssue:
+    digest = hashlib.sha256(raw).hexdigest()
+    decoded = raw.decode("utf-8", errors="replace")
+    preview = decoded[:500].replace("\n", "\\n").replace("\r", "\\r")
+    quarantine_path = ""
+    issue = JsonlReadIssue(
+        path=str(path.resolve()),
+        offset=offset,
+        next_offset=next_offset,
+        error_type=type(exc).__name__,
+        error=str(exc),
+        raw_sha256=digest,
+        preview=preview,
+    )
+    if quarantine_dir is not None:
+        quarantine_path = _quarantine_jsonl_issue(quarantine_dir, path, raw, issue)
+        issue = JsonlReadIssue(
+            path=issue.path,
+            offset=issue.offset,
+            next_offset=issue.next_offset,
+            error_type=issue.error_type,
+            error=issue.error,
+            raw_sha256=issue.raw_sha256,
+            preview=issue.preview,
+            quarantine_path=quarantine_path,
+        )
+    return issue
+
+
+def _quarantine_jsonl_issue(quarantine_dir: Path, source_path: Path, raw: bytes, issue: JsonlReadIssue) -> str:
+    quarantine_dir.mkdir(parents=True, exist_ok=True)
+    target = quarantine_dir / f"{source_path.name}.bad.jsonl"
+    row = {
+        **issue.as_dict(),
+        "source_file": str(source_path.resolve()),
+        "raw_line": raw.decode("utf-8", errors="replace"),
+    }
+    with target.open("ab") as handle:
+        handle.write((json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n").encode("utf-8"))
+    return str(target.resolve())
 
 
 def _cursor_key(path: Path, session_id: str = "") -> str:
