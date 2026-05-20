@@ -7,6 +7,7 @@ import sys
 import time
 from dataclasses import asdict, replace
 from pathlib import Path
+from typing import Any
 
 from ..core.config import Settings
 from ..integrations.connectors.slack import SlackConnectorService
@@ -415,6 +416,17 @@ def _build_parser() -> argparse.ArgumentParser:
     peer_netd_service_status_cmd = peer_netd_sub.add_parser("service-status", help="Inspect the OS startup entry for peer netd")
     peer_netd_service_status_cmd.add_argument("--service-name", default="AMO Peer Netd")
     _add_peer_netd_watch_service_args(peer_netd_service_status_cmd)
+    peer_relay = peer_sub.add_parser("relay", help="Run or inspect a public AMO relay+rendezvous helper node")
+    peer_relay_sub = peer_relay.add_subparsers(dest="relay_command", required=True)
+    peer_relay_start = peer_relay_sub.add_parser("start", help="Start a combined circuit relay and rendezvous node")
+    peer_relay_start.add_argument("--node-id", default="amo-relay")
+    peer_relay_start.add_argument("--listen", default="/ip4/0.0.0.0/tcp/4001")
+    peer_relay_start.add_argument("--api", default="127.0.0.1:8798")
+    peer_relay_start.add_argument("--advertise-addr", action="append", default=[], help="Public libp2p multiaddr, e.g. /ip4/1.2.3.4/tcp/4001")
+    peer_relay_start.add_argument("--namespace", default="amo-peer-default", help="Suggested rendezvous namespace for this trust group.")
+    peer_relay_start.add_argument("--store-path", default="")
+    peer_relay_start.add_argument("--no-build", action="store_true")
+    peer_relay_sub.add_parser("status", help="Show the managed relay/rendezvous node status")
     peer_poll_netd = peer_sub.add_parser("poll-netd", help="Process delivered sidecar messages into local peer rooms")
     peer_poll_netd.add_argument("--limit", type=int, default=None)
     peer_poll_netd.add_argument("--watch", action="store_true", help="Keep polling the sidecar inbox until interrupted.")
@@ -823,6 +835,18 @@ def main(argv: list[str] | None = None) -> int:
                     result = peer_netd_service_status(_peer_netd_service_options_from_args(args))
                     _print(result)
                     return 0 if result.get("ok") else 1
+            if args.peer_command == "relay":
+                runtime = PeerNetdRuntime(settings)
+                if args.relay_command == "start":
+                    result = runtime.start(
+                        _peer_relay_options_from_args(args),
+                        build_if_missing=not args.no_build,
+                    )
+                    _print(_with_relay_next_steps(result, args.namespace))
+                    return 0
+                if args.relay_command == "status":
+                    _print(runtime.status())
+                    return 0
             if args.peer_command == "doctor":
                 result = peer_doctor(settings)
                 _print(result)
@@ -1520,6 +1544,7 @@ def _add_peer_netd_start_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--listen", default="/ip4/0.0.0.0/tcp/0", help="libp2p listen multiaddr.")
     parser.add_argument("--api", default="127.0.0.1:8788", help="Local sidecar API host:port. Must be fixed for managed start.")
     parser.add_argument("--store-path", default="", help="Optional sidecar JSONL inbox path. Defaults under AMO_HOME/.peer/netd.")
+    parser.add_argument("--identity-key", default="", help="Optional persistent libp2p identity key path.")
     parser.add_argument(
         "--shared-secret-env",
         default="",
@@ -1531,6 +1556,9 @@ def _add_peer_netd_start_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--mdns", action="store_true", help="Enable LAN mDNS discovery.")
     parser.add_argument("--mdns-service", default="_amo-peer._udp", help="mDNS service tag.")
     parser.add_argument("--rendezvous-server", action="store_true", help="Serve AMO rendezvous registration/discovery streams.")
+    parser.add_argument("--rendezvous-addr", default="", help="Rendezvous node multiaddr to register with after startup.")
+    parser.add_argument("--rendezvous-namespace", default="", help="Rendezvous namespace to register this node under.")
+    parser.add_argument("--rendezvous-ttl-seconds", type=int, default=7200, help="Rendezvous registration TTL.")
     parser.add_argument("--relay-service", action="store_true", help="Serve libp2p circuit relay v2 when reachable.")
     parser.add_argument("--nat-service", action="store_true", help="Help peers determine reachability.")
     parser.add_argument("--auto-relay", action="store_true", help="Enable AutoRelay; usually paired with --static-relay.")
@@ -1541,6 +1569,12 @@ def _add_peer_netd_start_args(parser: argparse.ArgumentParser) -> None:
         "--advertise-localhost-dns",
         action="store_true",
         help="Local smoke only: advertise 127.0.0.1 as dns4/localhost.",
+    )
+    parser.add_argument(
+        "--advertise-addr",
+        action="append",
+        default=[],
+        help="Public libp2p listen multiaddr to advertise, e.g. /ip4/1.2.3.4/tcp/4001.",
     )
     parser.add_argument("--no-build", action="store_true", help="Do not build peer-netd automatically if the binary is missing.")
 
@@ -1564,6 +1598,7 @@ def _peer_netd_options_from_args(args: argparse.Namespace) -> PeerNetdLaunchOpti
         listen_addr=args.listen,
         api_addr=args.api,
         store_path=args.store_path,
+        identity_key_path=args.identity_key,
         shared_secret_env=args.shared_secret_env,
         require_signature=args.require_signature,
         bootstrap_addrs=tuple(args.bootstrap or []),
@@ -1578,7 +1613,64 @@ def _peer_netd_options_from_args(args: argparse.Namespace) -> PeerNetdLaunchOpti
         force_private=args.force_private,
         force_public=args.force_public,
         advertise_localhost_dns=args.advertise_localhost_dns,
+        advertise_addrs=tuple(args.advertise_addr or []),
+        rendezvous_addr=args.rendezvous_addr,
+        rendezvous_namespace=args.rendezvous_namespace,
+        rendezvous_ttl_seconds=args.rendezvous_ttl_seconds,
     )
+
+
+def _peer_relay_options_from_args(args: argparse.Namespace) -> PeerNetdLaunchOptions:
+    return PeerNetdLaunchOptions(
+        node_id=args.node_id,
+        listen_addr=args.listen,
+        api_addr=args.api,
+        store_path=args.store_path,
+        rendezvous_server=True,
+        relay_service=True,
+        nat_service=True,
+        force_public=True,
+        advertise_addrs=tuple(args.advertise_addr or ()),
+    )
+
+
+def _with_relay_next_steps(result: dict[str, Any], namespace: str) -> dict[str, Any]:
+    status = result.get("status") if isinstance(result.get("status"), dict) else {}
+    health = result.get("health") if isinstance(result.get("health"), dict) else status.get("health", {})
+    addrs = [str(item) for item in health.get("listen_addrs", []) if str(item).strip()]
+    relay_addr = addrs[0] if addrs else ""
+    client_enable_args = [
+        "peer",
+        "enable",
+        "--static-relay",
+        relay_addr or "<relay-multiaddr>",
+        "--auto-relay",
+        "--hole-punching",
+        "--rendezvous-addr",
+        relay_addr or "<relay-multiaddr>",
+        "--rendezvous-namespace",
+        namespace,
+    ]
+    invite_flags = [
+        "--rendezvous-addr",
+        relay_addr or "<relay-multiaddr>",
+        "--rendezvous-namespace",
+        namespace,
+    ]
+    return result | {
+        "relay": {
+            "relay_multiaddr": relay_addr,
+            "rendezvous_addr": relay_addr,
+            "rendezvous_namespace": namespace,
+            "client_enable_args": client_enable_args,
+            "create_invite_flags": invite_flags,
+            "notes": [
+                "Run this helper on an always-on public host or VPS with inbound TCP open for the listen port.",
+                "Client devices should start peer netd with --static-relay before creating or accepting invites.",
+                "The relay/rendezvous node carries transport streams and discovery records only; AMO room policy and memory stay on user devices.",
+            ],
+        }
+    }
 
 
 def _peer_netd_service_options_from_args(args: argparse.Namespace) -> PeerNetdServiceOptions:

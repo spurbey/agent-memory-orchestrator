@@ -9,6 +9,7 @@ import (
 	"github.com/agent-memory-orchestrator/peer-netd/internal/protocol"
 	"github.com/agent-memory-orchestrator/peer-netd/internal/rendezvous"
 	"github.com/agent-memory-orchestrator/peer-netd/internal/store"
+	"github.com/multiformats/go-multiaddr"
 )
 
 func TestNodeConnectAndSendSignedMessage(t *testing.T) {
@@ -185,6 +186,48 @@ func TestRelayAddressAllowsPeerMessageDelivery(t *testing.T) {
 	received := waitForMessages(t, storeA, 1)
 	if got := received[0].Message.Payload["answer"]; got != "relay path reached node-a" {
 		t.Fatalf("received payload answer = %v", got)
+	}
+}
+
+func TestAdvertiseAddrsFactoryAddsPublicAddress(t *testing.T) {
+	base := []multiaddr.Multiaddr{multiaddr.StringCast("/ip4/127.0.0.1/tcp/4001")}
+	advertised := []multiaddr.Multiaddr{multiaddr.StringCast("/ip4/203.0.113.10/tcp/4001")}
+
+	got := advertiseAddrsFactory(base, advertised, true)
+
+	if !containsMultiaddr(got, multiaddr.StringCast("/dns4/localhost/tcp/4001")) {
+		t.Fatalf("localhost dns address not advertised: %v", got)
+	}
+	if !containsMultiaddr(got, advertised[0]) {
+		t.Fatalf("public address not advertised: %v", got)
+	}
+}
+
+func TestIdentityKeyPathKeepsPeerIDStable(t *testing.T) {
+	ctx := context.Background()
+	keyPath := t.TempDir() + "/identity.key"
+
+	cfgA := testConfig("stable-a", "identity-secret")
+	cfgA.IdentityKeyPath = keyPath
+	nodeA, err := New(ctx, cfgA, store.New())
+	if err != nil {
+		t.Fatalf("New(first) error = %v", err)
+	}
+	firstPeerID := nodeA.PeerID()
+	if err := nodeA.Close(); err != nil {
+		t.Fatalf("Close(first) error = %v", err)
+	}
+
+	cfgB := testConfig("stable-b", "identity-secret")
+	cfgB.IdentityKeyPath = keyPath
+	nodeB, err := New(ctx, cfgB, store.New())
+	if err != nil {
+		t.Fatalf("New(second) error = %v", err)
+	}
+	defer nodeB.Close()
+
+	if got := nodeB.PeerID(); got != firstPeerID {
+		t.Fatalf("peer id changed after reusing identity key: first=%s second=%s", firstPeerID, got)
 	}
 }
 

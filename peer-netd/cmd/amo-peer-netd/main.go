@@ -22,6 +22,7 @@ func main() {
 	flag.StringVar(&cfg.ListenAddr, "listen", cfg.ListenAddr, "libp2p listen multiaddr")
 	flag.StringVar(&cfg.APIAddr, "api", cfg.APIAddr, "local HTTP API bind address")
 	flag.StringVar(&cfg.StorePath, "store-path", cfg.StorePath, "optional JSONL inbox path for delivered envelopes")
+	flag.StringVar(&cfg.IdentityKeyPath, "identity-key", cfg.IdentityKeyPath, "path to a persistent libp2p private key file")
 	flag.StringVar(&cfg.SharedSecret, "shared-secret", os.Getenv("AMO_PEER_NETD_SECRET"), "optional shared HMAC secret for AMO envelopes")
 	flag.BoolVar(&cfg.RequireSignature, "require-signature", false, "reject unsigned incoming envelopes")
 	flag.Var((*stringList)(&cfg.BootstrapAddrs), "bootstrap", "bootstrap peer multiaddr; can be repeated")
@@ -36,6 +37,7 @@ func main() {
 	flag.BoolVar(&cfg.ForcePrivate, "force-private", cfg.ForcePrivate, "force private reachability for AutoRelay tests")
 	flag.BoolVar(&cfg.ForcePublic, "force-public", cfg.ForcePublic, "force public reachability for relay-service tests")
 	flag.BoolVar(&cfg.AdvertiseLocalhostDNS, "advertise-localhost-dns", cfg.AdvertiseLocalhostDNS, "advertise 127.0.0.1 listener as dns4/localhost for local relay smoke tests")
+	flag.Var((*stringList)(&cfg.AdvertiseAddrs), "advertise-addr", "public libp2p listen multiaddr to advertise; repeat for multiple addresses")
 	flag.Var((*stringList)(&cfg.StaticRelayAddrs), "static-relay", "static relay multiaddr; can be repeated")
 	flag.Parse()
 
