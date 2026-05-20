@@ -4,6 +4,7 @@ import argparse
 import json
 import os
 import threading
+import time
 from dataclasses import replace
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -141,6 +142,11 @@ class AmoHandler(BaseHTTPRequestHandler):
                     "qwen_compress_timeout_seconds": self.settings.qwen_compress_timeout_seconds,
                     "qwen_num_ctx": self.settings.qwen_num_ctx,
                     "drain_max_windows_per_run": self.settings.drain_max_windows_per_run,
+                    "drain_token_threshold": self.settings.drain_token_threshold,
+                    "auto_drain_enabled": self.settings.auto_drain_enabled,
+                    "auto_drain_interval_seconds": self.settings.auto_drain_interval_seconds,
+                    "auto_drain_record_limit": self.settings.auto_drain_record_limit,
+                    "auto_embedding_batch_size": self.settings.auto_embedding_batch_size,
                 },
             )
             return
@@ -583,6 +589,81 @@ def _settings_with_payload_paths(settings: Settings, payload: dict[str, Any], *,
     return replace(settings, **updates)
 
 
+def _start_auto_drain_worker(settings: Settings) -> threading.Thread | None:
+    if not settings.auto_drain_enabled:
+        _daemon_log(settings, "auto_drain_disabled")
+        return None
+    worker = threading.Thread(target=_auto_drain_loop, args=(settings,), name="amo-auto-drain", daemon=True)
+    worker.start()
+    _daemon_log(
+        settings,
+        "auto_drain_started",
+        interval_seconds=settings.auto_drain_interval_seconds,
+        token_threshold=settings.drain_token_threshold,
+        embedding_batch_size=settings.auto_embedding_batch_size,
+    )
+    return worker
+
+
+def _auto_drain_loop(settings: Settings) -> None:
+    while True:
+        time.sleep(settings.auto_drain_interval_seconds)
+        try:
+            result = _run_auto_drain_once(settings)
+            if result.get("windows_processed") or result.get("records_ingested"):
+                _daemon_log(settings, "auto_drain_cycle", **result)
+        except Exception as exc:
+            _daemon_log(settings, "auto_drain_failed", error_type=type(exc).__name__, error=str(exc))
+
+
+def _run_auto_drain_once(settings: Settings) -> dict[str, Any]:
+    with _GRAPH_LOCK:
+        graph = GraphRagService(settings)
+        try:
+            drain = graph.drain_evidence(
+                limit=settings.auto_drain_record_limit,
+                max_windows=settings.drain_max_windows_per_run,
+            )
+            result: dict[str, Any] = {
+                "records_ingested": int(drain.get("records_ingested") or 0),
+                "windows_processed": int(drain.get("windows_processed") or 0),
+                "stopped_reason": drain.get("stopped_reason"),
+                "pending_sessions": drain.get("pending_sessions"),
+            }
+            if result["windows_processed"] <= 0:
+                return result
+
+            result["retrieval_index"] = graph.rebuild_retrieval_index(
+                limit=settings.auto_retrieval_node_limit,
+                max_doc_chars=settings.auto_retrieval_max_doc_chars,
+            )
+            if settings.vector_backend != "disabled" and settings.auto_embedding_batch_size > 0:
+                result["retrieval_embedding"] = graph.embed_retrieval_index(
+                    limit=settings.auto_embedding_batch_size,
+                    rebuild_faiss=True,
+                )
+            else:
+                result["retrieval_embedding"] = {"ok": True, "skipped": True, "reason": "disabled"}
+            return result
+        finally:
+            graph.close()
+
+
+def _daemon_log(settings: Settings, event: str, **fields: object) -> None:
+    record = {
+        "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "event": event,
+        **fields,
+    }
+    try:
+        path = settings.home / "logs" / "daemon.log"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")
+    except Exception:
+        return
+
+
 SESSION_COCKPIT_HTML = _load_web_asset("index.html")
 DASHBOARD_HTML = SESSION_COCKPIT_HTML
 GRAPH_HTML = SESSION_COCKPIT_HTML
@@ -604,6 +685,7 @@ def main(argv: list[str] | None = None) -> int:
         raise ValueError("AMO_LOCAL_ONLY=true requires daemon host to be localhost")
 
     AmoHandler.settings = settings
+    _start_auto_drain_worker(settings)
     server = ThreadingHTTPServer((host, port), AmoHandler)
     print(f"amo-daemon listening on http://{host}:{port}")
     try:
