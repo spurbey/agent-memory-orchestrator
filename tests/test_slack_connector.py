@@ -200,7 +200,7 @@ def test_slack_message_evidence_is_local_raw_jsonl(tmp_path) -> None:
     assert rows[-1]["payload"]["message"] == "Keep this Slack decision"
 
 
-def test_slack_finalize_event_triggers_graph_drain_window(tmp_path) -> None:
+def test_slack_finalize_event_waits_for_token_threshold(tmp_path) -> None:
     settings = _settings(tmp_path)
     svc = SlackConnectorService(settings, config=SlackConfig(enabled=True))
 
@@ -215,8 +215,12 @@ def test_slack_finalize_event_triggers_graph_drain_window(tmp_path) -> None:
         },
     }
     decision = detect_trigger(record)
-    assert decision.should_process is True
-    assert decision.trigger_type == "connector_finalize"
+    assert decision.should_process is False
+    assert decision.trigger_type == "none"
+
+    threshold_decision = detect_trigger(record, pending_approx_tokens=100, token_threshold=100)
+    assert threshold_decision.should_process is True
+    assert threshold_decision.trigger_type == "token_threshold"
 
 
 def test_slack_cli_manifest_and_setup(monkeypatch, tmp_path, capsys) -> None:

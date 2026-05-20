@@ -16,7 +16,7 @@ def test_read_only_prompt_does_not_trigger_graph_build() -> None:
     assert decision.trigger_type == "none"
 
 
-def test_apply_patch_tool_triggers_write_window() -> None:
+def test_apply_patch_tool_does_not_trigger_without_token_threshold() -> None:
     decision = detect_trigger(
         {
             "event_name": "post_tool_use",
@@ -24,25 +24,24 @@ def test_apply_patch_tool_triggers_write_window() -> None:
         }
     )
 
-    assert decision.should_process is True
-    assert decision.is_write is True
-    assert decision.trigger_type == "write"
+    assert decision.should_process is False
+    assert decision.is_write is False
+    assert decision.trigger_type == "none"
 
 
-def test_test_command_after_pending_write_triggers_test_window() -> None:
+def test_test_command_does_not_trigger_without_token_threshold() -> None:
     decision = detect_trigger(
         {
             "event_name": "post_tool_use",
             "payload": {"tool": "shell_command", "content": "python -m pytest -q"},
-        },
-        pending_write=True,
+        }
     )
 
-    assert decision.should_process is True
-    assert decision.trigger_type == "test"
+    assert decision.should_process is False
+    assert decision.trigger_type == "none"
 
 
-def test_finalize_prompt_triggers_explicit_memory_window() -> None:
+def test_finalize_prompt_does_not_trigger_without_token_threshold() -> None:
     decision = detect_trigger(
         {
             "event_name": "user_prompt_submit",
@@ -50,5 +49,20 @@ def test_finalize_prompt_triggers_explicit_memory_window() -> None:
         }
     )
 
+    assert decision.should_process is False
+    assert decision.trigger_type == "none"
+
+
+def test_pending_token_threshold_is_the_only_processing_trigger() -> None:
+    decision = detect_trigger(
+        {
+            "event_name": "post_tool_use",
+            "payload": {"tool": "apply_patch", "content": "Updated src/app.py"},
+        },
+        pending_approx_tokens=100,
+        token_threshold=100,
+    )
+
     assert decision.should_process is True
-    assert decision.trigger_type == "explicit_finalize"
+    assert decision.trigger_type == "token_threshold"
+    assert decision.approx_tokens == 100
