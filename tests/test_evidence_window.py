@@ -50,7 +50,7 @@ class _FakeQwenClient:
 
 def test_clean_evidence_window_removes_raw_artifacts_and_bounds_records() -> None:
     records = _dirty_records()
-    trigger = TriggerDecision(True, "token_threshold", "pending evidence window reached token threshold")
+    trigger = TriggerDecision(True, "session_boundary", "new session s2 started after session s1")
 
     cleaned = clean_evidence_window(records, trigger)
     encoded = json.dumps(cleaned, ensure_ascii=False).lower()
@@ -67,7 +67,7 @@ def test_qwen_graph_extractor_receives_clean_bounded_prompt(tmp_path: Path) -> N
     fake = _FakeQwenClient()
     extractor = QwenGraphExtractor(settings)
     extractor.client = fake  # type: ignore[assignment]
-    trigger = TriggerDecision(True, "token_threshold", "pending evidence window reached token threshold")
+    trigger = TriggerDecision(True, "session_boundary", "new session s2 started after session s1")
 
     delta = extractor.extract(session_id="s1", records=_dirty_records(), trigger=trigger)
     lowered = fake.prompt.lower()
