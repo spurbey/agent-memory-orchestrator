@@ -1,0 +1,87 @@
+﻿<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>AMO Graph Workbench</title>
+  <link rel="stylesheet" href="/web/css/graph-workbench.css" />
+</head>
+<body>
+  <main class="graph-workbench" aria-label="AMO full page 3D graph visualization">
+    <canvas id="graphCanvas" aria-label="AMO 3D semantic memory graph"></canvas>
+
+    <header class="hud top-hud">
+      <div class="title-block">
+        <a class="back-link" href="/">AMO</a>
+        <div>
+          <p class="eyebrow">Central Knowledge Graph</p>
+          <h1>3D Memory Workbench</h1>
+          <p id="modeCaption">Semantic atlas: orient across memory, code, packets, evidence, and commits.</p>
+        </div>
+      </div>
+      <div class="hud-actions">
+        <span id="graphStatus" class="status-chip warn">loading graph</span>
+        <button id="reloadBtn" class="control-btn">Reload</button>
+        <button id="sliceBtn" class="control-btn active">Slice</button>
+        <button id="wholeBtn" class="control-btn">Whole graph</button>
+      </div>
+    </header>
+
+    <section class="hud mode-hud" aria-label="Graph modes">
+      <button class="mode-btn active" data-mode="atlas"><strong>Atlas</strong><span>semantic memory map</span></button>
+      <button class="mode-btn" data-mode="causal"><strong>Causal replay</strong><span>evidence to code flow</span></button>
+      <button class="mode-btn" data-mode="similarity"><strong>Similarity lens</strong><span>retrieval cluster view</span></button>
+      <button class="mode-btn" data-mode="trace"><strong>Retrieval trace</strong><span>animate query path</span></button>
+    </section>
+
+    <section class="hud filter-hud" aria-label="Graph filters">
+      <input id="graphFilter" placeholder="Filter node text, file, packet, commit" />
+      <select id="kindFilter"><option value="">All kinds</option></select>
+      <select id="statusFilter"><option value="">All status</option></select>
+      <label><input id="supportToggle" type="checkbox" /> provenance</label>
+      <label><input id="labelToggle" type="checkbox" /> labels</label>
+      <label><input id="axesToggle" type="checkbox" /> axes</label>
+    </section>
+
+    <section class="hud trace-hud" aria-label="Retrieval trace runner">
+      <div>
+        <p class="eyebrow">Retrieval Trace</p>
+        <h2>Watch query evidence flow</h2>
+      </div>
+      <div class="trace-form">
+        <input id="traceQuery" placeholder="why did we change graph_service.py?" />
+        <button id="traceBtn" class="primary-btn">Run Trace</button>
+      </div>
+      <div id="traceSteps" class="trace-steps"></div>
+      <div id="tracePanel" class="trace-panel"><span class="muted">Run a query to animate candidates, graph expansion, reranking, and answer support.</span></div>
+    </section>
+
+    <aside class="hud inspector" aria-label="Node inspector">
+      <div class="panel-title">
+        <p class="eyebrow">Inspector</p>
+        <h2 id="inspectorTitle">Select a node</h2>
+        <p id="inspectorSubtitle">Click any point to inspect provenance, lineage, and connected knowledge.</p>
+      </div>
+      <div id="inspectorBody" class="inspector-body"></div>
+    </aside>
+
+    <section class="hud stats-hud" aria-label="Graph stats">
+      <div id="graphStats" class="graph-stats"></div>
+      <div id="legend" class="legend"></div>
+    </section>
+
+    <section class="hud lineage-hud" aria-label="Knowledge creation flow">
+      <div class="lineage-head">
+        <div>
+          <p class="eyebrow">Knowledge Creation Flow</p>
+          <h2>Selected lineage</h2>
+        </div>
+        <span class="hint">Clean view hides raw support by default. Drag rotates. Shift/Space/right-drag pans. Wheel zooms. 0 resets.</span>
+      </div>
+      <div id="lineageFlow" class="lineage-flow"><span class="muted">Select a node to see evidence -> reasoning -> code/commit lineage.</span></div>
+    </section>
+  </main>
+
+  <script type="module" src="/web/js/graph/workbench.js"></script>
+</body>
+</html>

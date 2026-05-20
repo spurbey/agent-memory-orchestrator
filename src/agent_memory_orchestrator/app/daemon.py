@@ -121,10 +121,10 @@ class AmoHandler(BaseHTTPRequestHandler):
             self._write_html(200, SESSION_COCKPIT_HTML)
             return
         if path == "/graph":
-            self._write_html(200, GRAPH_HTML)
+            self._write_html(200, GRAPH_WORKBENCH_HTML)
             return
         if path == "/graph3d":
-            self._write_html(200, GRAPH3D_HTML)
+            self._write_html(200, GRAPH_WORKBENCH_HTML)
             return
         if path == "/health":
             self._write_json(
@@ -666,8 +666,9 @@ def _daemon_log(settings: Settings, event: str, **fields: object) -> None:
 
 SESSION_COCKPIT_HTML = _load_web_asset("index.html")
 DASHBOARD_HTML = SESSION_COCKPIT_HTML
-GRAPH_HTML = SESSION_COCKPIT_HTML
-GRAPH3D_HTML = SESSION_COCKPIT_HTML
+GRAPH_WORKBENCH_HTML = _load_web_asset("graph.html")
+GRAPH_HTML = GRAPH_WORKBENCH_HTML
+GRAPH3D_HTML = GRAPH_WORKBENCH_HTML
 
 
 def main(argv: list[str] | None = None) -> int:
