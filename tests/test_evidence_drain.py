@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
 
 from agent_memory_orchestrator.config import Settings
@@ -67,8 +68,43 @@ def test_drain_read_only_prompt_is_evidence_only_and_idempotent(tmp_path: Path) 
     assert not store.list_nodes(kinds=["WorkChange"], session_id="s1")
 
 
+def test_drain_token_threshold_persists_pending_window_across_runs(tmp_path: Path) -> None:
+    settings = replace(make_settings(tmp_path), drain_token_threshold=80)
+    store = InMemoryGraphStore()
+    backend = _StaticGitBackend()
+    evidence = RawEvidenceStore(settings.evidence_dir)
+    evidence.append(
+        {"hook_event_name": "UserPromptSubmit", "session_id": "s1", "prompt": "short context only"},
+        session_id="s1",
+        source_app="codex",
+        event_name="user_prompt_submit",
+    )
+
+    first = _drain(settings, store, backend).drain(limit=1)
+    assert first["windows_processed"] == 0
+    assert first["pending_sessions"] == 1
+
+    evidence.append(
+        {
+            "hook_event_name": "UserPromptSubmit",
+            "session_id": "s1",
+            "prompt": " ".join(["more context that pushes this session beyond the automatic token threshold"] * 20),
+        },
+        session_id="s1",
+        source_app="codex",
+        event_name="user_prompt_submit",
+    )
+
+    second = _drain(settings, store, backend).drain(limit=1)
+
+    assert second["windows_processed"] == 1
+    assert second["triggered"][0]["trigger"]["trigger_type"] == "token_threshold"
+    assert second["pending_sessions"] == 0
+    assert store.list_nodes(kinds=["CleanedEvidenceWindow"], session_id="s1")
+
+
 def test_drain_write_window_builds_context_snapshot_and_work_change(tmp_path: Path) -> None:
-    settings = make_settings(tmp_path)
+    settings = replace(make_settings(tmp_path), drain_token_threshold=30)
     store = InMemoryGraphStore()
     backend = _StaticGitBackend()
     evidence = RawEvidenceStore(settings.evidence_dir)
@@ -110,8 +146,8 @@ def test_drain_write_window_builds_context_snapshot_and_work_change(tmp_path: Pa
     assert {edge["kind"] for edge in edges} >= {"CLEANED_INTO", "EXTRACTED_AS", "CREATED", "MODIFIES", "IMPLEMENTS"}
 
 
-def test_drain_git_commit_links_work_change_to_commit_from_snapshot(tmp_path: Path) -> None:
-    settings = make_settings(tmp_path)
+def test_drain_git_commit_links_work_change_when_commit_sha_is_in_threshold_window(tmp_path: Path) -> None:
+    settings = replace(make_settings(tmp_path), drain_token_threshold=1)
     store = InMemoryGraphStore()
     backend = _StaticGitBackend(
         GitSnapshot(
@@ -122,7 +158,11 @@ def test_drain_git_commit_links_work_change_to_commit_from_snapshot(tmp_path: Pa
         )
     )
     RawEvidenceStore(settings.evidence_dir).append(
-        {"hook_event_name": "PostToolUse", "session_id": "s1", "content": "git commit -m graph ledger"},
+        {
+            "hook_event_name": "PostToolUse",
+            "session_id": "s1",
+            "content": "git commit abcdef1234567890abcdef1234567890abcdef12 -m graph ledger",
+        },
         session_id="s1",
         source_app="codex",
         event_name="post_tool_use",
@@ -166,7 +206,7 @@ def test_basic_event_git_metadata_is_compact(tmp_path: Path) -> None:
 
 
 def test_session_filtered_drain_uses_session_cursor_and_matching_limit(tmp_path: Path) -> None:
-    settings = make_settings(tmp_path)
+    settings = replace(make_settings(tmp_path), drain_token_threshold=30)
     store = InMemoryGraphStore()
     backend = _StaticGitBackend()
     evidence = RawEvidenceStore(settings.evidence_dir)
@@ -211,7 +251,7 @@ def test_session_filtered_drain_uses_session_cursor_and_matching_limit(tmp_path:
 
 
 def test_drain_stops_after_max_windows(tmp_path: Path) -> None:
-    settings = make_settings(tmp_path)
+    settings = replace(make_settings(tmp_path), drain_token_threshold=30)
     store = InMemoryGraphStore()
     backend = _StaticGitBackend()
     evidence = RawEvidenceStore(settings.evidence_dir)
