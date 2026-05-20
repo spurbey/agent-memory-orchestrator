@@ -22,6 +22,7 @@ type Config struct {
 	ForcePrivate          bool
 	ForcePublic           bool
 	AdvertiseLocalhostDNS bool
+	AdvertiseAddrs        []string
 	StaticRelayAddrs      []string
 }
 
