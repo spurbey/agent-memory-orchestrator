@@ -163,7 +163,21 @@ Storage is local:
 
 ## What Runs Automatically
 
-Hooks capture evidence. They do not silently inject memory into every prompt.
+Hooks capture evidence and fail open. They do not silently inject memory into every prompt.
+
+The daemon processes captured sessions in the background:
+
+```text
+hook JSONL capture
+-> daemon drain
+-> cleaned evidence window when the pending session crosses the token threshold
+-> local Qwen extraction with deterministic fallback
+-> Kuzu graph updates
+-> retrieval document rebuild
+-> small resumable embedding/FAISS refresh batch
+```
+
+The only raw-to-processing trigger is `drain_token_threshold=6000` approximate tokens. Write, git, test, stop, connector finalize, and "remember this" events remain evidence inside the eventual window; they do not trigger processing by themselves. The automatic loop can be controlled with `auto_drain_enabled`, `auto_drain_interval_seconds`, `auto_drain_record_limit`, and `auto_embedding_batch_size` in `~/.agent-memory-orchestrator/config.json`.
 
 Retrieval is explicit through CLI or MCP tools such as:
 

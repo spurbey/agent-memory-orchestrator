@@ -976,7 +976,13 @@ function lineageStep(node, edge, active) {
   return `<div class="lineage-step${active ? " active" : ""}" data-edge="${escapeHtml(edge)}"><strong>${escapeHtml(readableKind(nodeKind(node)))}</strong><p>${escapeHtml(truncate(nodeSummary(node) || nodeLabel(node), 120))}</p><span class="muted small">${escapeHtml(nodeStatus(node))}</span></div>`;
 }
 function bindEvents() {
-  qsa(".nav-item").forEach(btn => btn.addEventListener("click", () => setView(btn.dataset.view)));
+  qsa(".nav-item").forEach(btn => btn.addEventListener("click", () => {
+    if (btn.dataset.route) {
+      window.location.href = btn.dataset.route;
+      return;
+    }
+    setView(btn.dataset.view);
+  }));
   qsa("[data-jump]").forEach(btn => btn.addEventListener("click", () => setView(btn.dataset.jump)));
   $("refreshBtn").addEventListener("click", refreshAll);
   $("runRetrievalBtn").addEventListener("click", runRetrieval);

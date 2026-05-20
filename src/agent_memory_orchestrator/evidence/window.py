@@ -89,10 +89,10 @@ def _clean_record(
         return _compact_row(index, event_name, "user_goal", _safe_summary(prompt, max_content_chars))
 
     if event_name in {"stop", "session_stop"}:
-        if trigger.trigger_type != "stop_finalize":
-            return None
         message = str(payload.get("last_assistant_message") or "").strip()
-        return _compact_row(index, event_name, "finalize", _safe_summary(message, max_content_chars))
+        if not message:
+            return None
+        return _compact_row(index, event_name, "session_stop", _safe_summary(message, max_content_chars))
 
     tool = str(payload.get("tool") or payload.get("tool_name") or "").strip()
     command = _tool_command(payload)
@@ -189,19 +189,18 @@ def _fit_total_budget(
 
 
 def _is_relevant_record(record: dict[str, Any], trigger: TriggerDecision) -> bool:
+    del trigger
     payload = _payload(record)
     if _is_hook_capture_response(payload):
         return False
     if _prompt_text(record):
         return True
     text = _record_text(record)
-    if trigger.is_write and _looks_like_write(str(payload.get("tool") or ""), _tool_command(payload), text):
+    if _looks_like_write(str(payload.get("tool") or ""), _tool_command(payload), text):
         return True
-    if trigger.is_test and _looks_like_test(text):
+    if _looks_like_test(text):
         return True
-    if trigger.is_git and _looks_like_git(text):
-        return True
-    if trigger.trigger_type in {"explicit_finalize", "stop_finalize"} and _contains_durable_statement(text):
+    if _looks_like_git(text):
         return True
     return _contains_durable_statement(text)
 
@@ -299,7 +298,7 @@ def _git_summary(command: str, raw: str, *, max_content_chars: int) -> str:
         return "Git commit operation executed."
     if command:
         return _trim(f"Git command executed: {_safe_command(command)}", max_content_chars)
-    return "Git operation detected."
+    return "Git evidence included."
 
 
 def _test_summaries(raw: str) -> list[str]:
