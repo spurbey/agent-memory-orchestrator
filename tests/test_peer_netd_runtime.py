@@ -38,6 +38,7 @@ def test_peer_netd_runtime_builds_expected_args(tmp_path: Path, monkeypatch: pyt
             hole_punching=True,
             force_private=True,
             advertise_localhost_dns=True,
+            advertise_addrs=("/ip4/203.0.113.10/tcp/4001",),
         ),
     )
 
@@ -64,6 +65,7 @@ def test_peer_netd_runtime_builds_expected_args(tmp_path: Path, monkeypatch: pyt
         "--advertise-localhost-dns",
     ]:
         assert flag in args
+    assert args[args.index("--advertise-addr") + 1] == "/ip4/203.0.113.10/tcp/4001"
     assert args[args.index("--bootstrap") + 1] == "/ip4/127.0.0.1/tcp/9100/p2p/bootstrap"
     assert args[args.index("--static-relay") + 1] == "/ip4/127.0.0.1/tcp/9200/p2p/relay"
 

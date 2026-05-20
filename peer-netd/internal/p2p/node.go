@@ -57,8 +57,14 @@ func New(ctx context.Context, cfg config.Config, st *store.Store) (*Node, error)
 	}
 
 	opts := []libp2p.Option{libp2p.ListenAddrs(listen)}
-	if cfg.AdvertiseLocalhostDNS {
-		opts = append(opts, libp2p.AddrsFactory(localhostDNSAddrsFactory))
+	if cfg.AdvertiseLocalhostDNS || len(cfg.AdvertiseAddrs) > 0 {
+		advertiseAddrs, err := multiaddrsFromStrings(cfg.AdvertiseAddrs)
+		if err != nil {
+			return nil, fmt.Errorf("invalid advertise addr: %w", err)
+		}
+		opts = append(opts, libp2p.AddrsFactory(func(addrs []multiaddr.Multiaddr) []multiaddr.Multiaddr {
+			return advertiseAddrsFactory(addrs, advertiseAddrs, cfg.AdvertiseLocalhostDNS)
+		}))
 	}
 	if cfg.EnableRelayService {
 		opts = append(opts, libp2p.DisableRelay(), libp2p.EnableRelayService())
@@ -441,6 +447,18 @@ func addrInfosFromStrings(addrs []string) ([]peer.AddrInfo, error) {
 	return out, nil
 }
 
+func multiaddrsFromStrings(addrs []string) ([]multiaddr.Multiaddr, error) {
+	out := make([]multiaddr.Multiaddr, 0, len(addrs))
+	for _, addr := range addrs {
+		ma, err := multiaddr.NewMultiaddr(addr)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, ma)
+	}
+	return out, nil
+}
+
 func peerInfoFromRendezvous(item rendezvous.PeerInfo) (*peer.AddrInfo, error) {
 	id, err := peer.Decode(item.ID)
 	if err != nil {
@@ -485,14 +503,30 @@ func min(a int, b int) int {
 	return b
 }
 
-func localhostDNSAddrsFactory(addrs []multiaddr.Multiaddr) []multiaddr.Multiaddr {
+func advertiseAddrsFactory(addrs []multiaddr.Multiaddr, advertised []multiaddr.Multiaddr, localhostDNS bool) []multiaddr.Multiaddr {
 	out := make([]multiaddr.Multiaddr, len(addrs))
 	copy(out, addrs)
-	for i, addr := range out {
-		text := addr.String()
-		if strings.HasPrefix(text, "/ip4/127.0.0.1/") {
-			out[i] = multiaddr.StringCast("/dns4/localhost" + strings.TrimPrefix(text, "/ip4/127.0.0.1"))
+	if localhostDNS {
+		for i, addr := range out {
+			text := addr.String()
+			if strings.HasPrefix(text, "/ip4/127.0.0.1/") {
+				out[i] = multiaddr.StringCast("/dns4/localhost" + strings.TrimPrefix(text, "/ip4/127.0.0.1"))
+			}
+		}
+	}
+	for _, addr := range advertised {
+		if !containsMultiaddr(out, addr) {
+			out = append(out, addr)
 		}
 	}
 	return out
+}
+
+func containsMultiaddr(items []multiaddr.Multiaddr, target multiaddr.Multiaddr) bool {
+	for _, item := range items {
+		if item.Equal(target) {
+			return true
+		}
+	}
+	return false
 }
