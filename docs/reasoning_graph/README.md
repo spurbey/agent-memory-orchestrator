@@ -10,16 +10,21 @@ Git already records what changed. AMO V2 adds the reasoning layer around it: pro
 
 ```text
 raw evidence and transcripts
+-> closed-session V2 job
 -> reasoning evidence view
 -> commit-backed work packets
 -> packet-wise reasoning extraction
 -> Git hunks and AST CodeNodes
 -> reasoning-to-code linking
 -> graph validation
--> isolated Kuzu session graph
+-> V2 Kuzu graph write
 -> retrieval docs, embeddings, graph expansion, reranking
--> central graph merge after acceptance
 ```
+
+Production runs this flow through `V2SessionJobRunner`. Drain only detects that
+a previous session closed and enqueues a job; it does not run extraction or write
+graph nodes. Completed stage artifacts are reused unless their input hash or
+stage configuration hash changes.
 
 ## Source of Truth
 
@@ -32,6 +37,26 @@ V2 uses deterministic facts as the spine:
 - Kuzu stores graph truth.
 - SQLite stores retrieval/index ledgers.
 - FAISS is a rebuildable vector cache.
+- SQLite also stores V2 job state, stage rows, lock leases, retry metadata, and
+  the explicit production reset marker.
+
+## Production Reset
+
+Pre-V2 graph and retrieval rows are treated as scrap after the V2 cutover, but
+cleanup is never automatic on daemon startup. Operators must run:
+
+```bash
+amo-cli v2-reset-production --backup --clean-graph --clean-retrieval
+```
+
+The command backs up production graph/retrieval/vector stores first, verifies a
+backup manifest, then cleans only graph/retrieval/vector/FAISS storage. Raw JSONL
+evidence, config, and V2 job tables are preserved.
+
+Legacy `GraphDelta` generation is available only for `graph-drain-smoke`, which
+writes to a disposable smoke graph. Production closed-session processing writes
+V2 node kinds such as `Packet`, `Commit`, `EvidenceRef`, `ReasoningNode`,
+`CodeHunk`, `CodeNode`, `CodeVersion`, and `Symbol`.
 
 ## Core Concepts
 
