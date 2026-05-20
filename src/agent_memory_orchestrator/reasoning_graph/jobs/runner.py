@@ -27,6 +27,9 @@ from ..retrieval import embed_missing_retrieval_documents
 from ..session_graph_writer import build_compact_session_graph
 from ..session_graph_writer import write_compact_session_graph
 from ..session_runtime import StrictTextEmbedder
+from ..stage4_contract import build_stage4_packet_prompt
+from ..stage4_contract import stage4_contract_hash
+from ..stage4_contract import stage4_output_schema
 from ..work_packets import build_reasoning_work_packets_from_view
 from .constants import GRAPH_SCHEMA_VERSION
 from .constants import PIPELINE_VERSION
@@ -175,13 +178,13 @@ class V2SessionJobRunner:
         )
         results: list[dict[str, Any]] = []
         for packet in packets:
-            prompt = _reasoning_prompt(packet)
+            prompt = build_stage4_packet_prompt(packet)
             try:
                 parsed = client.generate_json(
                     prompt,
                     num_predict=900,
                     timeout_seconds=self.settings.qwen_extract_timeout_seconds,
-                    schema=_reasoning_output_schema(),
+                    schema=stage4_output_schema(),
                 )
             except QwenUnavailable as exc:
                 raise PendingModel("qwen_unavailable", {"packet_id": packet.get("packet_id"), "error": str(exc)}) from exc
@@ -287,9 +290,7 @@ class V2SessionJobRunner:
         return StageResult(output_path=output, diagnostics={"edge_count": len(edges)})
 
     def _stage_kuzu_write(self, job: dict[str, Any], artifact_dir: Path, stage_dir: Path) -> StageResult:
-        marker = self.job_store.marker(RESET_MARKER_KEY)
-        if marker is None:
-            raise RuntimeError("production_v2_reset_marker_missing")
+        require_complete_v2_reset_marker(self.job_store.marker(RESET_MARKER_KEY))
         packets = _versioned_items(_read_json(_stage_output(artifact_dir, "work_packets")), job)
         reasoning_nodes = _versioned_items(_read_json(_stage_output(artifact_dir, "reasoning_review")), job)
         hunk_nodes = _versioned_items(_read_json(_stage_output(artifact_dir, "git_hunks")), job)
@@ -339,6 +340,7 @@ class V2SessionJobRunner:
 
     def _stage_retrieval_docs(self, job: dict[str, Any], artifact_dir: Path, stage_dir: Path) -> StageResult:
         del artifact_dir
+        require_complete_v2_reset_marker(self.job_store.marker(RESET_MARKER_KEY))
         graph = self.graph_store_factory(self.settings.graph_path)
         conn = connect(self.settings.retrieval_db_path)
         try:
@@ -348,6 +350,8 @@ class V2SessionJobRunner:
                 session_id="",
                 node_limit=self.settings.auto_retrieval_node_limit,
                 max_doc_chars=self.settings.auto_retrieval_max_doc_chars,
+                pipeline_version=PIPELINE_VERSION,
+                graph_schema_version=GRAPH_SCHEMA_VERSION,
             )
             index.replace_documents(docs)
         finally:
@@ -421,6 +425,17 @@ class PendingModel(RuntimeError):
         self.diagnostics = diagnostics or {}
 
 
+def require_complete_v2_reset_marker(marker: dict[str, Any] | None) -> dict[str, Any]:
+    if marker is None:
+        raise RuntimeError("production_v2_reset_marker_missing")
+    cleaned = marker.get("cleaned") if isinstance(marker.get("cleaned"), dict) else {}
+    if marker.get("pipeline_version") != PIPELINE_VERSION or marker.get("graph_schema_version") != GRAPH_SCHEMA_VERSION:
+        raise RuntimeError("production_v2_reset_marker_version_mismatch")
+    if cleaned.get("graph") is not True or cleaned.get("retrieval") is not True:
+        raise RuntimeError("production_v2_reset_marker_incomplete")
+    return marker
+
+
 def file_sha256(path: Path) -> str:
     if not path.exists() or path.is_dir():
         return path_hash(path)
@@ -448,6 +463,7 @@ def stage_config_hash(settings: Settings, *, stage: str) -> str:
         "qwen_endpoint": settings.qwen_endpoint,
         "qwen_runtime": settings.qwen_runtime,
         "qwen_num_ctx": settings.qwen_num_ctx,
+        "stage4_contract_hash": stage4_contract_hash(),
         "embedding_model": settings.embedding_model,
         "vector_backend": settings.vector_backend,
         "retrieval_max_doc_chars": settings.auto_retrieval_max_doc_chars,
@@ -512,48 +528,6 @@ def _first_transcript_path(records: list[dict[str, Any]]) -> str:
         if isinstance(value, str) and value.strip():
             return value.strip()
     return ""
-
-
-def _reasoning_prompt(packet: dict[str, Any]) -> str:
-    return (
-        "/no_think\n"
-        "You are extracting answer-grade reasoning graph nodes from one commit-backed work packet. "
-        "Return JSON only. Do not cite raw transcript ids or tool call ids. "
-        "Every evidence_ref must exist in the packet problem_refs, rationale_refs, or validation_refs. "
-        "Support refs are provenance only. If evidence is insufficient, emit no node or mark needs_review. "
-        "Each node statement must be one factual claim. "
-        "Allowed node_type values: Problem, Decision, Cause, Fix, Constraint, OpenQuestion. "
-        "Output shape: {\"packet_id\":\"...\",\"commit_sha\":\"...\",\"nodes\":[{\"node_type\":\"Decision\",\"subject\":\"...\","
-        "\"statement\":\"...\",\"reason\":\"...\",\"confidence\":0.0,\"evidence_refs\":[\"E00001\"],\"status\":\"accepted\"}]}.\n"
-        f"Packet:\n{json.dumps(packet, ensure_ascii=False, indent=2)}"
-    )
-
-
-def _reasoning_output_schema() -> dict[str, Any]:
-    return {
-        "type": "object",
-        "properties": {
-            "packet_id": {"type": "string"},
-            "commit_sha": {"type": "string"},
-            "nodes": {
-                "type": "array",
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "node_type": {"type": "string"},
-                        "subject": {"type": "string"},
-                        "statement": {"type": "string"},
-                        "reason": {"type": "string"},
-                        "confidence": {"type": "number"},
-                        "evidence_refs": {"type": "array", "items": {"type": "string"}},
-                        "status": {"type": "string"},
-                    },
-                    "required": ["node_type", "subject", "statement", "reason", "confidence", "evidence_refs", "status"],
-                },
-            },
-        },
-        "required": ["packet_id", "commit_sha", "nodes"],
-    }
 
 
 def _packet_commit_sha(packet: dict[str, Any]) -> str:

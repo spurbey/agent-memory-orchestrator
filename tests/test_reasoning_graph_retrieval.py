@@ -16,6 +16,8 @@ from agent_memory_orchestrator.graph.store import GraphEdge
 from agent_memory_orchestrator.graph.store import GraphNode
 from agent_memory_orchestrator.graph.store import InMemoryGraphStore
 from agent_memory_orchestrator.llm.qwen import DeterministicPlanner
+from agent_memory_orchestrator.reasoning_graph.jobs.constants import GRAPH_SCHEMA_VERSION
+from agent_memory_orchestrator.reasoning_graph.jobs.constants import PIPELINE_VERSION
 from agent_memory_orchestrator.reasoning_graph import GraphEmbeddingStore
 from agent_memory_orchestrator.reasoning_graph import RetrievalIndexStore
 from agent_memory_orchestrator.reasoning_graph import build_retrieval_documents_from_graph
@@ -141,6 +143,42 @@ def test_retrieval_documents_are_graph_attached_and_fts_indexed(tmp_path: Path) 
     assert {doc.doc_type for doc in docs} == {"reasoning", "code", "symbol"}
     assert hits
     assert hit_docs[hits[0].doc_id].graph_node_id.startswith("reason:")
+
+
+def test_retrieval_document_build_can_filter_to_v2_graph_schema() -> None:
+    graph = InMemoryGraphStore()
+    graph.upsert_node(
+        GraphNode(
+            id="reason:legacy",
+            kind="ReasoningNode",
+            label="legacy graph delta node",
+            summary="Old pre-V2 graph output should not enter V2 retrieval docs.",
+            session_id="s1",
+        )
+    )
+    graph.upsert_node(
+        GraphNode(
+            id="reason:v2",
+            kind="ReasoningNode",
+            label="v2 reasoning node",
+            summary="V2 answer-grade reasoning node.",
+            session_id="s1",
+            metadata={
+                "pipeline_version": PIPELINE_VERSION,
+                "graph_schema_version": GRAPH_SCHEMA_VERSION,
+                "packet_id": "WP0001",
+            },
+        )
+    )
+
+    docs = build_retrieval_documents_from_graph(
+        graph,
+        session_id="s1",
+        pipeline_version=PIPELINE_VERSION,
+        graph_schema_version=GRAPH_SCHEMA_VERSION,
+    )
+
+    assert [doc.graph_node_id for doc in docs] == ["reason:v2"]
 
 
 def test_embedding_missing_retrieval_documents_is_resumable(tmp_path: Path) -> None:
