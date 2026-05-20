@@ -27,6 +27,7 @@ class PeerNetdLaunchOptions:
     listen_addr: str = "/ip4/0.0.0.0/tcp/0"
     api_addr: str = "127.0.0.1:8788"
     store_path: str = ""
+    identity_key_path: str = ""
     shared_secret_env: str = ""
     require_signature: bool = False
     bootstrap_addrs: tuple[str, ...] = ()
@@ -269,6 +270,8 @@ class PeerNetdRuntime:
             options.api_addr,
             "--store-path",
             str(self.store_path(options)),
+            "--identity-key",
+            str(self.identity_key_path(options)),
             "--mdns-service",
             options.mdns_service,
         ]
@@ -328,6 +331,11 @@ class PeerNetdRuntime:
         if options.store_path:
             return Path(options.store_path).expanduser().resolve()
         return self.runtime_dir / "inbox.jsonl"
+
+    def identity_key_path(self, options: PeerNetdLaunchOptions) -> Path:
+        if options.identity_key_path:
+            return Path(options.identity_key_path).expanduser().resolve()
+        return self.runtime_dir / "identity.key"
 
     def default_binary_path(self) -> Path:
         return self.bin_dir / binary_name()
