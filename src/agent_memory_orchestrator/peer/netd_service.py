@@ -186,6 +186,8 @@ def _enable_command(settings: Settings, launch: PeerNetdLaunchOptions) -> list[s
     ]
     if launch.store_path:
         command.extend(["--store-path", launch.store_path])
+    if launch.identity_key_path:
+        command.extend(["--identity-key", launch.identity_key_path])
     if launch.shared_secret_env:
         command.extend(["--shared-secret-env", launch.shared_secret_env])
     if launch.require_signature:
