@@ -9,7 +9,9 @@ from ..core.config import Settings
 from ..app.client import DaemonClient, DaemonUnavailable
 from ..evidence.drain import EvidenceDrain
 from ..evidence.triggers import detect_trigger
-from ..evidence.triggers import estimate_record_tokens
+from ..evidence.triggers import is_session_start
+from ..evidence.triggers import record_session_id
+from ..evidence.triggers import session_boundary_trigger
 from ..llm.qwen import OllamaQwenClient, QwenUnavailable
 from .merge import QwenMergeClassifier
 from .service import GraphRagService
@@ -95,18 +97,18 @@ def debug_retrieval(client: DaemonClient, *, query: str, limit: int = 8) -> dict
         return {"ok": False, "error": str(exc), "client_elapsed_ms": _elapsed_ms(start)}
 
 
-def trigger_preview(records: list[dict[str, Any]], *, token_threshold: int = 0) -> list[dict[str, Any]]:
-    pending_approx_tokens = 0
+def trigger_preview(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    last_active_session_id = ""
     decisions: list[dict[str, Any]] = []
     for record in records:
-        pending_approx_tokens += estimate_record_tokens(record)
-        decision = detect_trigger(
-            record,
-            pending_approx_tokens=pending_approx_tokens,
-            token_threshold=token_threshold,
-        )
-        if decision.should_process:
-            pending_approx_tokens = 0
+        current_session = record_session_id(record)
+        if is_session_start(record) and last_active_session_id and last_active_session_id != current_session:
+            decision = session_boundary_trigger(last_active_session_id, current_session)
+            last_active_session_id = current_session
+        else:
+            decision = detect_trigger(record)
+            if is_session_start(record) or not last_active_session_id:
+                last_active_session_id = current_session
         decisions.append(
             {
                 "id": record.get("id"),
