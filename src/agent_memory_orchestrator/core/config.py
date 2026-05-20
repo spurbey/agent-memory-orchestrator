@@ -81,6 +81,13 @@ class Settings:
     qwen_compress_timeout_seconds: float = 12.0
     qwen_num_ctx: int = 2048
     drain_max_windows_per_run: int = 3
+    drain_token_threshold: int = 6000
+    auto_drain_enabled: bool = True
+    auto_drain_interval_seconds: float = 8.0
+    auto_drain_record_limit: int = 500
+    auto_retrieval_node_limit: int = 10000
+    auto_retrieval_max_doc_chars: int = 5000
+    auto_embedding_batch_size: int = 32
 
     @classmethod
     def load(cls) -> "Settings":
@@ -125,6 +132,13 @@ class Settings:
         qwen_compress_timeout_seconds = float(_setting(config, "qwen_compress_timeout_seconds", "12"))
         qwen_num_ctx = int(_setting(config, "qwen_num_ctx", "2048"))
         drain_max_windows_per_run = int(_setting(config, "drain_max_windows_per_run", "3"))
+        drain_token_threshold = int(_setting(config, "drain_token_threshold", "6000"))
+        auto_drain_enabled = _parse_bool(_setting(config, "auto_drain_enabled", True), default=True)
+        auto_drain_interval_seconds = float(_setting(config, "auto_drain_interval_seconds", "8"))
+        auto_drain_record_limit = int(_setting(config, "auto_drain_record_limit", "500"))
+        auto_retrieval_node_limit = int(_setting(config, "auto_retrieval_node_limit", "10000"))
+        auto_retrieval_max_doc_chars = int(_setting(config, "auto_retrieval_max_doc_chars", "5000"))
+        auto_embedding_batch_size = int(_setting(config, "auto_embedding_batch_size", "32"))
 
         if not db_path.is_absolute():
             db_path = (home / db_path).resolve()
@@ -192,6 +206,18 @@ class Settings:
             raise ValueError("AMO_QWEN_NUM_CTX must be positive")
         if drain_max_windows_per_run <= 0:
             raise ValueError("AMO_DRAIN_MAX_WINDOWS_PER_RUN must be positive")
+        if drain_token_threshold < 0:
+            raise ValueError("AMO_DRAIN_TOKEN_THRESHOLD must be zero or positive")
+        if auto_drain_interval_seconds <= 0:
+            raise ValueError("AMO_AUTO_DRAIN_INTERVAL_SECONDS must be positive")
+        if auto_drain_record_limit <= 0:
+            raise ValueError("AMO_AUTO_DRAIN_RECORD_LIMIT must be positive")
+        if auto_retrieval_node_limit <= 0:
+            raise ValueError("AMO_AUTO_RETRIEVAL_NODE_LIMIT must be positive")
+        if auto_retrieval_max_doc_chars <= 0:
+            raise ValueError("AMO_AUTO_RETRIEVAL_MAX_DOC_CHARS must be positive")
+        if auto_embedding_batch_size < 0:
+            raise ValueError("AMO_AUTO_EMBEDDING_BATCH_SIZE must be zero or positive")
 
         return cls(
             home=home,
@@ -232,4 +258,11 @@ class Settings:
             qwen_compress_timeout_seconds=qwen_compress_timeout_seconds,
             qwen_num_ctx=qwen_num_ctx,
             drain_max_windows_per_run=drain_max_windows_per_run,
+            drain_token_threshold=drain_token_threshold,
+            auto_drain_enabled=auto_drain_enabled,
+            auto_drain_interval_seconds=auto_drain_interval_seconds,
+            auto_drain_record_limit=auto_drain_record_limit,
+            auto_retrieval_node_limit=auto_retrieval_node_limit,
+            auto_retrieval_max_doc_chars=auto_retrieval_max_doc_chars,
+            auto_embedding_batch_size=auto_embedding_batch_size,
         )
