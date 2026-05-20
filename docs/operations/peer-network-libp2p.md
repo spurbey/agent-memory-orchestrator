@@ -251,6 +251,8 @@ The important ordering is: start the local sidecar with `--static-relay`, confir
 
 For production operations, run at least two helper nodes and pass both as `--static-relay` values. Monitor process liveness, open TCP port reachability, relay reservation failures, and bandwidth. The helper should reject broad public access later with invite/group-level admission rules; until then, treat it as a private beta service.
 
+AWS deployment automation lives in `docs/operations/aws-peer-relay.md` and `infra/aws/peer-relay/cloudformation.yaml`. It creates the small EC2/EIP/SSM helper node and prints the relay/rendezvous flags clients should use.
+
 ## Why libp2p, Not Tailscale
 
 Tailscale solved private reachability quickly, but it makes users leave AMO and join a separate network. libp2p is a better product direction because AMO can embed the peer node as a sidecar and gradually add discovery, relay, and NAT traversal behind a stable AMO UX.
