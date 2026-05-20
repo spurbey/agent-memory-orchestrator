@@ -66,6 +66,8 @@ scripts/
 
 `netd_runtime.py` is the managed sidecar lifecycle layer. It locates repo or packaged `peer-netd` source, builds the Go binary into `AMO_HOME/.peer/bin`, starts/stops it, writes PID/API/log state under `AMO_HOME/.peer/netd`, and refuses unsafe managed starts where the local API port is dynamic.
 
+Managed starts persist the libp2p private key at `AMO_HOME/.peer/netd/identity.key` by default. This keeps peer IDs and relay multiaddrs stable across restarts.
+
 `netd_service.py` plans OS startup integration. It returns a Windows Scheduled Task plan or user-systemd unit plan by default, and only mutates the host when `--apply` is explicitly used.
 
 `scripts/build_peer_netd_binaries.py` builds release binaries into `src/agent_memory_orchestrator/bin/<goos-goarch>/`. Wheel/package builds include those files when present, so normal users do not need Go once release packaging generates platform binaries.

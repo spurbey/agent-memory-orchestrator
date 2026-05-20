@@ -26,6 +26,7 @@ def test_peer_netd_runtime_builds_expected_args(tmp_path: Path, monkeypatch: pyt
             listen_addr="/ip4/0.0.0.0/tcp/9000",
             api_addr="127.0.0.1:8799",
             store_path=str(tmp_path / "custom-inbox.jsonl"),
+            identity_key_path=str(tmp_path / "custom-identity.key"),
             shared_secret_env="AMO_PEER_SECRET",
             require_signature=True,
             bootstrap_addrs=("/ip4/127.0.0.1/tcp/9100/p2p/bootstrap",),
@@ -52,6 +53,7 @@ def test_peer_netd_runtime_builds_expected_args(tmp_path: Path, monkeypatch: pyt
         "127.0.0.1:8799",
     ]
     assert args[args.index("--store-path") + 1] == str(tmp_path / "custom-inbox.jsonl")
+    assert args[args.index("--identity-key") + 1] == str(tmp_path / "custom-identity.key")
     assert ["--shared-secret", "test-secret"] == args[args.index("--shared-secret") : args.index("--shared-secret") + 2]
     for flag in [
         "--require-signature",
@@ -75,6 +77,14 @@ def test_peer_netd_runtime_requires_configured_secret(tmp_path: Path) -> None:
 
     with pytest.raises(PeerNetdRuntimeError, match="shared secret env var is not set"):
         runtime.args_for(Path("amo-peer-netd"), PeerNetdLaunchOptions(shared_secret_env="AMO_MISSING_SECRET"))
+
+
+def test_peer_netd_runtime_defaults_identity_key_under_runtime_dir(tmp_path: Path) -> None:
+    runtime = PeerNetdRuntime(make_settings(tmp_path))
+
+    args = runtime.args_for(Path("amo-peer-netd"), PeerNetdLaunchOptions())
+
+    assert args[args.index("--identity-key") + 1] == str(tmp_path / ".peer" / "netd" / "identity.key")
 
 
 def test_peer_netd_runtime_reports_missing_state_as_stopped(tmp_path: Path) -> None:
