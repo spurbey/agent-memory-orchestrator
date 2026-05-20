@@ -203,6 +203,34 @@ func TestAdvertiseAddrsFactoryAddsPublicAddress(t *testing.T) {
 	}
 }
 
+func TestIdentityKeyPathKeepsPeerIDStable(t *testing.T) {
+	ctx := context.Background()
+	keyPath := t.TempDir() + "/identity.key"
+
+	cfgA := testConfig("stable-a", "identity-secret")
+	cfgA.IdentityKeyPath = keyPath
+	nodeA, err := New(ctx, cfgA, store.New())
+	if err != nil {
+		t.Fatalf("New(first) error = %v", err)
+	}
+	firstPeerID := nodeA.PeerID()
+	if err := nodeA.Close(); err != nil {
+		t.Fatalf("Close(first) error = %v", err)
+	}
+
+	cfgB := testConfig("stable-b", "identity-secret")
+	cfgB.IdentityKeyPath = keyPath
+	nodeB, err := New(ctx, cfgB, store.New())
+	if err != nil {
+		t.Fatalf("New(second) error = %v", err)
+	}
+	defer nodeB.Close()
+
+	if got := nodeB.PeerID(); got != firstPeerID {
+		t.Fatalf("peer id changed after reusing identity key: first=%s second=%s", firstPeerID, got)
+	}
+}
+
 func testConfig(nodeID string, secret string) config.Config {
 	cfg := config.Default()
 	cfg.NodeID = nodeID

@@ -15,6 +15,7 @@ def test_peer_netd_service_plan_contains_enable_command(tmp_path: Path) -> None:
         PeerNetdLaunchOptions(
             node_id="zenbook-amo",
             api_addr="127.0.0.1:8799",
+            identity_key_path=str(tmp_path / "identity.key"),
             shared_secret_env="AMO_PEER_SECRET",
             require_signature=True,
             mdns=True,
@@ -30,6 +31,8 @@ def test_peer_netd_service_plan_contains_enable_command(tmp_path: Path) -> None:
     assert str(tmp_path) in command
     assert "--node-id" in command
     assert "zenbook-amo" in command
+    assert "--identity-key" in command
+    assert str(tmp_path / "identity.key") in command
     assert "--shared-secret-env" in command
     assert "AMO_PEER_SECRET" in command
     assert "--require-signature" in command
