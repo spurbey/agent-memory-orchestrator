@@ -5,6 +5,7 @@ const AMO = {
   selectedSessionId: "",
   selectedSession: null,
   health: null,
+  jobs: { jobs: [], reset_marker: null },
   connectors: { slack: null },
   centralGraph: { nodes: [], edges: [], warnings: [], full: false, limit: 360 },
   versionFlow: { flows: [], nodes: [], edges: [], warnings: [] },
@@ -188,8 +189,16 @@ async function loadConnectorStatus() {
   }
   renderConnectorStatus();
 }
+async function loadJobs() {
+  try {
+    AMO.jobs = await apiGet("/api/jobs?limit=50");
+  } catch (error) {
+    AMO.jobs = { ok: false, error: error.message, jobs: [], reset_marker: null };
+  }
+  renderJobs();
+}
 async function refreshAll() {
-  await Promise.allSettled([loadHealth(), loadSessions(), loadCentralGraph(), loadVersionFlow(), loadConnectorStatus()]);
+  await Promise.allSettled([loadHealth(), loadSessions(), loadCentralGraph(), loadVersionFlow(), loadConnectorStatus(), loadJobs()]);
   if (AMO.selectedSessionId) await selectSession(AMO.selectedSessionId, { silent: true });
 }
 function setView(view) {
@@ -269,6 +278,58 @@ function renderConnectorStatus() {
   </div>`;
   const command = $("slackCommandPanel");
   if (command) command.textContent = data.run_command ? `amo-cli slack setup-wizard\n${data.run_command}` : command.textContent;
+}
+function renderJobs() {
+  const list = $("v2JobsList");
+  if (!list) return;
+  const marker = AMO.jobs?.reset_marker;
+  const markerTarget = $("v2ResetMarker");
+  if (markerTarget) {
+    markerTarget.innerHTML = marker
+      ? `<span class="pill good">V2 reset ${escapeHtml(marker.production_v2_reset_applied_at || marker.updated_at || "applied")}</span><span class="pill blue">${escapeHtml(marker.pipeline_version || "v2")}</span>`
+      : `<span class="pill warn">V2 production reset marker missing</span><span class="pill">run explicit backup-first reset before V2 graph writes</span>`;
+  }
+  if (!AMO.jobs?.ok) {
+    list.innerHTML = `<pre class="code-block">${escapeHtml(AMO.jobs?.error || "Unable to load jobs")}</pre>`;
+    return;
+  }
+  const jobs = AMO.jobs.jobs || [];
+  list.innerHTML = jobs.map(renderJobCard).join("") || empty("No V2 session jobs yet.");
+}
+function renderJobCard(job) {
+  const status = text(job.status || "unknown");
+  const cls = status === "complete" ? "good" : status === "failed" ? "bad" : status === "pending_model" ? "warn" : "blue";
+  const retry = ["failed", "pending_model"].includes(status)
+    ? `<button class="btn ghost retry-job-btn" data-job-id="${escapeHtml(job.job_id)}">Retry</button>`
+    : "";
+  const error = job.error && Object.keys(job.error).length ? `<pre class="code-block small">${escapeHtml(formatJson(job.error))}</pre>` : "";
+  return `<article class="job-card">
+    <div class="panel-head">
+      <div>
+        <p class="eyebrow">${escapeHtml(job.source_app || "session")}</p>
+        <h3>${escapeHtml(job.session_id || job.job_id)}</h3>
+      </div>
+      <div class="button-row"><span class="pill ${cls}">${escapeHtml(status)}</span>${retry}</div>
+    </div>
+    <div class="job-meta">
+      <span>stage ${escapeHtml(job.current_stage || "-")}</span>
+      <span>last ${escapeHtml(job.last_successful_stage || "-")}</span>
+      <span>attempts ${escapeHtml(job.attempt_count || 0)}</span>
+      <span>${escapeHtml(truncate(job.repo_path || job.artifact_dir || "", 92))}</span>
+    </div>
+    ${error}
+  </article>`;
+}
+async function retryJob(jobId) {
+  const output = $("adminOutput");
+  if (output) output.textContent = `Retrying ${jobId}...`;
+  try {
+    const result = await apiPost(`/api/jobs/${encodeURIComponent(jobId)}/retry`, { forced_by: "dashboard" });
+    if (output) output.textContent = formatJson(result);
+    await loadJobs();
+  } catch (error) {
+    if (output) output.textContent = error.stack || error.message;
+  }
 }
 function renderPipeline(target, counts) {
   target.innerHTML = PIPELINE.map(([name, desc, key]) => `<div class="stage-card"><strong>${escapeHtml(name)}</strong><div class="count">${escapeHtml(counts[key] ?? 0)}</div><small>${escapeHtml(desc)}</small></div>`).join("");
@@ -1005,6 +1066,7 @@ function bindEvents() {
   $("cacheBtn").addEventListener("click", () => runAdminJob("cache"));
   $("debugGraphBtn").addEventListener("click", () => runAdminJob("debugGraph"));
   $("debugQwenBtn").addEventListener("click", () => runAdminJob("debugQwen"));
+  $("refreshJobsBtn")?.addEventListener("click", loadJobs);
   document.body.addEventListener("click", event => {
     const sessionEl = event.target.closest(".session-card");
     if (sessionEl) selectSession(sessionEl.dataset.sessionId);
@@ -1024,6 +1086,8 @@ function bindEvents() {
       selectGraphNode(versionNode.dataset.nodeId);
       focusSelectedNeighbors();
     }
+    const retryJobEl = event.target.closest(".retry-job-btn");
+    if (retryJobEl?.dataset.jobId) retryJob(retryJobEl.dataset.jobId);
   });
 }
 async function init() {
@@ -1037,5 +1101,6 @@ async function init() {
   else if (path.includes("dashboard")) setView("dashboard");
   await refreshAll();
   setInterval(() => { if (AMO.view === "dashboard" || AMO.view === "sessions") loadSessions().catch(() => {}); }, 15000);
+  setInterval(() => { if (AMO.view === "admin") loadJobs().catch(() => {}); }, 12000);
 }
 init().catch(error => { setDaemon(false, "ui failed"); console.error(error); });

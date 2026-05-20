@@ -5,7 +5,7 @@ AMO is local-first graph memory for AI coding sessions.
 ## Runtime Shape
 
 - Hooks capture evidence and fail open.
-- The daemon owns Kuzu, automatic drain jobs, graph jobs, retrieval, local model calls, and web UI state.
+- The daemon owns session-boundary drain, V2 session jobs, Kuzu, retrieval, local model calls, and web UI state.
 - MCP exposes explicit retrieval tools to agents.
 - Kuzu stores graph truth.
 - SQLite stores retrieval/index ledgers.
@@ -19,14 +19,35 @@ hook evidence
 -> append-only JSONL
 -> daemon drain loop
 -> trigger only when a later session starts
--> cleaned evidence window
--> graph extraction
--> Kuzu graph write
+-> enqueue durable V2 session job in SQLite
+-> evidence view and commit-backed work packets
+-> packet-wise Qwen reasoning extraction when available
+-> deterministic hunks, AST/code nodes, symbols, and code links
+-> V2 Kuzu graph write
 -> retrieval document rebuild
 -> bounded embedding/FAISS refresh
 ```
 
-Hooks never perform graph work directly. Pending evidence windows are persisted under `.state/` so a session can be closed across daemon cycles when the next `session_start` appears. Write, git, test, stop, and connector-finalize events are evidence, not processing triggers.
+Hooks never perform graph work directly. Drain does not run Qwen, Kuzu writes,
+retrieval rebuild, embeddings, or old `GraphDelta` processing. It reads raw
+evidence, tracks cursors/session boundaries, and idempotently enqueues the
+previous session when a new `session_start` appears.
+
+The V2 job runner owns resumable processing and stores job/stage/event state in
+SQLite. If Qwen or the embedding model is unavailable, the job pauses as
+`pending_model`; it does not create fake answer-grade reasoning or hash-vector
+production output.
+
+Old pre-V2 graph/retrieval data is cleaned only through an explicit backup-first
+operator command:
+
+```bash
+amo-cli v2-reset-production --backup --clean-graph --clean-retrieval
+```
+
+The reset command never deletes raw JSONL evidence, config, or V2 job tables.
+The legacy `GraphDelta` path is isolated to `graph-drain-smoke` and writes to a
+disposable graph under `.state/smoke/`, not the production Kuzu path.
 
 ## Retrieval Shape
 

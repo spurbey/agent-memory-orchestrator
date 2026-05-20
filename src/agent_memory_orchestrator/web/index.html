@@ -254,6 +254,18 @@ amo-cli slack run --reply-mode answer</pre>
       </section>
 
       <section id="adminView" class="view">
+        <section class="panel">
+          <div class="panel-head">
+            <div>
+              <p class="eyebrow">V2 session jobs</p>
+              <h2>Background production pipeline</h2>
+              <p class="muted">Closed sessions are enqueued here and processed stage by stage. Failed or model-waiting jobs require an explicit retry.</p>
+            </div>
+            <button id="refreshJobsBtn" class="btn ghost">Refresh Jobs</button>
+          </div>
+          <div id="v2ResetMarker" class="warning-list"></div>
+          <div id="v2JobsList" class="job-list"></div>
+        </section>
         <div class="two-col">
           <section class="panel">
             <p class="eyebrow">Graph jobs</p>

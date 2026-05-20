@@ -58,12 +58,35 @@ Current traversal rules:
 - Keep extra packets, commits, evidence, hunks, code nodes, and symbols as
   citation support rather than forcing them into the narrative.
 
-## Build the Retrieval Index
+## Production Refresh
+
+In production, retrieval refresh is a V2 job stage, not a separate daemon side
+effect:
+
+```text
+drain/enqueue closed sessions
+-> V2SessionJobRunner
+-> kuzu_write
+-> retrieval_docs
+-> embeddings
+-> faiss
+```
+
+If the embedding model is unavailable after graph and retrieval docs are built,
+the job pauses as `pending_model`. Graph and lexical retrieval remain available;
+vectors and FAISS resume after the model/runtime is restored and the job is
+retried.
+
+## Manual Retrieval Index Build
 
 ```bash
 amo-cli graph-retrieval-build
 amo-cli graph-retrieval-embed --model BAAI/bge-m3
 ```
+
+These commands are maintenance/smoke tools. The normal closed-session production
+path uses the V2 job runner so stage status, errors, and retries are observable
+from `/api/jobs` and the dashboard Admin view.
 
 ## Retrieve
 
