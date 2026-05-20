@@ -207,6 +207,48 @@ signed room message is delivered to the private peer
 
 Relay nodes should be treated as transport utilities. They should be rate-limited and monitored, but they should not read AMO memory or own room state.
 
+## Public Relay/Rendezvous Deployment
+
+For peers on different routers or subnets, run one small always-on helper node. This is the AMO equivalent of the minimum Tailscale control-plane replacement: it does discovery and relay only, not memory or room state.
+
+On a public VPS or always-on machine with inbound TCP open:
+
+```powershell
+amo-cli peer relay start `
+  --node-id amo-relay-prod `
+  --listen /ip4/0.0.0.0/tcp/4001 `
+  --advertise-addr /ip4/<public_ip>/tcp/4001 `
+  --namespace <team_namespace>
+```
+
+Use `/dns4/<domain>/tcp/4001` instead of `/ip4/<public_ip>/tcp/4001` if DNS is stable. The command starts `amo-peer-netd` with rendezvous, relay service, NAT service, and public reachability defaults. It prints the relay multiaddr that clients should use.
+
+On each user device, start its local peer sidecar with the relay before creating or accepting invites:
+
+```powershell
+amo-cli peer enable `
+  --node-id <device_node_id> `
+  --static-relay <relay_multiaddr> `
+  --auto-relay `
+  --hole-punching `
+  --rendezvous-addr <relay_multiaddr> `
+  --rendezvous-namespace <team_namespace>
+```
+
+Then create invites with the same rendezvous hint:
+
+```powershell
+amo-cli peer create-invite `
+  --auto-approve `
+  --rendezvous-addr <relay_multiaddr> `
+  --rendezvous-namespace <team_namespace> `
+  --out host.invite.json
+```
+
+The important ordering is: start the local sidecar with `--static-relay`, confirm `peer netd status` shows `relay_addrs`, then create or accept invites. The peer card inside the invite/response will include `/p2p-circuit` relay addresses, so the join request can return even when direct LAN dialing fails.
+
+For production operations, run at least two helper nodes and pass both as `--static-relay` values. Monitor process liveness, open TCP port reachability, relay reservation failures, and bandwidth. The helper should reject broad public access later with invite/group-level admission rules; until then, treat it as a private beta service.
+
 ## Why libp2p, Not Tailscale
 
 Tailscale solved private reachability quickly, but it makes users leave AMO and join a separate network. libp2p is a better product direction because AMO can embed the peer node as a sidecar and gradually add discovery, relay, and NAT traversal behind a stable AMO UX.

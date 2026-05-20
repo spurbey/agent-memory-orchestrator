@@ -5,7 +5,7 @@ from pathlib import Path
 
 from agent_memory_orchestrator.app.cli import main
 from agent_memory_orchestrator.peer import PeerService
-from agent_memory_orchestrator.peer.netd_runtime import binary_name
+from agent_memory_orchestrator.peer.netd_runtime import PeerNetdRuntime, binary_name
 
 
 def test_peer_netd_status_uses_amo_home(tmp_path: Path, capsys) -> None:
@@ -333,3 +333,48 @@ def test_peer_netd_install_service_can_plan_watcher(tmp_path: Path, capsys) -> N
     assert "enable" in payload["enable_command"]
     assert "poll-netd" in payload["watcher"]["watch_command"]
     assert "--watch" in payload["watcher"]["watch_command"]
+
+
+def test_peer_relay_start_uses_public_helper_defaults(tmp_path: Path, capsys, monkeypatch) -> None:
+    captured_options = []
+
+    def fake_start(self: PeerNetdRuntime, options, *, build_if_missing: bool = True) -> dict:
+        captured_options.append((options, build_if_missing))
+        return {
+            "ok": True,
+            "health": {
+                "listen_addrs": ["/ip4/203.0.113.10/tcp/4001/p2p/12D3KooWRelay"],
+            },
+        }
+
+    monkeypatch.setattr(PeerNetdRuntime, "start", fake_start)
+
+    code = main(
+        [
+            "peer",
+            "--amo-home",
+            str(tmp_path),
+            "relay",
+            "start",
+            "--node-id",
+            "amo-relay-prod",
+            "--advertise-addr",
+            "/ip4/203.0.113.10/tcp/4001",
+            "--namespace",
+            "amo-team",
+            "--no-build",
+        ]
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+    options, build_if_missing = captured_options[0]
+    assert code == 0
+    assert build_if_missing is False
+    assert options.node_id == "amo-relay-prod"
+    assert options.relay_service is True
+    assert options.rendezvous_server is True
+    assert options.nat_service is True
+    assert options.force_public is True
+    assert options.advertise_addrs == ("/ip4/203.0.113.10/tcp/4001",)
+    assert payload["relay"]["relay_multiaddr"] == "/ip4/203.0.113.10/tcp/4001/p2p/12D3KooWRelay"
+    assert payload["relay"]["rendezvous_namespace"] == "amo-team"
