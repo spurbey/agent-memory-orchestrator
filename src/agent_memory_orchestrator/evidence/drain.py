@@ -10,6 +10,7 @@ from typing import Any
 from ..core.config import Settings
 from ..graph.session import SessionGraphBuilder
 from ..graph.store import GraphStore
+from ..reasoning_graph.jobs import V2SessionJobStore
 from ..versioning import VersionBackend
 from .triggers import detect_trigger
 from .triggers import is_session_start
@@ -19,8 +20,14 @@ from .triggers import session_boundary_trigger
 
 @dataclass(slots=True)
 class DrainSessionState:
+    pending_count: int = 0
+    first_event_id: str = ""
+    latest_event_id: str = ""
+    source_app: str = ""
+    repo_path: str = ""
+    evidence_days: set[str] = field(default_factory=set)
+    enqueued_windows: int = 0
     pending_records: list[dict[str, Any]] = field(default_factory=list)
-    processed_windows: int = 0
 
 
 @dataclass(slots=True, frozen=True)
@@ -63,12 +70,14 @@ class EvidenceDrain:
         pending_path: Path | None = None,
         evidence_roots: list[Path] | None = None,
         builder: SessionGraphBuilder | None = None,
+        job_store: V2SessionJobStore | None = None,
     ) -> None:
         self.settings = settings
         self.cursor_path = cursor_path or settings.home / ".state" / "evidence_cursors.json"
         self.pending_path = pending_path or settings.home / ".state" / "evidence_pending_windows.json"
         self.evidence_roots = evidence_roots or [settings.evidence_dir]
-        self.builder = builder or SessionGraphBuilder(settings, store, version_backend)
+        self.builder = builder
+        self.job_store = job_store if job_store is not None else (None if builder is not None else V2SessionJobStore(settings))
 
     def drain(self, *, limit: int = 500, session_id: str = "", max_windows: int | None = None) -> dict[str, Any]:
         start = time.monotonic()
@@ -93,6 +102,7 @@ class EvidenceDrain:
         for path in self._evidence_files():
             key = _cursor_key(path, session_filter)
             offset = int(cursors.get(key, 0))
+            evidence_day = path.stem
             for next_offset, record, issue in _iter_jsonl_from(
                 path,
                 offset,
@@ -116,16 +126,19 @@ class EvidenceDrain:
                         previous_state = states.get(previous_session)
                         if (
                             previous_state is not None
-                            and previous_state.pending_records
+                            and previous_state.pending_count
                             and (not session_filter or previous_session == session_filter)
                         ):
                             decision = session_boundary_trigger(previous_session, current_session)
-                            result = self.builder.process_window(
+                            result = self._process_or_enqueue_closed_session(
                                 session_id=previous_session,
-                                records=previous_state.pending_records,
+                                new_session_id=current_session,
+                                boundary_event_id=str(record.get("id") or ""),
+                                state=previous_state,
                                 trigger=decision,
                             )
-                            previous_state.processed_windows += 1
+                            previous_state.enqueued_windows += 1
+                            previous_state.pending_count = 0
                             previous_state.pending_records = []
                             stats["windows_processed"] += 1
                             stats["triggered"].append(
@@ -156,10 +169,11 @@ class EvidenceDrain:
                     continue
 
                 state = states.setdefault(current_session, DrainSessionState())
-                self.builder.ingest_basic_record(record)
+                if self.builder is not None:
+                    self.builder.ingest_basic_record(record)
                 stats["records_ingested"] += 1
                 decision = detect_trigger(record)
-                state.pending_records.append(record)
+                _update_state_from_record(state, record, evidence_day=evidence_day)
                 stats["skipped"].append(
                     {
                         "session_id": current_session,
@@ -247,8 +261,15 @@ class EvidenceDrain:
             if not isinstance(row, dict):
                 continue
             records = row.get("pending_records")
+            days = row.get("evidence_days")
             states[str(session_id)] = DrainSessionState(
-                pending_records=records if isinstance(records, list) else [],
+                pending_count=int(row.get("pending_count", len(records) if isinstance(records, list) else 0)),
+                first_event_id=str(row.get("first_event_id") or ""),
+                latest_event_id=str(row.get("latest_event_id") or ""),
+                source_app=str(row.get("source_app") or ""),
+                repo_path=str(row.get("repo_path") or ""),
+                evidence_days=set(str(item) for item in days if str(item)) if isinstance(days, list) else set(),
+                enqueued_windows=int(row.get("enqueued_windows", row.get("processed_windows", 0))),
             )
         last_active_session_id = str(payload.get("last_active_session_id") or "") if isinstance(payload, dict) else ""
         return states, last_active_session_id
@@ -256,10 +277,16 @@ class EvidenceDrain:
     def _save_pending_states(self, states: dict[str, DrainSessionState], last_active_session_id: str) -> None:
         sessions = {
             session_id: {
-                "pending_records": state.pending_records,
+                "pending_count": state.pending_count,
+                "first_event_id": state.first_event_id,
+                "latest_event_id": state.latest_event_id,
+                "source_app": state.source_app,
+                "repo_path": state.repo_path,
+                "evidence_days": sorted(state.evidence_days),
+                "enqueued_windows": state.enqueued_windows,
             }
             for session_id, state in sorted(states.items())
-            if state.pending_records
+            if state.pending_count
         }
         self.pending_path.parent.mkdir(parents=True, exist_ok=True)
         self.pending_path.write_text(
@@ -283,6 +310,36 @@ class EvidenceDrain:
     ) -> None:
         self._save_cursors(cursors)
         self._save_pending_states(states, last_active_session_id)
+
+    def _process_or_enqueue_closed_session(
+        self,
+        *,
+        session_id: str,
+        new_session_id: str,
+        boundary_event_id: str,
+        state: DrainSessionState,
+        trigger: Any,
+    ) -> dict[str, Any]:
+        if self.builder is not None:
+            return self.builder.process_window(session_id=session_id, records=state.pending_records, trigger=trigger)
+        if self.job_store is None:
+            raise RuntimeError("V2 session job store is required for enqueue-only drain")
+        enqueue = self.job_store.enqueue_session(
+            session_id=session_id,
+            boundary_event_id=boundary_event_id,
+            source_app=state.source_app,
+            repo_path=state.repo_path,
+            source_evidence_day=sorted(state.evidence_days)[-1] if state.evidence_days else "",
+            source_evidence_days=sorted(state.evidence_days),
+        )
+        return {
+            "mode": "v2_job_enqueue",
+            "job_id": enqueue.job.get("job_id"),
+            "created": enqueue.created,
+            "updated": enqueue.updated,
+            "reason": enqueue.reason,
+            "closed_by_session_id": new_session_id,
+        }
 
 
 def _read_jsonl_from(path: Path, offset: int) -> list[tuple[int, dict[str, Any]]]:
@@ -403,6 +460,11 @@ def _cursor_key(path: Path, session_id: str = "") -> str:
 
 def _compact_result(result: dict[str, Any]) -> dict[str, Any]:
     return {
+        "mode": result.get("mode", ""),
+        "job_id": result.get("job_id", ""),
+        "created": result.get("created"),
+        "updated": result.get("updated"),
+        "reason": result.get("reason", ""),
         "processed": bool(result.get("processed")),
         "context_node_id": result.get("context_node_id"),
         "work_node_id": result.get("work_node_id"),
@@ -412,5 +474,38 @@ def _compact_result(result: dict[str, Any]) -> dict[str, Any]:
 
 
 def _pending_session_count(states: dict[str, DrainSessionState]) -> int:
-    return sum(1 for state in states.values() if state.pending_records)
+    return sum(1 for state in states.values() if state.pending_count)
+
+
+def _update_state_from_record(state: DrainSessionState, record: dict[str, Any], *, evidence_day: str) -> None:
+    event_id = str(record.get("id") or "")
+    state.pending_count += 1
+    state.pending_records.append(record)
+    if event_id and not state.first_event_id:
+        state.first_event_id = event_id
+    if event_id:
+        state.latest_event_id = event_id
+    source_app = str(record.get("source_app") or "")
+    if source_app and not state.source_app:
+        state.source_app = source_app
+    repo_path = _record_repo_path(record)
+    if repo_path and not state.repo_path:
+        state.repo_path = repo_path
+    if evidence_day:
+        state.evidence_days.add(evidence_day)
+
+
+def _record_repo_path(record: dict[str, Any]) -> str:
+    payload = record.get("payload") if isinstance(record.get("payload"), dict) else {}
+    for key in ("cwd", "repo_path", "repo_root", "workspace", "workspace_root"):
+        value = payload.get(key, record.get(key))
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    tool_input = payload.get("tool_input")
+    if isinstance(tool_input, dict):
+        for key in ("cwd", "repo_path", "repo_root"):
+            value = tool_input.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+    return ""
 
