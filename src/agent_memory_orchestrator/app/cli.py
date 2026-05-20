@@ -44,6 +44,7 @@ from ..reasoning_graph.session_runtime import build_and_query_session_graph
 from ..reasoning_graph.session_runtime import build_session_graph
 from ..reasoning_graph.session_runtime import default_session_graph_path
 from ..reasoning_graph.session_runtime import query_session_graph
+from ..reasoning_graph.jobs.reset import reset_production_v2_storage
 from ..skill_checkpoint import DEFAULT_LOCAL_NUM_CTX
 from ..skill_checkpoint import DEFAULT_NUM_PREDICT
 from ..skill_checkpoint import list_skill_checkpoints
@@ -67,6 +68,16 @@ def _build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("init-db", help="Initialize local database schema")
     sub.add_parser("init-graph", help="Initialize local Kuzu GraphRAG schema")
+
+    v2_reset = sub.add_parser("v2-reset-production", help="Explicitly back up and reset production V2 graph/retrieval stores")
+    v2_reset.add_argument("--backup", action="store_true", help="Required. Create a timestamped backup before cleaning.")
+    v2_reset.add_argument("--clean-graph", action="store_true", help="Clean/recreate the production Kuzu graph store.")
+    v2_reset.add_argument("--clean-retrieval", action="store_true", help="Clean retrieval docs/vector ledger and FAISS cache.")
+    v2_reset.add_argument(
+        "--force-if-daemon-running",
+        action="store_true",
+        help="Allow reset even if the daemon health endpoint is reachable.",
+    )
 
     install = sub.add_parser("install", help="Configure Claude/Codex hooks, MCP, and local AMO runtime config")
     install.add_argument("--target", choices=["codex", "claude", "all"], default="all")
@@ -157,6 +168,11 @@ def _build_parser() -> argparse.ArgumentParser:
     graph_drain.add_argument("--limit", type=int, default=500)
     graph_drain.add_argument("--max-windows", type=int, default=None, help="Maximum Qwen trigger windows to process in one request.")
     graph_drain.add_argument("--offline", action="store_true", help="Open Kuzu directly for single-process maintenance.")
+
+    graph_drain_smoke = sub.add_parser("graph-drain-smoke", help="Run legacy GraphDelta drain into a disposable smoke graph")
+    graph_drain_smoke.add_argument("--limit", type=int, default=500)
+    graph_drain_smoke.add_argument("--max-windows", type=int, default=None)
+    graph_drain_smoke.add_argument("--offline", action="store_true", help="Open Kuzu directly for single-process maintenance.")
 
     graph_cleanup = sub.add_parser("graph-cleanup-noisy", help="Find or abandon noisy draft graph answer nodes")
     graph_cleanup.add_argument("--limit", type=int, default=500)
@@ -616,6 +632,18 @@ def main(argv: list[str] | None = None) -> int:
                 graph.close()
             return 0
 
+        if args.command == "v2-reset-production":
+            settings = Settings.load()
+            result = reset_production_v2_storage(
+                settings,
+                backup=args.backup,
+                clean_graph=args.clean_graph,
+                clean_retrieval=args.clean_retrieval,
+                force_if_daemon_running=args.force_if_daemon_running,
+            )
+            _print(result)
+            return 0
+
         if args.command == "models":
             if args.models_command == "list":
                 _print({"ok": True, "presets": list_model_presets()})
@@ -1062,6 +1090,7 @@ def main(argv: list[str] | None = None) -> int:
             "graph-search",
             "graph-status",
             "graph-drain",
+            "graph-drain-smoke",
             "graph-cleanup-noisy",
             "graph-consolidate",
             "graph-cache-status",
@@ -1086,6 +1115,8 @@ def main(argv: list[str] | None = None) -> int:
                         )
                     elif args.command == "graph-drain":
                         result = graph.drain_evidence(limit=args.limit, session_id=args.session_id, max_windows=args.max_windows)
+                    elif args.command == "graph-drain-smoke":
+                        result = graph.drain_evidence_smoke(limit=args.limit, max_windows=args.max_windows)
                     elif args.command == "graph-cleanup-noisy":
                         result = graph.cleanup_noisy_drafts(limit=args.limit, apply=args.apply)
                     elif args.command == "graph-consolidate":
@@ -1150,6 +1181,7 @@ def main(argv: list[str] | None = None) -> int:
                     if args.command
                     in {
                         "graph-drain",
+                        "graph-drain-smoke",
                         "graph-consolidate",
                         "graph-rebuild-cache",
                         "graph-retrieval-build",
@@ -1176,6 +1208,11 @@ def main(argv: list[str] | None = None) -> int:
                         result = client.post(
                             "/graph/drain",
                             {"session_id": args.session_id, "limit": args.limit, "max_windows": args.max_windows},
+                        )
+                    elif args.command == "graph-drain-smoke":
+                        result = client.post(
+                            "/graph/drain-smoke",
+                            {"limit": args.limit, "max_windows": args.max_windows},
                         )
                     elif args.command == "graph-cleanup-noisy":
                         result = client.post("/graph/cleanup-noisy", {"limit": args.limit, "apply": args.apply})
