@@ -36,6 +36,7 @@ func main() {
 	flag.BoolVar(&cfg.ForcePrivate, "force-private", cfg.ForcePrivate, "force private reachability for AutoRelay tests")
 	flag.BoolVar(&cfg.ForcePublic, "force-public", cfg.ForcePublic, "force public reachability for relay-service tests")
 	flag.BoolVar(&cfg.AdvertiseLocalhostDNS, "advertise-localhost-dns", cfg.AdvertiseLocalhostDNS, "advertise 127.0.0.1 listener as dns4/localhost for local relay smoke tests")
+	flag.Var((*stringList)(&cfg.AdvertiseAddrs), "advertise-addr", "public libp2p listen multiaddr to advertise; repeat for multiple addresses")
 	flag.Var((*stringList)(&cfg.StaticRelayAddrs), "static-relay", "static relay multiaddr; can be repeated")
 	flag.Parse()
 
