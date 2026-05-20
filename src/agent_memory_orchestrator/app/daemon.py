@@ -18,6 +18,8 @@ from ..graph.store import GraphBackendUnavailable
 from ..integrations.connectors.slack import SlackConnectorService
 from ..memory import MemoryService
 from ..llm.qwen import QwenUnavailable
+from ..reasoning_graph.jobs import V2SessionJobRunner
+from ..reasoning_graph.jobs import V2SessionJobStore
 
 _CLIENT_ABORT_ERRORS = (BrokenPipeError, ConnectionAbortedError, ConnectionResetError)
 _GRAPH_LOCK = threading.RLock()
@@ -127,6 +129,11 @@ class AmoHandler(BaseHTTPRequestHandler):
             self._write_html(200, GRAPH_WORKBENCH_HTML)
             return
         if path == "/health":
+            job_store = V2SessionJobStore(self.settings)
+            try:
+                reset_marker = job_store.marker()
+            finally:
+                job_store.close()
             self._write_json(
                 200,
                 {
@@ -146,6 +153,7 @@ class AmoHandler(BaseHTTPRequestHandler):
                     "auto_drain_interval_seconds": self.settings.auto_drain_interval_seconds,
                     "auto_drain_record_limit": self.settings.auto_drain_record_limit,
                     "auto_embedding_batch_size": self.settings.auto_embedding_batch_size,
+                    "v2_reset_marker": reset_marker,
                 },
             )
             return
@@ -171,6 +179,32 @@ class AmoHandler(BaseHTTPRequestHandler):
                 )
             except Exception as exc:
                 self._write_json(500, {"ok": False, "error": str(exc)})
+            return
+        if path == "/api/jobs" or path.startswith("/api/jobs/"):
+            raw_limit = (query.get("limit") or ["100"])[0]
+            limit = _bounded_int(raw_limit, default=100, minimum=1, maximum=500)
+            job_store = V2SessionJobStore(self.settings)
+            try:
+                if path == "/api/jobs":
+                    self._write_json(200, {"ok": True, "jobs": job_store.list_jobs(limit=limit), "reset_marker": job_store.marker()})
+                    return
+                job_id = path.removeprefix("/api/jobs/").strip("/")
+                job = job_store.get_job(job_id)
+                if job is None:
+                    self._write_json(404, {"ok": False, "error": "job not found"})
+                    return
+                self._write_json(
+                    200,
+                    {
+                        "ok": True,
+                        "job": job,
+                        "stages": job_store.list_stages(job_id),
+                        "events": job_store.list_events(job_id, limit=limit),
+                        "reset_marker": job_store.marker(),
+                    },
+                )
+            finally:
+                job_store.close()
             return
         if path.startswith("/api/graph/") or path.startswith("/api/debug/") or path == "/api/graph-merge-status":
             try:
@@ -331,6 +365,15 @@ class AmoHandler(BaseHTTPRequestHandler):
             return
 
         try:
+            if self.path.startswith("/api/jobs/") and self.path.endswith("/retry"):
+                job_id = self.path.removeprefix("/api/jobs/").removesuffix("/retry").strip("/")
+                job_store = V2SessionJobStore(self.settings)
+                try:
+                    job = job_store.retry_job(job_id, forced_by=str(payload.get("forced_by") or "daemon-api"))
+                    self._write_json(200, {"ok": True, "job": job})
+                finally:
+                    job_store.close()
+                return
             if self.path == "/hooks/ingest":
                 with _GRAPH_LOCK:
                     graph = GraphRagService(self.settings)
@@ -487,6 +530,21 @@ class AmoHandler(BaseHTTPRequestHandler):
                     finally:
                         graph.close()
                 return
+            if self.path == "/graph/drain-smoke":
+                with _GRAPH_LOCK:
+                    graph = GraphRagService(self.settings)
+                    try:
+                        limit = _bounded_int(str(payload.get("limit") or ""), default=500, minimum=1, maximum=5000)
+                        max_windows = _bounded_int(
+                            str(payload.get("max_windows") or ""),
+                            default=self.settings.drain_max_windows_per_run,
+                            minimum=1,
+                            maximum=25,
+                        )
+                        self._write_json(200, graph.drain_evidence_smoke(limit=limit, max_windows=max_windows))
+                    finally:
+                        graph.close()
+                return
             if self.path == "/graph/finalize-session":
                 with _GRAPH_LOCK:
                     graph = GraphRagService(self.settings)
@@ -608,7 +666,7 @@ def _auto_drain_loop(settings: Settings) -> None:
         time.sleep(settings.auto_drain_interval_seconds)
         try:
             result = _run_auto_drain_once(settings)
-            if result.get("windows_processed") or result.get("records_ingested"):
+            if result.get("windows_processed") or result.get("records_ingested") or result.get("v2_job_run", {}).get("ran"):
                 _daemon_log(settings, "auto_drain_cycle", **result)
         except Exception as exc:
             _daemon_log(settings, "auto_drain_failed", error_type=type(exc).__name__, error=str(exc))
@@ -622,26 +680,18 @@ def _run_auto_drain_once(settings: Settings) -> dict[str, Any]:
                 limit=settings.auto_drain_record_limit,
                 max_windows=settings.drain_max_windows_per_run,
             )
+            runner = V2SessionJobRunner(settings)
+            try:
+                job_run = runner.run_next()
+            finally:
+                runner.close()
             result: dict[str, Any] = {
                 "records_ingested": int(drain.get("records_ingested") or 0),
                 "windows_processed": int(drain.get("windows_processed") or 0),
                 "stopped_reason": drain.get("stopped_reason"),
                 "pending_sessions": drain.get("pending_sessions"),
+                "v2_job_run": job_run,
             }
-            if result["windows_processed"] <= 0:
-                return result
-
-            result["retrieval_index"] = graph.rebuild_retrieval_index(
-                limit=settings.auto_retrieval_node_limit,
-                max_doc_chars=settings.auto_retrieval_max_doc_chars,
-            )
-            if settings.vector_backend != "disabled" and settings.auto_embedding_batch_size > 0:
-                result["retrieval_embedding"] = graph.embed_retrieval_index(
-                    limit=settings.auto_embedding_batch_size,
-                    rebuild_faiss=True,
-                )
-            else:
-                result["retrieval_embedding"] = {"ok": True, "skipped": True, "reason": "disabled"}
             return result
         finally:
             graph.close()

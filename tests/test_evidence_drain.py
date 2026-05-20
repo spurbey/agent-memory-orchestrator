@@ -10,6 +10,7 @@ from agent_memory_orchestrator.graph.store import InMemoryGraphStore
 from agent_memory_orchestrator.evidence.raw_store import RawEvidenceStore
 from agent_memory_orchestrator.graph.session import DeterministicGraphExtractor, SessionGraphBuilder
 from agent_memory_orchestrator.versioning import GitSnapshot
+from agent_memory_orchestrator.reasoning_graph.jobs import V2SessionJobStore
 
 
 class _StaticGitBackend:
@@ -118,8 +119,6 @@ def test_drain_skips_and_quarantines_malformed_jsonl_lines(tmp_path: Path) -> No
 
 def test_drain_session_boundary_persists_pending_window_across_runs(tmp_path: Path) -> None:
     settings = make_settings(tmp_path)
-    store = InMemoryGraphStore()
-    backend = _StaticGitBackend()
     evidence = RawEvidenceStore(settings.evidence_dir)
     _append_session_start(evidence, "s1")
     evidence.append(
@@ -129,19 +128,29 @@ def test_drain_session_boundary_persists_pending_window_across_runs(tmp_path: Pa
         event_name="user_prompt_submit",
     )
 
-    first = _drain(settings, store, backend).drain(limit=2)
+    first = _v2_drain(settings).drain(limit=2)
     assert first["windows_processed"] == 0
     assert first["pending_sessions"] == 1
 
     _append_session_start(evidence, "s2")
 
-    second = _drain(settings, store, backend).drain(limit=1)
+    second = _v2_drain(settings).drain(limit=1)
 
     assert second["windows_processed"] == 1
     assert second["triggered"][0]["session_id"] == "s1"
     assert second["triggered"][0]["trigger"]["trigger_type"] == "session_boundary"
+    assert second["triggered"][0]["result"]["mode"] == "v2_job_enqueue"
+    assert second["triggered"][0]["result"]["created"] is True
     assert second["pending_sessions"] == 1
-    assert store.list_nodes(kinds=["CleanedEvidenceWindow"], session_id="s1")
+    job_store = V2SessionJobStore(settings)
+    try:
+        job = job_store.get_job_by_session(session_id="s1")
+    finally:
+        job_store.close()
+    assert job is not None
+    assert job["status"] == "pending"
+    assert job["current_stage"] == "evidence_view"
+    assert job["source_app"] == "codex"
 
 
 def test_drain_write_window_builds_context_snapshot_and_work_change(tmp_path: Path) -> None:
@@ -359,3 +368,7 @@ def _drain(settings: Settings, store: InMemoryGraphStore, backend: _StaticGitBac
             extractor=DeterministicGraphExtractor(),
         ),
     )
+
+
+def _v2_drain(settings: Settings) -> EvidenceDrain:
+    return EvidenceDrain(settings, InMemoryGraphStore(), _StaticGitBackend())

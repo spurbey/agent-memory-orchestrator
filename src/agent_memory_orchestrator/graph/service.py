@@ -351,6 +351,29 @@ class GraphRagService:
             result["finalizations"] = finalizations
         return result
 
+    def drain_evidence_smoke(self, *, limit: int = 500, max_windows: int | None = None) -> dict[str, Any]:
+        """Run the legacy GraphDelta extractor only into a disposable smoke graph."""
+        timestamp = time.strftime("%Y%m%d-%H%M%S")
+        smoke_path = self.settings.home / ".state" / "smoke" / f"graph-drain-smoke-{timestamp}.kuzu"
+        if smoke_path.exists():
+            _remove_graph_path(smoke_path)
+        smoke_store = KuzuGraphStore(smoke_path)
+        smoke_store.init_schema()
+        try:
+            result = self._drain_fresh_graph(
+                smoke_store,
+                cursor_path=self.settings.home / ".state" / f"smoke-drain-cursors-{timestamp}.json",
+                limit=limit,
+                max_windows=max_windows,
+            )
+            result["ok"] = True
+            result["mode"] = "legacy_graphdelta_smoke"
+            result["graph_path"] = str(smoke_path)
+            result["production_graph_path"] = str(self.settings.graph_path)
+            return result
+        finally:
+            smoke_store.close()
+
     def pending_evidence(self, *, session_id: str = "") -> dict[str, Any]:
         drain = self._new_drain()
         return drain.pending(session_id=session_id)
@@ -924,14 +947,11 @@ class GraphRagService:
         return {"ok": trace.commit.available, "trace": trace.as_dict()}
 
     def _new_drain(self) -> EvidenceDrain:
-        extractor = QwenGraphExtractor(self.settings)
-        builder = SessionGraphBuilder(self.settings, self.store, self.version_backend, extractor=extractor)
         return EvidenceDrain(
             self.settings,
             self.store,
             self.version_backend,
             evidence_roots=_evidence_roots(self.settings),
-            builder=builder,
         )
 
     def _upsert_basic_nodes(self, normalized: dict[str, Any], *, evidence: RawEvidenceRef, git: dict[str, Any]) -> None:
