@@ -47,7 +47,16 @@ package-dir = {"" = "src"}
 where = ["src"]
 
 [tool.setuptools.package-data]
-agent_memory_orchestrator = ["web/*.html", "web/*.css", "web/*.js", "bin/*/amo-peer-netd", "bin/*/amo-peer-netd.exe"]
+agent_memory_orchestrator = [
+  "web/*.html",
+  "web/*.css",
+  "web/*.js",
+  "web/css/*.css",
+  "web/js/core/*.js",
+  "web/js/graph/*.js",
+  "bin/*/amo-peer-netd",
+  "bin/*/amo-peer-netd.exe",
+]
 
 [tool.setuptools.data-files]
 "peer-netd" = [

@@ -22,10 +22,18 @@ def test_bounded_int_clamps_invalid_and_extreme_values() -> None:
 def test_web_assets_load_from_package_static_folder() -> None:
     html = _load_web_asset("index.html")
     js, content_type = _web_asset_bytes("amo.js")
+    graph_html = _load_web_asset("graph.html")
+    graph_js, graph_content_type = _web_asset_bytes("js/graph/workbench.js")
+    graph_css, graph_css_type = _web_asset_bytes("css/graph-workbench.css")
 
     assert "AMO Control Room" in html
     assert b"function buildGraph" in js
     assert content_type.startswith("application/javascript")
+    assert "3D Memory Workbench" in graph_html
+    assert b"async function loadGraph" in graph_js
+    assert graph_content_type.startswith("application/javascript")
+    assert b".graph-workbench" in graph_css
+    assert graph_css_type.startswith("text/css")
 
 
 def test_web_asset_loader_blocks_path_traversal() -> None:

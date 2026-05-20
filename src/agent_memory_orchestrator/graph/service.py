@@ -16,7 +16,9 @@ from ..core.config import Settings
 from ..evidence.drain import EvidenceDrain
 from ..evidence.drain import _read_jsonl_from
 from ..evidence.raw_store import RawEvidenceRef, RawEvidenceStore
-from ..evidence.triggers import TriggerDecision, detect_trigger
+from ..evidence.triggers import TriggerDecision
+from ..evidence.triggers import detect_trigger
+from ..evidence.triggers import estimate_record_tokens
 from ..evidence.window import clean_evidence_window
 from ..llm.embeddings import embed_text
 from ..llm.qwen import DeterministicPlanner, OllamaQwenClient, QueryPlan, QwenPlanner, QwenUnavailable
@@ -575,7 +577,7 @@ class GraphRagService:
         nodes = [_sanitize_output_node(node) for node in self.store.list_nodes(session_id=session_id, limit=300)]
         edges = self.store.list_edges(session_id=session_id, limit=500)
         pending = self.pending_evidence(session_id=session_id)
-        windows = _reconstruct_clean_windows(records, nodes)
+        windows = _reconstruct_clean_windows(records, nodes, token_threshold=self.settings.drain_token_threshold)
         merge_preview = CommitMergeEngine(self.settings, self.store, self.version_backend, classifier=None).finalize_session(
             session_id=session_id,
             commit="HEAD",
@@ -1728,13 +1730,8 @@ def _is_clean_answer_summary(summary: str, metadata: object = None) -> bool:
     if len(text) > 240 and _code_token_ratio(text) > 0.18:
         return False
     meta = metadata if isinstance(metadata, dict) else {}
-    if meta.get("trigger", {}).get("trigger_type") == "write" and meta.get("changed_files"):
+    if meta.get("changed_files"):
         return True
-    if meta.get("trigger", {}).get("trigger_type") == "write" and not any(
-        term in lowered
-        for term in ("changed", "implemented", "fixed", "decision", "added", "updated", "removed", "refactor", "test")
-    ):
-        return False
     return True
 
 
@@ -1799,19 +1796,24 @@ def _timeline_row(record: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _reconstruct_clean_windows(records: list[dict[str, Any]], nodes: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _reconstruct_clean_windows(
+    records: list[dict[str, Any]], nodes: list[dict[str, Any]], *, token_threshold: int
+) -> list[dict[str, Any]]:
     pending_records: list[dict[str, Any]] = []
-    pending_write = False
+    pending_approx_tokens = 0
     windows: list[dict[str, Any]] = []
     for record in records:
-        decision = detect_trigger(record, pending_write=pending_write)
-        if decision.is_write:
-            pending_write = True
+        pending_approx_tokens += estimate_record_tokens(record)
+        decision = detect_trigger(
+            record,
+            pending_approx_tokens=pending_approx_tokens,
+            token_threshold=token_threshold,
+        )
         pending_records.append(record)
         if decision.should_process:
             windows.append(_window_row(len(windows) + 1, pending_records, decision, nodes))
             pending_records = []
-            pending_write = False
+            pending_approx_tokens = 0
     if pending_records:
         preview_trigger = TriggerDecision(False, "pending", "pending raw evidence window")
         windows.append(
@@ -2150,11 +2152,8 @@ def _central_graph_warnings(nodes: list[dict[str, Any]], edges: list[dict[str, A
 
 
 def _is_finalize_boundary(trigger: dict[str, Any]) -> bool:
-    return bool(trigger.get("is_commit")) or str(trigger.get("trigger_type") or "") in {
-        "explicit_finalize",
-        "connector_finalize",
-        "stop_finalize",
-    }
+    del trigger
+    return False
 
 
 def _rebuild_smoke(store: GraphStore) -> dict[str, Any]:
