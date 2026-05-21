@@ -18,7 +18,20 @@ Install for Claude and Codex:
 npx -y agent-memory-orchestrator-cli -- install --target all --preset cpu-balanced --qwen-model qwen3.5:9b
 ```
 
-If `npx` resolves `agent-memory-orchestrator-cli@0.1.1`, that registry package is too old for this command shape. Publish/use `0.1.3` or newer.
+If `npx` resolves `agent-memory-orchestrator-cli@0.1.1`, that registry package is too old for this command shape. Publish/use `0.1.4` or newer.
+
+The wrapper automatically skips Python versions that are too new for AMO's Kuzu
+dependency and asks `pipx` to create the AMO app with Python 3.10, 3.11, 3.12,
+or 3.13. This avoids the common macOS ARM failure where `python3` points to
+Python 3.14 and pip tries to build Kuzu from source. If automatic discovery
+cannot find the right interpreter, install Python 3.13 and rerun the same
+command.
+
+For unusual machines, you can override the interpreter explicitly:
+
+```bash
+npx -y agent-memory-orchestrator-cli -- install --pipx-python /opt/homebrew/bin/python3.13 --target codex
+```
 
 On a fresh device, install initializes the empty V2 production marker automatically. The
 `v2-reset-production` command is only for an existing AMO home with old pre-V2 graph/retrieval
@@ -29,6 +42,7 @@ data that must be backed up and cleaned explicitly.
 | Option | Meaning |
 | --- | --- |
 | `--target codex|claude|all` | Agent configs to patch |
+| `--pipx-python <path>` | Optional override for the Python used by pipx |
 | `--preset cpu-light|cpu-balanced|gpu-quality` | Local model profile |
 | `--qwen-model <model>` | Ollama Qwen model written to config |
 | `--with-models` | Install embedding/vector extras |
