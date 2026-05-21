@@ -11,6 +11,8 @@ const DEFAULT_SPEC =
 const PIPX_PACKAGE = process.env.AMO_PIPX_PACKAGE || "agent-memory-orchestrator";
 const MODEL_PACKAGES = ["sentence-transformers", "faiss-cpu"];
 const SLACK_PACKAGES = ["websocket-client"];
+const PYTHON_MIN_MINOR = 10;
+const PYTHON_MAX_MINOR = 13;
 const VALUE_FLAGS = new Set([
   "--target",
   "--user-home",
@@ -33,6 +35,7 @@ Usage:
 
 Wrapper flags:
   --from <pip_spec>     Install AMO from a custom pip spec.
+  --pipx-python <path>  Override the Python interpreter used for the pipx AMO env.
   --with-models         Inject sentence-transformers and faiss-cpu into the pipx app.
   --with-slack          Inject websocket-client into the pipx app.
   --with-all-extras     Enable all optional runtime extras.
@@ -95,12 +98,121 @@ function findPythonLauncher() {
   return null;
 }
 
+function pythonProbeScript() {
+  return [
+    "import json, sys",
+    "print(json.dumps({'major': sys.version_info[0], 'minor': sys.version_info[1], 'executable': sys.executable}))",
+  ].join("; ");
+}
+
+function probePython(cmd, args = []) {
+  const label = [cmd, ...args].join(" ");
+  const result = run(cmd, [...args, "-c", pythonProbeScript()], { silent: true });
+  if (!result.ok) {
+    return { ok: false, label, error: outputTail(`${result.stdout || ""}\n${result.stderr || ""}`, 500) };
+  }
+  try {
+    const parsed = JSON.parse((result.stdout || "").trim());
+    return {
+      ok: true,
+      label,
+      cmd,
+      args,
+      major: Number(parsed.major),
+      minor: Number(parsed.minor),
+      version: `${parsed.major}.${parsed.minor}`,
+      executable: String(parsed.executable || cmd),
+    };
+  } catch (error) {
+    return { ok: false, label, error: `Could not parse Python version output: ${error.message}` };
+  }
+}
+
+function isSupportedPython(info) {
+  return info && info.major === 3 && info.minor >= PYTHON_MIN_MINOR && info.minor <= PYTHON_MAX_MINOR;
+}
+
+function pythonUnsupportedHint(checked) {
+  const seen = checked.length
+    ? ` Checked: ${checked.map((item) => `${item.label}${item.version ? `=${item.version}` : ""}`).join(", ")}.`
+    : "";
+  return (
+    `AMO currently needs Python 3.${PYTHON_MIN_MINOR}-3.${PYTHON_MAX_MINOR} for installation because Kuzu wheels ` +
+    "are not available for every newer Python/platform combination yet. Install Python 3.13, 3.12, 3.11, or 3.10 " +
+    "and rerun the same npx command." +
+    seen
+  );
+}
+
+function addPythonCandidate(candidates, seen, cmd, args = []) {
+  const key = [cmd, ...args].join("\u0000");
+  if (seen.has(key)) {
+    return;
+  }
+  seen.add(key);
+  candidates.push({ cmd, args });
+}
+
+function pythonCandidates() {
+  const candidates = [];
+  const seen = new Set();
+
+  const preferred = [process.env.AMO_PIPX_PYTHON, process.env.PIPX_DEFAULT_PYTHON].filter(Boolean);
+  for (const value of preferred) {
+    addPythonCandidate(candidates, seen, value, []);
+  }
+
+  if (process.platform === "win32") {
+    for (const minor of [13, 12, 11, 10]) {
+      addPythonCandidate(candidates, seen, "py", [`-3.${minor}`]);
+    }
+    for (const minor of [13, 12, 11, 10]) {
+      addPythonCandidate(candidates, seen, `python3.${minor}`, []);
+    }
+    addPythonCandidate(candidates, seen, "python", []);
+    addPythonCandidate(candidates, seen, "python3", []);
+  } else {
+    for (const minor of [13, 12, 11, 10]) {
+      addPythonCandidate(candidates, seen, `python3.${minor}`, []);
+    }
+    addPythonCandidate(candidates, seen, "python3", []);
+    addPythonCandidate(candidates, seen, "python", []);
+  }
+
+  return candidates;
+}
+
+function selectInstallPython(explicitPython) {
+  const checked = [];
+  if (explicitPython) {
+    const info = probePython(explicitPython);
+    checked.push(info);
+    if (info.ok && isSupportedPython(info)) {
+      return info;
+    }
+    throw new Error(`--pipx-python must point to Python 3.${PYTHON_MIN_MINOR}-3.${PYTHON_MAX_MINOR}. ${pythonUnsupportedHint(checked)}`);
+  }
+
+  for (const candidate of pythonCandidates()) {
+    const info = probePython(candidate.cmd, candidate.args);
+    if (!info.ok) {
+      continue;
+    }
+    checked.push(info);
+    if (isSupportedPython(info)) {
+      return info;
+    }
+  }
+
+  throw new Error(pythonUnsupportedHint(checked));
+}
+
 function getPipxRunner(options = {}) {
   const allowBootstrap = options.allowBootstrap !== false;
   if (commandExists("pipx")) {
     return { cmd: "pipx", prefix: [] };
   }
-  const py = findPythonLauncher();
+  const py = options.bootstrapPython || findPythonLauncher();
   if (!py) {
     return null;
   }
@@ -118,6 +230,7 @@ function pipxArgs(runner, args) {
 
 function parseInstallArgs(argv) {
   let spec = DEFAULT_SPEC;
+  let pipxPython = null;
   const amoArgs = [];
   const extras = new Set();
 
@@ -129,6 +242,15 @@ function parseInstallArgs(argv) {
         throw new Error("--from requires a value");
       }
       spec = next;
+      i += 1;
+      continue;
+    }
+    if (arg === "--pipx-python") {
+      const next = argv[i + 1];
+      if (!next) {
+        throw new Error("--pipx-python requires a value");
+      }
+      pipxPython = next;
       i += 1;
       continue;
     }
@@ -161,7 +283,7 @@ function parseInstallArgs(argv) {
     extras.add("models");
   }
 
-  return { spec, amoArgs, extras };
+  return { spec, pipxPython, amoArgs, extras };
 }
 
 function bootstrapPipx(pyCmd) {
@@ -233,11 +355,12 @@ function resolveInstalledApp(runner, appName) {
 }
 
 function runInstall(argv) {
-  const { spec, amoArgs, extras } = parseInstallArgs(argv);
-  const runner = getPipxRunner({ allowBootstrap: true });
+  const { spec, pipxPython, amoArgs, extras } = parseInstallArgs(argv);
+  const installPython = selectInstallPython(pipxPython);
+  const runner = getPipxRunner({ allowBootstrap: true, bootstrapPython: installPython.executable });
   if (!runner) {
     throw new Error(
-      "Python is not available on PATH. Install Python 3.10+ first, then rerun this command."
+      `Python 3.${PYTHON_MIN_MINOR}-3.${PYTHON_MAX_MINOR} is not available. Install a supported Python first, then rerun this command.`
     );
   }
 
@@ -245,8 +368,14 @@ function runInstall(argv) {
     bootstrapPipx(runner.cmd);
   }
 
-  console.log("[3/5] Installing Agent Memory Orchestrator with pipx...");
-  runQuietOrThrow(runner.cmd, pipxArgs(runner, ["install", "--force", spec]), "pipx install failed.");
+  console.log(
+    `[3/5] Installing Agent Memory Orchestrator with pipx using Python ${installPython.version} (${installPython.executable})...`
+  );
+  runQuietOrThrow(
+    runner.cmd,
+    pipxArgs(runner, ["install", "--force", "--python", installPython.executable, spec]),
+    "pipx install failed."
+  );
 
   injectOptionalPackages(runner, extras);
 
@@ -270,6 +399,12 @@ function runInstall(argv) {
 
 function runDoctor(args) {
   const py = findPythonLauncher();
+  let installPython = null;
+  try {
+    installPython = selectInstallPython(null);
+  } catch (_error) {
+    installPython = null;
+  }
   const runner = getPipxRunner({ allowBootstrap: false });
   const amoCli = runner ? resolveInstalledApp(runner, "amo-cli") : commandExists("amo-cli") ? "amo-cli" : null;
   if (amoCli) {
@@ -280,6 +415,9 @@ function runDoctor(args) {
     JSON.stringify(
       {
         python: py || null,
+        compatible_install_python: installPython
+          ? { version: installPython.version, executable: installPython.executable }
+          : null,
         pipx_available: Boolean(runner),
         amo_cli_available: false,
         hint: "Run `npx -y agent-memory-orchestrator-cli -- install --target codex --preset cpu-balanced --qwen-model qwen3.5:9b`.",
