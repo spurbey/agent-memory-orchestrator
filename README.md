@@ -7,7 +7,7 @@
 
 <p align="center">
   <a href="./LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-0f766e.svg"></a>
-  <img alt="Python 3.10+" src="https://img.shields.io/badge/python-3.10%2B-2563eb.svg">
+  <img alt="Python 3.10-3.13" src="https://img.shields.io/badge/python-3.10--3.13-2563eb.svg">
   <img alt="Local first" src="https://img.shields.io/badge/local--first-yes-16a34a.svg">
   <img alt="GraphRAG V2" src="https://img.shields.io/badge/GraphRAG-V2-7c3aed.svg">
 </p>
@@ -51,7 +51,7 @@ flowchart LR
 
 Prerequisites:
 
-- Python 3.10+
+- Python 3.10, 3.11, 3.12, or 3.13
 - Node.js 18+
 - pipx
 - Ollama for local Qwen reasoning
@@ -62,6 +62,10 @@ npx -y agent-memory-orchestrator-cli -- install --target codex --preset cpu-bala
 amo-cli doctor --target codex
 amo-daemon
 ```
+
+The `npx` installer automatically chooses a compatible Python for `pipx` and skips
+Python 3.14 when it would force Kuzu to build from source. If a machine has no
+Python 3.10-3.13 interpreter, install Python 3.13 and rerun the same command.
 
 Fresh installs initialize an empty V2 production graph marker automatically. The destructive
 `v2-reset-production` command is only for machines that already have old pre-V2 graph/retrieval
