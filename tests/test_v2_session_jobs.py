@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -16,6 +17,7 @@ from agent_memory_orchestrator.reasoning_graph.jobs.reset import adopt_existing_
 from agent_memory_orchestrator.reasoning_graph.jobs.reset import initialize_fresh_v2_production_storage
 from agent_memory_orchestrator.reasoning_graph.jobs.reset import reset_production_v2_storage
 from agent_memory_orchestrator.reasoning_graph.jobs.runner import require_complete_v2_reset_marker
+from agent_memory_orchestrator.reasoning_graph.jobs.runner import V2SessionJobRunner
 from agent_memory_orchestrator.reasoning_graph.stage4_contract import STAGE4_CONTRACT_VERSION
 from agent_memory_orchestrator.reasoning_graph.stage4_contract import build_stage4_packet_prompt
 from agent_memory_orchestrator.reasoning_graph.stage4_contract import stage4_contract_hash
@@ -130,6 +132,76 @@ def test_v2_stage_rows_track_hashes_and_config_hash(tmp_path: Path) -> None:
         assert updated["status"] == "pending"
         assert updated["current_stage"] == "work_packets"
         assert updated["last_successful_stage"] == "evidence_view"
+    finally:
+        store.close()
+
+
+def test_v2_runner_fails_instead_of_completing_empty_graph_when_no_work_packets(tmp_path: Path) -> None:
+    settings = make_settings(tmp_path)
+    settings.evidence_dir.mkdir(parents=True, exist_ok=True)
+    transcript_path = tmp_path / "transcript.jsonl"
+    transcript_rows = [
+        {
+            "type": "response_item",
+            "timestamp": "2026-05-21T10:00:00Z",
+            "payload": {"type": "message", "role": "user", "content": [{"text": "Explain the installer behavior."}]},
+        },
+        {
+            "type": "response_item",
+            "timestamp": "2026-05-21T10:01:00Z",
+            "payload": {
+                "type": "message",
+                "role": "assistant",
+                "content": [{"text": "I found the issue and should document the decision, but no git commit was created."}],
+            },
+        },
+    ]
+    transcript_path.write_text("".join(json.dumps(row) + "\n" for row in transcript_rows), encoding="utf-8")
+    evidence_path = settings.evidence_dir / "2026-05-21.jsonl"
+    evidence_path.write_text(
+        json.dumps(
+            {
+                "id": "raw_1",
+                "session_id": "s-no-commit",
+                "event_name": "session_start",
+                "transcript_path": str(transcript_path),
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    store = V2SessionJobStore(settings)
+    try:
+        job = store.enqueue_session(
+            session_id="s-no-commit",
+            boundary_event_id="raw_boundary",
+            source_app="codex",
+            repo_path=str(tmp_path),
+            source_evidence_day="2026-05-21",
+        ).job
+        runner = V2SessionJobRunner(settings, job_store=store)
+
+        first = runner.run_next()
+        second = runner.run_next()
+
+        assert first["stage"] == "evidence_view"
+        assert first["status"] == "pending"
+        assert second["stage"] == "work_packets"
+        assert second["status"] == "failed"
+        assert second["error"] == "no_commit_backed_work_packets"
+
+        updated = store.get_job(job["job_id"])
+        assert updated is not None
+        assert updated["status"] == "failed"
+        assert updated["current_stage"] == "work_packets"
+        assert "no_commit_backed_work_packets" in updated["error"]["reason"]
+        stages = store.list_stages(job["job_id"])
+        assert [stage["stage"] for stage in stages] == ["evidence_view", "work_packets"]
+        work_stage = stages[1]
+        assert work_stage["status"] == "failed"
+        assert work_stage["diagnostics"]["quality"]["packet_count"] == 0
+        assert Path(work_stage["diagnostics"]["packet_artifact"]).exists()
     finally:
         store.close()
 
