@@ -1,10 +1,10 @@
 ﻿export const ANSWER_KINDS = new Set([
-  "Decision", "WorkChange", "Fix", "Bug", "Blocker", "TestRun", "ContextSnapshot", "GitCommit", "Topic", "Cluster",
+  "Decision", "Fix", "Bug", "Blocker", "TestRun", "Topic", "Cluster",
   "ReasoningNode", "Problem", "Cause", "Constraint", "OpenQuestion", "Commit", "Packet", "CodeNode", "CodeVersion", "Symbol",
 ]);
 
 export const SUPPORT_KINDS = new Set([
-  "RawEvidenceRef", "CleanedEvidenceWindow", "GraphDelta", "Session", "Repo", "Branch", "File", "App", "ToolResult", "Prompt",
+  "EvidenceRef", "RawEvidenceRef", "Session", "Repo", "Branch", "File", "App", "ToolResult", "Prompt",
 ]);
 
 export const SEMANTIC_EDGE_TYPES = new Set([
@@ -20,7 +20,6 @@ const NODE_STYLE = {
   Query: { color: "#fff3a3", halo: "#f2cf78", shape: "ring", radius: 12, tier: 7 },
   Answer: { color: "#f7fbff", halo: "#ffffff", shape: "ring", radius: 11, tier: 7 },
   Decision: { color: "#80dec6", halo: "#80dec6", shape: "diamond", radius: 8, tier: 6 },
-  WorkChange: { color: "#f2cf78", halo: "#f2cf78", shape: "hex", radius: 8, tier: 5 },
   Fix: { color: "#b7f56e", halo: "#b7f56e", shape: "circle", radius: 8, tier: 6 },
   Bug: { color: "#ff766f", halo: "#ff766f", shape: "triangle", radius: 8, tier: 6 },
   Problem: { color: "#ff9d6e", halo: "#ff766f", shape: "triangle", radius: 8, tier: 6 },
@@ -35,11 +34,9 @@ const NODE_STYLE = {
   CodeNode: { color: "#bda2ff", halo: "#bda2ff", shape: "file", radius: 6.5, tier: 4 },
   CodeVersion: { color: "#bda2ff", halo: "#bda2ff", shape: "file", radius: 6.5, tier: 4 },
   Symbol: { color: "#c7b8ff", halo: "#bda2ff", shape: "file", radius: 6.3, tier: 4 },
-  ContextSnapshot: { color: "#d5f7df", halo: "#d5f7df", shape: "circle", radius: 6.3, tier: 3 },
   Topic: { color: "#bda2ff", halo: "#bda2ff", shape: "ring", radius: 10, tier: 3 },
   Cluster: { color: "#bda2ff", halo: "#bda2ff", shape: "ring", radius: 12, tier: 3 },
-  GraphDelta: { color: "#6fd2c4", halo: "#80dec6", shape: "diamond", radius: 5.2, tier: 2 },
-  CleanedEvidenceWindow: { color: "#a5d7c4", halo: "#a5d7c4", shape: "square", radius: 4.8, tier: 2 },
+  EvidenceRef: { color: "#a5d7c4", halo: "#a5d7c4", shape: "square", radius: 4.8, tier: 2 },
   RawEvidenceRef: { color: "#67786f", halo: "#67786f", shape: "circle", radius: 4.1, tier: 1 },
   ToolResult: { color: "#87968f", halo: "#87968f", shape: "circle", radius: 4.3, tier: 1 },
   Prompt: { color: "#91cf7b", halo: "#91cf7b", shape: "circle", radius: 4.6, tier: 1 },
@@ -129,7 +126,7 @@ export function styleForEdge(edge) {
 export function graphClassForNode(node) {
   const kind = nodeKind(node);
   if (["Decision", "Fix", "Problem", "Cause", "Constraint", "ReasoningNode"].includes(kind)) return "reasoning";
-  if (["Packet", "GraphDelta", "CleanedEvidenceWindow", "RawEvidenceRef", "ToolResult", "Prompt"].includes(kind)) return "evidence";
+  if (["Packet", "EvidenceRef", "RawEvidenceRef", "ToolResult", "Prompt"].includes(kind)) return "evidence";
   if (["Commit", "GitCommit", "CodeNode", "CodeVersion", "Symbol", "File"].includes(kind)) return "code";
   if (["Query", "Answer"].includes(kind)) return "retrieval";
   return "memory";

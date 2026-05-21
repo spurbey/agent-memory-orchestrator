@@ -99,8 +99,8 @@ function rebuildGraph() {
     if (!state.showSupport && !isAnswerNode(node)) return false;
     if (kind && nodeKind(node) !== kind) return false;
     if (status && nodeStatus(node) !== status) return false;
-    if (mode === "causal" && !["RawEvidenceRef", "CleanedEvidenceWindow", "GraphDelta", "Packet", "ReasoningNode", "Decision", "Fix", "WorkChange", "Commit", "GitCommit", "CodeNode"].includes(nodeKind(node))) return false;
-    if (mode === "similarity" && !["ReasoningNode", "Decision", "WorkChange", "CodeNode", "Symbol", "Packet", "Topic", "Cluster"].includes(nodeKind(node))) return false;
+    if (mode === "causal" && !["EvidenceRef", "RawEvidenceRef", "Packet", "ReasoningNode", "Decision", "Fix", "Commit", "GitCommit", "CodeNode", "CodeVersion", "Symbol"].includes(nodeKind(node))) return false;
+    if (mode === "similarity" && !["ReasoningNode", "Decision", "CodeNode", "CodeVersion", "Symbol", "Packet", "Topic", "Cluster"].includes(nodeKind(node))) return false;
     if (query) {
       const haystack = `${nodeKind(node)} ${nodeLabel(node)} ${nodeSummary(node)} ${nodeId(node)} ${formatJson(nodeMetadata(node))}`.toLowerCase();
       if (!haystack.includes(query)) return false;
@@ -147,10 +147,10 @@ function scoreNode(node, degree, query) {
   const kind = nodeKind(node);
   const status = nodeStatus(node);
   let score = degree.get(nodeId(node)) || 0;
-  if (["Decision", "Problem", "Cause", "Fix", "ReasoningNode", "WorkChange"].includes(kind)) score += 80;
+  if (["Decision", "Problem", "Cause", "Fix", "ReasoningNode"].includes(kind)) score += 80;
   if (["Packet", "Commit", "GitCommit", "CodeNode", "CodeVersion", "Symbol"].includes(kind)) score += 46;
-  if (["Topic", "Cluster", "ContextSnapshot"].includes(kind)) score += 24;
-  if (["RawEvidenceRef", "ToolResult", "Prompt", "CleanedEvidenceWindow"].includes(kind)) score -= state.showSupport ? 8 : 120;
+  if (["Topic", "Cluster"].includes(kind)) score += 24;
+  if (["EvidenceRef", "RawEvidenceRef", "ToolResult", "Prompt"].includes(kind)) score -= state.showSupport ? 8 : 120;
   if (["committed", "session_final", "accepted", "active"].includes(status)) score += 34;
   if (node.scope === "central") score += 20;
   if (query) {
