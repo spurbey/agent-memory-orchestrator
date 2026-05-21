@@ -21,6 +21,9 @@ class PeerNetdRuntimeError(RuntimeError):
     """Raised when the managed peer sidecar cannot be built or controlled."""
 
 
+REQUIRED_NETD_FLAGS = ("identity-key", "advertise-addr")
+
+
 @dataclass(slots=True, frozen=True)
 class PeerNetdLaunchOptions:
     node_id: str = "amo-node"
@@ -103,19 +106,7 @@ class PeerNetdRuntime:
                 current["health"] = PeerNetdClient(base_url=api_url, timeout_seconds=1.0).health()
             return {"ok": True, "already_running": True, "status": current, "post_start": post_start}
 
-        binary = self.resolve_binary()
-        packaged = self.packaged_binary_path()
-        if packaged is not None and binary.resolve() == packaged.resolve():
-            binary = self.install_packaged_binary(packaged)
-        elif not binary.exists():
-            if packaged is not None:
-                binary = self.install_packaged_binary(packaged, binary)
-            elif not build_if_missing:
-                raise PeerNetdRuntimeError(f"peer-netd binary not found: {binary}")
-            else:
-                self.build(binary)
-        elif not binary.is_file():
-            raise PeerNetdRuntimeError(f"peer-netd binary path is not a file: {binary}")
+        binary = self.prepare_binary(build_if_missing=build_if_missing)
 
         self.runtime_dir.mkdir(parents=True, exist_ok=True)
         self.log_dir.mkdir(parents=True, exist_ok=True)
@@ -170,6 +161,85 @@ class PeerNetdRuntime:
             "health": health,
             "post_start": post_start,
             "logs": {"stdout": str(stdout_path), "stderr": str(stderr_path)},
+        }
+
+    def prepare_binary(self, *, build_if_missing: bool = True) -> Path:
+        binary = self.resolve_binary()
+        packaged = self.packaged_binary_path()
+        if packaged is not None and binary.resolve() == packaged.resolve():
+            binary = self.install_packaged_binary(packaged)
+        elif not binary.exists():
+            if packaged is not None:
+                binary = self.install_packaged_binary(packaged, binary)
+            elif not build_if_missing:
+                raise PeerNetdRuntimeError(f"peer-netd binary not found: {binary}")
+            else:
+                self.build(binary)
+        elif not binary.is_file():
+            raise PeerNetdRuntimeError(f"peer-netd binary path is not a file: {binary}")
+
+        capabilities = self.binary_capabilities(binary)
+        if not capabilities.get("missing_required_flags"):
+            return binary
+
+        packaged_is_different = packaged is not None and packaged.exists() and packaged.resolve() != binary.resolve()
+        if packaged_is_different:
+            packaged_capabilities = self.binary_capabilities(packaged)
+            if not packaged_capabilities.get("missing_required_flags"):
+                return self.install_packaged_binary(packaged, binary)
+
+        missing = ", ".join(str(item) for item in capabilities.get("missing_required_flags", []))
+        if not build_if_missing:
+            raise PeerNetdRuntimeError(
+                "peer-netd binary is stale or incompatible"
+                f" (missing flags: {missing}); run amo-cli peer netd build or reinstall/update AMO"
+            )
+        self.build(binary)
+        rebuilt = self.binary_capabilities(binary)
+        if rebuilt.get("missing_required_flags"):
+            missing_after = ", ".join(str(item) for item in rebuilt.get("missing_required_flags", []))
+            raise PeerNetdRuntimeError(f"rebuilt peer-netd is still missing required flags: {missing_after}")
+        return binary
+
+    def binary_capabilities(self, binary: Path | None = None) -> dict[str, Any]:
+        candidate = (binary or self.resolve_binary()).expanduser().resolve()
+        if not candidate.exists():
+            return {
+                "ok": False,
+                "binary": str(candidate),
+                "exists": False,
+                "missing_required_flags": list(REQUIRED_NETD_FLAGS),
+            }
+        try:
+            result = subprocess.run(
+                [str(candidate), "-h"],
+                text=True,
+                capture_output=True,
+                check=False,
+                timeout=5,
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            return {
+                "ok": False,
+                "binary": str(candidate),
+                "exists": True,
+                "executable": False,
+                "error": str(exc),
+                "missing_required_flags": list(REQUIRED_NETD_FLAGS),
+            }
+        help_text = f"{result.stdout}\n{result.stderr}"
+        missing = [
+            flag
+            for flag in REQUIRED_NETD_FLAGS
+            if f"-{flag}" not in help_text and f"--{flag}" not in help_text
+        ]
+        return {
+            "ok": not missing,
+            "binary": str(candidate),
+            "exists": True,
+            "executable": True,
+            "returncode": result.returncode,
+            "missing_required_flags": missing,
         }
 
     def stop(self) -> dict[str, Any]:

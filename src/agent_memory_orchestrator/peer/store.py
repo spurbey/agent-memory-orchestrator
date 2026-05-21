@@ -49,6 +49,7 @@ class PeerStore:
         self.rooms_dir = self.root / "rooms"
         self.invites_dir = self.root / "invites"
         self.join_requests_dir = self.root / "join_requests"
+        self.relay_profiles_path = self.root / "relay_profiles.json"
         self.netd_processed_path = self.root / "netd_processed.json"
         self.root.mkdir(parents=True, exist_ok=True)
         self.rooms_dir.mkdir(parents=True, exist_ok=True)
@@ -93,6 +94,76 @@ class PeerStore:
             raise ValueError("peer requires base_url, peer_id, multiaddrs, relay_addrs, or rendezvous_addr")
         config = self.load_config()
         return self.save_config(config.with_peer(peer))
+
+    def save_relay_profile(
+        self,
+        *,
+        name: str,
+        relay_addr: str,
+        rendezvous_namespace: str,
+        rendezvous_addr: str = "",
+        auto_relay: bool = True,
+        hole_punching: bool = True,
+    ) -> dict[str, Any]:
+        profile_name = _safe_peer_record_id(name)
+        relay_addr = relay_addr.strip()
+        rendezvous_addr = (rendezvous_addr or relay_addr).strip()
+        rendezvous_namespace = rendezvous_namespace.strip()
+        if not relay_addr:
+            raise ValueError("relay_addr is required")
+        if not rendezvous_addr:
+            raise ValueError("rendezvous_addr is required")
+        if not rendezvous_namespace:
+            raise ValueError("rendezvous_namespace is required")
+        profiles = self.load_relay_profiles()
+        existing = profiles.get(profile_name, {})
+        profile = {
+            "name": profile_name,
+            "relay_addr": relay_addr,
+            "rendezvous_addr": rendezvous_addr,
+            "rendezvous_namespace": rendezvous_namespace,
+            "auto_relay": bool(auto_relay),
+            "hole_punching": bool(hole_punching),
+            "created_at": existing.get("created_at") or _utc_now(),
+            "updated_at": _utc_now(),
+        }
+        profiles[profile_name] = profile
+        self.relay_profiles_path.write_text(json.dumps(profiles, indent=2), encoding="utf-8")
+        return profile
+
+    def load_relay_profiles(self) -> dict[str, dict[str, Any]]:
+        if not self.relay_profiles_path.exists():
+            return {}
+        try:
+            payload = json.loads(self.relay_profiles_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            return {}
+        if not isinstance(payload, dict):
+            return {}
+        profiles: dict[str, dict[str, Any]] = {}
+        for key, value in payload.items():
+            if isinstance(value, dict):
+                profiles[str(key)] = value
+        return profiles
+
+    def list_relay_profiles(self) -> list[dict[str, Any]]:
+        profiles = list(self.load_relay_profiles().values())
+        profiles.sort(key=lambda item: str(item.get("name") or ""))
+        return profiles
+
+    def get_relay_profile(self, name: str) -> dict[str, Any]:
+        profile_name = _safe_peer_record_id(name)
+        profile = self.load_relay_profiles().get(profile_name)
+        if not isinstance(profile, dict):
+            raise FileNotFoundError(f"relay profile not found: {profile_name}")
+        return profile
+
+    def delete_relay_profile(self, name: str) -> dict[str, Any]:
+        profile_name = _safe_peer_record_id(name)
+        profiles = self.load_relay_profiles()
+        removed = profiles.pop(profile_name, None)
+        self.relay_profiles_path.write_text(json.dumps(profiles, indent=2), encoding="utf-8")
+        return {"ok": True, "deleted": bool(removed), "name": profile_name}
 
     def save_peer_invite_record(self, record: dict[str, Any]) -> dict[str, Any]:
         invite_id = _safe_peer_record_id(str(record.get("invite_id") or ""))

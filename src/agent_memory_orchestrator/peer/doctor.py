@@ -18,6 +18,7 @@ def peer_doctor(settings: Settings) -> dict[str, Any]:
     status = runtime.status()
     source_dir = runtime.source_dir()
     binary_path = runtime.resolve_binary()
+    binary_capabilities = runtime.binary_capabilities(binary_path) if binary_path.exists() else {}
     go_path = runtime.go_path()
 
     checks: list[dict[str, Any]] = []
@@ -53,8 +54,24 @@ def peer_doctor(settings: Settings) -> dict[str, Any]:
             "reinstall/update agent-memory-orchestrator-cli so packaged peer-netd sources are available",
         )
 
-    if binary_path.exists():
-        add_check("netd_binary", "pass", f"found sidecar binary at {binary_path}")
+    if binary_path.exists() and not binary_capabilities.get("missing_required_flags"):
+        add_check("netd_binary", "pass", f"found compatible sidecar binary at {binary_path}")
+    elif binary_path.exists() and go_path:
+        missing_flags = ", ".join(str(item) for item in binary_capabilities.get("missing_required_flags", []))
+        add_check(
+            "netd_binary",
+            "warn",
+            f"sidecar binary is stale or incompatible at {binary_path}; missing flags: {missing_flags}",
+            "amo-cli peer netd build",
+        )
+    elif binary_path.exists():
+        missing_flags = ", ".join(str(item) for item in binary_capabilities.get("missing_required_flags", []))
+        add_check(
+            "netd_binary",
+            "fail",
+            f"sidecar binary is stale or incompatible at {binary_path}; missing flags: {missing_flags}",
+            "install Go 1.22+ or reinstall/update AMO with a prebuilt amo-peer-netd binary",
+        )
     elif go_path:
         add_check(
             "netd_binary",
@@ -126,6 +143,7 @@ def peer_doctor(settings: Settings) -> dict[str, Any]:
         "config_path": str(store.config_path),
         "source_dir": str(source_dir),
         "binary": str(binary_path),
+        "binary_capabilities": binary_capabilities,
         "go": go_path,
         "netd": status,
         "checks": checks,
