@@ -21,7 +21,7 @@ AMO can run a local Slack Socket Mode connector. It captures selected sent Slack
 Install optional Slack runtime:
 
 ```bash
-npx agent-memory-orchestrator-cli -- install --with-slack --target codex --preset cpu-balanced --qwen-model qwen3.5:9b
+npx -y agent-memory-orchestrator-cli -- install --with-slack --target codex --preset cpu-balanced --qwen-model qwen3.5:9b
 ```
 
 Print a one-click Slack app setup URL:
