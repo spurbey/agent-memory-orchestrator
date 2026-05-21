@@ -100,7 +100,9 @@ python -m agent_memory_orchestrator.app.cli peer --amo-home <amo_home> netd stop
 
 `peer doctor` is the first diagnostic command for a new machine. It separates blocking install/config failures from normal next steps like starting the sidecar or importing peer cards.
 
-`peer enable` is the one-command normal path. It uses a packaged prebuilt sidecar when available, otherwise builds the sidecar if Go is available, starts it, waits for `/health`, and returns the peer id/listen addresses. Packaged installs also include the Go sidecar source so users do not need a repo clone just to build `amo-peer-netd`. Future install work should wire this into a background OS service, but the process state is already AMO-owned.
+`peer enable` is the low-level normal path. It uses a packaged prebuilt sidecar when available, otherwise builds the sidecar if Go is available, starts it, waits for `/health`, and returns the peer id/listen addresses. It also verifies that an existing sidecar binary supports the current required flags before launch; stale binaries are replaced from a packaged binary or rebuilt from source. Packaged installs include the Go sidecar source so users do not need a repo clone just to build `amo-peer-netd`.
+
+`peer setup` is the user-facing one-time path. It initializes the peer identity, expands a saved relay profile, starts the sidecar, can accept an invite, and can install per-user startup entries for both peer netd and `poll-netd --watch`.
 
 Delivered envelopes are persisted by default:
 
@@ -123,6 +125,17 @@ python -m agent_memory_orchestrator.app.cli peer --amo-home <amo_home> netd unin
 ```
 
 The default is a plan, not mutation. On Windows the apply path creates per-user Scheduled Tasks at logon. On Linux it writes user systemd units and enables them. Use `--with-watch` for the normal bot-participation setup: one startup entry keeps `amo-peer-netd` online, and the second drains `poll-netd --watch` so trusted room invites/responses are processed without manual polling.
+
+Short relay setup:
+
+```powershell
+python -m agent_memory_orchestrator.app.cli peer --amo-home <home_a> relay save --name amo-test --addr <relay_multiaddr> --namespace amo-test
+python -m agent_memory_orchestrator.app.cli peer --amo-home <home_a> setup --node-id node-a --display-name "Node A" --relay amo-test --install-startup
+python -m agent_memory_orchestrator.app.cli peer --amo-home <home_a> create-invite --auto-approve --relay amo-test --out node-a.invite.json
+python -m agent_memory_orchestrator.app.cli peer --amo-home <home_b> setup --node-id node-b --display-name "Node B" --invite node-a.invite.json --install-startup
+```
+
+The accepting setup command reads the invite's rendezvous fields, saves the relay profile locally, starts its sidecar through that relay, then accepts the invite and sends the join request back when the initiator is reachable.
 
 ## Room Flow Over Netd
 
@@ -225,29 +238,20 @@ amo-cli peer relay start `
 
 Use `/dns4/<domain>/tcp/4001` instead of `/ip4/<public_ip>/tcp/4001` if DNS is stable. The command starts `amo-peer-netd` with rendezvous, relay service, NAT service, and public reachability defaults. It prints the relay multiaddr that clients should use.
 
-On each user device, start its local peer sidecar with the relay before creating or accepting invites:
+On each user device, save a relay profile once, then start local peer netd with the short profile name:
 
 ```powershell
-amo-cli peer enable `
-  --node-id <device_node_id> `
-  --static-relay <relay_multiaddr> `
-  --auto-relay `
-  --hole-punching `
-  --rendezvous-addr <relay_multiaddr> `
-  --rendezvous-namespace <team_namespace>
+amo-cli peer relay save --name amo-team --addr <relay_multiaddr> --namespace <team_namespace>
+amo-cli peer setup --node-id <device_node_id> --relay amo-team --install-startup
 ```
 
-Then create invites with the same rendezvous hint:
+Then create invites with the same relay profile:
 
 ```powershell
-amo-cli peer create-invite `
-  --auto-approve `
-  --rendezvous-addr <relay_multiaddr> `
-  --rendezvous-namespace <team_namespace> `
-  --out host.invite.json
+amo-cli peer create-invite --auto-approve --relay amo-team --out host.invite.json
 ```
 
-The important ordering is: start the local sidecar with `--static-relay`, confirm `peer netd status` shows `relay_addrs`, then create or accept invites. The peer card inside the invite/response will include `/p2p-circuit` relay addresses, so the join request can return even when direct LAN dialing fails.
+The important ordering is: start the local sidecar through the relay, confirm `peer netd status` shows `relay_addrs`, then create or accept invites. The peer card inside the invite/response will include `/p2p-circuit` relay addresses, so the join request can return even when direct LAN dialing fails. The long-form `--static-relay --auto-relay --hole-punching --rendezvous-*` flags remain available for debugging and automation.
 
 For production operations, run at least two helper nodes and pass both as `--static-relay` values. Monitor process liveness, open TCP port reachability, relay reservation failures, and bandwidth. The helper should reject broad public access later with invite/group-level admission rules; until then, treat it as a private beta service.
 

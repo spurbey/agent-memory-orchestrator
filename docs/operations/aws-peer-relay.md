@@ -55,7 +55,44 @@ Optional private-beta hardening:
 
 ## Client Flow After Deploy
 
-Use the script output. The important part is that every participating device starts peer netd with the same relay and rendezvous namespace before creating or accepting invites.
+Use the script output once to save a relay profile. After that users should use the short profile name, not paste the long relay flags every time.
+
+```powershell
+amo-cli peer relay save `
+  --name amo-test `
+  --addr "<relay_multiaddr>" `
+  --namespace "<namespace>"
+```
+
+Initiator one-time setup:
+
+```powershell
+amo-cli peer setup `
+  --node-id <your-device-node-id> `
+  --display-name "<Your Device>" `
+  --relay amo-test `
+  --install-startup
+```
+
+Create an invite. The invite includes the rendezvous hint so the accepting device can configure itself from the same file.
+
+```powershell
+amo-cli peer create-invite --auto-approve --relay amo-test --out host.invite.json
+```
+
+Accepting device one-time setup:
+
+```powershell
+amo-cli peer setup `
+  --node-id <friend-device-node-id> `
+  --display-name "<Friend Device>" `
+  --invite .\host.invite.json `
+  --install-startup
+```
+
+With the relay reachable, `peer setup --invite` starts the sidecar through the relay, accepts the invite, and sends the join request back to the initiator over libp2p instead of requiring a manually returned `.card.json`.
+
+Advanced/debug equivalent without a saved profile:
 
 ```powershell
 amo-cli peer enable `
@@ -66,32 +103,6 @@ amo-cli peer enable `
   --rendezvous-addr "<relay_multiaddr>" `
   --rendezvous-namespace "<namespace>"
 ```
-
-Then create the invite:
-
-```powershell
-amo-cli peer create-invite `
-  --auto-approve `
-  --rendezvous-addr "<relay_multiaddr>" `
-  --rendezvous-namespace "<namespace>" `
-  --out host.invite.json
-```
-
-The accepting device runs:
-
-```powershell
-amo-cli peer enable `
-  --node-id <friend-device-node-id> `
-  --static-relay "<relay_multiaddr>" `
-  --auto-relay `
-  --hole-punching `
-  --rendezvous-addr "<relay_multiaddr>" `
-  --rendezvous-namespace "<namespace>"
-
-amo-cli peer accept-invite --file .\host.invite.json
-```
-
-With the relay reachable, `accept-invite` can send the join request back to the initiator over libp2p instead of requiring a manually returned `.card.json`.
 
 ## Check Server Health
 
