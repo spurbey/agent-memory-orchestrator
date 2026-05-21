@@ -46,6 +46,7 @@ from ..reasoning_graph.session_runtime import build_session_graph
 from ..reasoning_graph.session_runtime import default_session_graph_path
 from ..reasoning_graph.session_runtime import query_session_graph
 from ..reasoning_graph.jobs.reset import adopt_existing_v2_production_storage
+from ..reasoning_graph.jobs.reset import initialize_fresh_v2_production_storage
 from ..reasoning_graph.jobs.reset import reset_production_v2_storage
 from ..skill_checkpoint import DEFAULT_LOCAL_NUM_CTX
 from ..skill_checkpoint import DEFAULT_NUM_PREDICT
@@ -70,6 +71,10 @@ def _build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("init-db", help="Initialize local database schema")
     sub.add_parser("init-graph", help="Initialize local Kuzu GraphRAG schema")
+    sub.add_parser(
+        "v2-init-production",
+        help="Non-destructively mark empty fresh graph/retrieval stores as production V2-ready",
+    )
 
     v2_reset = sub.add_parser("v2-reset-production", help="Explicitly back up and reset production V2 graph/retrieval stores")
     v2_reset.add_argument("--backup", action="store_true", help="Required. Create a timestamped backup before cleaning.")
@@ -599,6 +604,7 @@ def main(argv: list[str] | None = None) -> int:
                 )
             init_result = None
             init_graph = None
+            init_v2 = None
             if not args.skip_init_db:
                 os.environ["AMO_HOME"] = plan["amo_home"]
                 init_settings = Settings.load()
@@ -614,6 +620,15 @@ def main(argv: list[str] | None = None) -> int:
                     init_graph = {"ok": True, "graph_path": str(init_settings.graph_path)}
                 except GraphBackendUnavailable as exc:
                     init_graph = {"ok": False, "error": str(exc)}
+                if init_graph.get("ok"):
+                    try:
+                        init_v2 = initialize_fresh_v2_production_storage(init_settings)
+                    except Exception as exc:
+                        init_v2 = {
+                            "ok": False,
+                            "error": str(exc),
+                            "note": "Existing non-empty graph/retrieval stores need explicit v2-reset-production or v2-adopt-production.",
+                        }
             _print(
                 {
                     "ok": True,
@@ -622,6 +637,7 @@ def main(argv: list[str] | None = None) -> int:
                     "models": model_result,
                     "init_db": init_result,
                     "init_graph": init_graph,
+                    "init_v2_production": init_v2,
                 }
             )
             return 0
@@ -655,6 +671,11 @@ def main(argv: list[str] | None = None) -> int:
                 _print({"ok": True, "graph_path": str(settings.graph_path), "backend": settings.graph_backend})
             finally:
                 graph.close()
+            return 0
+
+        if args.command == "v2-init-production":
+            settings = Settings.load()
+            _print(initialize_fresh_v2_production_storage(settings))
             return 0
 
         if args.command == "v2-reset-production":

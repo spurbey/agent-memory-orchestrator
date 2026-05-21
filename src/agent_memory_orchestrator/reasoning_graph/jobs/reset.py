@@ -10,10 +10,49 @@ from ...app.client import DaemonClient
 from ...app.client import DaemonUnavailable
 from ...core.config import Settings
 from ...core.db import connect
+from ...graph.store import KuzuGraphStore
 from .constants import GRAPH_SCHEMA_VERSION
 from .constants import PIPELINE_VERSION
 from .constants import RESET_MARKER_KEY
 from .store import V2SessionJobStore
+
+
+def initialize_fresh_v2_production_storage(settings: Settings) -> dict[str, Any]:
+    """Mark a fresh, empty production install as V2-ready.
+
+    This is intentionally non-destructive. It exists for new devices: they have
+    no pre-V2 graph/retrieval data to clean, so forcing the operator through a
+    reset command is wrong. Existing non-empty stores still require explicit
+    backup-first reset/adoption.
+    """
+    store = V2SessionJobStore(settings)
+    try:
+        existing = store.marker(RESET_MARKER_KEY)
+    finally:
+        store.close()
+    if existing is not None:
+        return {"ok": True, "created": False, "reason": "marker_exists", "marker": existing}
+
+    graph = _validate_empty_graph_store(settings)
+    retrieval = _validate_empty_retrieval_store(settings)
+    if not graph.get("empty") or not retrieval.get("empty"):
+        raise RuntimeError(
+            "v2_fresh_init_refused_non_empty_stores:"
+            + json.dumps({"graph": graph, "retrieval": retrieval}, sort_keys=True)
+        )
+
+    marker = {
+        "production_v2_initialized_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "pipeline_version": PIPELINE_VERSION,
+        "graph_schema_version": GRAPH_SCHEMA_VERSION,
+        "fresh_install": True,
+        "backup_path": "",
+        "cleaned": {"graph": True, "retrieval": True, "faiss": True},
+        "validated": {"graph_empty": True, "retrieval_empty": True},
+        "validation": {"graph": graph, "retrieval": retrieval},
+    }
+    _write_marker(settings, marker)
+    return {"ok": True, "created": True, "reason": "fresh_empty_stores", "marker": marker}
 
 
 def reset_production_v2_storage(
@@ -255,6 +294,26 @@ def _validate_existing_graph_store(settings: Settings) -> dict[str, Any]:
     return result
 
 
+def _validate_empty_graph_store(settings: Settings) -> dict[str, Any]:
+    graph = KuzuGraphStore(settings.graph_path)
+    try:
+        graph.init_schema()
+        status = graph.merge_status()
+        counts = status.get("counts") if isinstance(status, dict) else {}
+        node_count = sum(int(value) for value in counts.values()) if isinstance(counts, dict) else 0
+        edge_sample_count = len(graph.list_edges(limit=1))
+    finally:
+        graph.close()
+    return {
+        "ok": node_count == 0 and edge_sample_count == 0,
+        "empty": node_count == 0 and edge_sample_count == 0,
+        "path": str(settings.graph_path),
+        "node_count": node_count,
+        "edge_sample_count": edge_sample_count,
+        "check": "kuzu_node_edge_empty",
+    }
+
+
 def _validate_existing_retrieval_store(settings: Settings) -> dict[str, Any]:
     path = settings.retrieval_db_path
     if not path.exists():
@@ -280,6 +339,35 @@ def _validate_existing_retrieval_store(settings: Settings) -> dict[str, Any]:
     if not result["ok"]:
         raise RuntimeError(f"v2_adopt_retrieval_validation_failed:{json.dumps(result, sort_keys=True)}")
     return result
+
+
+def _validate_empty_retrieval_store(settings: Settings) -> dict[str, Any]:
+    path = settings.retrieval_db_path
+    path.parent.mkdir(parents=True, exist_ok=True)
+    conn = connect(path)
+    try:
+        doc_count = _table_count(conn, "retrieval_documents")
+        embedding_count = _table_count(conn, "graph_embeddings")
+    finally:
+        conn.close()
+    return {
+        "ok": doc_count == 0 and embedding_count == 0,
+        "empty": doc_count == 0 and embedding_count == 0,
+        "path": str(path),
+        "retrieval_document_count": doc_count,
+        "embedding_count": embedding_count,
+        "check": "retrieval_and_embedding_tables_empty",
+    }
+
+
+def _table_count(conn: Any, table: str) -> int:
+    exists = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
+        (table,),
+    ).fetchone()
+    if exists is None:
+        return 0
+    return int(conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
 
 
 def _path_has_content(path: Path) -> bool:
