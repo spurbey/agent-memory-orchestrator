@@ -45,6 +45,9 @@ operator command:
 amo-cli v2-reset-production --backup --clean-graph --clean-retrieval
 ```
 
+Fresh installs do not need this command. Install/init creates a non-destructive
+fresh V2 marker when production graph and retrieval stores are empty.
+
 The reset command never deletes raw JSONL evidence, config, or V2 job tables.
 It writes the production reset marker only after both graph and retrieval/vector
 storage have been cleaned from a verified backup; backup-only runs do not unlock
