@@ -92,6 +92,7 @@ class PeerService:
             "config_path": str(self.store.config_path),
             "rooms_dir": str(self.store.rooms_dir),
             "peers": [peer.to_dict() for peer in config.peers],
+            "relay_profiles": self.store.list_relay_profiles(),
             "room_count": len(rooms),
         }
 

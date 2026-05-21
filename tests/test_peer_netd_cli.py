@@ -4,7 +4,9 @@ import json
 from pathlib import Path
 
 from agent_memory_orchestrator.app.cli import main
+from agent_memory_orchestrator.core.config import Settings
 from agent_memory_orchestrator.peer import PeerService
+from agent_memory_orchestrator.peer.invites import build_peer_invite
 from agent_memory_orchestrator.peer.netd_runtime import PeerNetdRuntime, binary_name
 
 
@@ -52,8 +54,35 @@ def test_peer_doctor_accepts_initialized_node_with_existing_binary(tmp_path: Pat
     payload = json.loads(captured.out)
     assert code == 0
     assert payload["blocking_count"] == 0
-    assert any(check["name"] == "netd_binary" and check["status"] == "pass" for check in payload["checks"])
+    assert any(check["name"] == "netd_binary" and check["status"] == "warn" for check in payload["checks"])
     assert any(check["name"] == "netd_runtime" and check["status"] == "warn" for check in payload["checks"])
+
+
+def test_peer_netd_rebuilds_stale_binary_when_go_is_available(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("AMO_HOME", str(tmp_path))
+    runtime = PeerNetdRuntime(Settings.load())
+    binary_path = tmp_path / ".peer" / "bin" / binary_name()
+    binary_path.parent.mkdir(parents=True)
+    binary_path.write_text("stale", encoding="utf-8")
+    capability_calls = 0
+
+    def fake_capabilities(self: PeerNetdRuntime, binary: Path | None = None) -> dict:
+        nonlocal capability_calls
+        capability_calls += 1
+        if capability_calls == 1:
+            return {"ok": False, "missing_required_flags": ["identity-key"], "binary": str(binary)}
+        return {"ok": True, "missing_required_flags": [], "binary": str(binary)}
+
+    def fake_build(self: PeerNetdRuntime, output_path: Path | None = None) -> dict:
+        target = output_path or self.default_binary_path()
+        target.write_text("fresh", encoding="utf-8")
+        return {"ok": True, "binary": str(target)}
+
+    monkeypatch.setattr(PeerNetdRuntime, "binary_capabilities", fake_capabilities)
+    monkeypatch.setattr(PeerNetdRuntime, "build", fake_build)
+
+    assert runtime.prepare_binary(build_if_missing=True) == binary_path
+    assert binary_path.read_text(encoding="utf-8") == "fresh"
 
 
 def test_peer_enable_rejects_dynamic_api_port_without_building(tmp_path: Path, capsys) -> None:
@@ -94,6 +123,192 @@ def test_peer_add_accepts_libp2p_identity_without_base_url(tmp_path: Path, capsy
     assert payload["peer"]["base_url"] == ""
     assert payload["peer"]["peer_id"] == "12D3KooWPeer"
     assert payload["peer"]["multiaddrs"] == ["/ip4/127.0.0.1/tcp/9001/p2p/12D3KooWPeer"]
+
+
+def test_peer_relay_profile_save_list_and_show(tmp_path: Path, capsys) -> None:
+    relay_addr = "/ip4/203.0.113.10/tcp/4001/p2p/12D3KooWRelay"
+
+    save_code = main(
+        [
+            "peer",
+            "--amo-home",
+            str(tmp_path),
+            "relay",
+            "save",
+            "--name",
+            "amo-test",
+            "--addr",
+            relay_addr,
+            "--namespace",
+            "amo-team",
+        ]
+    )
+    save_payload = json.loads(capsys.readouterr().out)
+
+    assert save_code == 0
+    assert save_payload["profile"]["name"] == "amo-test"
+    assert save_payload["profile"]["relay_addr"] == relay_addr
+    assert save_payload["profile"]["rendezvous_namespace"] == "amo-team"
+
+    list_code = main(["peer", "--amo-home", str(tmp_path), "relay", "list"])
+    list_payload = json.loads(capsys.readouterr().out)
+    assert list_code == 0
+    assert [item["name"] for item in list_payload["profiles"]] == ["amo-test"]
+
+    show_code = main(["peer", "--amo-home", str(tmp_path), "relay", "show", "--name", "amo-test"])
+    show_payload = json.loads(capsys.readouterr().out)
+    assert show_code == 0
+    assert show_payload["profile"]["relay_addr"] == relay_addr
+
+
+def test_peer_enable_expands_saved_relay_profile(tmp_path: Path, capsys, monkeypatch) -> None:
+    relay_addr = "/ip4/203.0.113.10/tcp/4001/p2p/12D3KooWRelay"
+    assert (
+        main(
+            [
+                "peer",
+                "--amo-home",
+                str(tmp_path),
+                "relay",
+                "save",
+                "--name",
+                "amo-test",
+                "--addr",
+                relay_addr,
+                "--namespace",
+                "amo-team",
+            ]
+        )
+        == 0
+    )
+    capsys.readouterr()
+    captured_options = []
+
+    def fake_start(self: PeerNetdRuntime, options, *, build_if_missing: bool = True) -> dict:
+        captured_options.append((options, build_if_missing))
+        return {"ok": True, "api_url": "http://127.0.0.1:8788"}
+
+    monkeypatch.setattr(PeerNetdRuntime, "start", fake_start)
+
+    code = main(["peer", "--amo-home", str(tmp_path), "enable", "--node-id", "node-a", "--relay", "amo-test", "--no-build"])
+    payload = json.loads(capsys.readouterr().out)
+    options, build_if_missing = captured_options[0]
+
+    assert code == 0
+    assert payload["ok"] is True
+    assert build_if_missing is False
+    assert options.static_relays == (relay_addr,)
+    assert options.auto_relay is True
+    assert options.hole_punching is True
+    assert options.rendezvous_addr == relay_addr
+    assert options.rendezvous_namespace == "amo-team"
+
+
+def test_peer_create_invite_expands_saved_relay_profile(tmp_path: Path, capsys, monkeypatch) -> None:
+    relay_addr = "/ip4/203.0.113.10/tcp/4001/p2p/12D3KooWRelay"
+    circuit_addr = relay_addr + "/p2p-circuit/p2p/12D3KooWNodeA"
+    assert main(["peer", "--amo-home", str(tmp_path), "init", "--node-id", "node-a"]) == 0
+    capsys.readouterr()
+    assert (
+        main(
+            [
+                "peer",
+                "--amo-home",
+                str(tmp_path),
+                "relay",
+                "save",
+                "--name",
+                "amo-test",
+                "--addr",
+                relay_addr,
+                "--namespace",
+                "amo-team",
+            ]
+        )
+        == 0
+    )
+    capsys.readouterr()
+
+    def fake_status(self: PeerNetdRuntime) -> dict:
+        return {
+            "ok": True,
+            "api_ok": True,
+            "health": {
+                "peer_id": "12D3KooWNodeA",
+                "listen_addrs": ["/ip4/127.0.0.1/tcp/9001/p2p/12D3KooWNodeA"],
+                "relay_addrs": [circuit_addr],
+            },
+        }
+
+    monkeypatch.setattr(PeerNetdRuntime, "status", fake_status)
+
+    code = main(["peer", "--amo-home", str(tmp_path), "create-invite", "--relay", "amo-test", "--auto-approve"])
+    payload = json.loads(capsys.readouterr().out)
+
+    assert code == 0
+    assert payload["invite"]["card"]["relay_addrs"] == [circuit_addr]
+    assert payload["invite"]["card"]["rendezvous_addr"] == relay_addr
+    assert payload["invite"]["card"]["rendezvous_namespace"] == "amo-team"
+
+
+def test_peer_setup_can_save_relay_from_invite_and_accept(tmp_path: Path, capsys, monkeypatch) -> None:
+    relay_addr = "/ip4/203.0.113.10/tcp/4001/p2p/12D3KooWRelay"
+    invite = build_peer_invite(
+        card={
+            "amo_peer_card_version": 1,
+            "node_id": "host",
+            "display_name": "Host",
+            "capabilities": ["graph_retrieval"],
+            "transport": "libp2p",
+            "base_url": "",
+            "peer_id": "12D3KooWHost",
+            "multiaddrs": [relay_addr + "/p2p-circuit/p2p/12D3KooWHost"],
+            "relay_addrs": [relay_addr + "/p2p-circuit/p2p/12D3KooWHost"],
+            "rendezvous_addr": relay_addr,
+            "rendezvous_namespace": "amo-team",
+        },
+        trust="trusted",
+        auto_approve=True,
+    )
+    invite_path = tmp_path / "host.invite.json"
+    invite_path.write_text(json.dumps(invite, indent=2), encoding="utf-8")
+    captured_options = []
+
+    def fake_start(self: PeerNetdRuntime, options, *, build_if_missing: bool = True) -> dict:
+        captured_options.append(options)
+        return {"ok": True, "api_url": "http://127.0.0.1:8788"}
+
+    def fake_accept(self: PeerService, invite_payload: dict, **kwargs) -> dict:
+        return {"ok": True, "imported_peer": invite_payload["card"]["node_id"]}
+
+    monkeypatch.setattr(PeerNetdRuntime, "start", fake_start)
+    monkeypatch.setattr(PeerService, "accept_peer_invite", fake_accept)
+
+    code = main(
+        [
+            "peer",
+            "--amo-home",
+            str(tmp_path),
+            "setup",
+            "--node-id",
+            "friend",
+            "--display-name",
+            "Friend",
+            "--invite",
+            str(invite_path),
+            "--no-build",
+        ]
+    )
+    payload = json.loads(capsys.readouterr().out)
+    options = captured_options[0]
+
+    assert code == 0
+    assert payload["relay_profile"]["name"] == "amo-team"
+    assert payload["relay_profile"]["relay_addr"] == relay_addr
+    assert payload["accept_invite"]["ok"] is True
+    assert options.static_relays == (relay_addr,)
+    assert options.rendezvous_addr == relay_addr
+    assert options.rendezvous_namespace == "amo-team"
 
 
 def test_peer_share_and_import_card_with_base_url(tmp_path: Path, capsys) -> None:
