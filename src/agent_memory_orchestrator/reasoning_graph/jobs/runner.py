@@ -76,6 +76,9 @@ class V2SessionJobRunner:
         except PendingModel as exc:
             self.job_store.set_pending_model(job_id=job_id, stage=stage, reason=exc.reason, diagnostics=exc.diagnostics)
             return {"ok": True, "ran": True, "job_id": job_id, "stage": stage, "status": "pending_model", "reason": exc.reason}
+        except StageFailed as exc:
+            self.job_store.fail_stage(job_id=job_id, stage=stage, reason=exc.reason, diagnostics=exc.diagnostics)
+            return {"ok": False, "ran": True, "job_id": job_id, "stage": stage, "status": "failed", "error": exc.reason}
         except Exception as exc:
             self.job_store.fail_stage(
                 job_id=job_id,
@@ -164,6 +167,17 @@ class V2SessionJobRunner:
         output.write_text(json.dumps(list(build.packets), indent=2, ensure_ascii=False), encoding="utf-8")
         (stage_dir / "packet_quality_inventory.json").write_text(json.dumps(build.quality, indent=2, ensure_ascii=False), encoding="utf-8")
         (stage_dir / "quarantined_commits.json").write_text(json.dumps(list(build.quarantined_commits), indent=2), encoding="utf-8")
+        if build.quality.get("stage_acceptance") != "PASS":
+            reason = "no_commit_backed_work_packets" if not build.packets else "work_packets_acceptance_failed"
+            raise StageFailed(
+                reason,
+                {
+                    "quality": build.quality,
+                    "packet_artifact": str(output),
+                    "quarantined_commit_count": len(build.quarantined_commits),
+                    "note": "V2 answer-grade graph output requires at least one resolved Git commit-backed work packet.",
+                },
+            )
         return StageResult(output_path=output, diagnostics={"quality": build.quality})
 
     def _stage_qwen_reasoning(self, job: dict[str, Any], artifact_dir: Path, stage_dir: Path) -> StageResult:
@@ -419,6 +433,13 @@ class V2SessionJobRunner:
 
 
 class PendingModel(RuntimeError):
+    def __init__(self, reason: str, diagnostics: dict[str, Any] | None = None) -> None:
+        super().__init__(reason)
+        self.reason = reason
+        self.diagnostics = diagnostics or {}
+
+
+class StageFailed(RuntimeError):
     def __init__(self, reason: str, diagnostics: dict[str, Any] | None = None) -> None:
         super().__init__(reason)
         self.reason = reason
