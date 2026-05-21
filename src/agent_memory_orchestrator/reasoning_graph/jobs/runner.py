@@ -429,9 +429,16 @@ def require_complete_v2_reset_marker(marker: dict[str, Any] | None) -> dict[str,
     if marker is None:
         raise RuntimeError("production_v2_reset_marker_missing")
     cleaned = marker.get("cleaned") if isinstance(marker.get("cleaned"), dict) else {}
+    validated = marker.get("validated") if isinstance(marker.get("validated"), dict) else {}
     if marker.get("pipeline_version") != PIPELINE_VERSION or marker.get("graph_schema_version") != GRAPH_SCHEMA_VERSION:
         raise RuntimeError("production_v2_reset_marker_version_mismatch")
-    if cleaned.get("graph") is not True or cleaned.get("retrieval") is not True:
+    cleaned_ok = cleaned.get("graph") is True and cleaned.get("retrieval") is True
+    adopted_ok = (
+        marker.get("adopted_existing_v2") is True
+        and validated.get("graph") is True
+        and validated.get("retrieval") is True
+    )
+    if not cleaned_ok and not adopted_ok:
         raise RuntimeError("production_v2_reset_marker_incomplete")
     return marker
 
