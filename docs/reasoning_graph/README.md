@@ -49,6 +49,10 @@ cleanup is never automatic on daemon startup. Operators must run:
 amo-cli v2-reset-production --backup --clean-graph --clean-retrieval
 ```
 
+New devices with empty production graph/retrieval stores should use normal
+install/init instead; `amo-cli v2-init-production` writes the fresh-store marker
+without deleting anything.
+
 The command backs up production graph/retrieval/vector stores first, verifies a
 backup manifest, then cleans only graph/retrieval/vector/FAISS storage. Raw JSONL
 evidence, config, and V2 job tables are preserved.

@@ -20,6 +20,10 @@ npx agent-memory-orchestrator-cli -- install --target all --preset cpu-balanced 
 
 If `npx` resolves `agent-memory-orchestrator-cli@0.1.1`, that registry package is too old for this command shape. Publish/use `0.1.2` or newer.
 
+On a fresh device, install initializes the empty V2 production marker automatically. The
+`v2-reset-production` command is only for an existing AMO home with old pre-V2 graph/retrieval
+data that must be backed up and cleaned explicitly.
+
 ## Common Options
 
 | Option | Meaning |
