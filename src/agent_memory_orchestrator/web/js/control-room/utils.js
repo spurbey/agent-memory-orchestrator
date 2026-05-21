@@ -1,4 +1,6 @@
-export { $, qsa, escapeHtml, formatJson, text, truncate } from "../core/dom.js";
+import { $, qsa, escapeHtml, formatJson, text, truncate } from "../core/dom.js";
+
+export { $, qsa, escapeHtml, formatJson, text, truncate };
 
 export function timeAgo(iso) {
   if (!iso) return "unknown";

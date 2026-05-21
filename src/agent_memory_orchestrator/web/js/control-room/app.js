@@ -27,6 +27,10 @@ import {
   selectSession,
 } from "./actions.js";
 
+let refreshAllInFlight = false;
+let livePollInFlight = false;
+let adminPollInFlight = false;
+
 function setView(view) {
   state.view = view;
   qsa(".view").forEach(el => el.classList.toggle("active", el.id === `${view}View`));
@@ -44,25 +48,58 @@ function setView(view) {
 }
 
 async function refreshAll() {
-  await Promise.allSettled([
-    loadHealth(),
-    loadJobs(),
-    loadSessions(),
-    loadCentralGraph(),
-    loadConnectorStatus(),
-    loadVersionFlow(),
-  ]);
-  setDaemon(!!state.health?.ok, `daemon on ${state.health?.graph_backend || "graph"}`);
-  renderHealth(state);
-  renderJobs(state);
-  renderSessions(state);
-  renderDashboard(state);
-  renderConnectorStatus(state);
-  renderVersionFlow(state);
-  if (!state.selectedSessionId && state.sessions[0]) {
-    await selectSession(state.sessions[0].session_id, { silent: true, setView });
-  } else if (state.selectedSessionId) {
-    await selectSession(state.selectedSessionId, { silent: true, setView });
+  if (refreshAllInFlight) return;
+  refreshAllInFlight = true;
+  try {
+    await Promise.allSettled([
+      loadHealth(),
+      loadJobs(),
+      loadSessions(),
+      loadCentralGraph(),
+      loadConnectorStatus(),
+      loadVersionFlow(),
+    ]);
+    setDaemon(!!state.health?.ok, `daemon on ${state.health?.graph_backend || "graph"}`);
+    renderHealth(state);
+    renderJobs(state);
+    renderSessions(state);
+    renderDashboard(state);
+    renderConnectorStatus(state);
+    renderVersionFlow(state);
+    if (!state.selectedSessionId && state.sessions[0]) {
+      await selectSession(state.sessions[0].session_id, { silent: true, setView });
+    } else if (state.selectedSessionId) {
+      await selectSession(state.selectedSessionId, { silent: true, setView });
+    }
+  } finally {
+    refreshAllInFlight = false;
+  }
+}
+
+async function pollLiveViews() {
+  if (livePollInFlight || refreshAllInFlight) return;
+  if (state.view !== "dashboard" && state.view !== "sessions") return;
+  livePollInFlight = true;
+  try {
+    await Promise.allSettled([loadSessions(), loadJobs()]);
+    renderSessions(state);
+    renderDashboard(state);
+    if (state.selectedSession) renderSessionDetail(state);
+  } finally {
+    livePollInFlight = false;
+  }
+}
+
+async function pollAdminJobs() {
+  if (adminPollInFlight || refreshAllInFlight || state.view !== "admin") return;
+  adminPollInFlight = true;
+  try {
+    await loadJobs();
+    renderJobs(state);
+  } catch {
+    // Keep operator polling fail-open; the next explicit refresh will show details.
+  } finally {
+    adminPollInFlight = false;
   }
 }
 
@@ -115,18 +152,8 @@ async function init() {
   else if (path.includes("dashboard")) setView("dashboard");
   else setView("dashboard");
   await refreshAll();
-  setInterval(() => {
-    if (state.view === "dashboard" || state.view === "sessions") {
-      Promise.allSettled([loadSessions(), loadJobs()]).then(() => {
-        renderSessions(state);
-        renderDashboard(state);
-        if (state.selectedSession) renderSessionDetail(state);
-      });
-    }
-  }, 15000);
-  setInterval(() => {
-    if (state.view === "admin") loadJobs().then(() => renderJobs(state)).catch(() => {});
-  }, 12000);
+  setInterval(pollLiveViews, 15000);
+  setInterval(pollAdminJobs, 12000);
 }
 
 init().catch(error => {
