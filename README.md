@@ -63,6 +63,10 @@ amo-cli doctor --target codex
 amo-daemon
 ```
 
+Fresh installs initialize an empty V2 production graph marker automatically. The destructive
+`v2-reset-production` command is only for machines that already have old pre-V2 graph/retrieval
+data and need an explicit backup-first cleanup.
+
 Open the local UI:
 
 ```text
@@ -87,6 +91,7 @@ python -m venv .venv
 pip install -e ".[dev,models]"
 amo-cli init-db
 amo-cli init-graph
+amo-cli v2-init-production
 amo-daemon
 ```
 

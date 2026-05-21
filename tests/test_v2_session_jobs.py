@@ -13,6 +13,7 @@ from agent_memory_orchestrator.reasoning_graph.jobs import V2SessionJobStore
 from agent_memory_orchestrator.reasoning_graph.jobs.constants import GRAPH_SCHEMA_VERSION
 from agent_memory_orchestrator.reasoning_graph.jobs.constants import PIPELINE_VERSION
 from agent_memory_orchestrator.reasoning_graph.jobs.reset import adopt_existing_v2_production_storage
+from agent_memory_orchestrator.reasoning_graph.jobs.reset import initialize_fresh_v2_production_storage
 from agent_memory_orchestrator.reasoning_graph.jobs.reset import reset_production_v2_storage
 from agent_memory_orchestrator.reasoning_graph.jobs.runner import require_complete_v2_reset_marker
 from agent_memory_orchestrator.reasoning_graph.stage4_contract import STAGE4_CONTRACT_VERSION
@@ -242,6 +243,54 @@ def test_v2_reset_requires_backup_and_preserves_raw_config_and_job_tables(tmp_pa
     assert marker["pipeline_version"] == PIPELINE_VERSION
     assert marker["graph_schema_version"] == GRAPH_SCHEMA_VERSION
     assert marker["cleaned"] == {"graph": True, "retrieval": True, "faiss": True}
+
+
+def test_v2_fresh_init_marks_empty_new_install_without_reset(tmp_path: Path) -> None:
+    settings = make_settings(tmp_path)
+    settings.home.mkdir(parents=True, exist_ok=True)
+
+    result = initialize_fresh_v2_production_storage(settings)
+
+    assert result["ok"] is True
+    assert result["created"] is True
+    marker = result["marker"]
+    assert marker["fresh_install"] is True
+    assert marker["pipeline_version"] == PIPELINE_VERSION
+    assert marker["graph_schema_version"] == GRAPH_SCHEMA_VERSION
+    assert marker["cleaned"] == {"graph": True, "retrieval": True, "faiss": True}
+    assert marker["validated"] == {"graph_empty": True, "retrieval_empty": True}
+    assert require_complete_v2_reset_marker(marker) == marker
+
+    again = initialize_fresh_v2_production_storage(settings)
+    assert again["created"] is False
+    assert again["reason"] == "marker_exists"
+
+
+def test_v2_fresh_init_refuses_non_empty_retrieval_store(tmp_path: Path) -> None:
+    settings = make_settings(tmp_path)
+    settings.home.mkdir(parents=True, exist_ok=True)
+    settings.retrieval_db_path.parent.mkdir(parents=True, exist_ok=True)
+    conn = connect(settings.retrieval_db_path)
+    try:
+        RetrievalIndexStore(conn).replace_documents(
+            [
+                RetrievalDocument(
+                    doc_id="doc:1",
+                    doc_type="packet",
+                    graph_node_id="node:1",
+                    node_kind="Packet",
+                    packet_id="packet:1",
+                    commit_sha="abc123",
+                    title="existing",
+                    body="existing retrieval doc",
+                )
+            ]
+        )
+    finally:
+        conn.close()
+
+    with pytest.raises(RuntimeError, match="refused_non_empty_stores"):
+        initialize_fresh_v2_production_storage(settings)
 
 
 def test_v2_adopt_production_backs_up_and_preserves_existing_v2_stores(tmp_path: Path) -> None:

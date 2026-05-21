@@ -314,6 +314,9 @@ function renderJobCard(job) {
 
 function renderMarker(marker) {
   if (!marker) return `<span class="pill warn">V2 production marker missing</span><span class="pill">run reset or adopt before V2 graph writes</span>`;
+  if (marker.fresh_install) {
+    return `<span class="pill good">Fresh V2 stores ready</span><span class="pill blue">${escapeHtml(marker.pipeline_version || "v2")}</span><span class="pill">no pre-V2 graph cleanup needed</span>`;
+  }
   if (marker.adopted_existing_v2) {
     const docs = marker.validation?.retrieval?.retrieval_document_count;
     return `<span class="pill good">V2 adopted existing stores</span><span class="pill blue">${escapeHtml(marker.pipeline_version || "v2")}</span>${docs ? `<span class="pill">${escapeHtml(docs)} retrieval docs at adoption</span>` : ""}`;
