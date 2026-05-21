@@ -12,6 +12,7 @@ from agent_memory_orchestrator.reasoning_graph.embedding_store import GraphEmbed
 from agent_memory_orchestrator.reasoning_graph.jobs import V2SessionJobStore
 from agent_memory_orchestrator.reasoning_graph.jobs.constants import GRAPH_SCHEMA_VERSION
 from agent_memory_orchestrator.reasoning_graph.jobs.constants import PIPELINE_VERSION
+from agent_memory_orchestrator.reasoning_graph.jobs.reset import adopt_existing_v2_production_storage
 from agent_memory_orchestrator.reasoning_graph.jobs.reset import reset_production_v2_storage
 from agent_memory_orchestrator.reasoning_graph.jobs.runner import require_complete_v2_reset_marker
 from agent_memory_orchestrator.reasoning_graph.stage4_contract import STAGE4_CONTRACT_VERSION
@@ -243,20 +244,107 @@ def test_v2_reset_requires_backup_and_preserves_raw_config_and_job_tables(tmp_pa
     assert marker["cleaned"] == {"graph": True, "retrieval": True, "faiss": True}
 
 
+def test_v2_adopt_production_backs_up_and_preserves_existing_v2_stores(tmp_path: Path) -> None:
+    settings = make_settings(tmp_path)
+    settings.home.mkdir(parents=True, exist_ok=True)
+    settings.graph_path.mkdir(parents=True)
+    (settings.graph_path / "graph.bin").write_text("existing v2 graph", encoding="utf-8")
+    settings.retrieval_db_path.parent.mkdir(parents=True, exist_ok=True)
+
+    conn = connect(settings.retrieval_db_path)
+    try:
+        RetrievalIndexStore(conn).replace_documents(
+            [
+                RetrievalDocument(
+                    doc_id="doc:1",
+                    doc_type="packet",
+                    graph_node_id="node:1",
+                    node_kind="Packet",
+                    packet_id="WP0001",
+                    commit_sha="abc123",
+                    title="existing v2",
+                    body="existing v2 retrieval doc",
+                    metadata={"node_metadata": {"graph_schema_version": GRAPH_SCHEMA_VERSION}},
+                )
+            ]
+        )
+    finally:
+        conn.close()
+
+    with pytest.raises(ValueError):
+        adopt_existing_v2_production_storage(
+            settings,
+            backup=False,
+            validate_graph=True,
+            validate_retrieval=True,
+            force_if_daemon_running=True,
+        )
+    with pytest.raises(ValueError, match="validate-graph and --validate-retrieval"):
+        adopt_existing_v2_production_storage(
+            settings,
+            backup=True,
+            validate_graph=False,
+            validate_retrieval=True,
+            force_if_daemon_running=True,
+        )
+
+    result = adopt_existing_v2_production_storage(
+        settings,
+        backup=True,
+        validate_graph=True,
+        validate_retrieval=True,
+        force_if_daemon_running=True,
+    )
+
+    assert result["ok"] is True
+    backup_dir = Path(result["backup_path"])
+    assert (backup_dir / "backup_manifest.json").exists()
+    assert settings.graph_path.exists()
+    assert (settings.graph_path / "graph.bin").read_text(encoding="utf-8") == "existing v2 graph"
+
+    conn = connect(settings.retrieval_db_path)
+    try:
+        doc_count = conn.execute("SELECT COUNT(*) FROM retrieval_documents").fetchone()[0]
+    finally:
+        conn.close()
+    assert doc_count == 1
+
+    store = V2SessionJobStore(settings)
+    try:
+        marker = store.marker()
+    finally:
+        store.close()
+    assert marker is not None
+    assert marker["adopted_existing_v2"] is True
+    assert marker["validated"] == {"graph": True, "retrieval": True}
+    assert marker["cleaned"] == {"graph": False, "retrieval": False, "faiss": False}
+    assert require_complete_v2_reset_marker(marker) == marker
+
+
 def test_v2_runner_rejects_missing_incomplete_or_wrong_reset_marker() -> None:
     complete_marker = {
         "pipeline_version": PIPELINE_VERSION,
         "graph_schema_version": GRAPH_SCHEMA_VERSION,
         "cleaned": {"graph": True, "retrieval": True, "faiss": True},
     }
+    adopted_marker = {
+        "pipeline_version": PIPELINE_VERSION,
+        "graph_schema_version": GRAPH_SCHEMA_VERSION,
+        "adopted_existing_v2": True,
+        "validated": {"graph": True, "retrieval": True},
+        "cleaned": {"graph": False, "retrieval": False, "faiss": False},
+    }
 
     assert require_complete_v2_reset_marker(complete_marker) == complete_marker
+    assert require_complete_v2_reset_marker(adopted_marker) == adopted_marker
     with pytest.raises(RuntimeError, match="missing"):
         require_complete_v2_reset_marker(None)
     with pytest.raises(RuntimeError, match="version_mismatch"):
         require_complete_v2_reset_marker({**complete_marker, "pipeline_version": "old"})
     with pytest.raises(RuntimeError, match="incomplete"):
         require_complete_v2_reset_marker({**complete_marker, "cleaned": {"graph": True, "retrieval": False}})
+    with pytest.raises(RuntimeError, match="incomplete"):
+        require_complete_v2_reset_marker({**adopted_marker, "validated": {"graph": True, "retrieval": False}})
 
 
 def test_stage4_prompt_uses_reset_contract_module() -> None:

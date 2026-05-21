@@ -53,6 +53,7 @@ agent_memory_orchestrator = [
   "web/*.js",
   "web/css/*.css",
   "web/js/core/*.js",
+  "web/js/control-room/*.js",
   "web/js/graph/*.js",
   "bin/*/amo-peer-netd",
   "bin/*/amo-peer-netd.exe",

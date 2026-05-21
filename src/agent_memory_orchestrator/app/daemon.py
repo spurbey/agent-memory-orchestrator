@@ -9,7 +9,7 @@ from dataclasses import replace
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 from ..core.config import Settings
 from ..graph.diagnostics import debug_drain, debug_graph, debug_hooks, debug_qwen
@@ -45,6 +45,14 @@ def _web_asset_bytes(name: str) -> tuple[bytes, str]:
     return data, content_type
 
 
+def _session_cockpit_html() -> str:
+    return _load_web_asset("index.html")
+
+
+def _graph_workbench_html() -> str:
+    return _load_web_asset("graph.html")
+
+
 def _bounded_int(raw: str | None, *, default: int, minimum: int, maximum: int) -> int:
     try:
         value = int(raw) if raw is not None else default
@@ -61,6 +69,7 @@ class AmoHandler(BaseHTTPRequestHandler):
         try:
             self.send_response(status)
             self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Cache-Control", "no-store")
             self.send_header("Content-Length", str(len(encoded)))
             self.end_headers()
             self.wfile.write(encoded)
@@ -73,6 +82,7 @@ class AmoHandler(BaseHTTPRequestHandler):
         try:
             self.send_response(status)
             self.send_header("Content-Type", "application/json")
+            self.send_header("Cache-Control", "no-store")
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
@@ -84,6 +94,7 @@ class AmoHandler(BaseHTTPRequestHandler):
         try:
             self.send_response(status)
             self.send_header("Content-Type", content_type)
+            self.send_header("Cache-Control", "no-store")
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
@@ -108,25 +119,25 @@ class AmoHandler(BaseHTTPRequestHandler):
             self._write_bytes(204, b"", "image/x-icon")
             return
         if path == "/":
-            self._write_html(200, SESSION_COCKPIT_HTML)
+            self._write_html(200, _session_cockpit_html())
             return
         if path == "/dashboard":
-            self._write_html(200, DASHBOARD_HTML)
+            self._write_html(200, _session_cockpit_html())
             return
         if path == "/sessions":
-            self._write_html(200, SESSION_COCKPIT_HTML)
+            self._write_html(200, _session_cockpit_html())
             return
         if path == "/versions":
-            self._write_html(200, SESSION_COCKPIT_HTML)
+            self._write_html(200, _session_cockpit_html())
             return
         if path == "/connectors":
-            self._write_html(200, SESSION_COCKPIT_HTML)
+            self._write_html(200, _session_cockpit_html())
             return
         if path == "/graph":
-            self._write_html(200, GRAPH_WORKBENCH_HTML)
+            self._write_html(200, _graph_workbench_html())
             return
         if path == "/graph3d":
-            self._write_html(200, GRAPH_WORKBENCH_HTML)
+            self._write_html(200, _graph_workbench_html())
             return
         if path == "/health":
             job_store = V2SessionJobStore(self.settings)
@@ -188,7 +199,7 @@ class AmoHandler(BaseHTTPRequestHandler):
                 if path == "/api/jobs":
                     self._write_json(200, {"ok": True, "jobs": job_store.list_jobs(limit=limit), "reset_marker": job_store.marker()})
                     return
-                job_id = path.removeprefix("/api/jobs/").strip("/")
+                job_id = unquote(path.removeprefix("/api/jobs/").strip("/"))
                 job = job_store.get_job(job_id)
                 if job is None:
                     self._write_json(404, {"ok": False, "error": "job not found"})
@@ -366,7 +377,7 @@ class AmoHandler(BaseHTTPRequestHandler):
 
         try:
             if self.path.startswith("/api/jobs/") and self.path.endswith("/retry"):
-                job_id = self.path.removeprefix("/api/jobs/").removesuffix("/retry").strip("/")
+                job_id = unquote(self.path.removeprefix("/api/jobs/").removesuffix("/retry").strip("/"))
                 job_store = V2SessionJobStore(self.settings)
                 try:
                     job = job_store.retry_job(job_id, forced_by=str(payload.get("forced_by") or "daemon-api"))
@@ -712,9 +723,9 @@ def _daemon_log(settings: Settings, event: str, **fields: object) -> None:
         return
 
 
-SESSION_COCKPIT_HTML = _load_web_asset("index.html")
+SESSION_COCKPIT_HTML = _session_cockpit_html()
 DASHBOARD_HTML = SESSION_COCKPIT_HTML
-GRAPH_WORKBENCH_HTML = _load_web_asset("graph.html")
+GRAPH_WORKBENCH_HTML = _graph_workbench_html()
 GRAPH_HTML = GRAPH_WORKBENCH_HTML
 GRAPH3D_HTML = GRAPH_WORKBENCH_HTML
 

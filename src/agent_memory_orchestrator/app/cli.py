@@ -45,6 +45,7 @@ from ..reasoning_graph.session_runtime import build_and_query_session_graph
 from ..reasoning_graph.session_runtime import build_session_graph
 from ..reasoning_graph.session_runtime import default_session_graph_path
 from ..reasoning_graph.session_runtime import query_session_graph
+from ..reasoning_graph.jobs.reset import adopt_existing_v2_production_storage
 from ..reasoning_graph.jobs.reset import reset_production_v2_storage
 from ..skill_checkpoint import DEFAULT_LOCAL_NUM_CTX
 from ..skill_checkpoint import DEFAULT_NUM_PREDICT
@@ -78,6 +79,18 @@ def _build_parser() -> argparse.ArgumentParser:
         "--force-if-daemon-running",
         action="store_true",
         help="Allow reset even if the daemon health endpoint is reachable.",
+    )
+    v2_adopt = sub.add_parser(
+        "v2-adopt-production",
+        help="Back up and mark existing production V2 graph/retrieval stores as runner-ready without deleting them",
+    )
+    v2_adopt.add_argument("--backup", action="store_true", help="Required. Create a timestamped backup before adoption.")
+    v2_adopt.add_argument("--validate-graph", action="store_true", help="Required. Verify the production graph store exists.")
+    v2_adopt.add_argument("--validate-retrieval", action="store_true", help="Required. Verify retrieval documents exist.")
+    v2_adopt.add_argument(
+        "--force-if-daemon-running",
+        action="store_true",
+        help="Allow adoption even if the daemon health endpoint is reachable.",
     )
 
     install = sub.add_parser("install", help="Configure Claude/Codex hooks, MCP, and local AMO runtime config")
@@ -663,6 +676,18 @@ def main(argv: list[str] | None = None) -> int:
                 backup=args.backup,
                 clean_graph=args.clean_graph,
                 clean_retrieval=args.clean_retrieval,
+                force_if_daemon_running=args.force_if_daemon_running,
+            )
+            _print(result)
+            return 0
+
+        if args.command == "v2-adopt-production":
+            settings = Settings.load()
+            result = adopt_existing_v2_production_storage(
+                settings,
+                backup=args.backup,
+                validate_graph=args.validate_graph,
+                validate_retrieval=args.validate_retrieval,
                 force_if_daemon_running=args.force_if_daemon_running,
             )
             _print(result)
