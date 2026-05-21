@@ -9,7 +9,7 @@ from dataclasses import replace
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 from ..core.config import Settings
 from ..graph.diagnostics import debug_drain, debug_graph, debug_hooks, debug_qwen
@@ -188,7 +188,7 @@ class AmoHandler(BaseHTTPRequestHandler):
                 if path == "/api/jobs":
                     self._write_json(200, {"ok": True, "jobs": job_store.list_jobs(limit=limit), "reset_marker": job_store.marker()})
                     return
-                job_id = path.removeprefix("/api/jobs/").strip("/")
+                job_id = unquote(path.removeprefix("/api/jobs/").strip("/"))
                 job = job_store.get_job(job_id)
                 if job is None:
                     self._write_json(404, {"ok": False, "error": "job not found"})
@@ -366,7 +366,7 @@ class AmoHandler(BaseHTTPRequestHandler):
 
         try:
             if self.path.startswith("/api/jobs/") and self.path.endswith("/retry"):
-                job_id = self.path.removeprefix("/api/jobs/").removesuffix("/retry").strip("/")
+                job_id = unquote(self.path.removeprefix("/api/jobs/").removesuffix("/retry").strip("/"))
                 job_store = V2SessionJobStore(self.settings)
                 try:
                     job = job_store.retry_job(job_id, forced_by=str(payload.get("forced_by") or "daemon-api"))
