@@ -99,12 +99,24 @@ class PeerNetdRuntime:
             raise PeerNetdRuntimeError("managed peer-netd start requires a fixed --api host:port, not port 0")
 
         current = self.status()
+        desired_launch = self.launch_config(options)
+        restart_result: dict[str, Any] | None = None
         if current.get("running") and current.get("api_ok"):
-            api_url = str(current.get("api_url") or self.api_url(options.api_addr))
-            post_start = self.post_start(options, api_url)
-            if post_start:
-                current["health"] = PeerNetdClient(base_url=api_url, timeout_seconds=1.0).health()
-            return {"ok": True, "already_running": True, "status": current, "post_start": post_start}
+            current_state = self.read_state()
+            current_launch = current_state.get("launch_config") if isinstance(current_state.get("launch_config"), dict) else None
+            if current_launch == desired_launch:
+                api_url = str(current.get("api_url") or self.api_url(options.api_addr))
+                post_start = self.post_start(options, api_url)
+                if post_start:
+                    current["health"] = PeerNetdClient(base_url=api_url, timeout_seconds=1.0).health()
+                return {
+                    "ok": True,
+                    "already_running": True,
+                    "launch_config_match": True,
+                    "status": current,
+                    "post_start": post_start,
+                }
+            restart_result = self.stop()
 
         binary = self.prepare_binary(build_if_missing=build_if_missing)
 
@@ -138,6 +150,7 @@ class PeerNetdRuntime:
             "store_path": str(self.store_path(options)),
             "started_at": timestamp,
             "args": args,
+            "launch_config": desired_launch,
             "stdout_log": str(stdout_path),
             "stderr_log": str(stderr_path),
         }
@@ -156,6 +169,7 @@ class PeerNetdRuntime:
         return {
             "ok": True,
             "already_running": False,
+            "restart": restart_result,
             "pid": process.pid,
             "api_url": state["api_url"],
             "health": health,
@@ -380,6 +394,39 @@ class PeerNetdRuntime:
         for addr in options.static_relays:
             args.extend(["--static-relay", addr])
         return args
+
+    def launch_config(self, options: PeerNetdLaunchOptions) -> dict[str, Any]:
+        """Return a stable config fingerprint for deciding sidecar reuse.
+
+        Values that affect peer identity, network reachability, or inbox location
+        must match before an already-running daemon can be reused.
+        """
+        return {
+            "node_id": options.node_id,
+            "listen_addr": options.listen_addr,
+            "api_addr": options.api_addr,
+            "store_path": str(self.store_path(options)),
+            "identity_key_path": str(self.identity_key_path(options)),
+            "shared_secret_env": options.shared_secret_env,
+            "require_signature": options.require_signature,
+            "bootstrap_addrs": list(options.bootstrap_addrs),
+            "static_relays": list(options.static_relays),
+            "mdns": options.mdns,
+            "mdns_service": options.mdns_service,
+            "auto_connect_discovered": options.auto_connect_discovered,
+            "rendezvous_server": options.rendezvous_server,
+            "relay_service": options.relay_service,
+            "nat_service": options.nat_service,
+            "auto_relay": options.auto_relay,
+            "hole_punching": options.hole_punching,
+            "force_private": options.force_private,
+            "force_public": options.force_public,
+            "advertise_localhost_dns": options.advertise_localhost_dns,
+            "advertise_addrs": list(options.advertise_addrs),
+            "rendezvous_addr": options.rendezvous_addr,
+            "rendezvous_namespace": options.rendezvous_namespace,
+            "rendezvous_ttl_seconds": options.rendezvous_ttl_seconds,
+        }
 
     @property
     def runtime_dir(self) -> Path:
