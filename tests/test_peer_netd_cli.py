@@ -8,6 +8,11 @@ from agent_memory_orchestrator.core.config import Settings
 from agent_memory_orchestrator.peer import PeerService
 from agent_memory_orchestrator.peer.invites import build_peer_invite
 from agent_memory_orchestrator.peer.netd_runtime import PeerNetdRuntime, binary_name
+from agent_memory_orchestrator.peer.netd_runtime import PeerNetdLaunchOptions
+from agent_memory_orchestrator.peer.netd_service import PeerNetdServiceOptions
+from agent_memory_orchestrator.peer.netd_service import install_service as install_netd_service
+from agent_memory_orchestrator.peer import netd_runtime as netd_runtime_module
+from agent_memory_orchestrator.peer import netd_service as netd_service_module
 
 
 def test_peer_netd_status_uses_amo_home(tmp_path: Path, capsys) -> None:
@@ -83,6 +88,80 @@ def test_peer_netd_rebuilds_stale_binary_when_go_is_available(tmp_path: Path, mo
 
     assert runtime.prepare_binary(build_if_missing=True) == binary_path
     assert binary_path.read_text(encoding="utf-8") == "fresh"
+
+
+def test_peer_netd_restarts_when_running_launch_config_differs(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("AMO_HOME", str(tmp_path))
+    runtime = PeerNetdRuntime(Settings.load())
+    relay_addr = "/ip4/203.0.113.10/tcp/4001/p2p/12D3KooWRelay"
+    old_options = PeerNetdLaunchOptions(node_id="node-a")
+    new_options = PeerNetdLaunchOptions(
+        node_id="node-a",
+        static_relays=(relay_addr,),
+        auto_relay=True,
+        hole_punching=True,
+        rendezvous_addr=relay_addr,
+        rendezvous_namespace="amo-team",
+    )
+    written_state: dict = {}
+    stopped = []
+
+    class FakeProcess:
+        pid = 4567
+
+    monkeypatch.setattr(
+        PeerNetdRuntime,
+        "status",
+        lambda self: {"ok": True, "running": True, "api_ok": True, "api_url": "http://127.0.0.1:8788"},
+    )
+    monkeypatch.setattr(
+        PeerNetdRuntime,
+        "read_state",
+        lambda self: {"pid": 1234, "launch_config": runtime.launch_config(old_options)},
+    )
+    monkeypatch.setattr(PeerNetdRuntime, "stop", lambda self: stopped.append(True) or {"ok": True, "stopped": True})
+    monkeypatch.setattr(PeerNetdRuntime, "prepare_binary", lambda self, build_if_missing=True: tmp_path / binary_name())
+    monkeypatch.setattr(PeerNetdRuntime, "args_for", lambda self, binary, options: [str(binary)])
+    monkeypatch.setattr(PeerNetdRuntime, "wait_for_health", lambda self, api_addr: {"ok": True, "relay_addrs": []})
+    monkeypatch.setattr(PeerNetdRuntime, "post_start", lambda self, options, api_url: {})
+    monkeypatch.setattr(PeerNetdRuntime, "write_state", lambda self, state: written_state.update(state))
+    monkeypatch.setattr(netd_runtime_module.subprocess, "Popen", lambda *args, **kwargs: FakeProcess())
+
+    result = runtime.start(new_options, build_if_missing=False)
+
+    assert result["ok"] is True
+    assert result["already_running"] is False
+    assert result["restart"] == {"ok": True, "stopped": True}
+    assert stopped == [True]
+    assert written_state["launch_config"]["static_relays"] == [relay_addr]
+    assert written_state["launch_config"]["rendezvous_namespace"] == "amo-team"
+
+
+def test_peer_netd_reuses_running_sidecar_when_launch_config_matches(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("AMO_HOME", str(tmp_path))
+    runtime = PeerNetdRuntime(Settings.load())
+    options = PeerNetdLaunchOptions(node_id="node-a")
+    stopped = []
+
+    monkeypatch.setattr(
+        PeerNetdRuntime,
+        "status",
+        lambda self: {"ok": True, "running": True, "api_ok": True, "api_url": "http://127.0.0.1:8788"},
+    )
+    monkeypatch.setattr(
+        PeerNetdRuntime,
+        "read_state",
+        lambda self: {"pid": 1234, "launch_config": runtime.launch_config(options)},
+    )
+    monkeypatch.setattr(PeerNetdRuntime, "stop", lambda self: stopped.append(True) or {"ok": True})
+    monkeypatch.setattr(PeerNetdRuntime, "post_start", lambda self, options, api_url: {})
+
+    result = runtime.start(options, build_if_missing=False)
+
+    assert result["ok"] is True
+    assert result["already_running"] is True
+    assert result["launch_config_match"] is True
+    assert stopped == []
 
 
 def test_peer_enable_rejects_dynamic_api_port_without_building(tmp_path: Path, capsys) -> None:
@@ -309,6 +388,34 @@ def test_peer_setup_can_save_relay_from_invite_and_accept(tmp_path: Path, capsys
     assert options.static_relays == (relay_addr,)
     assert options.rendezvous_addr == relay_addr
     assert options.rendezvous_namespace == "amo-team"
+
+
+def test_peer_setup_returns_nonzero_when_startup_install_fails(tmp_path: Path, capsys, monkeypatch) -> None:
+    from agent_memory_orchestrator.app import cli as cli_module
+
+    def fake_start(self: PeerNetdRuntime, options, *, build_if_missing: bool = True) -> dict:
+        return {"ok": True, "api_url": "http://127.0.0.1:8788"}
+
+    monkeypatch.setattr(PeerNetdRuntime, "start", fake_start)
+    monkeypatch.setattr(cli_module, "install_peer_netd_service", lambda *args, **kwargs: {"ok": False, "error": "boom"})
+
+    code = main(
+        [
+            "peer",
+            "--amo-home",
+            str(tmp_path),
+            "setup",
+            "--node-id",
+            "node-a",
+            "--install-startup",
+            "--no-build",
+        ]
+    )
+    payload = json.loads(capsys.readouterr().out)
+
+    assert code == 1
+    assert payload["ok"] is False
+    assert payload["startup"]["error"] == "boom"
 
 
 def test_peer_share_and_import_card_with_base_url(tmp_path: Path, capsys) -> None:
@@ -548,6 +655,25 @@ def test_peer_netd_install_service_can_plan_watcher(tmp_path: Path, capsys) -> N
     assert "enable" in payload["enable_command"]
     assert "poll-netd" in payload["watcher"]["watch_command"]
     assert "--watch" in payload["watcher"]["watch_command"]
+
+
+def test_peer_netd_windows_watcher_task_runs_immediately_after_install(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("AMO_HOME", str(tmp_path))
+    monkeypatch.setattr(netd_service_module.os, "name", "nt")
+    options = PeerNetdServiceOptions(apply=True, with_watcher=True)
+    commands = []
+
+    def fake_run_commands(payload: list[list[str]]) -> dict:
+        commands.extend(payload)
+        return {"ok": True, "results": [{"ok": True, "command": item} for item in payload]}
+
+    monkeypatch.setattr(netd_service_module, "_run_commands", fake_run_commands)
+
+    result = install_netd_service(Settings.load(), PeerNetdLaunchOptions(node_id="node-a"), options)
+
+    assert result["ok"] is True
+    assert result["watcher"]["start_command"] in commands
+    assert result["watcher"]["start_command"][:2] == ["schtasks", "/Run"]
 
 
 def test_peer_relay_start_uses_public_helper_defaults(tmp_path: Path, capsys, monkeypatch) -> None:
