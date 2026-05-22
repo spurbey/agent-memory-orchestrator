@@ -47,6 +47,7 @@ def install_service_plan(
                 "service_name": watcher_name,
                 "watch_command": watch_command,
                 "install_command": _windows_task_create_command(watcher_name, watch_command),
+                "start_command": ["schtasks", "/Run", "/TN", watcher_name],
                 "uninstall_command": ["schtasks", "/Delete", "/TN", watcher_name, "/F"],
             }
             plan["notes"].append("Also creates a watcher task that drains peer-netd inbox messages into AMO rooms.")
@@ -91,6 +92,7 @@ def install_service(settings: Settings, launch: PeerNetdLaunchOptions, options: 
         watcher = plan.get("watcher")
         if isinstance(watcher, dict):
             commands.append(watcher["install_command"])
+            commands.append(watcher["start_command"])
         return plan | _run_commands(commands)
 
     unit_path = Path(plan["unit_path"])

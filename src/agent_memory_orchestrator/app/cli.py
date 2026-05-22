@@ -928,9 +928,12 @@ def main(argv: list[str] | None = None) -> int:
                             watch_service_name=args.watch_service_name,
                         ),
                     )
+                setup_ok = all(
+                    item is None or bool(item.get("ok")) for item in (init_result, netd_result, accept_result, startup_result)
+                )
                 _print(
                     {
-                        "ok": True,
+                        "ok": setup_ok,
                         "init": init_result,
                         "relay_profile": saved_profile or (store.get_relay_profile(args.relay_profile) if args.relay_profile else None),
                         "netd": netd_result,
@@ -944,7 +947,7 @@ def main(argv: list[str] | None = None) -> int:
                         ],
                     }
                 )
-                return 0
+                return 0 if setup_ok else 1
             if args.peer_command == "netd":
                 runtime = PeerNetdRuntime(settings)
                 if args.netd_command == "build":
