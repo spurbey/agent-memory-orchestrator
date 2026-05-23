@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import uuid
+from collections.abc import Callable
 from typing import Any
 
 from ...core.config import Settings
@@ -59,16 +60,8 @@ def apply_merge_plan(
         current_view = owned_store.ensure_graph_view(branch=branch, mode=mode)
         current_head = str(current_view.get("graph_commit_id") or "")
         expected_parent = str(plan.get("parent_graph_commit_id") or "")
-        if str(plan_row.get("status") or "") == "applied" and current_head == graph_commit_id:
-            return {
-                "ok": True,
-                "plan_id": plan_id,
-                "graph_commit_id": graph_commit_id,
-                "status": "applied",
-                "idempotent": True,
-                "idempotency_skip_count": _applied_item_count(plan),
-            }
-        if current_head != expected_parent:
+        reapplies_applied_head = str(plan_row.get("status") or "") == "applied" and current_head == graph_commit_id
+        if not reapplies_applied_head and current_head != expected_parent:
             diagnostics = {
                 "reason": "replan_required",
                 "current_head": current_head,
@@ -77,10 +70,11 @@ def apply_merge_plan(
             owned_store.update_central_merge_plan_status(plan_id=plan_id, status="failed_recoverable", diagnostics=diagnostics)
             return {"ok": False, "plan_id": plan_id, "status": "failed_recoverable", "error": diagnostics}
 
+        lock_expected_parent = current_head if reapplies_applied_head else expected_parent
         if not owned_store.acquire_central_merge_lock(
             branch=branch,
             owner=owner,
-            expected_parent_graph_commit_id=expected_parent,
+            expected_parent_graph_commit_id=lock_expected_parent,
             lease_seconds=300,
         ):
             diagnostics = {"reason": "central_merge_lock_unavailable", "branch": branch}
@@ -140,6 +134,7 @@ def apply_merge_plan(
                 "added_edge_count": len(added_edges),
                 "added_nodes": added_nodes,
                 "added_edges": added_edges,
+                "idempotent": reapplies_applied_head,
             }
         except Exception as exc:
             diagnostics = {"reason": "central_merge_apply_failed", "error": str(exc)}
@@ -171,6 +166,7 @@ def _write_exact_atoms(
         if isinstance(version, dict) and version.get("atom_kind") in EXACT_APPLY_ATOM_KINDS
     ]
     atom_ids = {str(atom.get("atom_id") or "") for atom in atoms}
+    resolve_source_id = _source_id_resolver(graph_store)
     added_nodes: list[str] = []
     added_edges: list[str] = []
 
@@ -246,7 +242,7 @@ def _write_exact_atoms(
         )
         added_edges.append(edge_id)
         for source_node_id in version.get("source_node_ids", []) if isinstance(version.get("source_node_ids"), list) else []:
-            source_id = str(source_node_id or "")
+            source_id = resolve_source_id(str(source_node_id or ""))
             if not source_id:
                 continue
             derived_edge_id = _edge_id("DERIVED_FROM_SESSION_NODE", version_id, source_id, graph_commit_id)
@@ -356,14 +352,31 @@ def _idempotency_key(item_type: str, item_id: str, graph_commit_id: str) -> str:
     return hashlib.sha256(f"{item_type}|{item_id}|{graph_commit_id}".encode("utf-8")).hexdigest()
 
 
-def _applied_item_count(plan: dict[str, Any]) -> int:
-    atoms = [atom for atom in plan.get("new_atoms", []) if isinstance(atom, dict) and atom.get("atom_kind") in EXACT_APPLY_ATOM_KINDS]
-    versions = [
-        version
-        for version in plan.get("new_versions", [])
-        if isinstance(version, dict) and version.get("atom_kind") in EXACT_APPLY_ATOM_KINDS
-    ]
-    return len(atoms) + len(versions)
+def _source_id_resolver(graph_store: GraphStore) -> Callable[[str], str]:
+    ids: set[str] = set()
+    try:
+        ids = {str(node.get("id") or "") for node in graph_store.list_nodes(limit=100000)}
+    except Exception:
+        ids = set()
+    suffix_matches: dict[str, str] = {}
+    for node_id in ids:
+        if ":" not in node_id:
+            continue
+        suffix = node_id.split(":", 1)[1]
+        if suffix in suffix_matches and suffix_matches[suffix] != node_id:
+            suffix_matches[suffix] = ""
+        else:
+            suffix_matches[suffix] = node_id
+
+    def resolve(source_id: str) -> str:
+        if not source_id:
+            return ""
+        if not ids or source_id in ids:
+            return source_id
+        matched = suffix_matches.get(source_id)
+        return matched or source_id
+
+    return resolve
 
 
 def _dedupe(values: list[str]) -> list[str]:

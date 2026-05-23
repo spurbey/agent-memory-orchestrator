@@ -31,6 +31,7 @@ from agent_memory_orchestrator.reasoning_graph.stage4_contract import stage4_con
 from agent_memory_orchestrator.reasoning_graph.retrieval import RetrievalDocument
 from agent_memory_orchestrator.reasoning_graph.retrieval import RetrievalIndexStore
 from agent_memory_orchestrator.graph.service import GraphRagService
+from agent_memory_orchestrator.graph.store import GraphNode
 from agent_memory_orchestrator.graph.store import InMemoryGraphStore
 
 
@@ -232,6 +233,7 @@ def test_v2_central_merge_apply_writes_exact_atoms_graph_commit_and_view(tmp_pat
     graph = InMemoryGraphStore()
     store = V2SessionJobStore(settings)
     try:
+        graph.upsert_node(GraphNode(id="jobprefix:commit:abc123", kind="Commit", label="abc123"))
         job = store.enqueue_session(session_id="s-apply", boundary_event_id="raw_boundary", repo_path=str(tmp_path)).job
         compact_graph = {
             "nodes": [
@@ -263,6 +265,9 @@ def test_v2_central_merge_apply_writes_exact_atoms_graph_commit_and_view(tmp_pat
         assert all(node.metadata["repo_id"].startswith("repo:") for node in atom_nodes)
         assert any(edge.kind == "VERSION_OF" for edge in graph.edges.values())
         assert any(edge.kind == "DERIVED_FROM_SESSION_NODE" for edge in graph.edges.values())
+        derived_targets = {edge.target_id for edge in graph.edges.values() if edge.kind == "DERIVED_FROM_SESSION_NODE"}
+        assert "jobprefix:commit:abc123" in derived_targets
+        assert "commit:abc123" not in derived_targets
 
         node_count = len(graph.nodes)
         edge_count = len(graph.edges)
