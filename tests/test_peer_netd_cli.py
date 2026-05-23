@@ -659,7 +659,7 @@ def test_peer_netd_install_service_can_plan_watcher(tmp_path: Path, capsys) -> N
 
 def test_peer_netd_windows_watcher_task_runs_immediately_after_install(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("AMO_HOME", str(tmp_path))
-    monkeypatch.setattr(netd_service_module.os, "name", "nt")
+    monkeypatch.setattr(netd_service_module, "_is_windows", lambda: True)
     options = PeerNetdServiceOptions(apply=True, with_watcher=True)
     commands = []
 
