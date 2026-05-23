@@ -54,8 +54,8 @@ def test_peer_netd_service_plan_can_include_watcher(tmp_path: Path) -> None:
     assert "agent_memory_orchestrator.app.cli" in watch_command
     assert "--amo-home" in watch_command
     assert str(tmp_path) in watch_command
-    assert "poll-netd" in watch_command
-    assert "--watch" in watch_command
+    assert "peer-agent" in watch_command
+    assert "watch" in watch_command
     assert watcher["install_command"]
     assert watcher["uninstall_command"]
 

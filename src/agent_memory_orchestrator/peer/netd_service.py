@@ -26,7 +26,7 @@ def install_service_plan(
 ) -> dict[str, Any]:
     enable_command = _enable_command(settings, launch)
     watch_command = _watch_command(settings)
-    if os.name == "nt":
+    if _is_windows():
         task_name = options.service_name
         plan = {
             "ok": True,
@@ -47,6 +47,7 @@ def install_service_plan(
                 "service_name": watcher_name,
                 "watch_command": watch_command,
                 "install_command": _windows_task_create_command(watcher_name, watch_command),
+                "start_command": ["schtasks", "/Run", "/TN", watcher_name],
                 "uninstall_command": ["schtasks", "/Delete", "/TN", watcher_name, "/F"],
             }
             plan["notes"].append("Also creates a watcher task that drains peer-netd inbox messages into AMO rooms.")
@@ -86,11 +87,12 @@ def install_service(settings: Settings, launch: PeerNetdLaunchOptions, options: 
     plan = install_service_plan(settings, launch, options)
     if not options.apply:
         return plan
-    if os.name == "nt":
+    if _is_windows():
         commands = [plan["install_command"]]
         watcher = plan.get("watcher")
         if isinstance(watcher, dict):
             commands.append(watcher["install_command"])
+            commands.append(watcher["start_command"])
         return plan | _run_commands(commands)
 
     unit_path = Path(plan["unit_path"])
@@ -133,7 +135,7 @@ def uninstall_service(settings: Settings, options: PeerNetdServiceOptions) -> di
 
 
 def service_status(options: PeerNetdServiceOptions) -> dict[str, Any]:
-    if os.name == "nt":
+    if _is_windows():
         command = ["schtasks", "/Query", "/TN", options.service_name]
     else:
         command = ["systemctl", "--user", "status", _systemd_unit_name(options.service_name), "--no-pager"]
@@ -141,7 +143,7 @@ def service_status(options: PeerNetdServiceOptions) -> dict[str, Any]:
     payload: dict[str, Any] = {"service_name": options.service_name, "command": command} | _completed_process_result(result)
     if options.with_watcher:
         watch_name = options.watch_service_name or f"{options.service_name} Watcher"
-        if os.name == "nt":
+        if _is_windows():
             watch_command = ["schtasks", "/Query", "/TN", watch_name]
         else:
             watch_command = ["systemctl", "--user", "status", _systemd_unit_name(watch_name), "--no-pager"]
@@ -164,6 +166,10 @@ def _windows_task_create_command(task_name: str, command: list[str]) -> list[str
         subprocess.list2cmdline(command),
         "/F",
     ]
+
+
+def _is_windows() -> bool:
+    return os.name == "nt"
 
 
 def _enable_command(settings: Settings, launch: PeerNetdLaunchOptions) -> list[str]:
@@ -225,11 +231,10 @@ def _watch_command(settings: Settings) -> list[str]:
         sys.executable or "python",
         "-m",
         "agent_memory_orchestrator.app.cli",
-        "peer",
+        "peer-agent",
         "--amo-home",
         str(settings.home),
-        "poll-netd",
-        "--watch",
+        "watch",
     ]
 
 
