@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from ..core.config import Settings
+from ..core.db import connect
 from ..integrations.connectors.slack import SlackConnectorService
 from ..integrations.connectors.slack.manifest import slack_manifest_json, slack_manifest_setup_url
 from ..integrations.connectors.slack.service import load_event_file
@@ -47,6 +48,8 @@ from ..reasoning_graph.session_runtime import build_and_query_session_graph
 from ..reasoning_graph.session_runtime import build_session_graph
 from ..reasoning_graph.session_runtime import default_session_graph_path
 from ..reasoning_graph.session_runtime import query_session_graph
+from ..reasoning_graph.retrieval import RetrievalIndexStore
+from ..reasoning_graph.retrieval import retrieve_session_graph as retrieve_indexed_docs
 from ..reasoning_graph.jobs.reset import adopt_existing_v2_production_storage
 from ..reasoning_graph.jobs.reset import initialize_fresh_v2_production_storage
 from ..reasoning_graph.jobs.reset import reset_production_v2_storage
@@ -70,6 +73,47 @@ def _print(payload: object) -> None:
 
 def _print_line(payload: object) -> None:
     print(json.dumps(payload), flush=True)
+
+
+class _NoGraphWalkStore:
+    def neighbors(self, node_id: str, *, limit: int = 25) -> list[dict[str, object]]:
+        raise AssertionError("index-only graph retrieval should not expand Kuzu neighbors")
+
+    def list_nodes(
+        self,
+        *,
+        limit: int = 25,
+        kinds: list[str] | None = None,
+        session_id: str = "",
+        status: str = "",
+    ) -> list[dict[str, object]]:
+        raise AssertionError("index-only graph retrieval should not load Kuzu nodes")
+
+
+def _retrieve_index_only(settings: Settings, args: Any) -> dict[str, Any]:
+    target_db = args.db_path or settings.retrieval_db_path
+    conn = connect(target_db)
+    try:
+        index = RetrievalIndexStore(conn)
+        result = retrieve_indexed_docs(
+            query=args.query,
+            index_store=index,
+            graph_store=_NoGraphWalkStore(),
+            session_id=args.session_id,
+            limit=max(1, min(50, int(args.limit))),
+            expand_neighbors=0,
+            include_graph_nodes=False,
+        )
+        return {
+            "ok": True,
+            "db_path": str(target_db),
+            "graph_path": str(settings.graph_path),
+            "graph_scope": args.graph_scope or settings.retrieval_graph_scope,
+            "retrieval": result.as_dict(),
+            "mode": "index_only",
+        }
+    finally:
+        conn.close()
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -1471,6 +1515,9 @@ def main(argv: list[str] | None = None) -> int:
         }:
             settings = _settings_with_path_overrides(Settings.load(), args)
             if args.offline:
+                if args.command == "graph-retrieve" and args.no_answer and args.no_vector:
+                    _print(_retrieve_index_only(settings, args))
+                    return 0
                 graph = GraphRagService(settings)
                 try:
                     if args.command == "graph-search":
