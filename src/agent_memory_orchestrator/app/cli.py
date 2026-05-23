@@ -51,6 +51,7 @@ from ..reasoning_graph.jobs.reset import adopt_existing_v2_production_storage
 from ..reasoning_graph.jobs.reset import initialize_fresh_v2_production_storage
 from ..reasoning_graph.jobs.reset import reset_production_v2_storage
 from ..reasoning_graph.jobs.store import V2SessionJobStore
+from ..reasoning_graph.central_merge.backfill import backfill_central_merge_plan
 from ..reasoning_graph.central_merge.fixtures import export_job_fixture
 from ..reasoning_graph.central_merge.judge import run_semantic_eval_fixture
 from ..skill_checkpoint import DEFAULT_LOCAL_NUM_CTX
@@ -112,6 +113,8 @@ def _build_parser() -> argparse.ArgumentParser:
     v2_eval.add_argument("--out", type=Path, help="Write semantic eval result JSON")
     v2_plan = sub.add_parser("v2-merge-plan", help="Show the latest central_version_merge plan for a V2 job")
     v2_plan.add_argument("--job-id", required=True)
+    v2_plan.add_argument("--backfill", action="store_true", help="Create a dry-run merge plan for an old completed job if missing")
+    v2_plan.add_argument("--forced-by", default="manual-backfill")
     v2 = sub.add_parser("v2", help="V2 job, fixture, semantic eval, and central merge commands")
     v2_sub = v2.add_subparsers(dest="v2_command", required=True)
     v2_export_nested = v2_sub.add_parser("export-fixture", help="Export a V2 job fixture for semantic evaluation")
@@ -124,6 +127,8 @@ def _build_parser() -> argparse.ArgumentParser:
     v2_eval_nested.add_argument("--out", type=Path, help="Write semantic eval result JSON")
     v2_plan_nested = v2_sub.add_parser("merge-plan", help="Show the latest central_version_merge plan for a V2 job")
     v2_plan_nested.add_argument("--job-id", required=True)
+    v2_plan_nested.add_argument("--backfill", action="store_true", help="Create a dry-run merge plan for an old completed job if missing")
+    v2_plan_nested.add_argument("--forced-by", default="manual-backfill")
 
     install = sub.add_parser("install", help="Configure Claude/Codex hooks, MCP, and local AMO runtime config")
     install.add_argument("--target", choices=["codex", "claude", "all"], default="all")
@@ -821,6 +826,10 @@ def main(argv: list[str] | None = None) -> int:
 
         if args.command == "v2-merge-plan" or (args.command == "v2" and args.v2_command == "merge-plan"):
             settings = Settings.load()
+            if args.backfill:
+                result = backfill_central_merge_plan(settings, job_id=args.job_id, forced_by=args.forced_by)
+                _print(result)
+                return 0 if result.get("ok") else 1
             store = V2SessionJobStore(settings)
             try:
                 plan = store.get_central_merge_plan_for_job(args.job_id)
