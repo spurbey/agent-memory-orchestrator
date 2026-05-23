@@ -438,6 +438,7 @@ class PeerService:
         message_type: str = "context_request",
         citations: list[str] | None = None,
         confidence: float | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         message = PeerMessage(
             room_id=room_id,
@@ -447,6 +448,7 @@ class PeerService:
             content=content,
             citations=tuple(citations or ()),
             confidence=confidence,
+            metadata=metadata if isinstance(metadata, dict) else {},
         )
         return {"ok": True, "message": self.store.append_message(room_id, message.to_record())}
 
@@ -459,6 +461,7 @@ class PeerService:
         message_type: str = "context_request",
         citations: list[str] | None = None,
         confidence: float | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         config = self.store.load_config()
         peer = config.peer_by_id(peer_id)
@@ -472,6 +475,7 @@ class PeerService:
             content=content,
             citations=tuple(citations or ()),
             confidence=confidence,
+            metadata=metadata if isinstance(metadata, dict) else {},
         )
         stored = self.store.append_message(room_id, message.to_record())
         payload = stored | {"room_id": room_id}

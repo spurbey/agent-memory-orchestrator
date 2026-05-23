@@ -10,6 +10,7 @@ from ..graph.service import GraphRagService
 from ..graph.store import GraphBackendUnavailable
 from ..llm.qwen import QwenUnavailable
 from ..memory import MemoryService
+from ..peer.agent import PeerAgentService
 
 
 AGENTS = {"claude", "codex", "user", "system"}
@@ -76,6 +77,26 @@ MCP_MEMORY_TOOL_CONTRACTS: dict[str, dict[str, Any]] = {
         "required": [],
         "returns": ["counts"],
     },
+    "peer_memory_ask": {
+        "description": "Ask local AMO memory first, then query trusted peer agents when local confidence is low.",
+        "required": ["query"],
+        "returns": ["mode", "answer", "room_id", "local_quality", "peer_responses", "citations", "timing"],
+    },
+    "peer_room_status": {
+        "description": "Inspect peer-agent room lifecycle and idempotency state.",
+        "required": ["room_id"],
+        "returns": ["room", "agent_state"],
+    },
+    "peer_room_context": {
+        "description": "Read the local three-layer context pack for a peer-agent room.",
+        "required": ["room_id"],
+        "returns": ["context"],
+    },
+    "peer_room_messages": {
+        "description": "Read local peer-agent room transcript messages.",
+        "required": ["room_id"],
+        "returns": ["messages"],
+    },
 }
 
 
@@ -92,11 +113,13 @@ class MemoryMcpToolService:
         memory: MemoryService | None = None,
         graph: GraphRagService | None = None,
         daemon: DaemonClient | None = None,
+        peer_agent: PeerAgentService | None = None,
     ) -> None:
         self.settings = settings
         self.memory = memory or MemoryService(settings)
         self._graph = graph
         self._daemon = daemon or DaemonClient.from_settings(settings, timeout_seconds=60)
+        self._peer_agent = peer_agent
         self.memory.init_db()
 
     def close(self) -> None:
@@ -144,6 +167,20 @@ class MemoryMcpToolService:
             "qwen_compress_timeout_seconds": self.settings.qwen_compress_timeout_seconds,
             "qwen_num_ctx": self.settings.qwen_num_ctx,
             "drain_max_windows_per_run": self.settings.drain_max_windows_per_run,
+            "peer_agent_enabled": self.settings.peer_agent_enabled,
+            "peer_agent_runtime": self.settings.peer_agent_runtime,
+            "peer_agent_model": self.settings.peer_agent_model,
+            "peer_agent_endpoint": self.settings.peer_agent_endpoint,
+            "peer_agent_api_provider": self.settings.peer_agent_api_provider,
+            "peer_agent_api_base_url": self.settings.peer_agent_api_base_url,
+            "peer_agent_api_model": self.settings.peer_agent_api_model,
+            "peer_agent_api_key_env": self.settings.peer_agent_api_key_env,
+            "peer_agent_allow_initiator_api_fallback": self.settings.peer_agent_allow_initiator_api_fallback,
+            "peer_agent_allow_retrieval_only_responses": self.settings.peer_agent_allow_retrieval_only_responses,
+            "peer_agent_min_confidence": self.settings.peer_agent_min_confidence,
+            "peer_agent_strong_confidence": self.settings.peer_agent_strong_confidence,
+            "peer_agent_max_peers": self.settings.peer_agent_max_peers,
+            "peer_agent_room_timeout_seconds": self.settings.peer_agent_room_timeout_seconds,
         }
 
     def tool_contracts(self) -> dict[str, Any]:
@@ -342,6 +379,35 @@ class MemoryMcpToolService:
             daemon_method="GET",
             daemon_payload={"session_id": session_id},
         )
+
+    def peer_memory_ask(
+        self,
+        *,
+        query: str,
+        session_id: str = "",
+        min_confidence: float = 0.72,
+        timeout_seconds: float = 45,
+    ) -> dict[str, Any]:
+        return self._peer_agent_service().ask(
+            query=_require_text(query, "query"),
+            session_id=session_id,
+            min_confidence=min_confidence,
+            timeout_seconds=timeout_seconds,
+        )
+
+    def peer_room_status(self, *, room_id: str) -> dict[str, Any]:
+        return self._peer_agent_service().status(_require_text(room_id, "room_id"))
+
+    def peer_room_context(self, *, room_id: str) -> dict[str, Any]:
+        return self._peer_agent_service().context(_require_text(room_id, "room_id"))
+
+    def peer_room_messages(self, *, room_id: str) -> dict[str, Any]:
+        return self._peer_agent_service().messages(_require_text(room_id, "room_id"))
+
+    def _peer_agent_service(self) -> PeerAgentService:
+        if self._peer_agent is None:
+            self._peer_agent = PeerAgentService(self.settings)
+        return self._peer_agent
 
     def _graph_call(
         self,
