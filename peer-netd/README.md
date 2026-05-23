@@ -152,7 +152,7 @@ python -m agent_memory_orchestrator.app.cli peer --amo-home <home_b> setup `
   --install-startup
 ```
 
-`setup --install-startup` starts peer netd now and installs per-user startup entries for both netd and `poll-netd --watch`. Without `--install-startup`, it only starts the current session.
+`setup --install-startup` starts peer netd now and installs per-user startup entries for both netd and `peer-agent watch`. Without `--install-startup`, it only starts the current session.
 
 ## API
 
@@ -170,7 +170,7 @@ POST /rendezvous/discover    {"addr": "<rendezvous multiaddr>", "namespace": "am
 
 Messages are wrapped in AMO envelopes. When a shared secret is configured, outbound envelopes are signed with HMAC-SHA256 and inbound messages can require signatures.
 
-The sidecar persists delivered envelopes when `--store-path` is set. AMO's managed runtime sets this automatically to `AMO_HOME/.peer/netd/inbox.jsonl`, so messages survive sidecar restart until AMO processes them with `peer poll-netd`.
+The sidecar persists delivered envelopes when `--store-path` is set. AMO's managed runtime sets this automatically to `AMO_HOME/.peer/netd/inbox.jsonl`, so messages survive sidecar restart until AMO processes them with `peer-agent watch` or low-level `peer poll-netd`.
 
 ## Invite Flow
 
@@ -179,7 +179,7 @@ Use invite bundles/codes to avoid hand-editing peer-card JSON:
 ```powershell
 python -m agent_memory_orchestrator.app.cli peer --amo-home <home_a> create-invite --auto-approve --out node-a.invite.json
 python -m agent_memory_orchestrator.app.cli peer --amo-home <home_b> accept-invite --file node-a.invite.json
-python -m agent_memory_orchestrator.app.cli peer --amo-home <home_a> poll-netd
+python -m agent_memory_orchestrator.app.cli peer-agent --amo-home <home_a> watch --max-iterations 1
 ```
 
 The invite contains public reachability details, a one-time invite token, and a card hash, not private memory or secret values. `accept-invite` imports the inviter under the recommended trust policy and sends a `peer_join_request` back through netd when both sidecars are reachable. If the invite was not created with `--auto-approve`, use `peer join-requests` and `peer approve-join` on the inviter.

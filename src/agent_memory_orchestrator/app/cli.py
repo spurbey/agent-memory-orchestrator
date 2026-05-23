@@ -426,7 +426,7 @@ def _build_parser() -> argparse.ArgumentParser:
     peer_setup_invite = peer_setup.add_mutually_exclusive_group()
     peer_setup_invite.add_argument("--invite", type=Path, help="Invite JSON to accept after relay startup.")
     peer_setup_invite.add_argument("--invite-code", default="", help="amo-peer-invite: code to accept after relay startup.")
-    peer_setup.add_argument("--install-startup", action="store_true", help="Install OS startup entries for sidecar and poll-netd --watch.")
+    peer_setup.add_argument("--install-startup", action="store_true", help="Install OS startup entries for sidecar and peer-agent watch.")
     peer_setup.add_argument("--service-name", default="AMO Peer Netd")
     _add_peer_netd_watch_service_args(peer_setup)
     peer_setup.add_argument("--no-start", action="store_true", help="Only save config/profile; do not start peer-netd now.")
@@ -1859,12 +1859,12 @@ def _add_peer_netd_watch_service_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--with-watch",
         action="store_true",
-        help="Also install, uninstall, or inspect the poll-netd --watch startup entry.",
+        help="Also install, uninstall, or inspect the peer-agent watch startup entry.",
     )
     parser.add_argument(
         "--watch-service-name",
         default="",
-        help="Optional OS startup name for the poll-netd --watch entry.",
+        help="Optional OS startup name for the peer-agent watch entry.",
     )
 
 
