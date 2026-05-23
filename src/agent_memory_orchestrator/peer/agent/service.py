@@ -12,7 +12,7 @@ from .llm import PeerAgentLlmGateway
 from .quality import AnswerQuality, AnswerQualityEvaluator
 from .schemas import CONTEXT_REQUEST, CONTEXT_RESPONSE, FINAL_SYNTHESIS
 from .schemas import RESPONSE_LLM_ANSWER, RESPONSE_LOW_CONFIDENCE, RESPONSE_NEEDS_APPROVAL, RESPONSE_RETRIEVAL_BUNDLE
-from .schemas import citation_strings, compact_retrieval_bundle, stable_json_hash, support_from_retrieval
+from .schemas import citation_strings, compact_retrieval_bundle, redacted_retrieval_bundle, stable_json_hash, support_from_retrieval
 from .state import PeerAgentStateStore, utc_now
 
 
@@ -42,6 +42,7 @@ class PeerAgentService:
         min_confidence: float | None = None,
         timeout_seconds: float | None = None,
     ) -> dict[str, Any]:
+        self._ensure_enabled()
         safe_query = _require_text(query, "query")
         threshold = self._min_confidence(min_confidence)
         started = time.monotonic()
@@ -83,6 +84,8 @@ class PeerAgentService:
         state = self.state.load(room_id)
         state.update(
             {
+                "schema_version": 1,
+                "agent_managed": True,
                 "status": "open",
                 "original_query": safe_query,
                 "session_id": session_id,
@@ -153,6 +156,7 @@ class PeerAgentService:
         return self._room_result(room_id, mode="timed_out", reason="deadline_reached", started=started)
 
     def watch_once(self, *, limit: int | None = None) -> dict[str, Any]:
+        self._ensure_enabled()
         config = self.peer.store.load_config()
         drained: dict[str, Any] | None = None
         drain_error = ""
@@ -203,18 +207,22 @@ class PeerAgentService:
             time.sleep(interval_seconds)
 
     def status(self, room_id: str) -> dict[str, Any]:
+        self._ensure_enabled()
         room = self.peer.store.get_room(room_id)
         return {"ok": True, "room": _room_summary(room), "agent_state": self.state.load(room_id)}
 
     def context(self, room_id: str) -> dict[str, Any]:
+        self._ensure_enabled()
         config = self.peer.store.load_config()
         return {"ok": True, "context": self.peer.store.context_pack(room_id, viewer_node_id=config.node_id)}
 
     def messages(self, room_id: str) -> dict[str, Any]:
+        self._ensure_enabled()
         room = self.peer.store.get_room(room_id)
         return {"ok": True, "room_id": room_id, "messages": room.get("messages", [])}
 
     def summarize(self, room_id: str) -> dict[str, Any]:
+        self._ensure_enabled()
         context = self.peer.store.context_pack(room_id)
         try:
             payload = self.llm.summarize_room(room_context=context)
@@ -237,23 +245,31 @@ class PeerAgentService:
         room_id = str(room.get("room_id") or "")
         state = self.state.load(room_id)
         results: list[dict[str, Any]] = []
+        if str(state.get("status") or "open") in {"finalized", "timed_out", "closed"}:
+            return results
         for message in room.get("messages", []):
             if str(message.get("type") or "") != CONTEXT_REQUEST:
                 continue
             message_id = str(message.get("message_id") or "")
             metadata = message.get("metadata") if isinstance(message.get("metadata"), dict) else {}
             request_id = str(metadata.get("request_id") or message_id)
-            if self.state.has_processed_message(state, message_id) or self.state.has_sent_response(state, request_id):
+            if self.state.has_sent_response(state, request_id):
                 continue
             if str(message.get("from_node_id") or message.get("from") or "") == config.node_id:
                 continue
             recipients = [str(item) for item in message.get("to_node_ids") or message.get("to") or []]
             if recipients and config.node_id not in recipients:
                 continue
+            gate = self._validate_context_request(room=room, message=message, metadata=metadata)
+            if not gate.get("ok"):
+                results.append(gate)
+                continue
             result = self._respond_to_request(room=room, message=message, metadata=metadata, request_id=request_id)
             state = self.state.mark_processed_message(room_id, message_id)
             state = self.state.mark_processed_request(room_id, request_id)
-            state = self.state.mark_response_sent(room_id, request_id)
+            state = self.state.record_response_attempt(room_id, request_id, result)
+            if result.get("ok"):
+                state = self.state.mark_response_sent(room_id, request_id)
             results.append(result)
         return results
 
@@ -270,6 +286,20 @@ class PeerAgentService:
         initiator = str(message.get("from_node_id") or message.get("from") or room.get("initiator_node_id") or "")
         query = str(metadata.get("query") or message.get("content") or room.get("topic") or "")
         threshold = self._min_confidence(metadata.get("min_confidence"))
+        if not config.share_summaries:
+            return self._send_response(
+                peer_id=initiator,
+                room_id=room_id,
+                request_id=request_id,
+                parent_message_id=str(message.get("message_id") or ""),
+                mode=RESPONSE_NEEDS_APPROVAL,
+                content="Policy does not allow sharing memory summaries from this peer.",
+                confidence=0.0,
+                answer_grade=False,
+                quality={},
+                support=[],
+                retrieval_bundle={},
+            )
         if metadata.get("raw_evidence_requested") and config.raw_evidence != "allowed":
             return self._send_response(
                 peer_id=initiator,
@@ -286,8 +316,12 @@ class PeerAgentService:
             )
         retrieval = self._retrieve(query, session_id=str(metadata.get("session_id") or ""))
         quality = self.quality.evaluate(retrieval, query=query, min_confidence=threshold)
-        support = support_from_retrieval(retrieval, source_peer=config.node_id)
-        bundle = compact_retrieval_bundle(retrieval)
+        support = support_from_retrieval(
+            retrieval,
+            source_peer=config.node_id,
+            include_local_refs=config.share_citations,
+        )
+        bundle = redacted_retrieval_bundle(retrieval, support=support, include_answer_text=config.share_summaries)
         mode = RESPONSE_LOW_CONFIDENCE
         content = _answer_text(retrieval)
         answer_grade = quality.answer_grade
@@ -369,7 +403,7 @@ class PeerAgentService:
                 confidence=confidence,
                 metadata=metadata,
             )
-            return {"ok": True, "mode": mode, "message": message.get("message"), "delivery": {"ok": False, "error": "peer_not_configured"}}
+            return {"ok": False, "mode": mode, "message": message.get("message"), "delivery": {"ok": False, "error": "peer_not_configured"}}
         delivery = self.peer.send_message_to_peer(
             peer_id=peer_id,
             room_id=room_id,
@@ -384,9 +418,14 @@ class PeerAgentService:
     def _process_initiator_room(self, room: dict[str, Any]) -> list[dict[str, Any]]:
         room_id = str(room.get("room_id") or "")
         state = self.state.load(room_id)
+        if not state.get("agent_managed"):
+            return []
         if state.get("status") == "finalized":
             return []
         results: list[dict[str, Any]] = []
+        if _deadline_expired(str(state.get("deadline_at") or "")):
+            self._finalize_room(room_id, reason="deadline_reached")
+            return [{"ok": True, "room_id": room_id, "finalized": True, "reason": "deadline_reached"}]
         for message in room.get("messages", []):
             if str(message.get("type") or "") != CONTEXT_RESPONSE:
                 continue
@@ -563,6 +602,41 @@ class PeerAgentService:
                 break
         return selected
 
+    def _validate_context_request(
+        self,
+        *,
+        room: dict[str, Any],
+        message: dict[str, Any],
+        metadata: dict[str, Any],
+    ) -> dict[str, Any]:
+        room_id = str(room.get("room_id") or "")
+        request_id = str(metadata.get("request_id") or message.get("message_id") or "")
+        if int(metadata.get("schema_version") or 0) != 1:
+            return {"ok": False, "room_id": room_id, "request_id": request_id, "skipped": True, "reason": "invalid_schema_version"}
+        if not request_id:
+            return {"ok": False, "room_id": room_id, "skipped": True, "reason": "request_id_required"}
+        if _deadline_expired(str(metadata.get("deadline_at") or "")):
+            state = self.state.load(room_id)
+            state["status"] = "timed_out"
+            state["finalized_reason"] = "request_deadline_expired"
+            self.state.save(room_id, state)
+            return {"ok": False, "room_id": room_id, "request_id": request_id, "skipped": True, "reason": "request_deadline_expired"}
+        sender = str(message.get("from_node_id") or message.get("from") or "")
+        if sender != str(room.get("initiator_node_id") or ""):
+            return {"ok": False, "room_id": room_id, "request_id": request_id, "skipped": True, "reason": "request_sender_not_initiator"}
+        participants = {str(item) for item in room.get("participants", []) if str(item).strip()}
+        if sender not in participants or self.peer.store.load_config().node_id not in participants:
+            return {"ok": False, "room_id": room_id, "request_id": request_id, "skipped": True, "reason": "request_participant_mismatch"}
+        state = self.state.load(room_id)
+        if not state.get("agent_managed"):
+            state["agent_managed"] = True
+            state["schema_version"] = 1
+            state["status"] = "open"
+            state["deadline_at"] = str(metadata.get("deadline_at") or "")
+            state["original_query"] = str(metadata.get("query") or message.get("content") or room.get("topic") or "")
+            self.state.save(room_id, state)
+        return {"ok": True}
+
     def _peer_responses(self, room_id: str) -> list[dict[str, Any]]:
         room = self.peer.store.get_room(room_id)
         rows: list[dict[str, Any]] = []
@@ -623,6 +697,10 @@ class PeerAgentService:
         except (TypeError, ValueError):
             return self.settings.peer_agent_room_timeout_seconds
 
+    def _ensure_enabled(self) -> None:
+        if not self.settings.peer_agent_enabled:
+            raise RuntimeError("peer-agent is disabled by AMO_PEER_AGENT_ENABLED")
+
 
 def _retrieval_intent(result: dict[str, Any]) -> str:
     retrieval = result.get("retrieval") if isinstance(result.get("retrieval"), dict) else {}
@@ -657,7 +735,8 @@ def _retrieval_only_answer(local_result: Any, responses: list[dict[str, Any]]) -
 
 def _deterministic_summary(context: dict[str, Any]) -> str:
     room = context.get("room") if isinstance(context.get("room"), dict) else {}
-    recent = context.get("recent_messages") if isinstance(context.get("recent_messages"), list) else []
+    layers = context.get("layers") if isinstance(context.get("layers"), dict) else {}
+    recent = layers.get("recent_messages") if isinstance(layers.get("recent_messages"), list) else []
     lines = [
         "# Rolling Summary",
         "",
@@ -686,6 +765,19 @@ def _room_summary(room: dict[str, Any]) -> dict[str, Any]:
 
 def _deadline_at(timeout_seconds: float) -> str:
     return datetime.fromtimestamp(time.time() + max(0.0, timeout_seconds), tz=timezone.utc).isoformat()
+
+
+def _deadline_expired(value: str) -> bool:
+    text = str(value or "").strip()
+    if not text:
+        return False
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return True
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed <= datetime.now(timezone.utc)
 
 
 def _elapsed_ms(started: float) -> int:
