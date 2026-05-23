@@ -413,7 +413,11 @@ class PeerService:
             message = PeerMessage.from_payload(payload)
             if not message.room_id:
                 return {"ok": False, "error": "room_id is required", "auth": auth}
-            self._enforce_transport_auth(message.from_node_id, auth)
+            self._enforce_transport_auth(
+                message.from_node_id,
+                auth,
+                require_peer_binding=message.message_type in {"context_request", "context_response"},
+            )
             room = self.store.get_room(message.room_id)
             decision = policy.decide_message(
                 message.from_node_id,
@@ -520,6 +524,7 @@ class PeerService:
             "authenticated": bool(envelope.get("signature")),
             "auth": "netd:hmac-sha256" if envelope.get("signature") else "netd:none",
             "from_node_id": envelope.get("from_node_id") or message.get("from_node_id") or "",
+            "remote_peer_id": str(envelope.get("remote_peer_id") or "").strip(),
             "payload_sha256": envelope.get("payload_sha256"),
         }
         if message_type == "room_invite":
@@ -625,10 +630,22 @@ class PeerService:
     def _unwrap_incoming_payload(self, payload: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
         return unwrap_payload(payload=payload, config=self.store.load_config())
 
-    def _enforce_transport_auth(self, sender_node_id: str, auth: dict[str, Any]) -> None:
+    def _enforce_transport_auth(
+        self,
+        sender_node_id: str,
+        auth: dict[str, Any],
+        *,
+        require_peer_binding: bool = False,
+    ) -> None:
         peer = self.store.load_config().peer_by_id(sender_node_id)
         if peer is not None and peer.shared_secret_env and not auth.get("authenticated"):
             raise PeerAuthError(f"signed envelope required for peer: {sender_node_id}")
+        remote_peer_id = str(auth.get("remote_peer_id") or "").strip()
+        if peer is not None and remote_peer_id and peer.peer_id and remote_peer_id != peer.peer_id:
+            raise PeerAuthError(f"remote peer id mismatch for {sender_node_id}")
+        is_netd = str(auth.get("auth") or "").startswith("netd:")
+        if require_peer_binding and is_netd and peer is not None and peer.peer_id and not remote_peer_id and not auth.get("authenticated"):
+            raise PeerAuthError(f"remote peer id or signed envelope required for peer-agent message: {sender_node_id}")
 
     def _send_payload_via_netd(
         self,
