@@ -27,6 +27,7 @@ from ..memory import MemoryService
 from ..orchestration import OrchestratorService
 from ..core.privacy import redact_secrets
 from ..peer import PeerService
+from ..peer.agent import PeerAgentService
 from ..peer.doctor import peer_doctor
 from ..peer.invites import decode_invite_code
 from ..peer.netd_runtime import PeerNetdLaunchOptions
@@ -483,6 +484,28 @@ def _build_parser() -> argparse.ArgumentParser:
     peer_serve = peer_sub.add_parser("serve", help="Run the direct peer listener for Tailscale/private networking")
     peer_serve.add_argument("--host", default="0.0.0.0")
     peer_serve.add_argument("--port", type=int, default=8787)
+
+    peer_agent = sub.add_parser("peer-agent", help="Run AMO peer-agent ask/watch/finalize workflows")
+    peer_agent.add_argument("--amo-home", type=Path, help="AMO home directory for peer-agent state.")
+    peer_agent_sub = peer_agent.add_subparsers(dest="peer_agent_command", required=True)
+    peer_agent_ask = peer_agent_sub.add_parser("ask", help="Ask local memory first, then open a peer room if needed")
+    peer_agent_ask.add_argument("--query", required=True)
+    peer_agent_ask.add_argument("--session-id", default="")
+    peer_agent_ask.add_argument("--min-confidence", type=float, default=None)
+    peer_agent_ask.add_argument("--timeout-seconds", type=float, default=None)
+    peer_agent_watch = peer_agent_sub.add_parser("watch", help="Drain peer inbox and respond/finalize rooms")
+    peer_agent_watch.add_argument("--interval-seconds", type=float, default=2.0)
+    peer_agent_watch.add_argument("--max-iterations", type=int, default=0, help="Testing/debug guard. 0 means forever.")
+    peer_agent_watch.add_argument("--limit", type=int, default=None, help="Maximum netd envelopes to drain per tick.")
+    peer_agent_watch.add_argument("--fail-fast", action="store_true")
+    peer_agent_status = peer_agent_sub.add_parser("status", help="Show peer-agent room state")
+    peer_agent_status.add_argument("--room-id", required=True)
+    peer_agent_context = peer_agent_sub.add_parser("context", help="Show local peer-agent room context")
+    peer_agent_context.add_argument("--room-id", required=True)
+    peer_agent_messages = peer_agent_sub.add_parser("messages", help="Show peer-agent room messages")
+    peer_agent_messages.add_argument("--room-id", required=True)
+    peer_agent_summary = peer_agent_sub.add_parser("summarize", help="Update an initiator-owned room summary")
+    peer_agent_summary.add_argument("--room-id", required=True)
 
     debug = sub.add_parser("debug", help="Debug AMO hook, drain, Qwen, graph, and retrieval stages")
     debug_sub = debug.add_subparsers(dest="debug_command", required=True)
@@ -1176,6 +1199,41 @@ def main(argv: list[str] | None = None) -> int:
                 _print(svc.process_netd_inbox(limit=args.limit))
                 return 0
 
+        if args.command == "peer-agent":
+            if args.amo_home:
+                os.environ["AMO_HOME"] = str(args.amo_home)
+            settings = Settings.load()
+            svc = PeerAgentService(settings)
+            if args.peer_agent_command == "ask":
+                result = svc.ask(
+                    query=args.query,
+                    session_id=args.session_id,
+                    min_confidence=args.min_confidence,
+                    timeout_seconds=args.timeout_seconds,
+                )
+                _print(result)
+                return 0 if result.get("ok") else 1
+            if args.peer_agent_command == "watch":
+                return _watch_peer_agent(
+                    svc,
+                    limit=args.limit,
+                    interval_seconds=args.interval_seconds,
+                    max_iterations=args.max_iterations,
+                    fail_fast=args.fail_fast,
+                )
+            if args.peer_agent_command == "status":
+                _print(svc.status(args.room_id))
+                return 0
+            if args.peer_agent_command == "context":
+                _print(svc.context(args.room_id))
+                return 0
+            if args.peer_agent_command == "messages":
+                _print(svc.messages(args.room_id))
+                return 0
+            if args.peer_agent_command == "summarize":
+                _print(svc.summarize(args.room_id))
+                return 0
+
         if args.command in {
             "ingest-transcript",
             "ingest-hook",
@@ -1715,6 +1773,32 @@ def _watch_peer_netd_inbox(
                 _print_line({"ok": False, "error": str(exc), "watching": not fail_fast})
                 if fail_fast:
                     return 1
+            iterations += 1
+            if max_iterations and iterations >= max_iterations:
+                return 0
+            time.sleep(interval_seconds)
+    except KeyboardInterrupt:
+        _print_line({"ok": True, "stopped": True, "reason": "interrupted"})
+        return 0
+
+
+def _watch_peer_agent(
+    svc: PeerAgentService,
+    *,
+    limit: int | None,
+    interval_seconds: float,
+    max_iterations: int = 0,
+    fail_fast: bool = False,
+) -> int:
+    if interval_seconds <= 0:
+        raise ValueError("--interval-seconds must be positive")
+    iterations = 0
+    try:
+        while True:
+            result = svc.watch_once(limit=limit)
+            _print_line(result)
+            if fail_fast and not result.get("ok"):
+                return 1
             iterations += 1
             if max_iterations and iterations >= max_iterations:
                 return 0
