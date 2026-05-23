@@ -18,6 +18,10 @@ from agent_memory_orchestrator.reasoning_graph.jobs.reset import initialize_fres
 from agent_memory_orchestrator.reasoning_graph.jobs.reset import reset_production_v2_storage
 from agent_memory_orchestrator.reasoning_graph.jobs.runner import require_complete_v2_reset_marker
 from agent_memory_orchestrator.reasoning_graph.jobs.runner import V2SessionJobRunner
+from agent_memory_orchestrator.reasoning_graph.central_merge.fixtures import export_job_fixture
+from agent_memory_orchestrator.reasoning_graph.central_merge.judge import judge_semantic_case
+from agent_memory_orchestrator.reasoning_graph.central_merge.judge import run_semantic_eval_fixture
+from agent_memory_orchestrator.reasoning_graph.central_merge.repo_identity import normalize_remote_url
 from agent_memory_orchestrator.reasoning_graph.stage4_contract import STAGE4_CONTRACT_VERSION
 from agent_memory_orchestrator.reasoning_graph.stage4_contract import build_stage4_packet_prompt
 from agent_memory_orchestrator.reasoning_graph.stage4_contract import stage4_contract_hash
@@ -134,6 +138,114 @@ def test_v2_stage_rows_track_hashes_and_config_hash(tmp_path: Path) -> None:
         assert updated["last_successful_stage"] == "evidence_view"
     finally:
         store.close()
+
+
+def test_v2_schema_adds_central_merge_control_tables(tmp_path: Path) -> None:
+    settings = make_settings(tmp_path)
+    store = V2SessionJobStore(settings)
+    try:
+        rows = store.conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
+    finally:
+        store.close()
+    names = {row["name"] for row in rows}
+
+    assert {
+        "v2_central_merge_plans",
+        "v2_central_review_candidates",
+        "v2_graph_commits",
+        "v2_graph_views",
+        "v2_central_merge_locks",
+        "v2_semantic_eval_runs",
+        "v2_semantic_eval_cases",
+        "v2_semantic_eval_judgments",
+    }.issubset(names)
+
+
+def test_v2_central_merge_stage_writes_dry_run_plan_and_preserves_session_graph(tmp_path: Path) -> None:
+    settings = make_settings(tmp_path)
+    store = V2SessionJobStore(settings)
+    try:
+        job = store.enqueue_session(session_id="s-central", boundary_event_id="raw_boundary", repo_path=str(tmp_path)).job
+        artifact_dir = Path(job["artifact_dir"])
+        kuzu_dir = artifact_dir / "kuzu_write"
+        kuzu_dir.mkdir(parents=True, exist_ok=True)
+        manifest = {
+            "nodes": [
+                {"id": "commit:abc123", "kind": "Commit", "properties": {"full_sha": "ABC123"}},
+                {"id": "hunk:1", "kind": "CodeHunk", "properties": {"path": "src/graph_service.py"}},
+                {"id": "symbol:GraphRagService", "kind": "Symbol", "properties": {"path": "src/graph_service.py", "qualified_name": "GraphRagService"}},
+                {"id": "code:GraphRagService.init", "kind": "CodeNode", "properties": {"path": "src/graph_service.py", "qualified_name": "GraphRagService.__init__", "symbol_kind": "function"}},
+                {"id": "decision:1", "kind": "ReasoningNode", "properties": {"summary": "Do not canonicalize decisions yet."}},
+            ],
+            "edges": [],
+            "inventory": {"node_count": 5, "edge_count": 0, "unresolved_edge_count": 0},
+        }
+        (kuzu_dir / "compact_graph_manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+        result_path = kuzu_dir / "kuzu_write_result.json"
+        result_path.write_text(json.dumps({"ok": True, "inventory": manifest["inventory"]}), encoding="utf-8")
+        store.start_stage(
+            job_id=job["job_id"],
+            stage="kuzu_write",
+            input_artifact="graph_edges.json",
+            input_hash="input",
+            stage_config_hash="config",
+        )
+        store.complete_stage(
+            job_id=job["job_id"],
+            stage="kuzu_write",
+            output_artifact=str(result_path),
+            output_hash="output",
+            diagnostics=manifest["inventory"],
+        )
+
+        runner = V2SessionJobRunner(settings, job_store=store)
+        run = runner.run_next()
+
+        assert run["stage"] == "central_version_merge"
+        assert run["status"] == "pending"
+        plan_row = store.get_central_merge_plan_for_job(job["job_id"])
+        assert plan_row is not None
+        assert plan_row["mode"] == "dry_run"
+        assert plan_row["metrics"]["exact_atom_created_count"] == 4
+        assert plan_row["metrics"]["review_candidate_count"] == 0
+        assert plan_row["plan"]["new_atoms"]
+        assert plan_row["plan"]["new_versions"]
+        assert store.graph_view(branch="main", mode="active") is not None
+        stage = store.stage_row(job_id=job["job_id"], stage="central_version_merge")
+        assert stage is not None
+        assert Path(stage["output_artifact"]).name == "merge_plan.json"
+        fixture = export_job_fixture(settings, job_id=job["job_id"], out_dir=tmp_path / "fixture")
+        semantic_context = fixture["fixture"]["semantic_context"]
+        assert semantic_context["central_version_merge"]["repo_id"].startswith("repo:")
+        result = run_semantic_eval_fixture(fixture_path=Path(fixture["path"]), case_set="baseline")
+        assert result["status"] == "passed"
+        assert result["metrics"]["case_count"] >= 5
+    finally:
+        store.close()
+
+
+def test_v2_repo_identity_normalizes_remote_urls() -> None:
+    assert normalize_remote_url("git@github.com:Spurbey/Agent-Memory-Orchestrator.git") == "https://github.com/Spurbey/Agent-Memory-Orchestrator"
+    assert normalize_remote_url("https://github.com/spurbey/agent-memory-orchestrator.git/") == "https://github.com/spurbey/agent-memory-orchestrator"
+
+
+def test_semantic_judge_checks_mentions_citations_and_forbidden_claims() -> None:
+    case = {
+        "case_id": "why-graph-service",
+        "must_mention": ["reasoning", "commit"],
+        "must_cite": ["packet", "evidence"],
+        "must_not_claim": ["unsupported final decision"],
+    }
+    good = {
+        "answer": "The reasoning changed after a commit connected graph_service.py to V2 retrieval.",
+        "citations": [{"type": "packet", "id": "WP0001"}, {"type": "evidence", "id": "raw_1"}],
+    }
+    bad = {"answer": "Unsupported final decision.", "citations": []}
+
+    assert judge_semantic_case(case=case, answer_payload=good)["passed"] is True
+    failed = judge_semantic_case(case=case, answer_payload=bad)
+    assert failed["passed"] is False
+    assert failed["blocking_failures"]
 
 
 def test_v2_runner_fails_instead_of_completing_empty_graph_when_no_work_packets(tmp_path: Path) -> None:
