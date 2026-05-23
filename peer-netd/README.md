@@ -49,7 +49,7 @@ python -m agent_memory_orchestrator.app.cli peer --amo-home <amo_home> doctor
 python -m agent_memory_orchestrator.app.cli peer --amo-home <amo_home> netd build
 python -m agent_memory_orchestrator.app.cli peer --amo-home <amo_home> enable --node-id zenbook-amo
 python -m agent_memory_orchestrator.app.cli peer --amo-home <amo_home> netd status
-python -m agent_memory_orchestrator.app.cli peer --amo-home <amo_home> poll-netd --watch
+python -m agent_memory_orchestrator.app.cli peer-agent --amo-home <amo_home> watch
 python -m agent_memory_orchestrator.app.cli peer --amo-home <amo_home> netd stop
 ```
 
@@ -57,7 +57,44 @@ Packaged AMO installs include this `peer-netd` source tree as Python wheel data.
 
 If an older sidecar binary is already present, `peer enable` verifies that it supports the current required flags before launch. Stale binaries are replaced from a packaged prebuilt binary when available, otherwise rebuilt from the packaged source when Go is available.
 
-Run `poll-netd --watch` in the AMO process that should accept peer room invites/responses automatically. The sidecar only delivers envelopes into the local JSONL inbox; AMO still owns policy checks and room-state mutation.
+Run `peer-agent --amo-home <amo_home> watch` in the AMO process that should accept peer room invites/responses automatically. The sidecar only delivers envelopes into the local JSONL inbox; AMO still owns policy checks, memory retrieval, optional local LLM drafting, summarization, and room-state mutation. `peer poll-netd --watch` remains available for low-level transport debugging only.
+
+## Peer-Agent Worker
+
+The normal bot worker is Python-side:
+
+```powershell
+python -m agent_memory_orchestrator.app.cli peer-agent --amo-home <amo_home> ask --query "what did we decide about local-first architecture?"
+python -m agent_memory_orchestrator.app.cli peer-agent --amo-home <amo_home> watch --interval-seconds 2
+python -m agent_memory_orchestrator.app.cli peer-agent --amo-home <amo_home> status --room-id <room_id>
+python -m agent_memory_orchestrator.app.cli peer-agent --amo-home <amo_home> context --room-id <room_id>
+python -m agent_memory_orchestrator.app.cli peer-agent --amo-home <amo_home> messages --room-id <room_id>
+python -m agent_memory_orchestrator.app.cli peer-agent --amo-home <amo_home> summarize --room-id <room_id>
+```
+
+Response flow:
+
+```text
+peer local Ollama available -> peer returns llm_answer with structured support
+peer local Ollama unavailable -> peer returns retrieval_bundle when policy allows
+initiator local Ollama available -> initiator synthesizes final answer locally
+initiator local Ollama unavailable + provider configured -> initiator calls its own OpenAI-compatible API key
+no initiator LLM/API -> initiator returns structured retrieval-only output
+```
+
+Provider keys are never sent to peers. Configure initiator-paid fallback with:
+
+```json
+{
+  "peer_agent_api_provider": "openai_compatible",
+  "peer_agent_api_base_url": "https://api.example.com/v1",
+  "peer_agent_api_model": "model-name",
+  "peer_agent_api_key_env": "AMO_INITIATOR_API_KEY",
+  "peer_agent_allow_initiator_api_fallback": true
+}
+```
+
+Each room gets `agent_state.json` beside `room.md`, `rolling_summary.md`, and `transcript.jsonl`. It tracks processed message IDs, processed request IDs, sent response request IDs, deadlines, status, and finalization reason so duplicate sidecar envelopes do not create duplicate peer responses.
 
 The managed runtime writes:
 
@@ -77,7 +114,7 @@ python -m agent_memory_orchestrator.app.cli peer --amo-home <amo_home> netd inst
 python -m agent_memory_orchestrator.app.cli peer --amo-home <amo_home> netd install-service --node-id zenbook-amo --with-watch
 ```
 
-Add `--apply` only when you want AMO to create the Windows Scheduled Task or user-systemd unit. Use `--with-watch` for the normal unattended peer setup: it adds a second startup entry for `peer poll-netd --watch`, which turns delivered sidecar envelopes into local AMO room state.
+Add `--apply` only when you want AMO to create the Windows Scheduled Task or user-systemd unit. Use `--with-watch` for the normal unattended peer setup: it adds a second startup entry for `peer-agent watch`, which drains delivered sidecar envelopes and performs peer-agent room behavior.
 
 ## Relay Profile Setup
 
@@ -163,6 +200,7 @@ Implemented:
 - AMO-managed build/start/stop/status runtime
 - AMO startup-service planning through CLI
 - AMO watcher startup-service planning through CLI
+- Python peer-agent worker with local-first retrieval, initiator-owned finalization, idempotent room state, and retrieval-only fallback
 - stale sidecar compatibility check and rebuild/install fallback
 - saved relay profiles for short client setup commands
 - `peer setup` for one-command identity, relay startup, invite accept, and optional startup install
