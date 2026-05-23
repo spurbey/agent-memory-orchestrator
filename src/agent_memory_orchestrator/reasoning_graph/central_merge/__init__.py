@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from .applier import apply_merge_plan
 from .backfill import backfill_central_merge_plan
 from .fixtures import export_job_fixture
 from .judge import judge_semantic_case
@@ -13,6 +14,7 @@ __all__ = [
     "CENTRAL_MERGE_PLAN_VERSION",
     "MergePlan",
     "RepoIdentity",
+    "apply_merge_plan",
     "backfill_central_merge_plan",
     "build_dry_run_merge_plan",
     "export_job_fixture",

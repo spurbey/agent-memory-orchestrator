@@ -51,6 +51,7 @@ from ..reasoning_graph.jobs.reset import adopt_existing_v2_production_storage
 from ..reasoning_graph.jobs.reset import initialize_fresh_v2_production_storage
 from ..reasoning_graph.jobs.reset import reset_production_v2_storage
 from ..reasoning_graph.jobs.store import V2SessionJobStore
+from ..reasoning_graph.central_merge.applier import apply_merge_plan
 from ..reasoning_graph.central_merge.backfill import backfill_central_merge_plan
 from ..reasoning_graph.central_merge.fixtures import export_job_fixture
 from ..reasoning_graph.central_merge.judge import run_semantic_eval_fixture
@@ -115,6 +116,10 @@ def _build_parser() -> argparse.ArgumentParser:
     v2_plan.add_argument("--job-id", required=True)
     v2_plan.add_argument("--backfill", action="store_true", help="Create a dry-run merge plan for an old completed job if missing")
     v2_plan.add_argument("--forced-by", default="manual-backfill")
+    v2_apply = sub.add_parser("v2-merge-apply", help="Apply exact central atoms for an accepted central merge plan")
+    v2_apply.add_argument("--plan-id", required=True)
+    v2_apply.add_argument("--branch", default="main")
+    v2_apply.add_argument("--view", default="active")
     v2 = sub.add_parser("v2", help="V2 job, fixture, semantic eval, and central merge commands")
     v2_sub = v2.add_subparsers(dest="v2_command", required=True)
     v2_export_nested = v2_sub.add_parser("export-fixture", help="Export a V2 job fixture for semantic evaluation")
@@ -129,6 +134,10 @@ def _build_parser() -> argparse.ArgumentParser:
     v2_plan_nested.add_argument("--job-id", required=True)
     v2_plan_nested.add_argument("--backfill", action="store_true", help="Create a dry-run merge plan for an old completed job if missing")
     v2_plan_nested.add_argument("--forced-by", default="manual-backfill")
+    v2_apply_nested = v2_sub.add_parser("merge-apply", help="Apply exact central atoms for an accepted central merge plan")
+    v2_apply_nested.add_argument("--plan-id", required=True)
+    v2_apply_nested.add_argument("--branch", default="main")
+    v2_apply_nested.add_argument("--view", default="active")
 
     install = sub.add_parser("install", help="Configure Claude/Codex hooks, MCP, and local AMO runtime config")
     install.add_argument("--target", choices=["codex", "claude", "all"], default="all")
@@ -838,6 +847,12 @@ def main(argv: list[str] | None = None) -> int:
                 store.close()
             _print({"ok": plan is not None, "plan": plan, "review_candidates": candidates})
             return 0 if plan is not None else 1
+
+        if args.command == "v2-merge-apply" or (args.command == "v2" and args.v2_command == "merge-apply"):
+            settings = Settings.load()
+            result = apply_merge_plan(settings=settings, plan_id=args.plan_id, branch=args.branch, mode=args.view)
+            _print(result)
+            return 0 if result.get("ok") else 1
 
         if args.command == "models":
             if args.models_command == "list":
