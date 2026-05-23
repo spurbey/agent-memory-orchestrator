@@ -293,7 +293,13 @@ def _write_exact_atoms(
             session_id=str(plan.get("session_id") or ""),
             source_app="v2-central-merge",
             created_at=now,
-            metadata={**base, "branch": branch, "mode": mode, "graph_commit_id": graph_commit_id},
+            metadata={
+                **base,
+                "branch": branch,
+                "mode": mode,
+                "graph_commit_id": graph_commit_id,
+                "idempotency_key": _idempotency_key("node", graph_view_id, graph_commit_id),
+            },
         )
     )
     added_nodes.append(graph_view_id)

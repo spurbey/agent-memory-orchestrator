@@ -260,9 +260,15 @@ def test_v2_central_merge_apply_writes_exact_atoms_graph_commit_and_view(tmp_pat
         assert graph.nodes["v2view:main:active"].kind == "GraphView"
         atom_nodes = [node for node in graph.nodes.values() if node.kind == "KnowledgeAtom"]
         version_nodes = [node for node in graph.nodes.values() if node.kind == "KnowledgeVersion"]
+        central_nodes = [
+            node
+            for node in graph.nodes.values()
+            if node.kind in {"KnowledgeAtom", "KnowledgeVersion", "GraphCommit", "GraphView"}
+        ]
         assert {node.metadata["atom_kind"] for node in atom_nodes} == {"commit", "file", "symbol"}
         assert all(node.metadata["graph_commit_id"] == applied["graph_commit"]["graph_commit_id"] for node in atom_nodes + version_nodes)
         assert all(node.metadata["repo_id"].startswith("repo:") for node in atom_nodes)
+        assert all(node.metadata.get("idempotency_key") for node in central_nodes)
         assert any(edge.kind == "VERSION_OF" for edge in graph.edges.values())
         assert any(edge.kind == "DERIVED_FROM_SESSION_NODE" for edge in graph.edges.values())
         derived_targets = {edge.target_id for edge in graph.edges.values() if edge.kind == "DERIVED_FROM_SESSION_NODE"}
