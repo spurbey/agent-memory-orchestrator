@@ -18,6 +18,7 @@ from agent_memory_orchestrator.reasoning_graph.jobs.reset import initialize_fres
 from agent_memory_orchestrator.reasoning_graph.jobs.reset import reset_production_v2_storage
 from agent_memory_orchestrator.reasoning_graph.jobs.runner import require_complete_v2_reset_marker
 from agent_memory_orchestrator.reasoning_graph.jobs.runner import V2SessionJobRunner
+from agent_memory_orchestrator.reasoning_graph.central_merge.backfill import backfill_central_merge_plan
 from agent_memory_orchestrator.reasoning_graph.central_merge.fixtures import export_job_fixture
 from agent_memory_orchestrator.reasoning_graph.central_merge.judge import judge_semantic_case
 from agent_memory_orchestrator.reasoning_graph.central_merge.judge import run_semantic_eval_fixture
@@ -227,6 +228,49 @@ def test_v2_central_merge_stage_writes_dry_run_plan_and_preserves_session_graph(
 def test_v2_repo_identity_normalizes_remote_urls() -> None:
     assert normalize_remote_url("git@github.com:Spurbey/Agent-Memory-Orchestrator.git") == "https://github.com/Spurbey/Agent-Memory-Orchestrator"
     assert normalize_remote_url("https://github.com/spurbey/agent-memory-orchestrator.git/") == "https://github.com/spurbey/agent-memory-orchestrator"
+
+
+def test_v2_central_merge_backfill_does_not_reopen_completed_job(tmp_path: Path) -> None:
+    settings = make_settings(tmp_path)
+    store = V2SessionJobStore(settings)
+    try:
+        job = store.enqueue_session(session_id="s-old-complete", boundary_event_id="raw_boundary", repo_path=str(tmp_path)).job
+        artifact_dir = Path(job["artifact_dir"])
+        kuzu_dir = artifact_dir / "kuzu_write"
+        kuzu_dir.mkdir(parents=True, exist_ok=True)
+        manifest = {
+            "nodes": [{"id": "commit:abc123", "kind": "Commit", "properties": {"full_sha": "abc123"}}],
+            "edges": [],
+            "inventory": {"node_count": 1, "edge_count": 0, "unresolved_edge_count": 0},
+        }
+        (kuzu_dir / "compact_graph_manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+        (kuzu_dir / "kuzu_write_result.json").write_text(json.dumps({"ok": True, "inventory": manifest["inventory"]}), encoding="utf-8")
+        store.conn.execute(
+            "UPDATE v2_session_jobs SET status='complete', current_stage='', last_successful_stage='quality_eval' WHERE job_id=?",
+            (job["job_id"],),
+        )
+        store.conn.commit()
+    finally:
+        store.close()
+
+    result = backfill_central_merge_plan(settings, job_id=job["job_id"], forced_by="test")
+
+    store = V2SessionJobStore(settings)
+    try:
+        updated = store.get_job(job["job_id"])
+        stage = store.stage_row(job_id=job["job_id"], stage="central_version_merge")
+        events = store.list_events(job["job_id"], limit=5)
+    finally:
+        store.close()
+
+    assert result["ok"] is True
+    assert updated is not None
+    assert updated["status"] == "complete"
+    assert updated["current_stage"] == ""
+    assert stage is not None
+    assert stage["status"] == "complete"
+    assert stage["diagnostics"]["backfilled"] is True
+    assert any(event["event_type"] == "central_merge_backfilled" for event in events)
 
 
 def test_semantic_judge_checks_mentions_citations_and_forbidden_claims() -> None:
