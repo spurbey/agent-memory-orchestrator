@@ -133,6 +133,8 @@ def test_peer_agent_retries_failed_response_delivery(tmp_path: Path) -> None:
     assert first["processed"][0]["ok"] is False
     assert second["processed"][0]["ok"] is True
     room_id = store.list_rooms()[0]["room_id"]
+    transcript = store.read_messages(room_id)
+    assert [item["type"] for item in transcript].count(CONTEXT_RESPONSE) == 1
     state = json.loads((settings.home / ".peer" / "rooms" / room_id / "agent_state.json").read_text(encoding="utf-8"))
     assert state["response_attempts"]["req_1"]["attempt_count"] == 2
     assert "req_1" in state["sent_response_for_request_ids"]
@@ -156,10 +158,9 @@ def test_peer_agent_skips_stale_manual_context_requests(tmp_path: Path) -> None:
     assert result["processed"][0]["reason"] == "invalid_schema_version"
 
 
-def test_peer_agent_redacts_local_refs_when_citation_sharing_disabled(tmp_path: Path) -> None:
+def test_peer_agent_skips_schema_valid_request_without_transport_auth(tmp_path: Path) -> None:
     settings = make_settings(tmp_path)
-    store = peer_room_with_request(tmp_path, local_node="poco-amo")
-    store.save_config(replace(store.load_config(), share_citations=False))
+    store = peer_room_with_request(tmp_path, local_node="poco-amo", include_transport_auth=False)
     netd = FakeNetdClient()
     svc = PeerAgentService(
         settings,
@@ -168,14 +169,37 @@ def test_peer_agent_redacts_local_refs_when_citation_sharing_disabled(tmp_path: 
         llm=FakeLlm(fail_peer=True),
     )
 
+    result = svc.watch_once()
+
+    assert netd.sent == []
+    assert result["processed"][0]["skipped"] is True
+    assert result["processed"][0]["reason"] == "missing_verified_transport"
+
+
+def test_peer_agent_redacts_local_refs_when_citation_sharing_disabled(tmp_path: Path) -> None:
+    settings = make_settings(tmp_path)
+    store = peer_room_with_request(tmp_path, local_node="poco-amo")
+    store.save_config(replace(store.load_config(), share_citations=False))
+    netd = FakeNetdClient()
+    svc = PeerAgentService(
+        settings,
+        peer_service=PeerService(settings, store=store, netd_client=netd),
+        graph=FakeGraph(local_ref_retrieval()),
+        llm=FakeLlm(fail_peer=True),
+    )
+
     svc.watch_once()
 
     response = next(item["message"] for item in netd.sent if item["message"]["type"] == CONTEXT_RESPONSE)
     support = response["payload"]["metadata"]["support"]
     bundle = response["payload"]["metadata"]["retrieval_bundle"]
+    content = response["payload"]["content"]
     assert support
     assert support[0]["local_ref"] == {}
     assert "retrieval" not in bundle
+    for leaked in ("E00028", "WP0001", "decision:local-first", "raw_test"):
+        assert leaked not in bundle["answer"]["text"]
+        assert leaked not in content
 
 
 def test_peer_agent_disabled_config_blocks_automation(tmp_path: Path) -> None:
@@ -282,7 +306,14 @@ def test_peer_agent_mcp_contracts_are_registered(tmp_path: Path) -> None:
     assert result["mode"] == "retrieval_only"
 
 
-def peer_room_with_request(tmp_path: Path, *, local_node: str, schema_version: int = 1) -> PeerStore:
+def peer_room_with_request(
+    tmp_path: Path,
+    *,
+    local_node: str,
+    schema_version: int = 1,
+    agent_schema_version: int = 1,
+    include_transport_auth: bool = True,
+) -> PeerStore:
     settings = make_settings(tmp_path)
     store = PeerStore(settings)
     store.init_config(node_id=local_node)
@@ -292,6 +323,21 @@ def peer_room_with_request(tmp_path: Path, *, local_node: str, schema_version: i
         participants=["zenbook-amo", local_node],
         initiator_node_id="zenbook-amo",
     )
+    metadata = {
+        "schema_version": schema_version,
+        "agent_room_schema_version": agent_schema_version,
+        "request_id": "req_1",
+        "query": "what was the local first architecture decision",
+        "min_confidence": 0.72,
+        "deadline_at": "2999-01-01T00:00:00+00:00",
+        "raw_evidence_requested": False,
+    }
+    if include_transport_auth:
+        metadata["transport_auth"] = {
+            "auth": "netd:none",
+            "authenticated": False,
+            "remote_peer_id": "12D3KooWInitiator",
+        }
     store.append_message(
         room["room_id"],
         {
@@ -303,14 +349,7 @@ def peer_room_with_request(tmp_path: Path, *, local_node: str, schema_version: i
             "to_node_ids": [local_node],
             "content": "what was the local first architecture decision",
             "citations": [],
-            "metadata": {
-                "schema_version": schema_version,
-                "request_id": "req_1",
-                "query": "what was the local first architecture decision",
-                "min_confidence": 0.72,
-                "deadline_at": "2999-01-01T00:00:00+00:00",
-                "raw_evidence_requested": False,
-            },
+            "metadata": metadata,
         },
     )
     return store
@@ -392,6 +431,12 @@ def good_retrieval() -> dict[str, Any]:
             ],
         },
     }
+
+
+def local_ref_retrieval() -> dict[str, Any]:
+    result = good_retrieval()
+    result["answer"]["text"] = "AMO indexed graph answer: E00028 WP0001 decision:local-first raw_test should be hidden."
+    return result
 
 
 def low_retrieval() -> dict[str, Any]:

@@ -12,7 +12,7 @@ from .llm import PeerAgentLlmGateway
 from .quality import AnswerQuality, AnswerQualityEvaluator
 from .schemas import CONTEXT_REQUEST, CONTEXT_RESPONSE, FINAL_SYNTHESIS
 from .schemas import RESPONSE_LLM_ANSWER, RESPONSE_LOW_CONFIDENCE, RESPONSE_NEEDS_APPROVAL, RESPONSE_RETRIEVAL_BUNDLE
-from .schemas import citation_strings, compact_retrieval_bundle, redacted_retrieval_bundle, stable_json_hash, support_from_retrieval
+from .schemas import citation_strings, compact_retrieval_bundle, redacted_answer_text, redacted_retrieval_bundle, stable_json_hash, support_from_retrieval
 from .state import PeerAgentStateStore, utc_now
 
 
@@ -100,6 +100,7 @@ class PeerAgentService:
             request_id = f"req_{stable_json_hash({'room_id': room_id, 'peer': peer.node_id, 'query': safe_query})[:16]}"
             metadata = {
                 "schema_version": 1,
+                "agent_room_schema_version": 1,
                 "request_id": request_id,
                 "room_id": room_id,
                 "parent_message_id": "",
@@ -321,9 +322,18 @@ class PeerAgentService:
             source_peer=config.node_id,
             include_local_refs=config.share_citations,
         )
-        bundle = redacted_retrieval_bundle(retrieval, support=support, include_answer_text=config.share_summaries)
+        bundle = redacted_retrieval_bundle(
+            retrieval,
+            support=support,
+            include_answer_text=config.share_summaries,
+            include_local_refs=config.share_citations,
+        )
         mode = RESPONSE_LOW_CONFIDENCE
-        content = _answer_text(retrieval)
+        content = redacted_answer_text(
+            _answer_text(retrieval),
+            support=support,
+            include_local_refs=config.share_citations,
+        )
         answer_grade = quality.answer_grade
         confidence = quality.confidence
         if support or quality.confidence >= threshold:
@@ -334,7 +344,11 @@ class PeerAgentService:
                     quality=quality.as_dict(),
                     room_context=self.peer.store.context_pack(room_id, viewer_node_id=config.node_id),
                 )
-                content = str(llm_payload.get("answer") or content).strip() or content
+                content = redacted_answer_text(
+                    str(llm_payload.get("answer") or content).strip() or content,
+                    support=support,
+                    include_local_refs=config.share_citations,
+                )
                 confidence = _clamp_float(llm_payload.get("confidence"), default=confidence)
                 answer_grade = bool(llm_payload.get("answer_grade", answer_grade)) and bool(support)
                 mode = RESPONSE_LLM_ANSWER
@@ -393,17 +407,21 @@ class PeerAgentService:
         }
         citations = citation_strings(support)
         if self.peer.store.load_config().peer_by_id(peer_id) is None:
-            message = self.peer.append_message(
-                room_id=room_id,
-                from_node_id=self.peer.store.load_config().node_id,
-                to_node_ids=[peer_id],
-                message_type=CONTEXT_RESPONSE,
-                content=content,
-                citations=citations,
-                confidence=confidence,
-                metadata=metadata,
-            )
-            return {"ok": False, "mode": mode, "message": message.get("message"), "delivery": {"ok": False, "error": "peer_not_configured"}}
+            return {
+                "ok": False,
+                "mode": mode,
+                "message": None,
+                "pending_response": {
+                    "peer_id": peer_id,
+                    "room_id": room_id,
+                    "type": CONTEXT_RESPONSE,
+                    "content": content,
+                    "citations": citations,
+                    "confidence": confidence,
+                    "metadata": metadata,
+                },
+                "delivery": {"ok": False, "error": "peer_not_configured"},
+            }
         delivery = self.peer.send_message_to_peer(
             peer_id=peer_id,
             room_id=room_id,
@@ -412,6 +430,7 @@ class PeerAgentService:
             citations=citations,
             confidence=confidence,
             metadata=metadata,
+            append_on_success_only=True,
         )
         return {"ok": bool(delivery.get("ok")), "mode": mode, "message": delivery.get("message"), "delivery": delivery.get("delivery")}
 
@@ -613,6 +632,8 @@ class PeerAgentService:
         request_id = str(metadata.get("request_id") or message.get("message_id") or "")
         if int(metadata.get("schema_version") or 0) != 1:
             return {"ok": False, "room_id": room_id, "request_id": request_id, "skipped": True, "reason": "invalid_schema_version"}
+        if int(metadata.get("agent_room_schema_version") or 0) != 1:
+            return {"ok": False, "room_id": room_id, "request_id": request_id, "skipped": True, "reason": "invalid_agent_room_schema_version"}
         if not request_id:
             return {"ok": False, "room_id": room_id, "skipped": True, "reason": "request_id_required"}
         if _deadline_expired(str(metadata.get("deadline_at") or "")):
@@ -628,6 +649,8 @@ class PeerAgentService:
         if sender not in participants or self.peer.store.load_config().node_id not in participants:
             return {"ok": False, "room_id": room_id, "request_id": request_id, "skipped": True, "reason": "request_participant_mismatch"}
         state = self.state.load(room_id)
+        if not state.get("agent_managed") and not _has_verified_transport(metadata):
+            return {"ok": False, "room_id": room_id, "request_id": request_id, "skipped": True, "reason": "missing_verified_transport"}
         if not state.get("agent_managed"):
             state["agent_managed"] = True
             state["schema_version"] = 1
@@ -778,6 +801,13 @@ def _deadline_expired(value: str) -> bool:
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=timezone.utc)
     return parsed <= datetime.now(timezone.utc)
+
+
+def _has_verified_transport(metadata: dict[str, Any]) -> bool:
+    auth = metadata.get("transport_auth") if isinstance(metadata.get("transport_auth"), dict) else {}
+    if not str(auth.get("auth") or "").startswith("netd:"):
+        return False
+    return bool(auth.get("authenticated") or str(auth.get("remote_peer_id") or "").strip())
 
 
 def _elapsed_ms(started: float) -> int:
