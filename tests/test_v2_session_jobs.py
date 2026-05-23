@@ -273,6 +273,82 @@ def test_v2_central_merge_backfill_does_not_reopen_completed_job(tmp_path: Path)
     assert any(event["event_type"] == "central_merge_backfilled" for event in events)
 
 
+def test_v2_fixture_embedding_coverage_counts_only_current_retrieval_docs(tmp_path: Path) -> None:
+    settings = make_settings(tmp_path)
+    settings.retrieval_db_path.parent.mkdir(parents=True, exist_ok=True)
+    conn = connect(settings.retrieval_db_path)
+    try:
+        RetrievalIndexStore(conn).replace_documents(
+            [
+                RetrievalDocument(
+                    doc_id="doc:current:1",
+                    doc_type="packet",
+                    graph_node_id="node:1",
+                    node_kind="Packet",
+                    packet_id="WP0001",
+                    commit_sha="abc123",
+                    title="current",
+                    body="current doc",
+                ),
+                RetrievalDocument(
+                    doc_id="doc:current:2",
+                    doc_type="packet",
+                    graph_node_id="node:2",
+                    node_kind="Packet",
+                    packet_id="WP0002",
+                    commit_sha="def456",
+                    title="current 2",
+                    body="current doc 2",
+                ),
+            ]
+        )
+        embeddings = GraphEmbeddingStore(conn, db_path=settings.retrieval_db_path)
+        embeddings.upsert(
+            GraphEmbeddingRecord.create(
+                node_id="node:1",
+                node_kind="Packet",
+                memory_class="graph_context",
+                graph_scope="v2",
+                graph_path="doc:current:1",
+                session_id="s-coverage",
+                extraction_run_id="run",
+                embedding_kind="retrieval_text",
+                model="hash-fallback",
+                text="current doc",
+                vector=[0.1, 0.2],
+            )
+        )
+        embeddings.upsert(
+            GraphEmbeddingRecord.create(
+                node_id="old-node",
+                node_kind="Packet",
+                memory_class="graph_context",
+                graph_scope="v2",
+                graph_path="doc:stale:old",
+                session_id="s-coverage",
+                extraction_run_id="old-run",
+                embedding_kind="retrieval_text",
+                model="hash-fallback",
+                text="stale doc",
+                vector=[0.1, 0.2],
+            )
+        )
+    finally:
+        conn.close()
+
+    store = V2SessionJobStore(settings)
+    try:
+        job = store.enqueue_session(session_id="s-coverage", boundary_event_id="raw_boundary").job
+    finally:
+        store.close()
+    fixture = export_job_fixture(settings, job_id=job["job_id"], out_dir=tmp_path / "coverage-fixture")
+    coverage = fixture["fixture"]["embedding_coverage"]
+
+    assert coverage["total_docs"] == 2
+    assert coverage["embedded_docs"] == 1
+    assert coverage["status"] == "partial"
+
+
 def test_semantic_judge_checks_mentions_citations_and_forbidden_claims() -> None:
     case = {
         "case_id": "why-graph-service",

@@ -178,10 +178,12 @@ def _retrieval_inventory(settings: Settings) -> dict[str, Any]:
     conn = connect(settings.retrieval_db_path)
     try:
         index = RetrievalIndexStore(conn)
-        doc_count = len(index.list_documents(limit=1_000_000))
+        docs = index.list_documents(limit=1_000_000)
+        doc_count = len(docs)
+        doc_ids = {doc.doc_id for doc in docs}
         embedding_store = GraphEmbeddingStore(conn, db_path=settings.retrieval_db_path)
         embeddings = embedding_store.list_records()
-        embedded_docs = len({record.node_id for record in embeddings})
+        embedded_docs = len({record.graph_path for record in embeddings if record.graph_path in doc_ids})
     finally:
         conn.close()
     coverage = (embedded_docs / doc_count) if doc_count else 0.0
@@ -219,11 +221,23 @@ def _path_hash(path: Path) -> str:
     if not path.exists():
         return ""
     if path.is_file():
-        return hashlib.sha256(path.read_bytes()).hexdigest()
+        try:
+            return hashlib.sha256(path.read_bytes()).hexdigest()
+        except OSError as exc:
+            return f"unavailable:{type(exc).__name__}"
     rows = []
-    for child in sorted(path.rglob("*")):
-        if child.is_file():
-            rows.append(f"{child.relative_to(path)}:{hashlib.sha256(child.read_bytes()).hexdigest()}")
+    try:
+        children = sorted(path.rglob("*"))
+    except OSError as exc:
+        return f"unavailable:{type(exc).__name__}"
+    for child in children:
+        if not child.is_file():
+            continue
+        try:
+            digest = hashlib.sha256(child.read_bytes()).hexdigest()
+        except OSError as exc:
+            digest = f"unavailable:{type(exc).__name__}"
+        rows.append(f"{child.relative_to(path)}:{digest}")
     return hashlib.sha256("\n".join(rows).encode("utf-8")).hexdigest()
 
 
