@@ -27,6 +27,7 @@ from ..memory import MemoryService
 from ..orchestration import OrchestratorService
 from ..core.privacy import redact_secrets
 from ..peer import PeerService
+from ..peer.agent import PeerAgentService
 from ..peer.doctor import peer_doctor
 from ..peer.invites import decode_invite_code
 from ..peer.netd_runtime import PeerNetdLaunchOptions
@@ -36,6 +37,7 @@ from ..peer.netd_service import install_service as install_peer_netd_service
 from ..peer.netd_service import service_status as peer_netd_service_status
 from ..peer.netd_service import uninstall_service as uninstall_peer_netd_service
 from ..peer.server import main as peer_server_main
+from ..peer.store import PeerStore
 from ..llm.models import download_models, list_model_presets, model_status, preflight_models
 from ..llm.qwen import QwenUnavailable
 from ..reasoning_graph.session_runtime import DEFAULT_CODE_EMBEDDING_MODEL
@@ -356,6 +358,7 @@ def _build_parser() -> argparse.ArgumentParser:
     peer_share.add_argument("--base-url", default="", help="Optional legacy direct HTTP URL to include.")
     peer_share.add_argument("--rendezvous-addr", default="", help="Optional rendezvous node multiaddr to include.")
     peer_share.add_argument("--rendezvous-namespace", default="", help="Optional rendezvous namespace to include.")
+    peer_share.add_argument("--relay-profile", "--relay", dest="relay_profile", default="", help="Saved relay profile to include in this card.")
     peer_import = peer_sub.add_parser("import-card", help="Import a trusted peer from a peer-card JSON file")
     peer_import.add_argument("--file", required=True, type=Path)
     peer_import.add_argument("--trust", choices=["trusted", "limited", "blocked"], default="trusted")
@@ -368,6 +371,7 @@ def _build_parser() -> argparse.ArgumentParser:
     peer_invite.add_argument("--base-url", default="", help="Optional legacy direct HTTP URL to include.")
     peer_invite.add_argument("--rendezvous-addr", default="", help="Optional rendezvous node multiaddr to include.")
     peer_invite.add_argument("--rendezvous-namespace", default="", help="Optional rendezvous namespace to include.")
+    peer_invite.add_argument("--relay-profile", "--relay", dest="relay_profile", default="", help="Saved relay profile to include in this invite.")
     peer_invite.add_argument("--auto-approve", action="store_true", help="Auto-import the accepting peer after token proof.")
     peer_invite.add_argument("--expires-minutes", type=int, default=1440, help="Invite validity window.")
     peer_invite.add_argument("--max-uses", type=int, default=1, help="Maximum accepted join requests.")
@@ -412,6 +416,20 @@ def _build_parser() -> argparse.ArgumentParser:
     peer_room.add_argument("--topic", required=True)
     peer_room.add_argument("--peer", action="append", default=[], help="Peer node id to invite. Repeat for multiple peers.")
     peer_room.add_argument("--no-send", action="store_true", help="Create the room locally without sending invites.")
+    peer_setup = peer_sub.add_parser("setup", help="One-time peer setup: init identity, start relay sidecar, and optionally install startup")
+    _add_peer_netd_start_args(peer_setup)
+    peer_setup.add_argument("--display-name", default="", help="Display name to save for this AMO peer identity.")
+    peer_setup.add_argument("--capability", action="append", default=[], help="Capability to save on first setup. Repeat as needed.")
+    peer_setup.add_argument("--relay-addr", default="", help="Relay multiaddr to save before starting, e.g. from the AWS relay output.")
+    peer_setup.add_argument("--namespace", default="", help="Rendezvous namespace to save with --relay-addr.")
+    peer_setup.add_argument("--profile-name", default="", help="Profile name to save when --relay-addr is provided. Defaults to --relay/--relay-profile or default.")
+    peer_setup_invite = peer_setup.add_mutually_exclusive_group()
+    peer_setup_invite.add_argument("--invite", type=Path, help="Invite JSON to accept after relay startup.")
+    peer_setup_invite.add_argument("--invite-code", default="", help="amo-peer-invite: code to accept after relay startup.")
+    peer_setup.add_argument("--install-startup", action="store_true", help="Install OS startup entries for sidecar and peer-agent watch.")
+    peer_setup.add_argument("--service-name", default="AMO Peer Netd")
+    _add_peer_netd_watch_service_args(peer_setup)
+    peer_setup.add_argument("--no-start", action="store_true", help="Only save config/profile; do not start peer-netd now.")
     peer_enable = peer_sub.add_parser("enable", help="Build if needed and start the managed libp2p sidecar")
     _add_peer_netd_start_args(peer_enable)
     peer_netd = peer_sub.add_parser("netd", help="Build, start, stop, and inspect the managed libp2p sidecar")
@@ -444,6 +462,18 @@ def _build_parser() -> argparse.ArgumentParser:
     peer_relay_start.add_argument("--namespace", default="amo-peer-default", help="Suggested rendezvous namespace for this trust group.")
     peer_relay_start.add_argument("--store-path", default="")
     peer_relay_start.add_argument("--no-build", action="store_true")
+    peer_relay_save = peer_relay_sub.add_parser("save", help="Save a client relay profile for short --relay commands")
+    peer_relay_save.add_argument("--name", required=True)
+    peer_relay_save.add_argument("--addr", required=True, help="Relay/rendezvous multiaddr.")
+    peer_relay_save.add_argument("--rendezvous-addr", default="", help="Optional distinct rendezvous multiaddr. Defaults to --addr.")
+    peer_relay_save.add_argument("--namespace", required=True, help="Rendezvous namespace for this trust group.")
+    peer_relay_save.add_argument("--no-auto-relay", action="store_true", help="Do not enable AutoRelay when this profile is used.")
+    peer_relay_save.add_argument("--no-hole-punching", action="store_true", help="Do not enable hole punching when this profile is used.")
+    peer_relay_show = peer_relay_sub.add_parser("show", help="Show one saved client relay profile")
+    peer_relay_show.add_argument("--name", required=True)
+    peer_relay_delete = peer_relay_sub.add_parser("delete", help="Delete one saved client relay profile")
+    peer_relay_delete.add_argument("--name", required=True)
+    peer_relay_sub.add_parser("list", help="List saved client relay profiles")
     peer_relay_sub.add_parser("status", help="Show the managed relay/rendezvous node status")
     peer_poll_netd = peer_sub.add_parser("poll-netd", help="Process delivered sidecar messages into local peer rooms")
     peer_poll_netd.add_argument("--limit", type=int, default=None)
@@ -454,6 +484,28 @@ def _build_parser() -> argparse.ArgumentParser:
     peer_serve = peer_sub.add_parser("serve", help="Run the direct peer listener for Tailscale/private networking")
     peer_serve.add_argument("--host", default="0.0.0.0")
     peer_serve.add_argument("--port", type=int, default=8787)
+
+    peer_agent = sub.add_parser("peer-agent", help="Run AMO peer-agent ask/watch/finalize workflows")
+    peer_agent.add_argument("--amo-home", type=Path, help="AMO home directory for peer-agent state.")
+    peer_agent_sub = peer_agent.add_subparsers(dest="peer_agent_command", required=True)
+    peer_agent_ask = peer_agent_sub.add_parser("ask", help="Ask local memory first, then open a peer room if needed")
+    peer_agent_ask.add_argument("--query", required=True)
+    peer_agent_ask.add_argument("--session-id", default="")
+    peer_agent_ask.add_argument("--min-confidence", type=float, default=None)
+    peer_agent_ask.add_argument("--timeout-seconds", type=float, default=None)
+    peer_agent_watch = peer_agent_sub.add_parser("watch", help="Drain peer inbox and respond/finalize rooms")
+    peer_agent_watch.add_argument("--interval-seconds", type=float, default=2.0)
+    peer_agent_watch.add_argument("--max-iterations", type=int, default=0, help="Testing/debug guard. 0 means forever.")
+    peer_agent_watch.add_argument("--limit", type=int, default=None, help="Maximum netd envelopes to drain per tick.")
+    peer_agent_watch.add_argument("--fail-fast", action="store_true")
+    peer_agent_status = peer_agent_sub.add_parser("status", help="Show peer-agent room state")
+    peer_agent_status.add_argument("--room-id", required=True)
+    peer_agent_context = peer_agent_sub.add_parser("context", help="Show local peer-agent room context")
+    peer_agent_context.add_argument("--room-id", required=True)
+    peer_agent_messages = peer_agent_sub.add_parser("messages", help="Show peer-agent room messages")
+    peer_agent_messages.add_argument("--room-id", required=True)
+    peer_agent_summary = peer_agent_sub.add_parser("summarize", help="Update an initiator-owned room summary")
+    peer_agent_summary.add_argument("--room-id", required=True)
 
     debug = sub.add_parser("debug", help="Debug AMO hook, drain, Qwen, graph, and retrieval stages")
     debug_sub = debug.add_subparsers(dest="debug_command", required=True)
@@ -836,11 +888,89 @@ def main(argv: list[str] | None = None) -> int:
                 runtime = PeerNetdRuntime(settings)
                 _print(
                     runtime.start(
-                        _peer_netd_options_from_args(args),
+                        _peer_netd_options_from_args(args, settings),
                         build_if_missing=not args.no_build,
                     )
                 )
                 return 0
+            if args.peer_command == "setup":
+                store = PeerStore(settings)
+                saved_profile = None
+                invite = _peer_invite_from_setup_args(args)
+                if invite and not args.relay_addr and not args.relay_profile:
+                    card = invite.get("card") if isinstance(invite.get("card"), dict) else {}
+                    relay_addr = str(card.get("rendezvous_addr") or "").strip()
+                    namespace = str(card.get("rendezvous_namespace") or "").strip()
+                    if relay_addr and namespace:
+                        saved_profile = store.save_relay_profile(
+                            name=args.profile_name or namespace,
+                            relay_addr=relay_addr,
+                            rendezvous_addr=relay_addr,
+                            rendezvous_namespace=namespace,
+                        )
+                        args.relay_profile = str(saved_profile["name"])
+                if args.relay_addr:
+                    profile_name = args.profile_name or args.relay_profile or "default"
+                    saved_profile = store.save_relay_profile(
+                        name=profile_name,
+                        relay_addr=args.relay_addr,
+                        rendezvous_addr=args.rendezvous_addr,
+                        rendezvous_namespace=args.namespace or args.rendezvous_namespace,
+                    )
+                    args.relay_profile = profile_name
+                if args.relay_profile:
+                    relay_profile = store.get_relay_profile(args.relay_profile)
+                    if not args.rendezvous_addr:
+                        args.rendezvous_addr = str(relay_profile.get("rendezvous_addr") or relay_profile.get("relay_addr") or "")
+                    if not args.rendezvous_namespace:
+                        args.rendezvous_namespace = str(relay_profile.get("rendezvous_namespace") or "")
+                    if not args.static_relay:
+                        args.static_relay = [str(relay_profile.get("relay_addr") or "")]
+                    if relay_profile.get("auto_relay", True):
+                        args.auto_relay = True
+                    if relay_profile.get("hole_punching", True):
+                        args.hole_punching = True
+                svc = PeerService(settings)
+                init_result = svc.init_node(
+                    node_id=args.node_id,
+                    display_name=args.display_name,
+                    capabilities=args.capability or None,
+                )
+                launch = _peer_netd_options_from_args(args, settings)
+                netd_result = None if args.no_start else PeerNetdRuntime(settings).start(launch, build_if_missing=not args.no_build)
+                accept_result = svc.accept_peer_invite(invite) if invite else None
+                startup_result = None
+                if args.install_startup:
+                    startup_result = install_peer_netd_service(
+                        settings,
+                        launch,
+                        PeerNetdServiceOptions(
+                            service_name=args.service_name,
+                            apply=True,
+                            with_watcher=True,
+                            watch_service_name=args.watch_service_name,
+                        ),
+                    )
+                setup_ok = all(
+                    item is None or bool(item.get("ok")) for item in (init_result, netd_result, accept_result, startup_result)
+                )
+                _print(
+                    {
+                        "ok": setup_ok,
+                        "init": init_result,
+                        "relay_profile": saved_profile or (store.get_relay_profile(args.relay_profile) if args.relay_profile else None),
+                        "netd": netd_result,
+                        "accept_invite": accept_result,
+                        "startup": startup_result,
+                        "next_commands": [
+                            "amo-cli peer create-invite --relay "
+                            + (args.relay_profile or "<relay-profile>")
+                            + " --auto-approve --out host.invite.json",
+                            'amo-cli peer open-room --topic "<topic>" --peer <peer-node-id>',
+                        ],
+                    }
+                )
+                return 0 if setup_ok else 1
             if args.peer_command == "netd":
                 runtime = PeerNetdRuntime(settings)
                 if args.netd_command == "build":
@@ -849,7 +979,7 @@ def main(argv: list[str] | None = None) -> int:
                 if args.netd_command == "start":
                     _print(
                         runtime.start(
-                            _peer_netd_options_from_args(args),
+                            _peer_netd_options_from_args(args, settings),
                             build_if_missing=not args.no_build,
                         )
                     )
@@ -864,7 +994,7 @@ def main(argv: list[str] | None = None) -> int:
                     _print(
                         install_peer_netd_service(
                             settings,
-                            _peer_netd_options_from_args(args),
+                            _peer_netd_options_from_args(args, settings),
                             _peer_netd_service_options_from_args(args),
                         )
                     )
@@ -889,6 +1019,36 @@ def main(argv: list[str] | None = None) -> int:
                         build_if_missing=not args.no_build,
                     )
                     _print(_with_relay_next_steps(result, args.namespace))
+                    return 0
+                if args.relay_command == "save":
+                    profile = PeerStore(settings).save_relay_profile(
+                        name=args.name,
+                        relay_addr=args.addr,
+                        rendezvous_addr=args.rendezvous_addr,
+                        rendezvous_namespace=args.namespace,
+                        auto_relay=not args.no_auto_relay,
+                        hole_punching=not args.no_hole_punching,
+                    )
+                    _print(
+                        {
+                            "ok": True,
+                            "profile": profile,
+                            "next_commands": [
+                                f"amo-cli peer enable --node-id <device-node-id> --relay {profile['name']}",
+                                f"amo-cli peer create-invite --auto-approve --relay {profile['name']} --out host.invite.json",
+                            ],
+                        }
+                    )
+                    return 0
+                if args.relay_command == "list":
+                    store = PeerStore(settings)
+                    _print({"ok": True, "profiles": store.list_relay_profiles(), "path": str(store.relay_profiles_path)})
+                    return 0
+                if args.relay_command == "show":
+                    _print({"ok": True, "profile": PeerStore(settings).get_relay_profile(args.name)})
+                    return 0
+                if args.relay_command == "delete":
+                    _print(PeerStore(settings).delete_relay_profile(args.name))
                     return 0
                 if args.relay_command == "status":
                     _print(runtime.status())
@@ -928,10 +1088,11 @@ def main(argv: list[str] | None = None) -> int:
                 _print(svc.status())
                 return 0
             if args.peer_command == "share-card":
+                relay_values = _relay_values_from_args(args, settings)
                 result = svc.share_card(
                     base_url=args.base_url,
-                    rendezvous_addr=args.rendezvous_addr,
-                    rendezvous_namespace=args.rendezvous_namespace,
+                    rendezvous_addr=relay_values["rendezvous_addr"],
+                    rendezvous_namespace=relay_values["rendezvous_namespace"],
                 )
                 if result.get("ok") and args.out:
                     args.out.parent.mkdir(parents=True, exist_ok=True)
@@ -946,13 +1107,14 @@ def main(argv: list[str] | None = None) -> int:
                 _print(svc.import_card(card, trust=args.trust, shared_secret_env=args.shared_secret_env))
                 return 0
             if args.peer_command == "create-invite":
+                relay_values = _relay_values_from_args(args, settings)
                 result = svc.create_peer_invite(
                     trust=args.trust,
                     shared_secret_env=args.shared_secret_env,
                     label=args.label,
                     base_url=args.base_url,
-                    rendezvous_addr=args.rendezvous_addr,
-                    rendezvous_namespace=args.rendezvous_namespace,
+                    rendezvous_addr=relay_values["rendezvous_addr"],
+                    rendezvous_namespace=relay_values["rendezvous_namespace"],
                     auto_approve=args.auto_approve,
                     expires_minutes=args.expires_minutes,
                     max_uses=args.max_uses,
@@ -1035,6 +1197,41 @@ def main(argv: list[str] | None = None) -> int:
                         fail_fast=args.fail_fast,
                     )
                 _print(svc.process_netd_inbox(limit=args.limit))
+                return 0
+
+        if args.command == "peer-agent":
+            if args.amo_home:
+                os.environ["AMO_HOME"] = str(args.amo_home)
+            settings = Settings.load()
+            svc = PeerAgentService(settings)
+            if args.peer_agent_command == "ask":
+                result = svc.ask(
+                    query=args.query,
+                    session_id=args.session_id,
+                    min_confidence=args.min_confidence,
+                    timeout_seconds=args.timeout_seconds,
+                )
+                _print(result)
+                return 0 if result.get("ok") else 1
+            if args.peer_agent_command == "watch":
+                return _watch_peer_agent(
+                    svc,
+                    limit=args.limit,
+                    interval_seconds=args.interval_seconds,
+                    max_iterations=args.max_iterations,
+                    fail_fast=args.fail_fast,
+                )
+            if args.peer_agent_command == "status":
+                _print(svc.status(args.room_id))
+                return 0
+            if args.peer_agent_command == "context":
+                _print(svc.context(args.room_id))
+                return 0
+            if args.peer_agent_command == "messages":
+                _print(svc.messages(args.room_id))
+                return 0
+            if args.peer_agent_command == "summarize":
+                _print(svc.summarize(args.room_id))
                 return 0
 
         if args.command in {
@@ -1585,6 +1782,32 @@ def _watch_peer_netd_inbox(
         return 0
 
 
+def _watch_peer_agent(
+    svc: PeerAgentService,
+    *,
+    limit: int | None,
+    interval_seconds: float,
+    max_iterations: int = 0,
+    fail_fast: bool = False,
+) -> int:
+    if interval_seconds <= 0:
+        raise ValueError("--interval-seconds must be positive")
+    iterations = 0
+    try:
+        while True:
+            result = svc.watch_once(limit=limit)
+            _print_line(result)
+            if fail_fast and not result.get("ok"):
+                return 1
+            iterations += 1
+            if max_iterations and iterations >= max_iterations:
+                return 0
+            time.sleep(interval_seconds)
+    except KeyboardInterrupt:
+        _print_line({"ok": True, "stopped": True, "reason": "interrupted"})
+        return 0
+
+
 def _add_peer_netd_start_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--node-id", default="amo-node", help="Stable AMO node id advertised by the sidecar.")
     parser.add_argument("--listen", default="/ip4/0.0.0.0/tcp/0", help="libp2p listen multiaddr.")
@@ -1599,6 +1822,13 @@ def _add_peer_netd_start_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--require-signature", action="store_true", help="Reject unsigned incoming peer envelopes.")
     parser.add_argument("--bootstrap", action="append", default=[], help="Bootstrap peer multiaddr. Repeat for multiple peers.")
     parser.add_argument("--static-relay", action="append", default=[], help="Circuit relay multiaddr. Repeat for multiple relays.")
+    parser.add_argument(
+        "--relay-profile",
+        "--relay",
+        dest="relay_profile",
+        default="",
+        help="Saved relay profile name. Expands to --static-relay, --auto-relay, --hole-punching, and rendezvous flags.",
+    )
     parser.add_argument("--mdns", action="store_true", help="Enable LAN mDNS discovery.")
     parser.add_argument("--mdns-service", default="_amo-peer._udp", help="mDNS service tag.")
     parser.add_argument("--rendezvous-server", action="store_true", help="Serve AMO rendezvous registration/discovery streams.")
@@ -1629,16 +1859,23 @@ def _add_peer_netd_watch_service_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--with-watch",
         action="store_true",
-        help="Also install, uninstall, or inspect the poll-netd --watch startup entry.",
+        help="Also install, uninstall, or inspect the peer-agent watch startup entry.",
     )
     parser.add_argument(
         "--watch-service-name",
         default="",
-        help="Optional OS startup name for the poll-netd --watch entry.",
+        help="Optional OS startup name for the peer-agent watch entry.",
     )
 
 
-def _peer_netd_options_from_args(args: argparse.Namespace) -> PeerNetdLaunchOptions:
+def _peer_netd_options_from_args(args: argparse.Namespace, settings: Settings | None = None) -> PeerNetdLaunchOptions:
+    relay_values = _relay_values_from_args(args, settings) if settings is not None else {
+        "static_relays": tuple(args.static_relay or []),
+        "rendezvous_addr": args.rendezvous_addr,
+        "rendezvous_namespace": args.rendezvous_namespace,
+        "auto_relay": args.auto_relay,
+        "hole_punching": args.hole_punching,
+    }
     return PeerNetdLaunchOptions(
         node_id=args.node_id,
         listen_addr=args.listen,
@@ -1648,22 +1885,65 @@ def _peer_netd_options_from_args(args: argparse.Namespace) -> PeerNetdLaunchOpti
         shared_secret_env=args.shared_secret_env,
         require_signature=args.require_signature,
         bootstrap_addrs=tuple(args.bootstrap or []),
-        static_relays=tuple(args.static_relay or []),
+        static_relays=tuple(relay_values["static_relays"]),
         mdns=args.mdns,
         mdns_service=args.mdns_service,
         rendezvous_server=args.rendezvous_server,
         relay_service=args.relay_service,
         nat_service=args.nat_service,
-        auto_relay=args.auto_relay,
-        hole_punching=args.hole_punching,
+        auto_relay=bool(relay_values["auto_relay"]),
+        hole_punching=bool(relay_values["hole_punching"]),
         force_private=args.force_private,
         force_public=args.force_public,
         advertise_localhost_dns=args.advertise_localhost_dns,
         advertise_addrs=tuple(args.advertise_addr or []),
-        rendezvous_addr=args.rendezvous_addr,
-        rendezvous_namespace=args.rendezvous_namespace,
+        rendezvous_addr=str(relay_values["rendezvous_addr"]),
+        rendezvous_namespace=str(relay_values["rendezvous_namespace"]),
         rendezvous_ttl_seconds=args.rendezvous_ttl_seconds,
     )
+
+
+def _relay_values_from_args(args: argparse.Namespace, settings: Settings | None) -> dict[str, Any]:
+    static_relays = [str(item).strip() for item in getattr(args, "static_relay", []) or [] if str(item).strip()]
+    rendezvous_addr = str(getattr(args, "rendezvous_addr", "") or "").strip()
+    rendezvous_namespace = str(getattr(args, "rendezvous_namespace", "") or "").strip()
+    auto_relay = bool(getattr(args, "auto_relay", False))
+    hole_punching = bool(getattr(args, "hole_punching", False))
+    profile_name = str(getattr(args, "relay_profile", "") or "").strip()
+    if profile_name:
+        if settings is None:
+            raise ValueError("--relay requires AMO settings")
+        profile = PeerStore(settings).get_relay_profile(profile_name)
+        relay_addr = str(profile.get("relay_addr") or "").strip()
+        profile_rendezvous_addr = str(profile.get("rendezvous_addr") or relay_addr).strip()
+        profile_namespace = str(profile.get("rendezvous_namespace") or "").strip()
+        if relay_addr and relay_addr not in static_relays:
+            static_relays.insert(0, relay_addr)
+        rendezvous_addr = rendezvous_addr or profile_rendezvous_addr
+        rendezvous_namespace = rendezvous_namespace or profile_namespace
+        auto_relay = auto_relay or bool(profile.get("auto_relay", True))
+        hole_punching = hole_punching or bool(profile.get("hole_punching", True))
+    return {
+        "static_relays": tuple(static_relays),
+        "rendezvous_addr": rendezvous_addr,
+        "rendezvous_namespace": rendezvous_namespace,
+        "auto_relay": auto_relay,
+        "hole_punching": hole_punching,
+    }
+
+
+def _peer_invite_from_setup_args(args: argparse.Namespace) -> dict[str, Any] | None:
+    invite_path = getattr(args, "invite", None)
+    invite_code = str(getattr(args, "invite_code", "") or "")
+    if invite_code:
+        invite = decode_invite_code(invite_code)
+    elif invite_path:
+        invite = json.loads(invite_path.read_text(encoding="utf-8"))
+    else:
+        return None
+    if not isinstance(invite, dict):
+        raise ValueError("peer invite must contain a JSON object")
+    return invite
 
 
 def _peer_relay_options_from_args(args: argparse.Namespace) -> PeerNetdLaunchOptions:

@@ -92,6 +92,7 @@ class PeerService:
             "config_path": str(self.store.config_path),
             "rooms_dir": str(self.store.rooms_dir),
             "peers": [peer.to_dict() for peer in config.peers],
+            "relay_profiles": self.store.list_relay_profiles(),
             "room_count": len(rooms),
         }
 
@@ -409,10 +410,16 @@ class PeerService:
                 payload, auth = self._unwrap_incoming_payload(payload)
             config = self.store.load_config()
             policy = PeerPolicy(config)
+            if transport_auth:
+                payload = _with_transport_auth_metadata(payload, transport_auth)
             message = PeerMessage.from_payload(payload)
             if not message.room_id:
                 return {"ok": False, "error": "room_id is required", "auth": auth}
-            self._enforce_transport_auth(message.from_node_id, auth)
+            self._enforce_transport_auth(
+                message.from_node_id,
+                auth,
+                require_peer_binding=message.message_type in {"context_request", "context_response"},
+            )
             room = self.store.get_room(message.room_id)
             decision = policy.decide_message(
                 message.from_node_id,
@@ -437,6 +444,7 @@ class PeerService:
         message_type: str = "context_request",
         citations: list[str] | None = None,
         confidence: float | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         message = PeerMessage(
             room_id=room_id,
@@ -446,6 +454,7 @@ class PeerService:
             content=content,
             citations=tuple(citations or ()),
             confidence=confidence,
+            metadata=metadata if isinstance(metadata, dict) else {},
         )
         return {"ok": True, "message": self.store.append_message(room_id, message.to_record())}
 
@@ -458,6 +467,8 @@ class PeerService:
         message_type: str = "context_request",
         citations: list[str] | None = None,
         confidence: float | None = None,
+        metadata: dict[str, Any] | None = None,
+        append_on_success_only: bool = False,
     ) -> dict[str, Any]:
         config = self.store.load_config()
         peer = config.peer_by_id(peer_id)
@@ -471,10 +482,14 @@ class PeerService:
             content=content,
             citations=tuple(citations or ()),
             confidence=confidence,
+            metadata=metadata if isinstance(metadata, dict) else {},
         )
-        stored = self.store.append_message(room_id, message.to_record())
-        payload = stored | {"room_id": room_id}
+        record = message.to_record()
+        payload = record | {"room_id": room_id}
         delivery = self._send_payload_via_netd(peer, payload, message_type=message_type, room_id=room_id)
+        if append_on_success_only and not delivery.get("ok"):
+            return {"ok": False, "message": record, "delivery": delivery}
+        stored = self.store.append_message(room_id, record)
         return {"ok": bool(delivery.get("ok")), "message": stored, "delivery": delivery}
 
     def process_netd_inbox(self, limit: int | None = None) -> dict[str, Any]:
@@ -515,6 +530,7 @@ class PeerService:
             "authenticated": bool(envelope.get("signature")),
             "auth": "netd:hmac-sha256" if envelope.get("signature") else "netd:none",
             "from_node_id": envelope.get("from_node_id") or message.get("from_node_id") or "",
+            "remote_peer_id": str(envelope.get("remote_peer_id") or "").strip(),
             "payload_sha256": envelope.get("payload_sha256"),
         }
         if message_type == "room_invite":
@@ -620,10 +636,25 @@ class PeerService:
     def _unwrap_incoming_payload(self, payload: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
         return unwrap_payload(payload=payload, config=self.store.load_config())
 
-    def _enforce_transport_auth(self, sender_node_id: str, auth: dict[str, Any]) -> None:
+    def _enforce_transport_auth(
+        self,
+        sender_node_id: str,
+        auth: dict[str, Any],
+        *,
+        require_peer_binding: bool = False,
+    ) -> None:
         peer = self.store.load_config().peer_by_id(sender_node_id)
         if peer is not None and peer.shared_secret_env and not auth.get("authenticated"):
             raise PeerAuthError(f"signed envelope required for peer: {sender_node_id}")
+        remote_peer_id = str(auth.get("remote_peer_id") or "").strip()
+        if peer is not None and remote_peer_id and peer.peer_id and remote_peer_id != peer.peer_id:
+            raise PeerAuthError(f"remote peer id mismatch for {sender_node_id}")
+        is_netd = str(auth.get("auth") or "").startswith("netd:")
+        if require_peer_binding and is_netd and peer is not None:
+            if peer.peer_id and not remote_peer_id and not auth.get("authenticated"):
+                raise PeerAuthError(f"remote peer id or signed envelope required for peer-agent message: {sender_node_id}")
+            if not peer.peer_id and not auth.get("authenticated"):
+                raise PeerAuthError(f"signed envelope required for peer-agent message without peer_id: {sender_node_id}")
 
     def _send_payload_via_netd(
         self,
@@ -717,6 +748,22 @@ def _netd_envelope_id(envelope: dict[str, Any]) -> str:
         return signature
     canonical = json.dumps(envelope, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _with_transport_auth_metadata(payload: dict[str, Any], auth: dict[str, Any]) -> dict[str, Any]:
+    message_type = str(payload.get("type") or payload.get("message_type") or "").strip()
+    if message_type not in {"context_request", "context_response"}:
+        return payload
+    updated = dict(payload)
+    metadata = updated.get("metadata") if isinstance(updated.get("metadata"), dict) else {}
+    metadata = dict(metadata)
+    metadata["transport_auth"] = {
+        "auth": str(auth.get("auth") or ""),
+        "authenticated": bool(auth.get("authenticated")),
+        "remote_peer_id": str(auth.get("remote_peer_id") or "").strip(),
+    }
+    updated["metadata"] = metadata
+    return updated
 
 
 def _utc_now() -> str:

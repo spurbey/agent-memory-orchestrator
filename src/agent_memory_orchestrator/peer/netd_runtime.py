@@ -21,6 +21,9 @@ class PeerNetdRuntimeError(RuntimeError):
     """Raised when the managed peer sidecar cannot be built or controlled."""
 
 
+REQUIRED_NETD_FLAGS = ("identity-key", "advertise-addr")
+
+
 @dataclass(slots=True, frozen=True)
 class PeerNetdLaunchOptions:
     node_id: str = "amo-node"
@@ -96,26 +99,26 @@ class PeerNetdRuntime:
             raise PeerNetdRuntimeError("managed peer-netd start requires a fixed --api host:port, not port 0")
 
         current = self.status()
+        desired_launch = self.launch_config(options)
+        restart_result: dict[str, Any] | None = None
         if current.get("running") and current.get("api_ok"):
-            api_url = str(current.get("api_url") or self.api_url(options.api_addr))
-            post_start = self.post_start(options, api_url)
-            if post_start:
-                current["health"] = PeerNetdClient(base_url=api_url, timeout_seconds=1.0).health()
-            return {"ok": True, "already_running": True, "status": current, "post_start": post_start}
+            current_state = self.read_state()
+            current_launch = current_state.get("launch_config") if isinstance(current_state.get("launch_config"), dict) else None
+            if current_launch == desired_launch:
+                api_url = str(current.get("api_url") or self.api_url(options.api_addr))
+                post_start = self.post_start(options, api_url)
+                if post_start:
+                    current["health"] = PeerNetdClient(base_url=api_url, timeout_seconds=1.0).health()
+                return {
+                    "ok": True,
+                    "already_running": True,
+                    "launch_config_match": True,
+                    "status": current,
+                    "post_start": post_start,
+                }
+            restart_result = self.stop()
 
-        binary = self.resolve_binary()
-        packaged = self.packaged_binary_path()
-        if packaged is not None and binary.resolve() == packaged.resolve():
-            binary = self.install_packaged_binary(packaged)
-        elif not binary.exists():
-            if packaged is not None:
-                binary = self.install_packaged_binary(packaged, binary)
-            elif not build_if_missing:
-                raise PeerNetdRuntimeError(f"peer-netd binary not found: {binary}")
-            else:
-                self.build(binary)
-        elif not binary.is_file():
-            raise PeerNetdRuntimeError(f"peer-netd binary path is not a file: {binary}")
+        binary = self.prepare_binary(build_if_missing=build_if_missing)
 
         self.runtime_dir.mkdir(parents=True, exist_ok=True)
         self.log_dir.mkdir(parents=True, exist_ok=True)
@@ -147,6 +150,7 @@ class PeerNetdRuntime:
             "store_path": str(self.store_path(options)),
             "started_at": timestamp,
             "args": args,
+            "launch_config": desired_launch,
             "stdout_log": str(stdout_path),
             "stderr_log": str(stderr_path),
         }
@@ -165,11 +169,91 @@ class PeerNetdRuntime:
         return {
             "ok": True,
             "already_running": False,
+            "restart": restart_result,
             "pid": process.pid,
             "api_url": state["api_url"],
             "health": health,
             "post_start": post_start,
             "logs": {"stdout": str(stdout_path), "stderr": str(stderr_path)},
+        }
+
+    def prepare_binary(self, *, build_if_missing: bool = True) -> Path:
+        binary = self.resolve_binary()
+        packaged = self.packaged_binary_path()
+        if packaged is not None and binary.resolve() == packaged.resolve():
+            binary = self.install_packaged_binary(packaged)
+        elif not binary.exists():
+            if packaged is not None:
+                binary = self.install_packaged_binary(packaged, binary)
+            elif not build_if_missing:
+                raise PeerNetdRuntimeError(f"peer-netd binary not found: {binary}")
+            else:
+                self.build(binary)
+        elif not binary.is_file():
+            raise PeerNetdRuntimeError(f"peer-netd binary path is not a file: {binary}")
+
+        capabilities = self.binary_capabilities(binary)
+        if not capabilities.get("missing_required_flags"):
+            return binary
+
+        packaged_is_different = packaged is not None and packaged.exists() and packaged.resolve() != binary.resolve()
+        if packaged_is_different:
+            packaged_capabilities = self.binary_capabilities(packaged)
+            if not packaged_capabilities.get("missing_required_flags"):
+                return self.install_packaged_binary(packaged, binary)
+
+        missing = ", ".join(str(item) for item in capabilities.get("missing_required_flags", []))
+        if not build_if_missing:
+            raise PeerNetdRuntimeError(
+                "peer-netd binary is stale or incompatible"
+                f" (missing flags: {missing}); run amo-cli peer netd build or reinstall/update AMO"
+            )
+        self.build(binary)
+        rebuilt = self.binary_capabilities(binary)
+        if rebuilt.get("missing_required_flags"):
+            missing_after = ", ".join(str(item) for item in rebuilt.get("missing_required_flags", []))
+            raise PeerNetdRuntimeError(f"rebuilt peer-netd is still missing required flags: {missing_after}")
+        return binary
+
+    def binary_capabilities(self, binary: Path | None = None) -> dict[str, Any]:
+        candidate = (binary or self.resolve_binary()).expanduser().resolve()
+        if not candidate.exists():
+            return {
+                "ok": False,
+                "binary": str(candidate),
+                "exists": False,
+                "missing_required_flags": list(REQUIRED_NETD_FLAGS),
+            }
+        try:
+            result = subprocess.run(
+                [str(candidate), "-h"],
+                text=True,
+                capture_output=True,
+                check=False,
+                timeout=5,
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            return {
+                "ok": False,
+                "binary": str(candidate),
+                "exists": True,
+                "executable": False,
+                "error": str(exc),
+                "missing_required_flags": list(REQUIRED_NETD_FLAGS),
+            }
+        help_text = f"{result.stdout}\n{result.stderr}"
+        missing = [
+            flag
+            for flag in REQUIRED_NETD_FLAGS
+            if f"-{flag}" not in help_text and f"--{flag}" not in help_text
+        ]
+        return {
+            "ok": not missing,
+            "binary": str(candidate),
+            "exists": True,
+            "executable": True,
+            "returncode": result.returncode,
+            "missing_required_flags": missing,
         }
 
     def stop(self) -> dict[str, Any]:
@@ -310,6 +394,39 @@ class PeerNetdRuntime:
         for addr in options.static_relays:
             args.extend(["--static-relay", addr])
         return args
+
+    def launch_config(self, options: PeerNetdLaunchOptions) -> dict[str, Any]:
+        """Return a stable config fingerprint for deciding sidecar reuse.
+
+        Values that affect peer identity, network reachability, or inbox location
+        must match before an already-running daemon can be reused.
+        """
+        return {
+            "node_id": options.node_id,
+            "listen_addr": options.listen_addr,
+            "api_addr": options.api_addr,
+            "store_path": str(self.store_path(options)),
+            "identity_key_path": str(self.identity_key_path(options)),
+            "shared_secret_env": options.shared_secret_env,
+            "require_signature": options.require_signature,
+            "bootstrap_addrs": list(options.bootstrap_addrs),
+            "static_relays": list(options.static_relays),
+            "mdns": options.mdns,
+            "mdns_service": options.mdns_service,
+            "auto_connect_discovered": options.auto_connect_discovered,
+            "rendezvous_server": options.rendezvous_server,
+            "relay_service": options.relay_service,
+            "nat_service": options.nat_service,
+            "auto_relay": options.auto_relay,
+            "hole_punching": options.hole_punching,
+            "force_private": options.force_private,
+            "force_public": options.force_public,
+            "advertise_localhost_dns": options.advertise_localhost_dns,
+            "advertise_addrs": list(options.advertise_addrs),
+            "rendezvous_addr": options.rendezvous_addr,
+            "rendezvous_namespace": options.rendezvous_namespace,
+            "rendezvous_ttl_seconds": options.rendezvous_ttl_seconds,
+        }
 
     @property
     def runtime_dir(self) -> Path:

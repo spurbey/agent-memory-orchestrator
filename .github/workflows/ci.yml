@@ -100,8 +100,9 @@ jobs:
           python-version: "3.12"
           cache: pip
 
-      - name: Build one packaged peer-netd binary
-        run: python scripts/build_peer_netd_binaries.py --target linux/amd64
+      - name: Build packaged peer-netd binaries for primary desktop targets
+        run: |
+          python scripts/build_peer_netd_binaries.py --target linux/amd64 --target windows/amd64 --target darwin/amd64 --target darwin/arm64
 
       - name: Build Python package
         run: |
@@ -121,6 +122,12 @@ jobs:
               raise SystemExit("no wheel built")
           with zipfile.ZipFile(wheels[-1]) as wheel:
               names = set(wheel.namelist())
-          expected = "agent_memory_orchestrator/bin/linux-amd64/amo-peer-netd"
-          if expected not in names:
-              raise SystemExit(f"missing {expected}")
+          expected = {
+              "agent_memory_orchestrator/bin/linux-amd64/amo-peer-netd",
+              "agent_memory_orchestrator/bin/windows-amd64/amo-peer-netd.exe",
+              "agent_memory_orchestrator/bin/darwin-amd64/amo-peer-netd",
+              "agent_memory_orchestrator/bin/darwin-arm64/amo-peer-netd",
+          }
+          missing = sorted(expected - names)
+          if missing:
+              raise SystemExit(f"missing packaged peer-netd binaries: {missing}")

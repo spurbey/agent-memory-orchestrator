@@ -143,6 +143,36 @@ def create_server(settings: Settings) -> FastMCP:
         return memory_tools.amo_merge_status(session_id=session_id)
 
     @mcp.tool()
+    def peer_memory_ask(
+        query: str,
+        session_id: str = "",
+        min_confidence: float = 0.72,
+        timeout_seconds: float = 45,
+    ) -> dict:
+        """Ask local memory first; open a trusted peer-agent room only when local confidence is low."""
+        return memory_tools.peer_memory_ask(
+            query=query,
+            session_id=session_id,
+            min_confidence=min_confidence,
+            timeout_seconds=timeout_seconds,
+        )
+
+    @mcp.tool()
+    def peer_room_status(room_id: str) -> dict:
+        """Inspect peer-agent room status and agent_state."""
+        return memory_tools.peer_room_status(room_id=room_id)
+
+    @mcp.tool()
+    def peer_room_context(room_id: str) -> dict:
+        """Read local peer-agent room context."""
+        return memory_tools.peer_room_context(room_id=room_id)
+
+    @mcp.tool()
+    def peer_room_messages(room_id: str) -> dict:
+        """Read local peer-agent room messages."""
+        return memory_tools.peer_room_messages(room_id=room_id)
+
+    @mcp.tool()
     def orchestrator_start(session_id: str, title: str = "") -> dict:
         return orchestrator.start(session_id=session_id, title=(title or None))
 
