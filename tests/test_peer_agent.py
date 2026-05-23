@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
+
+import pytest
 
 from agent_memory_orchestrator.config import Settings
 from agent_memory_orchestrator.mcp.tools import MCP_MEMORY_TOOL_CONTRACTS, MemoryMcpToolService
@@ -87,7 +90,10 @@ def test_peer_agent_watch_returns_retrieval_bundle_without_peer_llm(tmp_path: Pa
 
     responses = [item["message"] for item in netd.sent if item["message"]["type"] == CONTEXT_RESPONSE]
     assert responses[0]["payload"]["metadata"]["mode"] == RESPONSE_RETRIEVAL_BUNDLE
-    assert responses[0]["payload"]["metadata"]["retrieval_bundle"]["answer"]["citations"]
+    bundle = responses[0]["payload"]["metadata"]["retrieval_bundle"]
+    assert bundle["answer"]["text"]
+    assert bundle["support"]
+    assert "retrieval" not in bundle
 
 
 def test_peer_agent_duplicate_request_is_idempotent(tmp_path: Path) -> None:
@@ -108,6 +114,80 @@ def test_peer_agent_duplicate_request_is_idempotent(tmp_path: Path) -> None:
     assert len(responses) == 1
 
 
+def test_peer_agent_retries_failed_response_delivery(tmp_path: Path) -> None:
+    settings = make_settings(tmp_path)
+    store = peer_room_with_request(tmp_path, local_node="poco-amo")
+    netd = FakeNetdClient(send_ok_sequence=[False, True])
+    svc = PeerAgentService(
+        settings,
+        peer_service=PeerService(settings, store=store, netd_client=netd),
+        graph=FakeGraph(good_retrieval()),
+        llm=FakeLlm(fail_peer=True),
+    )
+
+    first = svc.watch_once()
+    second = svc.watch_once()
+
+    responses = [item for item in netd.sent if item["message"]["type"] == CONTEXT_RESPONSE]
+    assert len(responses) == 2
+    assert first["processed"][0]["ok"] is False
+    assert second["processed"][0]["ok"] is True
+    room_id = store.list_rooms()[0]["room_id"]
+    state = json.loads((settings.home / ".peer" / "rooms" / room_id / "agent_state.json").read_text(encoding="utf-8"))
+    assert state["response_attempts"]["req_1"]["attempt_count"] == 2
+    assert "req_1" in state["sent_response_for_request_ids"]
+
+
+def test_peer_agent_skips_stale_manual_context_requests(tmp_path: Path) -> None:
+    settings = make_settings(tmp_path)
+    store = peer_room_with_request(tmp_path, local_node="poco-amo", schema_version=0)
+    netd = FakeNetdClient()
+    svc = PeerAgentService(
+        settings,
+        peer_service=PeerService(settings, store=store, netd_client=netd),
+        graph=FakeGraph(good_retrieval()),
+        llm=FakeLlm(fail_peer=True),
+    )
+
+    result = svc.watch_once()
+
+    assert netd.sent == []
+    assert result["processed"][0]["skipped"] is True
+    assert result["processed"][0]["reason"] == "invalid_schema_version"
+
+
+def test_peer_agent_redacts_local_refs_when_citation_sharing_disabled(tmp_path: Path) -> None:
+    settings = make_settings(tmp_path)
+    store = peer_room_with_request(tmp_path, local_node="poco-amo")
+    store.save_config(replace(store.load_config(), share_citations=False))
+    netd = FakeNetdClient()
+    svc = PeerAgentService(
+        settings,
+        peer_service=PeerService(settings, store=store, netd_client=netd),
+        graph=FakeGraph(good_retrieval()),
+        llm=FakeLlm(fail_peer=True),
+    )
+
+    svc.watch_once()
+
+    response = next(item["message"] for item in netd.sent if item["message"]["type"] == CONTEXT_RESPONSE)
+    support = response["payload"]["metadata"]["support"]
+    bundle = response["payload"]["metadata"]["retrieval_bundle"]
+    assert support
+    assert support[0]["local_ref"] == {}
+    assert "retrieval" not in bundle
+
+
+def test_peer_agent_disabled_config_blocks_automation(tmp_path: Path) -> None:
+    settings = make_settings(tmp_path, peer_agent_enabled=False)
+    store = PeerStore(settings)
+    store.init_config(node_id="zenbook-amo")
+    svc = PeerAgentService(settings, peer_service=PeerService(settings, store=store), graph=FakeGraph(good_retrieval()))
+
+    with pytest.raises(RuntimeError, match="peer-agent is disabled"):
+        svc.ask(query="what was local-first", timeout_seconds=0)
+
+
 def test_initiator_synthesizes_from_peer_response_with_own_llm(tmp_path: Path) -> None:
     settings = make_settings(tmp_path)
     store = PeerStore(settings)
@@ -117,6 +197,17 @@ def test_initiator_synthesizes_from_peer_response_with_own_llm(tmp_path: Path) -
     store.append_message(room["room_id"], strong_peer_response(room["room_id"], mode="llm_answer"))
     llm = FakeLlm(final_answer={"answer": "Synthesized by initiator.", "confidence": 0.93, "mode": "peer_assisted", "gaps": []})
     svc = PeerAgentService(settings, peer_service=PeerService(settings, store=store, netd_client=FakeNetdClient()), llm=llm)
+    svc.state.save(
+        room["room_id"],
+        {
+            "agent_managed": True,
+            "schema_version": 1,
+            "status": "open",
+            "original_query": "what was local-first",
+            "local_retrieval": compact_local_answer("local fallback"),
+            "deadline_at": "2999-01-01T00:00:00+00:00",
+        },
+    )
 
     result = svc.watch_once()
 
@@ -134,6 +225,17 @@ def test_initiator_without_llm_returns_retrieval_only_for_bundle(tmp_path: Path)
     room = store.create_room(topic="what was local-first", participants=["poco-amo"])
     store.append_message(room["room_id"], strong_peer_response(room["room_id"], mode=RESPONSE_RETRIEVAL_BUNDLE))
     svc = PeerAgentService(settings, peer_service=PeerService(settings, store=store), llm=FakeLlm(fail_final=True))
+    svc.state.save(
+        room["room_id"],
+        {
+            "agent_managed": True,
+            "schema_version": 1,
+            "status": "open",
+            "original_query": "what was local-first",
+            "local_retrieval": compact_local_answer(""),
+            "deadline_at": "2999-01-01T00:00:00+00:00",
+        },
+    )
 
     svc.watch_once()
 
@@ -180,7 +282,7 @@ def test_peer_agent_mcp_contracts_are_registered(tmp_path: Path) -> None:
     assert result["mode"] == "retrieval_only"
 
 
-def peer_room_with_request(tmp_path: Path, *, local_node: str) -> PeerStore:
+def peer_room_with_request(tmp_path: Path, *, local_node: str, schema_version: int = 1) -> PeerStore:
     settings = make_settings(tmp_path)
     store = PeerStore(settings)
     store.init_config(node_id=local_node)
@@ -202,14 +304,20 @@ def peer_room_with_request(tmp_path: Path, *, local_node: str) -> PeerStore:
             "content": "what was the local first architecture decision",
             "citations": [],
             "metadata": {
+                "schema_version": schema_version,
                 "request_id": "req_1",
                 "query": "what was the local first architecture decision",
                 "min_confidence": 0.72,
+                "deadline_at": "2999-01-01T00:00:00+00:00",
                 "raw_evidence_requested": False,
             },
         },
     )
     return store
+
+
+def compact_local_answer(text: str) -> dict[str, Any]:
+    return {"answer": {"text": text}, "retrieval": {"hits": []}}
 
 
 def strong_peer_response(room_id: str, *, mode: str) -> dict[str, Any]:
@@ -352,15 +460,17 @@ class FakePeerAgent:
 
 
 class FakeNetdClient:
-    def __init__(self) -> None:
+    def __init__(self, *, send_ok_sequence: list[bool] | None = None) -> None:
         self.sent: list[dict[str, Any]] = []
+        self.send_ok_sequence = list(send_ok_sequence or [])
 
     def messages(self) -> list[dict[str, Any]]:
         return []
 
     def send_raw(self, to_peer_id: str, message: dict[str, Any]) -> dict[str, Any]:
         self.sent.append({"to_peer_id": to_peer_id, "message": message})
-        return {"ok": True}
+        ok = self.send_ok_sequence.pop(0) if self.send_ok_sequence else True
+        return {"ok": ok, "error": "" if ok else "simulated send failure"}
 
     def connect(self, addr: str) -> dict[str, Any]:
         return {"ok": True, "addr": addr}

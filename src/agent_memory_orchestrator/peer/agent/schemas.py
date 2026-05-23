@@ -27,6 +27,7 @@ def support_from_retrieval(
     *,
     source_peer: str,
     visibility: str = "summary_only",
+    include_local_refs: bool = True,
     max_items: int = 8,
 ) -> list[dict[str, Any]]:
     answer = retrieval_result.get("answer") if isinstance(retrieval_result.get("answer"), dict) else {}
@@ -44,11 +45,7 @@ def support_from_retrieval(
         support = {
             "source_peer": source_peer,
             "visibility": visibility,
-            "local_ref": {
-                "packet_id": str(citation.get("packet_id") or (packet_ids[0] if packet_ids else "")),
-                "evidence_id": evidence_ids[0] if evidence_ids else "",
-                "node_id": str(citation.get("graph_node_id") or ""),
-            },
+            "local_ref": _local_ref(citation, packet_ids, evidence_ids) if include_local_refs else {},
             "shared_ref": {
                 "repo": "",
                 "commit": str(citation.get("commit_sha") or (commit_shas[0] if commit_shas else "")),
@@ -61,6 +58,21 @@ def support_from_retrieval(
         }
         supports.append(support)
     return supports
+
+
+def redacted_retrieval_bundle(
+    retrieval_result: dict[str, Any],
+    *,
+    support: list[dict[str, Any]],
+    include_answer_text: bool = True,
+) -> dict[str, Any]:
+    answer = retrieval_result.get("answer") if isinstance(retrieval_result.get("answer"), dict) else {}
+    return {
+        "answer": {
+            "text": str(answer.get("text") or "") if include_answer_text else "",
+        },
+        "support": support,
+    }
 
 
 def compact_retrieval_bundle(retrieval_result: dict[str, Any], *, max_hits: int = 5) -> dict[str, Any]:
@@ -102,6 +114,14 @@ def citation_strings(supports: list[dict[str, Any]]) -> list[str]:
                 out.append(f"{prefix}:{text}")
                 break
     return out
+
+
+def _local_ref(citation: dict[str, Any], packet_ids: list[str], evidence_ids: list[str]) -> dict[str, str]:
+    return {
+        "packet_id": str(citation.get("packet_id") or (packet_ids[0] if packet_ids else "")),
+        "evidence_id": evidence_ids[0] if evidence_ids else "",
+        "node_id": str(citation.get("graph_node_id") or ""),
+    }
 
 
 def _claim_for_citation(citation: dict[str, Any]) -> str:
