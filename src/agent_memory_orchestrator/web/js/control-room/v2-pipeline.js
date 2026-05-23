@@ -38,6 +38,7 @@ export function globalPipelineCounts({ sessions, jobs, nodes }) {
     packets: jobRows.filter(job => jobReached(job, "work_packets")).length,
     reason: jobRows.filter(job => jobReached(job, "reasoning_review")).length,
     graph: jobRows.filter(job => jobReached(job, "kuzu_write")).length || v2Nodes.length,
+    central: jobRows.filter(job => jobReached(job, "central_version_merge")).length,
     retrieval: retrievalReadiness(jobRows),
     retrieval_tone: retrievalReadiness(jobRows) === "ready" ? "good" : "warn",
   };
@@ -52,6 +53,7 @@ export function sessionPipelineCounts({ timeline, job, stages }) {
     packets: stageComplete(stageRows, job, "work_packets") ? 1 : 0,
     reason: stageComplete(stageRows, job, "reasoning_review") ? 1 : 0,
     graph: stageComplete(stageRows, job, "kuzu_write") ? 1 : 0,
+    central: stageComplete(stageRows, job, "central_version_merge") ? 1 : 0,
     retrieval: stageComplete(stageRows, job, "faiss") || stageComplete(stageRows, job, "embeddings") ? "ready" : "pending",
     retrieval_tone: stageComplete(stageRows, job, "embeddings") ? "good" : "warn",
   };
