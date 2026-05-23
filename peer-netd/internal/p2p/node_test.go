@@ -56,6 +56,9 @@ func TestNodeConnectAndSendSignedMessage(t *testing.T) {
 	}
 
 	received := waitForMessages(t, storeA, 1)
+	if got := received[0].RemotePeerID; got != nodeB.PeerID() {
+		t.Fatalf("received remote peer id = %v, want %v", got, nodeB.PeerID())
+	}
 	if got := received[0].Message.Payload["answer"]; got != "peer memory found the matching decision" {
 		t.Fatalf("received payload answer = %v", got)
 	}

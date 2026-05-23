@@ -32,6 +32,7 @@ type Message struct {
 type Envelope struct {
 	Version       int     `json:"amo_peer_envelope_version"`
 	FromNodeID    string  `json:"from_node_id"`
+	RemotePeerID  string  `json:"remote_peer_id,omitempty"`
 	CreatedAt     string  `json:"created_at"`
 	Nonce         string  `json:"nonce"`
 	PayloadSHA256 string  `json:"payload_sha256"`

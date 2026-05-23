@@ -362,13 +362,15 @@ func (n *Node) handleStream(stream network.Stream) {
 		}
 		if err := protocol.VerifyEnvelope(env, n.cfg.SharedSecret, n.cfg.RequireSignature); err != nil {
 			n.store.Add(protocol.Envelope{
-				Version:    protocol.EnvelopeVersion,
-				FromNodeID: "__invalid__",
-				CreatedAt:  time.Now().UTC().Format(time.RFC3339Nano),
-				Message:    protocol.Message{Type: "invalid_envelope", FromNode: "__invalid__", Payload: map[string]any{"error": err.Error()}},
+				Version:      protocol.EnvelopeVersion,
+				FromNodeID:   "__invalid__",
+				RemotePeerID: stream.Conn().RemotePeer().String(),
+				CreatedAt:    time.Now().UTC().Format(time.RFC3339Nano),
+				Message:      protocol.Message{Type: "invalid_envelope", FromNode: "__invalid__", Payload: map[string]any{"error": err.Error()}},
 			})
 			return
 		}
+		env.RemotePeerID = stream.Conn().RemotePeer().String()
 		n.store.Add(env)
 	}
 }
