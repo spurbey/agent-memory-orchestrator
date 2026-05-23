@@ -436,6 +436,45 @@ def test_unsigned_netd_message_is_denied_when_peer_requires_secret(tmp_path: Pat
     assert "signed envelope required" in result["error"]
 
 
+def test_netd_peer_agent_message_rejects_remote_peer_id_mismatch(tmp_path: Path) -> None:
+    peer_store = PeerStore(make_settings(tmp_path / "peer"))
+    peer_store.init_config(node_id="poco-amo")
+    peer_store.add_peer(PeerNode(node_id="zenbook-amo", peer_id="12D3KooWGood", trust="trusted"))
+    room = peer_store.create_room(
+        topic="trusted room",
+        participants=["zenbook-amo", "poco-amo"],
+        initiator_node_id="zenbook-amo",
+    )
+    service = PeerService(peer_store.settings, store=peer_store)
+
+    result = service.receive_netd_envelope(
+        _context_request_envelope(
+            room_id=room["room_id"],
+            remote_peer_id="12D3KooWBad",
+        )
+    )
+
+    assert result["ok"] is False
+    assert "remote peer id mismatch" in result["error"]
+
+
+def test_netd_peer_agent_message_requires_remote_peer_id_or_signature(tmp_path: Path) -> None:
+    peer_store = PeerStore(make_settings(tmp_path / "peer"))
+    peer_store.init_config(node_id="poco-amo")
+    peer_store.add_peer(PeerNode(node_id="zenbook-amo", peer_id="12D3KooWGood", trust="trusted"))
+    room = peer_store.create_room(
+        topic="trusted room",
+        participants=["zenbook-amo", "poco-amo"],
+        initiator_node_id="zenbook-amo",
+    )
+    service = PeerService(peer_store.settings, store=peer_store)
+
+    result = service.receive_netd_envelope(_context_request_envelope(room_id=room["room_id"]))
+
+    assert result["ok"] is False
+    assert "remote peer id or signed envelope required" in result["error"]
+
+
 def test_context_pack_uses_pairwise_recent_messages_for_peer(tmp_path: Path) -> None:
     settings = make_settings(tmp_path / "initiator")
     store = PeerStore(settings)
@@ -612,3 +651,28 @@ def _join_request_envelope(*, invite: dict, peer_card: dict, token: str) -> dict
             },
         },
     }
+
+
+def _context_request_envelope(*, room_id: str, remote_peer_id: str = "") -> dict:
+    envelope = {
+        "amo_peer_envelope_version": 1,
+        "from_node_id": "zenbook-amo",
+        "payload_sha256": "test",
+        "message": {
+            "type": "context_request",
+            "room_id": room_id,
+            "from_node_id": "zenbook-amo",
+            "to_node_id": "poco-amo",
+            "payload": {
+                "room_id": room_id,
+                "type": "context_request",
+                "from_node_id": "zenbook-amo",
+                "to_node_ids": ["poco-amo"],
+                "content": "what do you remember?",
+                "metadata": {"schema_version": 1, "request_id": "req_1"},
+            },
+        },
+    }
+    if remote_peer_id:
+        envelope["remote_peer_id"] = remote_peer_id
+    return envelope
