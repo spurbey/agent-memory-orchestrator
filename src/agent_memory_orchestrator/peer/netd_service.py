@@ -227,11 +227,10 @@ def _watch_command(settings: Settings) -> list[str]:
         sys.executable or "python",
         "-m",
         "agent_memory_orchestrator.app.cli",
-        "peer",
+        "peer-agent",
         "--amo-home",
         str(settings.home),
-        "poll-netd",
-        "--watch",
+        "watch",
     ]
 
 
