@@ -87,6 +87,22 @@ class Settings:
     auto_retrieval_node_limit: int = 10000
     auto_retrieval_max_doc_chars: int = 5000
     auto_embedding_batch_size: int = 32
+    peer_agent_enabled: bool = True
+    peer_agent_runtime: str = "ollama"
+    peer_agent_model: str = ""
+    peer_agent_endpoint: str = ""
+    peer_agent_timeout_seconds: float = 45.0
+    peer_agent_api_provider: str = ""
+    peer_agent_api_base_url: str = ""
+    peer_agent_api_model: str = ""
+    peer_agent_api_key_env: str = ""
+    peer_agent_allow_initiator_api_fallback: bool = True
+    peer_agent_allow_retrieval_only_responses: bool = True
+    peer_agent_min_confidence: float = 0.72
+    peer_agent_strong_confidence: float = 0.80
+    peer_agent_max_peers: int = 3
+    peer_agent_room_timeout_seconds: float = 60.0
+    peer_agent_summary_token_limit: int = 2500
 
     @classmethod
     def load(cls) -> "Settings":
@@ -137,6 +153,28 @@ class Settings:
         auto_retrieval_node_limit = int(_setting(config, "auto_retrieval_node_limit", "10000"))
         auto_retrieval_max_doc_chars = int(_setting(config, "auto_retrieval_max_doc_chars", "5000"))
         auto_embedding_batch_size = int(_setting(config, "auto_embedding_batch_size", "32"))
+        peer_agent_enabled = _parse_bool(_setting(config, "peer_agent_enabled", True), default=True)
+        peer_agent_runtime = str(_setting(config, "peer_agent_runtime", "ollama")).strip().lower()
+        peer_agent_model = str(_setting(config, "peer_agent_model", qwen_model)).strip()
+        peer_agent_endpoint = str(_setting(config, "peer_agent_endpoint", qwen_endpoint)).strip().rstrip("/")
+        peer_agent_timeout_seconds = float(_setting(config, "peer_agent_timeout_seconds", "45"))
+        peer_agent_api_provider = str(_setting(config, "peer_agent_api_provider", "")).strip().lower()
+        peer_agent_api_base_url = str(_setting(config, "peer_agent_api_base_url", "")).strip().rstrip("/")
+        peer_agent_api_model = str(_setting(config, "peer_agent_api_model", "")).strip()
+        peer_agent_api_key_env = str(_setting(config, "peer_agent_api_key_env", "")).strip()
+        peer_agent_allow_initiator_api_fallback = _parse_bool(
+            _setting(config, "peer_agent_allow_initiator_api_fallback", True),
+            default=True,
+        )
+        peer_agent_allow_retrieval_only_responses = _parse_bool(
+            _setting(config, "peer_agent_allow_retrieval_only_responses", True),
+            default=True,
+        )
+        peer_agent_min_confidence = float(_setting(config, "peer_agent_min_confidence", "0.72"))
+        peer_agent_strong_confidence = float(_setting(config, "peer_agent_strong_confidence", "0.80"))
+        peer_agent_max_peers = int(_setting(config, "peer_agent_max_peers", "3"))
+        peer_agent_room_timeout_seconds = float(_setting(config, "peer_agent_room_timeout_seconds", "60"))
+        peer_agent_summary_token_limit = int(_setting(config, "peer_agent_summary_token_limit", "2500"))
 
         if not db_path.is_absolute():
             db_path = (home / db_path).resolve()
@@ -202,6 +240,32 @@ class Settings:
             raise ValueError("AMO_QWEN_*_TIMEOUT_SECONDS must be positive")
         if qwen_num_ctx <= 0:
             raise ValueError("AMO_QWEN_NUM_CTX must be positive")
+        if peer_agent_runtime != "ollama":
+            raise ValueError("AMO_PEER_AGENT_RUNTIME must be: ollama")
+        if peer_agent_enabled and not peer_agent_model:
+            raise ValueError("AMO_PEER_AGENT_MODEL is required when peer agent is enabled")
+        if peer_agent_endpoint and not peer_agent_endpoint.startswith(("http://", "https://")):
+            raise ValueError("AMO_PEER_AGENT_ENDPOINT must be an HTTP URL")
+        if peer_agent_timeout_seconds <= 0:
+            raise ValueError("AMO_PEER_AGENT_TIMEOUT_SECONDS must be positive")
+        if peer_agent_api_provider not in {"", "openai_compatible"}:
+            raise ValueError("AMO_PEER_AGENT_API_PROVIDER must be empty or openai_compatible")
+        if peer_agent_api_provider and not peer_agent_api_base_url.startswith(("http://", "https://")):
+            raise ValueError("AMO_PEER_AGENT_API_BASE_URL must be an HTTP URL")
+        if peer_agent_api_provider and not peer_agent_api_model:
+            raise ValueError("AMO_PEER_AGENT_API_MODEL is required when provider fallback is enabled")
+        if peer_agent_api_provider and not peer_agent_api_key_env:
+            raise ValueError("AMO_PEER_AGENT_API_KEY_ENV is required when provider fallback is enabled")
+        if not (0.0 <= peer_agent_min_confidence <= 1.0):
+            raise ValueError("AMO_PEER_AGENT_MIN_CONFIDENCE must be between 0.0 and 1.0")
+        if not (0.0 <= peer_agent_strong_confidence <= 1.0):
+            raise ValueError("AMO_PEER_AGENT_STRONG_CONFIDENCE must be between 0.0 and 1.0")
+        if peer_agent_max_peers <= 0:
+            raise ValueError("AMO_PEER_AGENT_MAX_PEERS must be positive")
+        if peer_agent_room_timeout_seconds <= 0:
+            raise ValueError("AMO_PEER_AGENT_ROOM_TIMEOUT_SECONDS must be positive")
+        if peer_agent_summary_token_limit <= 0:
+            raise ValueError("AMO_PEER_AGENT_SUMMARY_TOKEN_LIMIT must be positive")
         if drain_max_windows_per_run <= 0:
             raise ValueError("AMO_DRAIN_MAX_WINDOWS_PER_RUN must be positive")
         if auto_drain_interval_seconds <= 0:
@@ -260,4 +324,20 @@ class Settings:
             auto_retrieval_node_limit=auto_retrieval_node_limit,
             auto_retrieval_max_doc_chars=auto_retrieval_max_doc_chars,
             auto_embedding_batch_size=auto_embedding_batch_size,
+            peer_agent_enabled=peer_agent_enabled,
+            peer_agent_runtime=peer_agent_runtime,
+            peer_agent_model=peer_agent_model,
+            peer_agent_endpoint=peer_agent_endpoint,
+            peer_agent_timeout_seconds=peer_agent_timeout_seconds,
+            peer_agent_api_provider=peer_agent_api_provider,
+            peer_agent_api_base_url=peer_agent_api_base_url,
+            peer_agent_api_model=peer_agent_api_model,
+            peer_agent_api_key_env=peer_agent_api_key_env,
+            peer_agent_allow_initiator_api_fallback=peer_agent_allow_initiator_api_fallback,
+            peer_agent_allow_retrieval_only_responses=peer_agent_allow_retrieval_only_responses,
+            peer_agent_min_confidence=peer_agent_min_confidence,
+            peer_agent_strong_confidence=peer_agent_strong_confidence,
+            peer_agent_max_peers=peer_agent_max_peers,
+            peer_agent_room_timeout_seconds=peer_agent_room_timeout_seconds,
+            peer_agent_summary_token_limit=peer_agent_summary_token_limit,
         )
