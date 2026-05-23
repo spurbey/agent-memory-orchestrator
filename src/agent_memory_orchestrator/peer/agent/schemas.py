@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from typing import Any
 
 
@@ -65,14 +66,32 @@ def redacted_retrieval_bundle(
     *,
     support: list[dict[str, Any]],
     include_answer_text: bool = True,
+    include_local_refs: bool = True,
 ) -> dict[str, Any]:
     answer = retrieval_result.get("answer") if isinstance(retrieval_result.get("answer"), dict) else {}
     return {
         "answer": {
-            "text": str(answer.get("text") or "") if include_answer_text else "",
+            "text": redacted_answer_text(
+                str(answer.get("text") or ""),
+                support=support,
+                include_local_refs=include_local_refs,
+            )
+            if include_answer_text
+            else "",
         },
         "support": support,
     }
+
+
+def redacted_answer_text(text: str, *, support: list[dict[str, Any]], include_local_refs: bool = True) -> str:
+    raw = str(text or "").strip()
+    if include_local_refs:
+        return raw
+    cleaned = _scrub_local_refs(raw).strip()
+    if cleaned:
+        return cleaned
+    claims = [str(item.get("claim") or "").strip() for item in support if isinstance(item, dict)]
+    return "\n".join(f"- {claim}" for claim in claims if claim)
 
 
 def compact_retrieval_bundle(retrieval_result: dict[str, Any], *, max_hits: int = 5) -> dict[str, Any]:
@@ -122,6 +141,19 @@ def _local_ref(citation: dict[str, Any], packet_ids: list[str], evidence_ids: li
         "evidence_id": evidence_ids[0] if evidence_ids else "",
         "node_id": str(citation.get("graph_node_id") or ""),
     }
+
+
+def _scrub_local_refs(text: str) -> str:
+    patterns = [
+        r"\bE\d{4,}\b",
+        r"\bWP\d{4,}\b",
+        r"\braw[_:-][A-Za-z0-9_.:-]+\b",
+        r"\b(?:decision|work|problem|fix|evidence|packet|context):[A-Za-z0-9_.:/-]+\b",
+    ]
+    cleaned = str(text or "")
+    for pattern in patterns:
+        cleaned = re.sub(pattern, "[local-ref]", cleaned)
+    return cleaned
 
 
 def _claim_for_citation(citation: dict[str, Any]) -> str:

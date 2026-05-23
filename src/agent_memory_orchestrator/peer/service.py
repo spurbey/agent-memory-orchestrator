@@ -410,6 +410,8 @@ class PeerService:
                 payload, auth = self._unwrap_incoming_payload(payload)
             config = self.store.load_config()
             policy = PeerPolicy(config)
+            if transport_auth:
+                payload = _with_transport_auth_metadata(payload, transport_auth)
             message = PeerMessage.from_payload(payload)
             if not message.room_id:
                 return {"ok": False, "error": "room_id is required", "auth": auth}
@@ -466,6 +468,7 @@ class PeerService:
         citations: list[str] | None = None,
         confidence: float | None = None,
         metadata: dict[str, Any] | None = None,
+        append_on_success_only: bool = False,
     ) -> dict[str, Any]:
         config = self.store.load_config()
         peer = config.peer_by_id(peer_id)
@@ -481,9 +484,12 @@ class PeerService:
             confidence=confidence,
             metadata=metadata if isinstance(metadata, dict) else {},
         )
-        stored = self.store.append_message(room_id, message.to_record())
-        payload = stored | {"room_id": room_id}
+        record = message.to_record()
+        payload = record | {"room_id": room_id}
         delivery = self._send_payload_via_netd(peer, payload, message_type=message_type, room_id=room_id)
+        if append_on_success_only and not delivery.get("ok"):
+            return {"ok": False, "message": record, "delivery": delivery}
+        stored = self.store.append_message(room_id, record)
         return {"ok": bool(delivery.get("ok")), "message": stored, "delivery": delivery}
 
     def process_netd_inbox(self, limit: int | None = None) -> dict[str, Any]:
@@ -644,8 +650,11 @@ class PeerService:
         if peer is not None and remote_peer_id and peer.peer_id and remote_peer_id != peer.peer_id:
             raise PeerAuthError(f"remote peer id mismatch for {sender_node_id}")
         is_netd = str(auth.get("auth") or "").startswith("netd:")
-        if require_peer_binding and is_netd and peer is not None and peer.peer_id and not remote_peer_id and not auth.get("authenticated"):
-            raise PeerAuthError(f"remote peer id or signed envelope required for peer-agent message: {sender_node_id}")
+        if require_peer_binding and is_netd and peer is not None:
+            if peer.peer_id and not remote_peer_id and not auth.get("authenticated"):
+                raise PeerAuthError(f"remote peer id or signed envelope required for peer-agent message: {sender_node_id}")
+            if not peer.peer_id and not auth.get("authenticated"):
+                raise PeerAuthError(f"signed envelope required for peer-agent message without peer_id: {sender_node_id}")
 
     def _send_payload_via_netd(
         self,
@@ -739,6 +748,22 @@ def _netd_envelope_id(envelope: dict[str, Any]) -> str:
         return signature
     canonical = json.dumps(envelope, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _with_transport_auth_metadata(payload: dict[str, Any], auth: dict[str, Any]) -> dict[str, Any]:
+    message_type = str(payload.get("type") or payload.get("message_type") or "").strip()
+    if message_type not in {"context_request", "context_response"}:
+        return payload
+    updated = dict(payload)
+    metadata = updated.get("metadata") if isinstance(updated.get("metadata"), dict) else {}
+    metadata = dict(metadata)
+    metadata["transport_auth"] = {
+        "auth": str(auth.get("auth") or ""),
+        "authenticated": bool(auth.get("authenticated")),
+        "remote_peer_id": str(auth.get("remote_peer_id") or "").strip(),
+    }
+    updated["metadata"] = metadata
+    return updated
 
 
 def _utc_now() -> str:

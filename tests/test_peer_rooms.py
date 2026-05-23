@@ -475,6 +475,23 @@ def test_netd_peer_agent_message_requires_remote_peer_id_or_signature(tmp_path: 
     assert "remote peer id or signed envelope required" in result["error"]
 
 
+def test_netd_peer_agent_message_without_peer_id_requires_signature(tmp_path: Path) -> None:
+    peer_store = PeerStore(make_settings(tmp_path / "peer"))
+    peer_store.init_config(node_id="poco-amo")
+    peer_store.add_peer(PeerNode(node_id="zenbook-amo", base_url="http://127.0.0.1:8787", trust="trusted"))
+    room = peer_store.create_room(
+        topic="trusted room",
+        participants=["zenbook-amo", "poco-amo"],
+        initiator_node_id="zenbook-amo",
+    )
+    service = PeerService(peer_store.settings, store=peer_store)
+
+    result = service.receive_netd_envelope(_context_request_envelope(room_id=room["room_id"]))
+
+    assert result["ok"] is False
+    assert "signed envelope required for peer-agent message without peer_id" in result["error"]
+
+
 def test_context_pack_uses_pairwise_recent_messages_for_peer(tmp_path: Path) -> None:
     settings = make_settings(tmp_path / "initiator")
     store = PeerStore(settings)
