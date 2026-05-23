@@ -361,6 +361,181 @@ class V2SessionJobStore:
         )
         self.conn.commit()
 
+    def upsert_central_merge_plan(self, plan: dict[str, Any]) -> dict[str, Any]:
+        now = utc_now()
+        plan_id = str(plan.get("plan_id") or "")
+        if not plan_id:
+            raise ValueError("plan_id is required")
+        graph_commit = plan.get("graph_commit_preview") if isinstance(plan.get("graph_commit_preview"), dict) else {}
+        self.conn.execute(
+            """
+            INSERT INTO v2_central_merge_plans(
+              plan_id, job_id, session_id, pipeline_version, graph_schema_version,
+              plan_version, status, mode, repo_id, repo_path, parent_graph_commit_id,
+              input_graph_hash, plan_hash, plan_json, metrics_json, diagnostics_json,
+              created_at, updated_at
+            )
+            VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(plan_id) DO UPDATE SET
+              status=excluded.status,
+              mode=excluded.mode,
+              repo_id=excluded.repo_id,
+              repo_path=excluded.repo_path,
+              parent_graph_commit_id=excluded.parent_graph_commit_id,
+              input_graph_hash=excluded.input_graph_hash,
+              plan_hash=excluded.plan_hash,
+              plan_json=excluded.plan_json,
+              metrics_json=excluded.metrics_json,
+              diagnostics_json=excluded.diagnostics_json,
+              updated_at=excluded.updated_at
+            """,
+            (
+                plan_id,
+                str(plan.get("job_id") or ""),
+                str(plan.get("session_id") or ""),
+                str(plan.get("pipeline_version") or PIPELINE_VERSION),
+                str(plan.get("graph_schema_version") or GRAPH_SCHEMA_VERSION),
+                str(plan.get("plan_version") or ""),
+                str(plan.get("status") or "planned"),
+                str(plan.get("mode") or "dry_run"),
+                str(plan.get("repo_id") or ""),
+                str(plan.get("repo_path") or ""),
+                str(plan.get("parent_graph_commit_id") or ""),
+                str(plan.get("input_graph_hash") or ""),
+                str(plan.get("plan_hash") or ""),
+                json.dumps(plan, sort_keys=True),
+                json.dumps(plan.get("metrics") or {}, sort_keys=True),
+                json.dumps(plan.get("diagnostics") or {}, sort_keys=True),
+                now,
+                now,
+            ),
+        )
+        self.conn.execute("DELETE FROM v2_central_review_candidates WHERE plan_id = ?", (plan_id,))
+        for candidate in plan.get("review_candidates", []) if isinstance(plan.get("review_candidates"), list) else []:
+            if not isinstance(candidate, dict):
+                continue
+            self.conn.execute(
+                """
+                INSERT INTO v2_central_review_candidates(
+                  candidate_id, plan_id, job_id, source_node_id, target_node_id,
+                  proposed_relation, score_json, reason, status, created_at, updated_at
+                )
+                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    str(candidate.get("candidate_id") or f"v2review:{uuid.uuid4().hex}"),
+                    plan_id,
+                    str(candidate.get("job_id") or plan.get("job_id") or ""),
+                    str(candidate.get("source_node_id") or ""),
+                    str(candidate.get("target_node_id") or ""),
+                    str(candidate.get("proposed_relation") or ""),
+                    json.dumps(candidate.get("score") or {}, sort_keys=True),
+                    str(candidate.get("reason") or ""),
+                    str(candidate.get("status") or "open"),
+                    now,
+                    now,
+                ),
+            )
+        if graph_commit.get("graph_commit_id"):
+            self.conn.execute(
+                """
+                INSERT INTO v2_graph_commits(
+                  graph_commit_id, plan_id, job_id, branch, parent_graph_commit_id,
+                  status, pipeline_version, graph_schema_version, algorithm_versions_json,
+                  added_nodes_json, added_edges_json, status_updates_json, diagnostics_json,
+                  created_at, updated_at
+                )
+                VALUES(?, ?, ?, 'main', ?, ?, ?, ?, ?, '[]', '[]', '[]', ?, ?, ?)
+                ON CONFLICT(graph_commit_id) DO UPDATE SET
+                  plan_id=excluded.plan_id,
+                  job_id=excluded.job_id,
+                  parent_graph_commit_id=excluded.parent_graph_commit_id,
+                  status=excluded.status,
+                  algorithm_versions_json=excluded.algorithm_versions_json,
+                  diagnostics_json=excluded.diagnostics_json,
+                  updated_at=excluded.updated_at
+                """,
+                (
+                    str(graph_commit["graph_commit_id"]),
+                    plan_id,
+                    str(plan.get("job_id") or ""),
+                    str(graph_commit.get("parent_graph_commit_id") or ""),
+                    str(graph_commit.get("status") or "preview"),
+                    str(plan.get("pipeline_version") or PIPELINE_VERSION),
+                    str(plan.get("graph_schema_version") or GRAPH_SCHEMA_VERSION),
+                    json.dumps({"central_merge_plan": plan.get("plan_version", "")}, sort_keys=True),
+                    json.dumps({"preview_only": True}, sort_keys=True),
+                    now,
+                    now,
+                ),
+            )
+        self.ensure_graph_view(branch="main", mode="active")
+        self.conn.commit()
+        return self.get_central_merge_plan(plan_id) or {}
+
+    def get_central_merge_plan(self, plan_id: str) -> dict[str, Any] | None:
+        row = self.conn.execute("SELECT * FROM v2_central_merge_plans WHERE plan_id = ?", (plan_id,)).fetchone()
+        return _row(row) if row is not None else None
+
+    def get_central_merge_plan_for_job(self, job_id: str) -> dict[str, Any] | None:
+        row = self.conn.execute(
+            "SELECT * FROM v2_central_merge_plans WHERE job_id = ? ORDER BY updated_at DESC LIMIT 1",
+            (job_id,),
+        ).fetchone()
+        return _row(row) if row is not None else None
+
+    def list_review_candidates(self, *, plan_id: str, status: str = "") -> list[dict[str, Any]]:
+        if status:
+            rows = self.conn.execute(
+                "SELECT * FROM v2_central_review_candidates WHERE plan_id = ? AND status = ? ORDER BY created_at ASC",
+                (plan_id, status),
+            ).fetchall()
+        else:
+            rows = self.conn.execute(
+                "SELECT * FROM v2_central_review_candidates WHERE plan_id = ? ORDER BY created_at ASC",
+                (plan_id,),
+            ).fetchall()
+        return [_row(row) for row in rows]
+
+    def ensure_graph_view(self, *, branch: str = "main", mode: str = "active") -> dict[str, Any]:
+        existing = self.graph_view(branch=branch, mode=mode, status="active")
+        if existing is not None:
+            return existing
+        now = utc_now()
+        view_id = f"v2view:{branch}:{mode}"
+        self.conn.execute(
+            """
+            INSERT OR IGNORE INTO v2_graph_views(view_id, branch, mode, graph_commit_id, status, metadata_json, created_at, updated_at)
+            VALUES(?, ?, ?, '', 'active', ?, ?, ?)
+            """,
+            (view_id, branch, mode, json.dumps({"empty_head": True}, sort_keys=True), now, now),
+        )
+        self.conn.commit()
+        return self.graph_view(branch=branch, mode=mode, status="active") or {}
+
+    def graph_view(self, *, branch: str = "main", mode: str = "active", status: str = "active") -> dict[str, Any] | None:
+        row = self.conn.execute(
+            "SELECT * FROM v2_graph_views WHERE branch = ? AND mode = ? AND status = ? ORDER BY updated_at DESC LIMIT 1",
+            (branch, mode, status),
+        ).fetchone()
+        return _row(row) if row is not None else None
+
+    def record_semantic_eval_run(self, *, run_id: str, case_set: str, fixture_path: str, status: str, metrics: dict[str, Any], diagnostics: dict[str, Any] | None = None) -> None:
+        now = utc_now()
+        self.conn.execute(
+            """
+            INSERT INTO v2_semantic_eval_runs(run_id, case_set, fixture_path, status, metrics_json, diagnostics_json, created_at, updated_at)
+            VALUES(?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(run_id) DO UPDATE SET
+              status=excluded.status,
+              metrics_json=excluded.metrics_json,
+              diagnostics_json=excluded.diagnostics_json,
+              updated_at=excluded.updated_at
+            """,
+            (run_id, case_set, fixture_path, status, json.dumps(metrics, sort_keys=True), json.dumps(diagnostics or {}, sort_keys=True), now, now),
+        )
+        self.conn.commit()
+
     def _stop_stage(
         self,
         *,
@@ -426,11 +601,11 @@ def utc_now() -> str:
 
 def _row(row: sqlite3.Row) -> dict[str, Any]:
     out = dict(row)
-    for key in ("source_evidence_days_json", "error_json", "diagnostics_json", "metadata_json", "value_json"):
-        if key in out:
+    for key, value in list(out.items()):
+        if key.endswith("_json"):
             try:
-                out[key.removesuffix("_json")] = json.loads(out[key])
-            except json.JSONDecodeError:
+                out[key.removesuffix("_json")] = json.loads(value)
+            except (TypeError, json.JSONDecodeError):
                 out[key.removesuffix("_json")] = {}
     return out
 

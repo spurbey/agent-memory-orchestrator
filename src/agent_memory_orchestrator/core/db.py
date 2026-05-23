@@ -338,6 +338,117 @@ CREATE TABLE IF NOT EXISTS v2_production_markers (
   updated_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS v2_central_merge_plans (
+  plan_id TEXT PRIMARY KEY,
+  job_id TEXT NOT NULL,
+  session_id TEXT NOT NULL,
+  pipeline_version TEXT NOT NULL DEFAULT 'v2-reset-2026-05',
+  graph_schema_version TEXT NOT NULL DEFAULT 'v2',
+  plan_version TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'planned',
+  mode TEXT NOT NULL DEFAULT 'dry_run',
+  repo_id TEXT NOT NULL DEFAULT '',
+  repo_path TEXT NOT NULL DEFAULT '',
+  parent_graph_commit_id TEXT NOT NULL DEFAULT '',
+  input_graph_hash TEXT NOT NULL DEFAULT '',
+  plan_hash TEXT NOT NULL DEFAULT '',
+  plan_json TEXT NOT NULL DEFAULT '{}',
+  metrics_json TEXT NOT NULL DEFAULT '{}',
+  diagnostics_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY (job_id) REFERENCES v2_session_jobs(job_id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS v2_central_review_candidates (
+  candidate_id TEXT PRIMARY KEY,
+  plan_id TEXT NOT NULL,
+  job_id TEXT NOT NULL,
+  source_node_id TEXT NOT NULL DEFAULT '',
+  target_node_id TEXT NOT NULL DEFAULT '',
+  proposed_relation TEXT NOT NULL DEFAULT '',
+  score_json TEXT NOT NULL DEFAULT '{}',
+  reason TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'open',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY (plan_id) REFERENCES v2_central_merge_plans(plan_id) ON DELETE CASCADE,
+  FOREIGN KEY (job_id) REFERENCES v2_session_jobs(job_id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS v2_graph_commits (
+  graph_commit_id TEXT PRIMARY KEY,
+  plan_id TEXT NOT NULL DEFAULT '',
+  job_id TEXT NOT NULL DEFAULT '',
+  branch TEXT NOT NULL DEFAULT 'main',
+  parent_graph_commit_id TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'planned',
+  pipeline_version TEXT NOT NULL DEFAULT 'v2-reset-2026-05',
+  graph_schema_version TEXT NOT NULL DEFAULT 'v2',
+  algorithm_versions_json TEXT NOT NULL DEFAULT '{}',
+  added_nodes_json TEXT NOT NULL DEFAULT '[]',
+  added_edges_json TEXT NOT NULL DEFAULT '[]',
+  status_updates_json TEXT NOT NULL DEFAULT '[]',
+  diagnostics_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS v2_graph_views (
+  view_id TEXT PRIMARY KEY,
+  branch TEXT NOT NULL DEFAULT 'main',
+  mode TEXT NOT NULL DEFAULT 'active',
+  graph_commit_id TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'active',
+  metadata_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE(branch, mode, status)
+);
+
+CREATE TABLE IF NOT EXISTS v2_central_merge_locks (
+  branch TEXT PRIMARY KEY,
+  lock_owner TEXT NOT NULL DEFAULT '',
+  lock_expires_at TEXT NOT NULL DEFAULT '',
+  expected_parent_graph_commit_id TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS v2_semantic_eval_runs (
+  run_id TEXT PRIMARY KEY,
+  case_set TEXT NOT NULL DEFAULT '',
+  fixture_path TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'pending',
+  metrics_json TEXT NOT NULL DEFAULT '{}',
+  diagnostics_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS v2_semantic_eval_cases (
+  case_id TEXT PRIMARY KEY,
+  case_set TEXT NOT NULL DEFAULT '',
+  query TEXT NOT NULL DEFAULT '',
+  case_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS v2_semantic_eval_judgments (
+  judgment_id TEXT PRIMARY KEY,
+  run_id TEXT NOT NULL,
+  case_id TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'pending',
+  scores_json TEXT NOT NULL DEFAULT '{}',
+  explanation TEXT NOT NULL DEFAULT '',
+  blocking_failures_json TEXT NOT NULL DEFAULT '[]',
+  payload_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY (run_id) REFERENCES v2_semantic_eval_runs(run_id) ON DELETE CASCADE
+);
+
 CREATE INDEX IF NOT EXISTS idx_sessions_updated
 ON sessions(updated_at DESC);
 
@@ -394,6 +505,24 @@ ON v2_session_jobs(session_id, pipeline_version);
 
 CREATE INDEX IF NOT EXISTS idx_v2_session_job_events_job
 ON v2_session_job_events(job_id, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_v2_central_merge_plans_job
+ON v2_central_merge_plans(job_id, updated_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_v2_central_merge_plans_status
+ON v2_central_merge_plans(status, updated_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_v2_central_review_candidates_plan
+ON v2_central_review_candidates(plan_id, status);
+
+CREATE INDEX IF NOT EXISTS idx_v2_graph_commits_branch
+ON v2_graph_commits(branch, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_v2_graph_views_lookup
+ON v2_graph_views(branch, mode, status);
+
+CREATE INDEX IF NOT EXISTS idx_v2_semantic_eval_runs_status
+ON v2_semantic_eval_runs(status, updated_at DESC);
 """
 
 
