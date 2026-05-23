@@ -51,6 +51,8 @@ def test_peer_agent_low_quality_creates_room_and_context_request(tmp_path: Path)
     assert len(context_messages) == 1
     metadata = context_messages[0]["payload"]["metadata"]
     assert metadata["request_id"].startswith("req_")
+    assert metadata["audience"] == "peer"
+    assert metadata["target_peer_id"] == "poco-amo"
     assert metadata["raw_evidence_requested"] is False
 
 
@@ -174,6 +176,24 @@ def test_peer_agent_skips_schema_valid_request_without_transport_auth(tmp_path: 
     assert netd.sent == []
     assert result["processed"][0]["skipped"] is True
     assert result["processed"][0]["reason"] == "missing_verified_transport"
+
+
+def test_peer_agent_skips_context_request_when_peer_is_not_tagged(tmp_path: Path) -> None:
+    settings = make_settings(tmp_path)
+    store = peer_room_with_request(tmp_path, local_node="poco-amo", targeted=False)
+    netd = FakeNetdClient()
+    svc = PeerAgentService(
+        settings,
+        peer_service=PeerService(settings, store=store, netd_client=netd),
+        graph=FakeGraph(good_retrieval()),
+        llm=FakeLlm(fail_peer=True),
+    )
+
+    result = svc.watch_once()
+
+    assert netd.sent == []
+    assert result["processed"][0]["skipped"] is True
+    assert result["processed"][0]["reason"] == "request_not_tagged_for_peer"
 
 
 def test_peer_agent_redacts_local_refs_when_citation_sharing_disabled(tmp_path: Path) -> None:
@@ -313,6 +333,7 @@ def peer_room_with_request(
     schema_version: int = 1,
     agent_schema_version: int = 1,
     include_transport_auth: bool = True,
+    targeted: bool = True,
 ) -> PeerStore:
     settings = make_settings(tmp_path)
     store = PeerStore(settings)
@@ -345,8 +366,8 @@ def peer_room_with_request(
             "type": CONTEXT_REQUEST,
             "from": "zenbook-amo",
             "from_node_id": "zenbook-amo",
-            "to": [local_node],
-            "to_node_ids": [local_node],
+            "to": [local_node] if targeted else [],
+            "to_node_ids": [local_node] if targeted else [],
             "content": "what was the local first architecture decision",
             "citations": [],
             "metadata": metadata,

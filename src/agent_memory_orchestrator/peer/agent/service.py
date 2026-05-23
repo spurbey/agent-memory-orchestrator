@@ -104,6 +104,8 @@ class PeerAgentService:
                 "request_id": request_id,
                 "room_id": room_id,
                 "parent_message_id": "",
+                "audience": "peer",
+                "target_peer_id": peer.node_id,
                 "query": safe_query,
                 "session_id": session_id,
                 "intent": _retrieval_intent(local_result),
@@ -258,8 +260,16 @@ class PeerAgentService:
                 continue
             if str(message.get("from_node_id") or message.get("from") or "") == config.node_id:
                 continue
-            recipients = [str(item) for item in message.get("to_node_ids") or message.get("to") or []]
-            if recipients and config.node_id not in recipients:
+            if not _targets_peer(message, metadata, config.node_id):
+                results.append(
+                    {
+                        "ok": True,
+                        "room_id": room_id,
+                        "request_id": request_id,
+                        "skipped": True,
+                        "reason": "request_not_tagged_for_peer",
+                    }
+                )
                 continue
             gate = self._validate_context_request(room=room, message=message, metadata=metadata)
             if not gate.get("ok"):
@@ -391,6 +401,8 @@ class PeerAgentService:
             "schema_version": 1,
             "request_id": request_id,
             "parent_message_id": parent_message_id,
+            "audience": "initiator",
+            "target_peer_id": peer_id,
             "mode": mode,
             "answer_grade": bool(answer_grade),
             "quality": quality,
@@ -531,7 +543,7 @@ class PeerAgentService:
             content=answer,
             citations=citation_strings(final["citations"]),
             confidence=confidence,
-            metadata={"mode": mode, "local_only": True, "reason": reason, "support": final["citations"]},
+            metadata={"mode": mode, "audience": "local", "local_only": True, "reason": reason, "support": final["citations"]},
         )
         state["status"] = "finalized"
         state["finalized_reason"] = reason
@@ -808,6 +820,24 @@ def _has_verified_transport(metadata: dict[str, Any]) -> bool:
     if not str(auth.get("auth") or "").startswith("netd:"):
         return False
     return bool(auth.get("authenticated") or str(auth.get("remote_peer_id") or "").strip())
+
+
+def _targets_peer(message: dict[str, Any], metadata: dict[str, Any], node_id: str) -> bool:
+    recipients = _recipient_set(message.get("to_node_ids") or message.get("to"))
+    target_peer = str(metadata.get("target_peer_id") or "").strip()
+    if target_peer:
+        return target_peer == node_id
+    return node_id in recipients
+
+
+def _recipient_set(value: Any) -> set[str]:
+    if value is None or value == "":
+        return set()
+    if isinstance(value, str):
+        return {value.strip()} if value.strip() else set()
+    if isinstance(value, (list, tuple, set)):
+        return {str(item).strip() for item in value if str(item).strip()}
+    return {str(value).strip()} if str(value).strip() else set()
 
 
 def _elapsed_ms(started: float) -> int:

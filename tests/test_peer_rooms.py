@@ -33,7 +33,9 @@ def test_peer_room_invite_creates_three_layer_context_files(tmp_path: Path) -> N
     assert "why did graph_service.py change?" in room_md
     assert "Layer 1: this room.md brief" in room_md
     assert "Layer 2: initiator-owned rolling_summary.md" in room_md
-    assert "Layer 3: peer sees last 2 initiator-peer exchanges" in room_md
+    assert "Layer 3A: compact group-visible room exchanges" in room_md
+    assert "Layer 3B: tagged initiator-peer exchanges" in room_md
+    assert "Peers auto-respond only when tagged" in room_md
 
 
 def test_peer_config_accepts_libp2p_peer_identity_without_legacy_base_url(tmp_path: Path) -> None:
@@ -505,6 +507,13 @@ def test_context_pack_uses_pairwise_recent_messages_for_peer(tmp_path: Path) -> 
     svc.append_message(
         room_id=room["room_id"],
         from_node_id="zenbook-amo",
+        to_node_ids=["poco-amo", "ui-amo"],
+        content="Shared room note: compare graph retrieval and UI memory.",
+        metadata={"audience": "group"},
+    )
+    svc.append_message(
+        room_id=room["room_id"],
+        from_node_id="zenbook-amo",
         to_node_ids=["poco-amo"],
         content="Can you check graph retrieval memory?",
     )
@@ -528,6 +537,10 @@ def test_context_pack_uses_pairwise_recent_messages_for_peer(tmp_path: Path) -> 
 
     assert pack["role"] == "peer"
     assert "route low-confidence memory question" in pack["layers"]["room_md"]
+    roster_ids = {item["node_id"] for item in pack["layers"]["room_roster"]}
+    assert roster_ids == {"poco-amo", "ui-amo", "zenbook-amo"}
+    assert "Shared room note" in pack["context_text"]
+    assert any("Shared room note" in item["content"] for item in pack["layers"]["group_recent_messages"])
     assert "Can you check graph retrieval memory?" in pack["context_text"]
     assert "I found WP0030." in pack["context_text"]
     assert "Unrelated UI reply" not in pack["context_text"]
