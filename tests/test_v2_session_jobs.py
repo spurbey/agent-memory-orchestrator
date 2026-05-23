@@ -18,10 +18,12 @@ from agent_memory_orchestrator.reasoning_graph.jobs.reset import initialize_fres
 from agent_memory_orchestrator.reasoning_graph.jobs.reset import reset_production_v2_storage
 from agent_memory_orchestrator.reasoning_graph.jobs.runner import require_complete_v2_reset_marker
 from agent_memory_orchestrator.reasoning_graph.jobs.runner import V2SessionJobRunner
+from agent_memory_orchestrator.reasoning_graph.central_merge.applier import apply_merge_plan
 from agent_memory_orchestrator.reasoning_graph.central_merge.backfill import backfill_central_merge_plan
 from agent_memory_orchestrator.reasoning_graph.central_merge.fixtures import export_job_fixture
 from agent_memory_orchestrator.reasoning_graph.central_merge.judge import judge_semantic_case
 from agent_memory_orchestrator.reasoning_graph.central_merge.judge import run_semantic_eval_fixture
+from agent_memory_orchestrator.reasoning_graph.central_merge.planner import build_dry_run_merge_plan
 from agent_memory_orchestrator.reasoning_graph.central_merge.repo_identity import normalize_remote_url
 from agent_memory_orchestrator.reasoning_graph.stage4_contract import STAGE4_CONTRACT_VERSION
 from agent_memory_orchestrator.reasoning_graph.stage4_contract import build_stage4_packet_prompt
@@ -221,6 +223,81 @@ def test_v2_central_merge_stage_writes_dry_run_plan_and_preserves_session_graph(
         result = run_semantic_eval_fixture(fixture_path=Path(fixture["path"]), case_set="baseline")
         assert result["status"] == "passed"
         assert result["metrics"]["case_count"] >= 5
+    finally:
+        store.close()
+
+
+def test_v2_central_merge_apply_writes_exact_atoms_graph_commit_and_view(tmp_path: Path) -> None:
+    settings = make_settings(tmp_path)
+    graph = InMemoryGraphStore()
+    store = V2SessionJobStore(settings)
+    try:
+        job = store.enqueue_session(session_id="s-apply", boundary_event_id="raw_boundary", repo_path=str(tmp_path)).job
+        compact_graph = {
+            "nodes": [
+                {"id": "commit:abc123", "kind": "Commit", "properties": {"full_sha": "abc123"}},
+                {"id": "hunk:1", "kind": "CodeHunk", "properties": {"path": "src/graph_service.py"}},
+                {"id": "symbol:GraphRagService", "kind": "Symbol", "properties": {"path": "src/graph_service.py", "qualified_name": "GraphRagService"}},
+            ],
+            "edges": [],
+        }
+        plan = build_dry_run_merge_plan(job=job, compact_graph=compact_graph, parent_graph_commit_id="")
+        stored = store.upsert_central_merge_plan(plan.as_dict())
+
+        applied = apply_merge_plan(settings=settings, plan_id=stored["plan_id"], store=store, graph_store=graph)
+
+        assert applied["ok"] is True
+        assert applied["status"] == "applied"
+        updated_plan = store.get_central_merge_plan(stored["plan_id"])
+        assert updated_plan is not None
+        assert updated_plan["status"] == "applied"
+        view = store.graph_view(branch="main", mode="active")
+        assert view is not None
+        assert view["graph_commit_id"] == applied["graph_commit"]["graph_commit_id"]
+        assert graph.nodes[applied["graph_commit"]["graph_commit_id"]].kind == "GraphCommit"
+        assert graph.nodes["v2view:main:active"].kind == "GraphView"
+        atom_nodes = [node for node in graph.nodes.values() if node.kind == "KnowledgeAtom"]
+        version_nodes = [node for node in graph.nodes.values() if node.kind == "KnowledgeVersion"]
+        assert {node.metadata["atom_kind"] for node in atom_nodes} == {"commit", "file", "symbol"}
+        assert all(node.metadata["graph_commit_id"] == applied["graph_commit"]["graph_commit_id"] for node in atom_nodes + version_nodes)
+        assert all(node.metadata["repo_id"].startswith("repo:") for node in atom_nodes)
+        assert any(edge.kind == "VERSION_OF" for edge in graph.edges.values())
+        assert any(edge.kind == "DERIVED_FROM_SESSION_NODE" for edge in graph.edges.values())
+
+        node_count = len(graph.nodes)
+        edge_count = len(graph.edges)
+        second = apply_merge_plan(settings=settings, plan_id=stored["plan_id"], store=store, graph_store=graph)
+        assert second["ok"] is True
+        assert second["idempotent"] is True
+        assert len(graph.nodes) == node_count
+        assert len(graph.edges) == edge_count
+    finally:
+        store.close()
+
+
+def test_v2_central_merge_apply_requires_matching_graph_view_head(tmp_path: Path) -> None:
+    settings = make_settings(tmp_path)
+    graph = InMemoryGraphStore()
+    store = V2SessionJobStore(settings)
+    try:
+        first_job = store.enqueue_session(session_id="s-apply-a", boundary_event_id="raw_boundary_a", repo_path=str(tmp_path)).job
+        second_job = store.enqueue_session(session_id="s-apply-b", boundary_event_id="raw_boundary_b", repo_path=str(tmp_path)).job
+        compact_graph = {"nodes": [{"id": "commit:abc123", "kind": "Commit", "properties": {"full_sha": "abc123"}}], "edges": []}
+        first_plan = build_dry_run_merge_plan(job=first_job, compact_graph=compact_graph, parent_graph_commit_id="")
+        second_plan = build_dry_run_merge_plan(job=second_job, compact_graph=compact_graph, parent_graph_commit_id="")
+        first = store.upsert_central_merge_plan(first_plan.as_dict())
+        second = store.upsert_central_merge_plan(second_plan.as_dict())
+
+        applied = apply_merge_plan(settings=settings, plan_id=first["plan_id"], store=store, graph_store=graph)
+        conflicted = apply_merge_plan(settings=settings, plan_id=second["plan_id"], store=store, graph_store=graph)
+
+        assert applied["ok"] is True
+        assert conflicted["ok"] is False
+        assert conflicted["status"] == "failed_recoverable"
+        assert conflicted["error"]["reason"] == "replan_required"
+        failed_plan = store.get_central_merge_plan(second["plan_id"])
+        assert failed_plan is not None
+        assert failed_plan["status"] == "failed_recoverable"
     finally:
         store.close()
 
