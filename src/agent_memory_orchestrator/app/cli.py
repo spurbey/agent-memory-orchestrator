@@ -50,6 +50,9 @@ from ..reasoning_graph.session_runtime import query_session_graph
 from ..reasoning_graph.jobs.reset import adopt_existing_v2_production_storage
 from ..reasoning_graph.jobs.reset import initialize_fresh_v2_production_storage
 from ..reasoning_graph.jobs.reset import reset_production_v2_storage
+from ..reasoning_graph.jobs.store import V2SessionJobStore
+from ..reasoning_graph.central_merge.fixtures import export_job_fixture
+from ..reasoning_graph.central_merge.judge import run_semantic_eval_fixture
 from ..skill_checkpoint import DEFAULT_LOCAL_NUM_CTX
 from ..skill_checkpoint import DEFAULT_NUM_PREDICT
 from ..skill_checkpoint import list_skill_checkpoints
@@ -99,6 +102,28 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Allow adoption even if the daemon health endpoint is reachable.",
     )
+    v2_export = sub.add_parser("v2-export-fixture", help="Export a V2 job fixture for semantic evaluation")
+    v2_export.add_argument("--job-id", required=True)
+    v2_export.add_argument("--out", type=Path, help="Output directory for fixture.json")
+    v2_export.add_argument("--copy-artifacts", action="store_true", help="Copy stage output artifacts into the fixture directory")
+    v2_eval = sub.add_parser("v2-semantic-eval", help="Run the baseline semantic eval harness against a fixture")
+    v2_eval.add_argument("--fixture", type=Path, required=True)
+    v2_eval.add_argument("--case-set", default="baseline")
+    v2_eval.add_argument("--out", type=Path, help="Write semantic eval result JSON")
+    v2_plan = sub.add_parser("v2-merge-plan", help="Show the latest central_version_merge plan for a V2 job")
+    v2_plan.add_argument("--job-id", required=True)
+    v2 = sub.add_parser("v2", help="V2 job, fixture, semantic eval, and central merge commands")
+    v2_sub = v2.add_subparsers(dest="v2_command", required=True)
+    v2_export_nested = v2_sub.add_parser("export-fixture", help="Export a V2 job fixture for semantic evaluation")
+    v2_export_nested.add_argument("--job-id", required=True)
+    v2_export_nested.add_argument("--out", type=Path, help="Output directory for fixture.json")
+    v2_export_nested.add_argument("--copy-artifacts", action="store_true", help="Copy stage output artifacts into the fixture directory")
+    v2_eval_nested = v2_sub.add_parser("semantic-eval", help="Run the baseline semantic eval harness against a fixture")
+    v2_eval_nested.add_argument("--fixture", type=Path, required=True)
+    v2_eval_nested.add_argument("--case-set", default="baseline")
+    v2_eval_nested.add_argument("--out", type=Path, help="Write semantic eval result JSON")
+    v2_plan_nested = v2_sub.add_parser("merge-plan", help="Show the latest central_version_merge plan for a V2 job")
+    v2_plan_nested.add_argument("--job-id", required=True)
 
     install = sub.add_parser("install", help="Configure Claude/Codex hooks, MCP, and local AMO runtime config")
     install.add_argument("--target", choices=["codex", "claude", "all"], default="all")
@@ -765,6 +790,45 @@ def main(argv: list[str] | None = None) -> int:
             )
             _print(result)
             return 0
+
+        if args.command == "v2-export-fixture" or (args.command == "v2" and args.v2_command == "export-fixture"):
+            settings = Settings.load()
+            result = export_job_fixture(settings, job_id=args.job_id, out_dir=args.out, copy_artifacts=args.copy_artifacts)
+            _print({"ok": result["ok"], "path": result["path"], "fixture": result["fixture"]})
+            return 0
+
+        if args.command == "v2-semantic-eval" or (args.command == "v2" and args.v2_command == "semantic-eval"):
+            settings = Settings.load()
+            result = run_semantic_eval_fixture(fixture_path=args.fixture, case_set=args.case_set)
+            if args.out:
+                args.out.parent.mkdir(parents=True, exist_ok=True)
+                args.out.write_text(json.dumps(result, indent=2, ensure_ascii=False), encoding="utf-8")
+                result = {**result, "path": str(args.out)}
+            store = V2SessionJobStore(settings)
+            try:
+                store.record_semantic_eval_run(
+                    run_id=f"v2eval:{int(time.time() * 1000)}",
+                    case_set=args.case_set,
+                    fixture_path=str(args.fixture),
+                    status=str(result.get("status") or "invalid"),
+                    metrics=result.get("metrics") if isinstance(result.get("metrics"), dict) else {},
+                    diagnostics={"judge_mode": "fixture_semantic_rubric_v1"},
+                )
+            finally:
+                store.close()
+            _print(result)
+            return 0 if result.get("status") == "passed" else 1
+
+        if args.command == "v2-merge-plan" or (args.command == "v2" and args.v2_command == "merge-plan"):
+            settings = Settings.load()
+            store = V2SessionJobStore(settings)
+            try:
+                plan = store.get_central_merge_plan_for_job(args.job_id)
+                candidates = store.list_review_candidates(plan_id=str(plan["plan_id"])) if plan else []
+            finally:
+                store.close()
+            _print({"ok": plan is not None, "plan": plan, "review_candidates": candidates})
+            return 0 if plan is not None else 1
 
         if args.command == "models":
             if args.models_command == "list":
