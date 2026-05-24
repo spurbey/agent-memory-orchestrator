@@ -176,6 +176,16 @@ class AmoHandler(BaseHTTPRequestHandler):
             finally:
                 svc.close()
             return
+        if path == "/api/repos":
+            with _GRAPH_LOCK:
+                graph = GraphRagService(self.settings)
+                try:
+                    raw_limit = (query.get("limit") or ["200"])[0]
+                    limit = _bounded_int(raw_limit, default=200, minimum=1, maximum=1000)
+                    self._write_json(200, graph.list_repositories(limit=limit))
+                finally:
+                    graph.close()
+            return
         if path == "/api/connectors/slack/status":
             try:
                 svc = SlackConnectorService(self.settings)
@@ -197,7 +207,16 @@ class AmoHandler(BaseHTTPRequestHandler):
             job_store = V2SessionJobStore(self.settings)
             try:
                 if path == "/api/jobs":
-                    self._write_json(200, {"ok": True, "jobs": job_store.list_jobs(limit=limit), "reset_marker": job_store.marker()})
+                    repo_id = (query.get("repo_id") or [""])[0]
+                    self._write_json(
+                        200,
+                        {
+                            "ok": True,
+                            "repo_id": repo_id,
+                            "jobs": job_store.list_jobs(limit=limit, repo_id=repo_id),
+                            "reset_marker": job_store.marker(),
+                        },
+                    )
                     return
                 job_id = unquote(path.removeprefix("/api/jobs/").strip("/"))
                 job = job_store.get_job(job_id)
@@ -222,6 +241,7 @@ class AmoHandler(BaseHTTPRequestHandler):
                 raw_limit = (query.get("limit") or ["25"])[0]
                 limit = _bounded_int(raw_limit, default=25, minimum=1, maximum=500)
                 session_id = (query.get("session_id") or [""])[0]
+                repo_id = (query.get("repo_id") or [""])[0]
                 if path == "/api/debug/hooks":
                     self._write_json(200, debug_hooks(self.settings))
                     return
@@ -248,7 +268,7 @@ class AmoHandler(BaseHTTPRequestHandler):
                             self._write_json(200, graph.work_trace(commit=commit, cwd=cwd))
                             return
                         if path == "/api/graph/sessions":
-                            self._write_json(200, graph.session_overview(limit=limit))
+                            self._write_json(200, graph.session_overview(limit=limit, repo_id=repo_id))
                             return
                         if path == "/api/graph/session-detail":
                             self._write_json(200, graph.session_detail(session_id=session_id, limit=limit))
@@ -261,13 +281,13 @@ class AmoHandler(BaseHTTPRequestHandler):
                                 minimum=1,
                                 maximum=10000 if full else 500,
                             )
-                            self._write_json(200, graph.central_graph(limit=central_limit, full=full))
+                            self._write_json(200, graph.central_graph(limit=central_limit, full=full, repo_id=repo_id))
                             return
                         if path == "/api/graph/version-flow":
                             commit = (query.get("commit") or [""])[0]
                             self._write_json(
                                 200,
-                                graph.version_flow(commit=commit, session_id=session_id, limit=limit),
+                                graph.version_flow(commit=commit, session_id=session_id, repo_id=repo_id, limit=limit),
                             )
                             return
                         if path == "/api/debug/drain":
@@ -486,6 +506,7 @@ class AmoHandler(BaseHTTPRequestHandler):
                         result = graph.rebuild_retrieval_index(
                             db_path=_optional_payload_path(payload, "db_path"),
                             session_id=str(payload.get("session_id") or ""),
+                            repo_id=str(payload.get("repo_id") or ""),
                             limit=limit,
                             max_doc_chars=max_doc_chars,
                         )
@@ -502,6 +523,7 @@ class AmoHandler(BaseHTTPRequestHandler):
                         result = graph.embed_retrieval_index(
                             db_path=_optional_payload_path(payload, "db_path"),
                             session_id=str(payload.get("session_id") or ""),
+                            repo_id=str(payload.get("repo_id") or ""),
                             limit=limit,
                             model=str(payload.get("model") or ""),
                             graph_scope=str(payload.get("graph_scope") or ""),
@@ -522,6 +544,7 @@ class AmoHandler(BaseHTTPRequestHandler):
                                 query=str(payload.get("query") or ""),
                                 db_path=_optional_payload_path(payload, "db_path"),
                                 session_id=str(payload.get("session_id") or ""),
+                                repo_id=str(payload.get("repo_id") or ""),
                                 limit=limit,
                                 use_vector=bool(payload.get("use_vector", True)),
                                 model=str(payload.get("model") or ""),
@@ -601,6 +624,7 @@ class AmoHandler(BaseHTTPRequestHandler):
                         result = graph.version_flow(
                             commit=str(payload.get("commit") or ""),
                             session_id=str(payload.get("session_id") or ""),
+                            repo_id=str(payload.get("repo_id") or ""),
                             limit=limit,
                         )
                         self._write_json(200, result)

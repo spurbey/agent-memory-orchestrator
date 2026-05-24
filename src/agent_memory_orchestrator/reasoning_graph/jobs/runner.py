@@ -17,10 +17,14 @@ from ...llm.qwen import OllamaQwenClient
 from ...llm.qwen import QwenUnavailable
 from ..code_analysis import extract_code_nodes_from_commit
 from ..central_merge import build_dry_run_merge_plan
+from ..central_merge.identity import atoms_by_canonical_key
 from ..embedding_store import GraphEmbeddingStore
 from ..evidence_view import build_reasoning_evidence_view
+from ..evidence_view import git_commit_truth
 from ..evidence_view import write_reasoning_evidence_view_artifacts
 from ..reasoning_extraction import review_reasoning_extraction_results
+from ..repo_resolution import resolve_session_repo_root
+from ..central_merge.repo_identity import resolve_repo_identity
 from ..retrieval import RETRIEVAL_EMBEDDING_KIND
 from ..retrieval import RetrievalIndexStore
 from ..retrieval import build_retrieval_documents_from_graph
@@ -152,26 +156,53 @@ class V2SessionJobRunner:
             raise RuntimeError(f"no_raw_evidence_for_session:{job['session_id']}")
         _write_jsonl(session_jsonl, records)
         transcript_path = _first_transcript_path(records)
+        repo_resolution = resolve_session_repo_root(
+            records,
+            transcript_path=transcript_path,
+            fallback_repo_path=str(job.get("repo_path") or ""),
+        )
+        repo_root = Path(str(repo_resolution.repo_root or job.get("repo_path") or ".")).resolve()
+        repo_identity = resolve_repo_identity(repo_root)
+        if repo_resolution.resolved and (
+            _path_changed(str(job.get("repo_path") or ""), str(repo_root))
+            or str(job.get("repo_id") or "") != repo_identity.repo_id
+        ):
+            self.job_store.update_job_repo_identity(
+                job_id=str(job["job_id"]),
+                repo_path=str(repo_root),
+                repo_id=repo_identity.repo_id,
+                reason="session repo root resolved from evidence commits",
+                metadata={"repo_resolution": repo_resolution.as_dict(), "repo_identity": repo_identity.as_dict()},
+            )
+            job["repo_path"] = str(repo_root)
+            job["repo_id"] = repo_identity.repo_id
         build = build_reasoning_evidence_view(
             session_jsonl,
             transcript_path=Path(transcript_path) if transcript_path else None,
-            repo_root=Path(str(job.get("repo_path") or ".")).resolve(),
+            repo_root=repo_root,
         )
+        build.view["repo_resolution"] = repo_resolution.as_dict()
         write_reasoning_evidence_view_artifacts(build, stage_dir)
         output = stage_dir / "reasoning_evidence_view.json"
         return StageResult(
             output_path=output,
-            diagnostics={"raw_record_count": len(records), "quality": build.quality},
+            diagnostics={"raw_record_count": len(records), "quality": build.quality, "repo_resolution": repo_resolution.as_dict()},
         )
 
     def _stage_work_packets(self, job: dict[str, Any], artifact_dir: Path, stage_dir: Path) -> StageResult:
         del artifact_dir
         view = _read_json(self._stage_input_artifact(job, "work_packets", Path(str(job["artifact_dir"]))))
+        repo_resolution: dict[str, Any] | None = None
+        if isinstance(view, dict):
+            repaired_view, repo_resolution = self._repair_unresolved_commit_truth(job, view)
+            view = repaired_view
         build = build_reasoning_work_packets_from_view(view)
         output = stage_dir / "reasoning_work_packets.json"
         output.write_text(json.dumps(list(build.packets), indent=2, ensure_ascii=False), encoding="utf-8")
         (stage_dir / "packet_quality_inventory.json").write_text(json.dumps(build.quality, indent=2, ensure_ascii=False), encoding="utf-8")
         (stage_dir / "quarantined_commits.json").write_text(json.dumps(list(build.quarantined_commits), indent=2), encoding="utf-8")
+        if repo_resolution:
+            (stage_dir / "repo_resolution.json").write_text(json.dumps(repo_resolution, indent=2, ensure_ascii=False), encoding="utf-8")
         if build.quality.get("stage_acceptance") != "PASS":
             reason = "no_commit_backed_work_packets" if not build.packets else "work_packets_acceptance_failed"
             raise StageFailed(
@@ -180,10 +211,63 @@ class V2SessionJobRunner:
                     "quality": build.quality,
                     "packet_artifact": str(output),
                     "quarantined_commit_count": len(build.quarantined_commits),
+                    "repo_resolution": repo_resolution or {},
                     "note": "V2 answer-grade graph output requires at least one resolved Git commit-backed work packet.",
                 },
             )
-        return StageResult(output_path=output, diagnostics={"quality": build.quality})
+        diagnostics = {"quality": build.quality}
+        if repo_resolution:
+            diagnostics["repo_resolution"] = repo_resolution
+        return StageResult(output_path=output, diagnostics=diagnostics)
+
+    def _repair_unresolved_commit_truth(self, job: dict[str, Any], view: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any] | None]:
+        commit_facts = [item for item in view.get("commit_facts", []) if isinstance(item, dict)]
+        if not commit_facts:
+            return view, None
+        resolved_count = sum(
+            1
+            for item in commit_facts
+            if isinstance(item.get("git_truth"), dict) and item["git_truth"].get("resolved") is True
+        )
+        if resolved_count:
+            return view, None
+        raw_path = Path(str(view.get("input_raw") or ""))
+        if not raw_path.exists():
+            return view, None
+        records = _read_jsonl_records(raw_path)
+        repo_resolution = resolve_session_repo_root(
+            records,
+            transcript_path=str(view.get("transcript_path") or ""),
+            fallback_repo_path=str(job.get("repo_path") or ""),
+        )
+        if not repo_resolution.resolved:
+            return view, repo_resolution.as_dict()
+        repo_root = Path(repo_resolution.repo_root).resolve()
+        repo_identity = resolve_repo_identity(repo_root)
+        repaired = json.loads(json.dumps(view))
+        repaired_commits: list[dict[str, Any]] = []
+        for commit in commit_facts:
+            next_commit = dict(commit)
+            next_commit["git_truth"] = git_commit_truth(str(commit.get("commit_id") or ""), repo_root=repo_root)
+            repaired_commits.append(next_commit)
+        repaired["commit_facts"] = repaired_commits
+        repaired["repo_resolution"] = repo_resolution.as_dict()
+        repaired_count = sum(1 for item in repaired_commits if item.get("git_truth", {}).get("resolved") is True)
+        resolution_payload = {**repo_resolution.as_dict(), "repaired_commit_truth_count": repaired_count}
+        if repaired_count and (
+            _path_changed(str(job.get("repo_path") or ""), str(repo_root))
+            or str(job.get("repo_id") or "") != repo_identity.repo_id
+        ):
+            self.job_store.update_job_repo_identity(
+                job_id=str(job["job_id"]),
+                repo_path=str(repo_root),
+                repo_id=repo_identity.repo_id,
+                reason="work packet repo root repaired from evidence commits",
+                metadata={**resolution_payload, "repo_identity": repo_identity.as_dict()},
+            )
+            job["repo_path"] = str(repo_root)
+            job["repo_id"] = repo_identity.repo_id
+        return repaired, resolution_payload
 
     def _stage_qwen_reasoning(self, job: dict[str, Any], artifact_dir: Path, stage_dir: Path) -> StageResult:
         packets = _read_json(self._stage_input_artifact(job, "qwen_reasoning", artifact_dir))
@@ -362,12 +446,15 @@ class V2SessionJobRunner:
         kuzu_result = _read_json(_stage_output(Path(str(job["artifact_dir"])), "kuzu_write"))
         manifest_path = Path(str(job["artifact_dir"])) / "kuzu_write" / "compact_graph_manifest.json"
         compact_graph = _read_json(manifest_path)
-        active_view = self.job_store.ensure_graph_view(branch="main", mode="active")
+        repo_id = str(job.get("repo_id") or "") or resolve_repo_identity(str(job.get("repo_path") or "")).repo_id
+        active_view = self.job_store.ensure_graph_view(repo_id=repo_id, branch="main", mode="active")
         parent_graph_commit_id = str(active_view.get("graph_commit_id") or "")
+        existing_atoms = self._central_atoms_by_canonical_key()
         plan = build_dry_run_merge_plan(
-            job=job,
+            job={**job, "repo_id": repo_id},
             compact_graph=compact_graph if isinstance(compact_graph, dict) else {},
             parent_graph_commit_id=parent_graph_commit_id,
+            existing_atoms_by_canonical_key=existing_atoms,
         )
         plan_payload = plan.as_dict()
         plan_payload["session_graph_write"] = kuzu_result if isinstance(kuzu_result, dict) else {}
@@ -386,6 +473,15 @@ class V2SessionJobRunner:
             "review_candidate_count": len(plan.review_candidates),
         }
         return StageResult(output_path=output, diagnostics=diagnostics)
+
+    def _central_atoms_by_canonical_key(self) -> dict[str, dict[str, Any]]:
+        graph = self.graph_store_factory(self.settings.graph_path)
+        try:
+            graph.init_schema()
+            nodes = graph.list_nodes(limit=1_000_000, kinds=["KnowledgeAtom"])
+        finally:
+            graph.close()
+        return atoms_by_canonical_key(nodes)
 
     def _stage_retrieval_docs(self, job: dict[str, Any], artifact_dir: Path, stage_dir: Path) -> StageResult:
         del artifact_dir
@@ -565,6 +661,21 @@ def _read_json(path: Path) -> Any:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def _read_jsonl_records(path: Path) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
+    with path.open("r", encoding="utf-8", errors="replace") as handle:
+        for line in handle:
+            if not line.strip():
+                continue
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(record, dict):
+                records.append(record)
+    return records
+
+
 def _write_jsonl(path: Path, records: list[dict[str, Any]]) -> None:
     path.write_text("".join(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n" for record in records), encoding="utf-8")
 
@@ -592,6 +703,15 @@ def _first_transcript_path(records: list[dict[str, Any]]) -> str:
         if isinstance(value, str) and value.strip():
             return value.strip()
     return ""
+
+
+def _path_changed(left: str, right: str) -> bool:
+    if not left or not right:
+        return bool(left or right)
+    try:
+        return Path(left).resolve() != Path(right).resolve()
+    except OSError:
+        return left.strip().lower() != right.strip().lower()
 
 
 def _packet_commit_sha(packet: dict[str, Any]) -> str:
@@ -767,7 +887,17 @@ def _versioned_items(value: Any, job: dict[str, Any]) -> list[dict[str, Any]]:
     for item in value:
         if not isinstance(item, dict):
             continue
-        out.append({**item, "pipeline_version": PIPELINE_VERSION, "graph_schema_version": GRAPH_SCHEMA_VERSION, "session_id": job.get("session_id"), "job_id": job.get("job_id")})
+        out.append(
+            {
+                **item,
+                "pipeline_version": PIPELINE_VERSION,
+                "graph_schema_version": GRAPH_SCHEMA_VERSION,
+                "session_id": job.get("session_id"),
+                "job_id": job.get("job_id"),
+                "repo_id": job.get("repo_id") or "",
+                "repo_path": job.get("repo_path") or "",
+            }
+        )
     return out
 
 

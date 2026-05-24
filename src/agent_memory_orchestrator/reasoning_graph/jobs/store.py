@@ -12,6 +12,7 @@ from typing import Any
 from ...core.config import Settings
 from ...core.db import connect
 from ...core.db import init_schema
+from ..central_merge.repo_identity import resolve_repo_identity
 from .constants import GRAPH_SCHEMA_VERSION
 from .constants import PIPELINE_VERSION
 from .constants import RESET_MARKER_KEY
@@ -51,6 +52,7 @@ class V2SessionJobStore:
         boundary_event_id: str,
         source_app: str = "",
         repo_path: str = "",
+        repo_id: str = "",
         source_evidence_day: str = "",
         source_evidence_days: list[str] | tuple[str, ...] = (),
         pipeline_version: str = PIPELINE_VERSION,
@@ -60,6 +62,10 @@ class V2SessionJobStore:
         if not safe_session:
             raise ValueError("session_id is required")
         now = utc_now()
+        safe_repo_path = str(repo_path or "")
+        safe_repo_id = str(repo_id or "").strip()
+        if not safe_repo_id and safe_repo_path:
+            safe_repo_id = resolve_repo_identity(safe_repo_path).repo_id
         job_id = stable_job_id(safe_session, pipeline_version)
         artifact_dir = str(default_artifact_dir(self.settings.home, pipeline_version, safe_session, job_id))
         days = _dedupe([source_evidence_day, *[str(item) for item in source_evidence_days if str(item)]])
@@ -69,11 +75,11 @@ class V2SessionJobStore:
                 """
                 INSERT INTO v2_session_jobs(
                   job_id, session_id, pipeline_version, graph_schema_version, status,
-                  current_stage, last_successful_stage, artifact_dir, source_app, repo_path,
+                  current_stage, last_successful_stage, artifact_dir, source_app, repo_path, repo_id,
                   boundary_event_id, source_evidence_day, source_evidence_days_json,
                   created_at, updated_at
                 )
-                VALUES(?, ?, ?, ?, 'pending', ?, '', ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES(?, ?, ?, ?, 'pending', ?, '', ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     job_id,
@@ -83,7 +89,8 @@ class V2SessionJobStore:
                     V2_STAGES[0],
                     artifact_dir,
                     source_app,
-                    repo_path,
+                    safe_repo_path,
+                    safe_repo_id,
                     boundary_event_id,
                     source_evidence_day,
                     json.dumps(days),
@@ -96,6 +103,13 @@ class V2SessionJobStore:
             return EnqueueResult(self.get_job(job_id) or {}, created=True, updated=False, reason="created")
 
         if str(existing.get("boundary_event_id") or "") == str(boundary_event_id or ""):
+            if safe_repo_id and not str(existing.get("repo_id") or ""):
+                existing = self.update_job_repo_identity(
+                    job_id=str(existing["job_id"]),
+                    repo_path=safe_repo_path,
+                    repo_id=safe_repo_id,
+                    reason="enqueue_repo_resolved",
+                )
             return EnqueueResult(existing, created=False, updated=False, reason="already_enqueued")
 
         self.conn.execute(
@@ -106,6 +120,7 @@ class V2SessionJobStore:
                 last_successful_stage='',
                 source_app=?,
                 repo_path=?,
+                repo_id=?,
                 boundary_event_id=?,
                 source_evidence_day=?,
                 source_evidence_days_json=?,
@@ -118,7 +133,8 @@ class V2SessionJobStore:
             (
                 V2_STAGES[0],
                 source_app or str(existing.get("source_app") or ""),
-                repo_path or str(existing.get("repo_path") or ""),
+                safe_repo_path or str(existing.get("repo_path") or ""),
+                safe_repo_id or str(existing.get("repo_id") or ""),
                 boundary_event_id,
                 source_evidence_day,
                 json.dumps(days),
@@ -272,12 +288,123 @@ class V2SessionJobStore:
         )
         self.conn.commit()
 
-    def list_jobs(self, *, limit: int = 100) -> list[dict[str, Any]]:
-        rows = self.conn.execute(
-            "SELECT * FROM v2_session_jobs ORDER BY updated_at DESC LIMIT ?",
-            (max(1, int(limit)),),
-        ).fetchall()
+    def update_job_repo_path(
+        self,
+        *,
+        job_id: str,
+        repo_path: str,
+        reason: str = "repo_resolved",
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any] | None:
+        return self.update_job_repo_identity(job_id=job_id, repo_path=repo_path, repo_id="", reason=reason, metadata=metadata)
+
+    def update_job_repo_identity(
+        self,
+        *,
+        job_id: str,
+        repo_path: str,
+        repo_id: str = "",
+        reason: str = "repo_resolved",
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any] | None:
+        now = utc_now()
+        safe_repo_path = str(repo_path or "").strip()
+        safe_repo_id = str(repo_id or "").strip()
+        self.conn.execute(
+            """
+            UPDATE v2_session_jobs
+            SET repo_path=?,
+                repo_id=CASE WHEN ? != '' THEN ? ELSE repo_id END,
+                updated_at=?
+            WHERE job_id=?
+            """,
+            (safe_repo_path, safe_repo_id, safe_repo_id, now, job_id),
+        )
+        self.conn.commit()
+        self.log_event(
+            job_id=job_id,
+            event_type="repo_resolved",
+            stage="",
+            message=reason,
+            metadata={"repo_path": safe_repo_path, "repo_id": safe_repo_id, **(metadata or {})},
+        )
+        return self.get_job(job_id)
+
+    def list_jobs(self, *, limit: int = 100, repo_id: str = "") -> list[dict[str, Any]]:
+        safe_repo_id = str(repo_id or "").strip()
+        if safe_repo_id:
+            rows = self.conn.execute(
+                "SELECT * FROM v2_session_jobs WHERE repo_id = ? ORDER BY updated_at DESC LIMIT ?",
+                (safe_repo_id, max(1, int(limit))),
+            ).fetchall()
+        else:
+            rows = self.conn.execute(
+                "SELECT * FROM v2_session_jobs ORDER BY updated_at DESC LIMIT ?",
+                (max(1, int(limit)),),
+            ).fetchall()
         return [_row(row) for row in rows]
+
+    def list_repositories(self, *, limit: int = 200) -> list[dict[str, Any]]:
+        repos: dict[str, dict[str, Any]] = {}
+
+        def add(repo_id: str, repo_path: str, *, source: str, updated_at: str = "", job_count: int = 0, plan_count: int = 0) -> None:
+            key = str(repo_id or "").strip()
+            if not key:
+                return
+            row = repos.setdefault(
+                key,
+                {
+                    "repo_id": key,
+                    "repo_path": "",
+                    "sources": set(),
+                    "job_count": 0,
+                    "plan_count": 0,
+                    "updated_at": "",
+                },
+            )
+            if repo_path and (not row["repo_path"] or len(repo_path) < len(str(row["repo_path"]))):
+                row["repo_path"] = repo_path
+            row["sources"].add(source)
+            row["job_count"] += int(job_count)
+            row["plan_count"] += int(plan_count)
+            if updated_at and updated_at > str(row["updated_at"]):
+                row["updated_at"] = updated_at
+
+        for row in self.conn.execute(
+            """
+            SELECT repo_id, repo_path, count(*) AS job_count, max(updated_at) AS updated_at
+            FROM v2_session_jobs
+            WHERE repo_id != ''
+            GROUP BY repo_id, repo_path
+            """
+        ).fetchall():
+            add(
+                str(row["repo_id"] or ""),
+                str(row["repo_path"] or ""),
+                source="v2_session_jobs",
+                updated_at=str(row["updated_at"] or ""),
+                job_count=int(row["job_count"] or 0),
+            )
+        for row in self.conn.execute(
+            """
+            SELECT repo_id, repo_path, count(*) AS plan_count, max(updated_at) AS updated_at
+            FROM v2_central_merge_plans
+            WHERE repo_id != ''
+            GROUP BY repo_id, repo_path
+            """
+        ).fetchall():
+            add(
+                str(row["repo_id"] or ""),
+                str(row["repo_path"] or ""),
+                source="v2_central_merge_plans",
+                updated_at=str(row["updated_at"] or ""),
+                plan_count=int(row["plan_count"] or 0),
+            )
+        out: list[dict[str, Any]] = []
+        for row in repos.values():
+            out.append({**row, "sources": sorted(row["sources"])})
+        out.sort(key=lambda item: str(item.get("updated_at") or ""), reverse=True)
+        return out[: max(1, int(limit))]
 
     def get_job(self, job_id: str) -> dict[str, Any] | None:
         row = self.conn.execute("SELECT * FROM v2_session_jobs WHERE job_id = ?", (job_id,)).fetchone()
@@ -440,15 +567,16 @@ class V2SessionJobStore:
             self.conn.execute(
                 """
                 INSERT INTO v2_graph_commits(
-                  graph_commit_id, plan_id, job_id, branch, parent_graph_commit_id,
+                  graph_commit_id, plan_id, job_id, repo_id, branch, parent_graph_commit_id,
                   status, pipeline_version, graph_schema_version, algorithm_versions_json,
                   added_nodes_json, added_edges_json, status_updates_json, diagnostics_json,
                   created_at, updated_at
                 )
-                VALUES(?, ?, ?, 'main', ?, ?, ?, ?, ?, '[]', '[]', '[]', ?, ?, ?)
+                VALUES(?, ?, ?, ?, 'main', ?, ?, ?, ?, ?, '[]', '[]', '[]', ?, ?, ?)
                 ON CONFLICT(graph_commit_id) DO UPDATE SET
                   plan_id=excluded.plan_id,
                   job_id=excluded.job_id,
+                  repo_id=excluded.repo_id,
                   parent_graph_commit_id=excluded.parent_graph_commit_id,
                   status=excluded.status,
                   algorithm_versions_json=excluded.algorithm_versions_json,
@@ -459,6 +587,7 @@ class V2SessionJobStore:
                     str(graph_commit["graph_commit_id"]),
                     plan_id,
                     str(plan.get("job_id") or ""),
+                    str(plan.get("repo_id") or ""),
                     str(graph_commit.get("parent_graph_commit_id") or ""),
                     str(graph_commit.get("status") or "preview"),
                     str(plan.get("pipeline_version") or PIPELINE_VERSION),
@@ -469,7 +598,7 @@ class V2SessionJobStore:
                     now,
                 ),
             )
-        self.ensure_graph_view(branch="main", mode="active")
+        self.ensure_graph_view(repo_id=str(plan.get("repo_id") or ""), branch="main", mode="active")
         self.conn.commit()
         return self.get_central_merge_plan(plan_id) or {}
 
@@ -481,6 +610,17 @@ class V2SessionJobStore:
         row = self.conn.execute(
             "SELECT * FROM v2_central_merge_plans WHERE job_id = ? ORDER BY updated_at DESC LIMIT 1",
             (job_id,),
+        ).fetchone()
+        return _row(row) if row is not None else None
+
+    def get_graph_commit(self, graph_commit_id: str) -> dict[str, Any] | None:
+        row = self.conn.execute("SELECT * FROM v2_graph_commits WHERE graph_commit_id = ?", (graph_commit_id,)).fetchone()
+        return _row(row) if row is not None else None
+
+    def get_graph_commit_for_plan(self, plan_id: str) -> dict[str, Any] | None:
+        row = self.conn.execute(
+            "SELECT * FROM v2_graph_commits WHERE plan_id = ? ORDER BY updated_at DESC LIMIT 1",
+            (plan_id,),
         ).fetchone()
         return _row(row) if row is not None else None
 
@@ -544,32 +684,39 @@ class V2SessionJobStore:
             ).fetchall()
         return [_row(row) for row in rows]
 
-    def ensure_graph_view(self, *, branch: str = "main", mode: str = "active") -> dict[str, Any]:
-        existing = self.graph_view(branch=branch, mode=mode, status="active")
+    def ensure_graph_view(self, *, repo_id: str = "", branch: str = "main", mode: str = "active") -> dict[str, Any]:
+        safe_repo_id = str(repo_id or "").strip()
+        existing = self.graph_view(repo_id=safe_repo_id, branch=branch, mode=mode, status="active")
         if existing is not None:
             return existing
         now = utc_now()
-        view_id = f"v2view:{branch}:{mode}"
+        view_id = graph_view_id(repo_id=safe_repo_id, branch=branch, mode=mode)
         self.conn.execute(
             """
-            INSERT OR IGNORE INTO v2_graph_views(view_id, branch, mode, graph_commit_id, status, metadata_json, created_at, updated_at)
-            VALUES(?, ?, ?, '', 'active', ?, ?, ?)
+            INSERT OR IGNORE INTO v2_graph_views(view_id, repo_id, branch, mode, graph_commit_id, status, metadata_json, created_at, updated_at)
+            VALUES(?, ?, ?, ?, '', 'active', ?, ?, ?)
             """,
-            (view_id, branch, mode, json.dumps({"empty_head": True}, sort_keys=True), now, now),
+            (view_id, safe_repo_id, branch, mode, json.dumps({"empty_head": True, "repo_id": safe_repo_id}, sort_keys=True), now, now),
         )
         self.conn.commit()
-        return self.graph_view(branch=branch, mode=mode, status="active") or {}
+        return self.graph_view(repo_id=safe_repo_id, branch=branch, mode=mode, status="active") or {}
 
-    def graph_view(self, *, branch: str = "main", mode: str = "active", status: str = "active") -> dict[str, Any] | None:
+    def graph_view(self, *, repo_id: str = "", branch: str = "main", mode: str = "active", status: str = "active") -> dict[str, Any] | None:
+        safe_repo_id = str(repo_id or "").strip()
         row = self.conn.execute(
-            "SELECT * FROM v2_graph_views WHERE branch = ? AND mode = ? AND status = ? ORDER BY updated_at DESC LIMIT 1",
-            (branch, mode, status),
+            """
+            SELECT * FROM v2_graph_views
+            WHERE repo_id = ? AND branch = ? AND mode = ? AND status = ?
+            ORDER BY updated_at DESC LIMIT 1
+            """,
+            (safe_repo_id, branch, mode, status),
         ).fetchone()
         return _row(row) if row is not None else None
 
     def acquire_central_merge_lock(
         self,
         *,
+        repo_id: str = "",
         branch: str,
         owner: str,
         expected_parent_graph_commit_id: str,
@@ -580,11 +727,11 @@ class V2SessionJobStore:
         self.conn.execute(
             """
             INSERT OR IGNORE INTO v2_central_merge_locks(
-              branch, lock_owner, lock_expires_at, expected_parent_graph_commit_id, created_at, updated_at
+              repo_id, branch, lock_owner, lock_expires_at, expected_parent_graph_commit_id, created_at, updated_at
             )
-            VALUES(?, '', '', '', ?, ?)
+            VALUES(?, ?, '', '', '', ?, ?)
             """,
-            (branch, now, now),
+            (str(repo_id or "").strip(), branch, now, now),
         )
         cursor = self.conn.execute(
             """
@@ -593,15 +740,15 @@ class V2SessionJobStore:
                 lock_expires_at=?,
                 expected_parent_graph_commit_id=?,
                 updated_at=?
-            WHERE branch=?
+            WHERE repo_id=? AND branch=?
               AND (lock_owner='' OR lock_expires_at < ? OR lock_owner=?)
             """,
-            (owner, expires, expected_parent_graph_commit_id, now, branch, now, owner),
+            (owner, expires, expected_parent_graph_commit_id, now, str(repo_id or "").strip(), branch, now, owner),
         )
         self.conn.commit()
         return cursor.rowcount > 0
 
-    def release_central_merge_lock(self, *, branch: str, owner: str) -> None:
+    def release_central_merge_lock(self, *, branch: str, owner: str, repo_id: str = "") -> None:
         now = utc_now()
         self.conn.execute(
             """
@@ -609,9 +756,9 @@ class V2SessionJobStore:
             SET lock_owner='',
                 lock_expires_at='',
                 updated_at=?
-            WHERE branch=? AND lock_owner=?
+            WHERE repo_id=? AND branch=? AND lock_owner=?
             """,
-            (now, branch, owner),
+            (now, str(repo_id or "").strip(), branch, owner),
         )
         self.conn.commit()
 
@@ -628,6 +775,7 @@ class V2SessionJobStore:
         algorithm_versions: dict[str, Any],
         added_nodes: list[str],
         added_edges: list[str],
+        repo_id: str = "",
         status_updates: list[dict[str, Any]] | None = None,
         diagnostics: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
@@ -635,15 +783,16 @@ class V2SessionJobStore:
         self.conn.execute(
             """
             INSERT INTO v2_graph_commits(
-              graph_commit_id, plan_id, job_id, branch, parent_graph_commit_id,
+              graph_commit_id, plan_id, job_id, repo_id, branch, parent_graph_commit_id,
               status, pipeline_version, graph_schema_version, algorithm_versions_json,
               added_nodes_json, added_edges_json, status_updates_json, diagnostics_json,
               created_at, updated_at
             )
-            VALUES(?, ?, ?, ?, ?, 'applied', ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES(?, ?, ?, ?, ?, ?, 'applied', ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(graph_commit_id) DO UPDATE SET
               plan_id=excluded.plan_id,
               job_id=excluded.job_id,
+              repo_id=excluded.repo_id,
               branch=excluded.branch,
               parent_graph_commit_id=excluded.parent_graph_commit_id,
               status='applied',
@@ -660,6 +809,7 @@ class V2SessionJobStore:
                 graph_commit_id,
                 plan_id,
                 job_id,
+                str(repo_id or "").strip(),
                 branch,
                 parent_graph_commit_id,
                 pipeline_version,
@@ -680,26 +830,37 @@ class V2SessionJobStore:
     def update_graph_view_head(
         self,
         *,
+        repo_id: str = "",
         branch: str = "main",
         mode: str = "active",
         graph_commit_id: str,
         metadata: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         now = utc_now()
-        view_id = f"v2view:{branch}:{mode}"
+        safe_repo_id = str(repo_id or "").strip()
+        view_id = graph_view_id(repo_id=safe_repo_id, branch=branch, mode=mode)
         self.conn.execute(
             """
-            INSERT INTO v2_graph_views(view_id, branch, mode, graph_commit_id, status, metadata_json, created_at, updated_at)
-            VALUES(?, ?, ?, ?, 'active', ?, ?, ?)
-            ON CONFLICT(branch, mode, status) DO UPDATE SET
+            INSERT INTO v2_graph_views(view_id, repo_id, branch, mode, graph_commit_id, status, metadata_json, created_at, updated_at)
+            VALUES(?, ?, ?, ?, ?, 'active', ?, ?, ?)
+            ON CONFLICT(repo_id, branch, mode, status) DO UPDATE SET
               graph_commit_id=excluded.graph_commit_id,
               metadata_json=excluded.metadata_json,
               updated_at=excluded.updated_at
             """,
-            (view_id, branch, mode, graph_commit_id, json.dumps(metadata or {}, sort_keys=True), now, now),
+            (
+                view_id,
+                safe_repo_id,
+                branch,
+                mode,
+                graph_commit_id,
+                json.dumps({"repo_id": safe_repo_id, **(metadata or {})}, sort_keys=True),
+                now,
+                now,
+            ),
         )
         self.conn.commit()
-        return self.graph_view(branch=branch, mode=mode, status="active") or {}
+        return self.graph_view(repo_id=safe_repo_id, branch=branch, mode=mode, status="active") or {}
 
     def record_semantic_eval_run(self, *, run_id: str, case_set: str, fixture_path: str, status: str, metrics: dict[str, Any], diagnostics: dict[str, Any] | None = None) -> None:
         now = utc_now()
@@ -774,6 +935,13 @@ def safe_part(value: str) -> str:
         else:
             out.append("_")
     return "".join(out).strip("_") or "value"
+
+
+def graph_view_id(*, repo_id: str = "", branch: str = "main", mode: str = "active") -> str:
+    safe_repo = safe_part(repo_id)[:72] if repo_id else ""
+    if safe_repo:
+        return f"v2view:{safe_repo}:{safe_part(branch)}:{safe_part(mode)}"
+    return f"v2view:{safe_part(branch)}:{safe_part(mode)}"
 
 
 def utc_now() -> str:
