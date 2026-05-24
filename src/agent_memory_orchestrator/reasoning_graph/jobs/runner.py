@@ -16,6 +16,7 @@ from ...graph.store import KuzuGraphStore
 from ...llm.qwen import OllamaQwenClient
 from ...llm.qwen import QwenUnavailable
 from ..code_analysis import extract_code_nodes_from_commit
+from ..central_merge import build_dry_run_merge_plan
 from ..embedding_store import GraphEmbeddingStore
 from ..evidence_view import build_reasoning_evidence_view
 from ..evidence_view import write_reasoning_evidence_view_artifacts
@@ -136,6 +137,10 @@ class V2SessionJobRunner:
             return self.settings.evidence_dir
         previous = V2_STAGES[V2_STAGES.index(stage) - 1]
         row = self.job_store.stage_row(job_id=str(job["job_id"]), stage=previous)
+        if (row is None or not row.get("output_artifact")) and stage == "retrieval_docs" and previous == "central_version_merge":
+            legacy = self.job_store.stage_row(job_id=str(job["job_id"]), stage="kuzu_write")
+            if legacy is not None and legacy.get("output_artifact"):
+                return Path(str(legacy["output_artifact"]))
         if row is None or not row.get("output_artifact"):
             raise RuntimeError(f"missing_previous_stage:{previous}")
         return Path(str(row["output_artifact"]))
@@ -352,6 +357,36 @@ class V2SessionJobRunner:
         )
         return StageResult(output_path=output, diagnostics=graph.inventory)
 
+    def _stage_central_version_merge(self, job: dict[str, Any], artifact_dir: Path, stage_dir: Path) -> StageResult:
+        del artifact_dir
+        kuzu_result = _read_json(_stage_output(Path(str(job["artifact_dir"])), "kuzu_write"))
+        manifest_path = Path(str(job["artifact_dir"])) / "kuzu_write" / "compact_graph_manifest.json"
+        compact_graph = _read_json(manifest_path)
+        active_view = self.job_store.ensure_graph_view(branch="main", mode="active")
+        parent_graph_commit_id = str(active_view.get("graph_commit_id") or "")
+        plan = build_dry_run_merge_plan(
+            job=job,
+            compact_graph=compact_graph if isinstance(compact_graph, dict) else {},
+            parent_graph_commit_id=parent_graph_commit_id,
+        )
+        plan_payload = plan.as_dict()
+        plan_payload["session_graph_write"] = kuzu_result if isinstance(kuzu_result, dict) else {}
+        self.job_store.upsert_central_merge_plan(plan_payload)
+        output = stage_dir / "merge_plan.json"
+        output.write_text(json.dumps(plan_payload, indent=2, ensure_ascii=False), encoding="utf-8")
+        diagnostics = {
+            "mode": plan.mode,
+            "plan_id": plan.plan_id,
+            "plan_hash": plan.plan_hash,
+            "input_graph_hash": plan.input_graph_hash,
+            "repo_id": plan.repo_id,
+            "repo_path": plan.repo_path,
+            "graph_commit_preview": plan.graph_commit_preview,
+            "metrics": plan.metrics,
+            "review_candidate_count": len(plan.review_candidates),
+        }
+        return StageResult(output_path=output, diagnostics=diagnostics)
+
     def _stage_retrieval_docs(self, job: dict[str, Any], artifact_dir: Path, stage_dir: Path) -> StageResult:
         del artifact_dir
         require_complete_v2_reset_marker(self.job_store.marker(RESET_MARKER_KEY))
@@ -517,6 +552,7 @@ def _stage_output(artifact_dir: Path, stage: str) -> Path:
         "symbol_versions": "symbol_versions.json",
         "reasoning_code_links": "graph_edges.json",
         "kuzu_write": "kuzu_write_result.json",
+        "central_version_merge": "merge_plan.json",
         "retrieval_docs": "retrieval_docs_result.json",
         "embeddings": "embeddings_result.json",
         "faiss": "faiss_result.json",
