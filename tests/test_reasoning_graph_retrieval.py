@@ -160,6 +160,43 @@ def test_retrieval_documents_are_graph_attached_and_fts_indexed(tmp_path: Path) 
     assert hit_docs[hits[0].doc_id].graph_node_id.startswith("reason:")
 
 
+def test_retrieval_index_store_migrates_old_fts_schema_without_packet_columns(tmp_path: Path) -> None:
+    db_path = tmp_path / "retrieval.sqlite"
+    conn = connect(db_path)
+    conn.execute(
+        """
+        CREATE TABLE retrieval_documents (
+          doc_id TEXT PRIMARY KEY,
+          doc_type TEXT NOT NULL,
+          graph_node_id TEXT NOT NULL,
+          node_kind TEXT NOT NULL,
+          title TEXT NOT NULL,
+          body TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE VIRTUAL TABLE retrieval_documents_fts USING fts5(
+          doc_id UNINDEXED,
+          title,
+          body
+        )
+        """
+    )
+    conn.commit()
+
+    index_store = RetrievalIndexStore(conn)
+    docs = build_retrieval_documents_from_graph(_graph(), session_id="s1")
+    written = index_store.replace_documents(docs)
+    columns = [row["name"] for row in conn.execute("PRAGMA table_info(retrieval_documents_fts)").fetchall()]
+    hits = index_store.bm25_search("WP0001 abc1234 retrieval", limit=5)
+
+    assert written == len(docs)
+    assert columns == ["doc_id", "title", "body", "packet_id", "commit_sha", "node_kind", "memory_class"]
+    assert hits
+
+
 def test_retrieval_document_build_can_filter_to_v2_graph_schema() -> None:
     graph = InMemoryGraphStore()
     graph.upsert_node(
@@ -194,6 +231,294 @@ def test_retrieval_document_build_can_filter_to_v2_graph_schema() -> None:
     )
 
     assert [doc.graph_node_id for doc in docs] == ["reason:v2"]
+
+
+def _central_graph() -> InMemoryGraphStore:
+    graph = InMemoryGraphStore()
+    graph.upsert_node(
+        GraphNode(
+            id="reason:job1:WP0001:decision:retrieval",
+            kind="ReasoningNode",
+            label="Decision: retrieval projection",
+            summary="Session support says retrieval should use central active memory with packet and code trace.",
+            status="accepted",
+            session_id="s1",
+            commit_id="abc1234",
+            metadata={
+                "packet_id": "WP0001",
+                "commit_sha": "abc1234",
+                "node_type": "Decision",
+                "statement": "Retrieval should use central active memory with packet and code trace.",
+                "pipeline_version": PIPELINE_VERSION,
+                "graph_schema_version": GRAPH_SCHEMA_VERSION,
+            },
+        )
+    )
+    graph.upsert_node(
+        GraphNode(
+            id="kver:active-retrieval",
+            kind="KnowledgeVersion",
+            label="Active retrieval projection version",
+            summary="Active central memory: retrieval defaults to GraphView main active and keeps session support for traces.",
+            status="active",
+            scope="central",
+            session_id="s1",
+            metadata={
+                "atom_id": "katom:retrieval",
+                "atom_kind": "code_region",
+                "canonical_key": "code_region|repo:amo|src/agent_memory_orchestrator/reasoning_graph/retrieval.py||retrieve_session_graph",
+                "graph_commit_id": "g2",
+                "merge_plan_id": "plan:g2",
+                "repo_id": "repo:amo",
+                "source_node_ids": ["reason:job1:WP0001:decision:retrieval"],
+                "status": "active",
+                "version_metadata": {"file_path": "src/agent_memory_orchestrator/reasoning_graph/retrieval.py"},
+                "pipeline_version": PIPELINE_VERSION,
+                "graph_schema_version": GRAPH_SCHEMA_VERSION,
+            },
+        )
+    )
+    graph.upsert_node(
+        GraphNode(
+            id="katom:retrieval",
+            kind="KnowledgeAtom",
+            label="retrieve_session_graph canonical atom",
+            summary="Canonical code region for retrieval active memory.",
+            status="active",
+            scope="central",
+            session_id="s1",
+            metadata={
+                "atom_kind": "code_region",
+                "canonical_key": "code_region|repo:amo|src/agent_memory_orchestrator/reasoning_graph/retrieval.py||retrieve_session_graph",
+                "canonical_key_version": 1,
+                "graph_commit_id": "g2",
+                "repo_id": "repo:amo",
+                "source_node_ids": ["reason:job1:WP0001:decision:retrieval"],
+                "pipeline_version": PIPELINE_VERSION,
+                "graph_schema_version": GRAPH_SCHEMA_VERSION,
+            },
+        )
+    )
+    graph.upsert_node(
+        GraphNode(
+            id="kver:old-retrieval",
+            kind="KnowledgeVersion",
+            label="Old retrieval projection version",
+            summary="Old central memory that should not leak into the active graph view.",
+            status="active",
+            scope="central",
+            session_id="s1",
+            metadata={
+                "atom_id": "katom:retrieval",
+                "atom_kind": "code_region",
+                "canonical_key": "code_region|repo:amo|old",
+                "graph_commit_id": "g1",
+                "repo_id": "repo:amo",
+                "pipeline_version": PIPELINE_VERSION,
+                "graph_schema_version": GRAPH_SCHEMA_VERSION,
+            },
+        )
+    )
+    graph.upsert_node(
+        GraphNode(
+            id="g2",
+            kind="GraphCommit",
+            label="g2",
+            summary="Applied exact central atoms for retrieval.",
+            status="applied",
+            scope="central",
+            session_id="s1",
+            metadata={
+                "branch": "main",
+                "graph_commit_id": "g2",
+                "pipeline_version": PIPELINE_VERSION,
+                "graph_schema_version": GRAPH_SCHEMA_VERSION,
+            },
+        )
+    )
+    graph.upsert_node(
+        GraphNode(
+            id="v2view:main:active",
+            kind="GraphView",
+            label="main/active",
+            summary="Active graph view at g2.",
+            status="active",
+            scope="central",
+            session_id="s1",
+            metadata={
+                "branch": "main",
+                "mode": "active",
+                "graph_commit_id": "g2",
+                "pipeline_version": PIPELINE_VERSION,
+                "graph_schema_version": GRAPH_SCHEMA_VERSION,
+            },
+        )
+    )
+    graph.upsert_edge(
+        GraphEdge(
+            id="edge:kver-session",
+            source_id="kver:active-retrieval",
+            target_id="reason:job1:WP0001:decision:retrieval",
+            kind="DERIVED_FROM_SESSION_NODE",
+        )
+    )
+    return graph
+
+
+def test_retrieval_documents_use_active_central_graph_view_with_session_support() -> None:
+    docs = build_retrieval_documents_from_graph(
+        _central_graph(),
+        session_id="s1",
+        pipeline_version=PIPELINE_VERSION,
+        graph_schema_version=GRAPH_SCHEMA_VERSION,
+    )
+
+    by_id = {doc.graph_node_id: doc for doc in docs}
+
+    assert by_id["kver:active-retrieval"].doc_type == "central_version"
+    assert by_id["kver:active-retrieval"].memory_class == "central_active_memory"
+    assert by_id["katom:retrieval"].doc_type == "central_atom"
+    assert by_id["reason:job1:WP0001:decision:retrieval"].doc_type == "reasoning"
+    assert "kver:old-retrieval" not in by_id
+
+
+def test_retrieve_session_graph_prefers_active_central_version(tmp_path: Path) -> None:
+    graph = _central_graph()
+    _conn, index_store, _embedding_store = _sqlite_store(tmp_path)
+    index_store.upsert_documents(
+        build_retrieval_documents_from_graph(
+            graph,
+            session_id="s1",
+            pipeline_version=PIPELINE_VERSION,
+            graph_schema_version=GRAPH_SCHEMA_VERSION,
+        )
+    )
+
+    result = retrieve_session_graph(
+        query="why does retrieval use central active memory with packet code trace?",
+        index_store=index_store,
+        graph_store=graph,
+        session_id="s1",
+        limit=3,
+        expand_neighbors=3,
+    )
+
+    assert result.hits
+    assert result.hits[0].document.graph_node_id == "kver:active-retrieval"
+    assert result.hits[0].document.doc_type == "central_version"
+    assert any(reason.startswith("central_active_boost:") for reason in result.hits[0].reasons)
+    assert any(neighbor["id"] == "reason:job1:WP0001:decision:retrieval" for neighbor in result.hits[0].neighbors)
+
+
+def test_version_flow_query_prefers_active_central_version_for_locator(tmp_path: Path) -> None:
+    graph = _central_graph()
+    _conn, index_store, _embedding_store = _sqlite_store(tmp_path)
+    index_store.upsert_documents(
+        build_retrieval_documents_from_graph(
+            graph,
+            session_id="s1",
+            pipeline_version=PIPELINE_VERSION,
+            graph_schema_version=GRAPH_SCHEMA_VERSION,
+        )
+    )
+
+    result = retrieve_session_graph(
+        query="show version flow for src/agent_memory_orchestrator/reasoning_graph/retrieval.py::retrieve_session_graph",
+        index_store=index_store,
+        graph_store=graph,
+        session_id="s1",
+        limit=3,
+        expand_neighbors=0,
+    )
+
+    assert result.intent == "version_flow"
+    assert result.hits[0].document.graph_node_id == "kver:active-retrieval"
+    assert any(reason == "central_active_boost:0.55" for reason in result.hits[0].reasons)
+
+
+def test_generic_query_does_not_overboost_low_overlap_exact_central_version(tmp_path: Path) -> None:
+    graph = InMemoryGraphStore()
+    graph.upsert_node(
+        GraphNode(
+            id="kver:debug-html",
+            kind="KnowledgeVersion",
+            label="debug extraction html",
+            summary="A debug extraction HTML file was done.",
+            status="active",
+            scope="central",
+            session_id="s1",
+            metadata={
+                "atom_id": "katom:debug-html",
+                "atom_kind": "file",
+                "canonical_key": "file|repo:amo|scraper_lean/debug/3_extraction_done.html",
+                "graph_commit_id": "g2",
+                "repo_id": "repo:amo",
+                "pipeline_version": PIPELINE_VERSION,
+                "graph_schema_version": GRAPH_SCHEMA_VERSION,
+            },
+        )
+    )
+    graph.upsert_node(
+        GraphNode(
+            id="v2view:main:active",
+            kind="GraphView",
+            label="main/active",
+            summary="Active graph view at g2.",
+            status="active",
+            scope="central",
+            session_id="s1",
+            metadata={
+                "branch": "main",
+                "mode": "active",
+                "graph_commit_id": "g2",
+                "pipeline_version": PIPELINE_VERSION,
+                "graph_schema_version": GRAPH_SCHEMA_VERSION,
+            },
+        )
+    )
+    graph.upsert_node(
+        GraphNode(
+            id="code:advisory-nav",
+            kind="CodeNode",
+            label="backend/app/workers/advisory_worker.py::city_names",
+            summary="Implemented advisory navigation data flow and the navigation tab route.",
+            status="active",
+            session_id="s1",
+            metadata={
+                "packet_id": "WP0009",
+                "commit_sha": "8f5b85c",
+                "file_path": "backend/app/workers/advisory_worker.py",
+                "symbol": "city_names",
+                "pipeline_version": PIPELINE_VERSION,
+                "graph_schema_version": GRAPH_SCHEMA_VERSION,
+            },
+        )
+    )
+    _conn, index_store, _embedding_store = _sqlite_store(tmp_path)
+    index_store.upsert_documents(
+        build_retrieval_documents_from_graph(
+            graph,
+            session_id="s1",
+            pipeline_version=PIPELINE_VERSION,
+            graph_schema_version=GRAPH_SCHEMA_VERSION,
+        )
+    )
+
+    result = retrieve_session_graph(
+        query="what work was done for advisory and navigation?",
+        index_store=index_store,
+        graph_store=graph,
+        session_id="s1",
+        limit=2,
+        expand_neighbors=0,
+    )
+
+    assert result.hits[0].document.graph_node_id == "code:advisory-nav"
+    assert any(
+        "central_low_topic_overlap_penalty" in hit.reasons
+        for hit in result.hits
+        if hit.document.graph_node_id == "kver:debug-html"
+    )
 
 
 def test_embedding_missing_retrieval_documents_is_resumable(tmp_path: Path) -> None:

@@ -17,7 +17,7 @@ from .embedding_store import hash_content
 
 
 RETRIEVAL_EMBEDDING_KIND = "retrieval_text"
-DEFAULT_RETRIEVAL_NODE_KINDS = (
+SESSION_RETRIEVAL_NODE_KINDS = (
     "ReasoningNode",
     "DecisionUnit",
     "DecisionThread",
@@ -30,6 +30,13 @@ DEFAULT_RETRIEVAL_NODE_KINDS = (
     "EvidenceRef",
     "Evidence",
 )
+CENTRAL_RETRIEVAL_NODE_KINDS = (
+    "KnowledgeVersion",
+    "KnowledgeAtom",
+    "GraphCommit",
+    "GraphView",
+)
+DEFAULT_RETRIEVAL_NODE_KINDS = SESSION_RETRIEVAL_NODE_KINDS + CENTRAL_RETRIEVAL_NODE_KINDS
 
 QUERY_STOPWORDS = {
     "about",
@@ -222,6 +229,7 @@ class RetrievalIndexStore:
 
     def __init__(self, conn: sqlite3.Connection) -> None:
         self.conn = conn
+        self._fts_enabled = True
         init_schema(conn)
         self.init_schema()
 
@@ -246,6 +254,7 @@ class RetrievalIndexStore:
             )
             """
         )
+        self._ensure_retrieval_document_columns()
         self.conn.execute(
             """
             CREATE INDEX IF NOT EXISTS idx_retrieval_documents_node
@@ -258,6 +267,35 @@ class RetrievalIndexStore:
             ON retrieval_documents(packet_id, commit_sha)
             """
         )
+        try:
+            self._ensure_retrieval_fts_schema()
+        except sqlite3.OperationalError:
+            self._fts_enabled = False
+        self.conn.commit()
+
+    def _ensure_retrieval_document_columns(self) -> None:
+        columns = _table_columns(self.conn, "retrieval_documents")
+        migrations = {
+            "packet_id": "packet_id TEXT NOT NULL DEFAULT ''",
+            "commit_sha": "commit_sha TEXT NOT NULL DEFAULT ''",
+            "body_char_count": "body_char_count INTEGER NOT NULL DEFAULT 0",
+            "chunk_index": "chunk_index INTEGER NOT NULL DEFAULT 1",
+            "chunk_count": "chunk_count INTEGER NOT NULL DEFAULT 1",
+            "memory_class": "memory_class TEXT NOT NULL DEFAULT 'graph_context'",
+            "importance": "importance REAL NOT NULL DEFAULT 0.5",
+            "metadata_json": "metadata_json TEXT NOT NULL DEFAULT '{}'",
+        }
+        for column, ddl in migrations.items():
+            if column not in columns:
+                self.conn.execute(f"ALTER TABLE retrieval_documents ADD COLUMN {ddl}")
+
+    def _ensure_retrieval_fts_schema(self) -> None:
+        expected = ("doc_id", "title", "body", "packet_id", "commit_sha", "node_kind", "memory_class")
+        existing = _table_columns(self.conn, "retrieval_documents_fts")
+        recreated = False
+        if existing and tuple(existing) != expected:
+            self.conn.execute("DROP TABLE retrieval_documents_fts")
+            recreated = True
         self.conn.execute(
             """
             CREATE VIRTUAL TABLE IF NOT EXISTS retrieval_documents_fts USING fts5(
@@ -271,7 +309,34 @@ class RetrievalIndexStore:
             )
             """
         )
-        self.conn.commit()
+        if recreated:
+            self._rebuild_fts_from_documents()
+
+    def _rebuild_fts_from_documents(self) -> None:
+        rows = self.conn.execute(
+            """
+            SELECT doc_id, title, body, packet_id, commit_sha, node_kind, memory_class
+            FROM retrieval_documents
+            """
+        ).fetchall()
+        for row in rows:
+            self.conn.execute(
+                """
+                INSERT INTO retrieval_documents_fts(
+                  doc_id, title, body, packet_id, commit_sha, node_kind, memory_class
+                )
+                VALUES(?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    row["doc_id"],
+                    row["title"],
+                    row["body"],
+                    row["packet_id"],
+                    row["commit_sha"],
+                    row["node_kind"],
+                    row["memory_class"],
+                ),
+            )
 
     def upsert_documents(self, docs: Iterable[RetrievalDocument]) -> int:
         count = 0
@@ -316,31 +381,33 @@ class RetrievalIndexStore:
                     json.dumps(doc.metadata, sort_keys=True),
                 ),
             )
-            self.conn.execute("DELETE FROM retrieval_documents_fts WHERE doc_id = ?", (doc.doc_id,))
-            self.conn.execute(
-                """
-                INSERT INTO retrieval_documents_fts(
-                  doc_id, title, body, packet_id, commit_sha, node_kind, memory_class
+            if self._fts_enabled:
+                self.conn.execute("DELETE FROM retrieval_documents_fts WHERE doc_id = ?", (doc.doc_id,))
+                self.conn.execute(
+                    """
+                    INSERT INTO retrieval_documents_fts(
+                      doc_id, title, body, packet_id, commit_sha, node_kind, memory_class
+                    )
+                    VALUES(?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        doc.doc_id,
+                        doc.title,
+                        doc.body,
+                        doc.packet_id,
+                        doc.commit_sha,
+                        doc.node_kind,
+                        doc.memory_class,
+                    ),
                 )
-                VALUES(?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    doc.doc_id,
-                    doc.title,
-                    doc.body,
-                    doc.packet_id,
-                    doc.commit_sha,
-                    doc.node_kind,
-                    doc.memory_class,
-                ),
-            )
             count += 1
         self.conn.commit()
         return count
 
     def replace_documents(self, docs: Iterable[RetrievalDocument]) -> int:
         self.conn.execute("DELETE FROM retrieval_documents")
-        self.conn.execute("DELETE FROM retrieval_documents_fts")
+        if self._fts_enabled:
+            self.conn.execute("DELETE FROM retrieval_documents_fts")
         self.conn.commit()
         return self.upsert_documents(docs)
 
@@ -385,6 +452,8 @@ class RetrievalIndexStore:
         fts_query = _fts_query(query)
         if not fts_query:
             return []
+        if not self._fts_enabled:
+            return self.like_search(query, limit=limit)
         try:
             rows = self.conn.execute(
                 """
@@ -458,11 +527,57 @@ def build_retrieval_documents_from_graph(
     pipeline_version: str = "",
     graph_schema_version: str = "",
 ) -> list[RetrievalDocument]:
-    nodes = graph_store.list_nodes(
-        limit=node_limit,
-        kinds=kinds if kinds is not None else list(DEFAULT_RETRIEVAL_NODE_KINDS),
-        session_id=session_id,
+    docs: list[RetrievalDocument] = []
+
+    if kinds is not None:
+        return _documents_for_nodes(
+            graph_store.list_nodes(limit=node_limit, kinds=kinds, session_id=session_id),
+            max_doc_chars=max_doc_chars,
+            pipeline_version=pipeline_version,
+            graph_schema_version=graph_schema_version,
+        )
+
+    active_graph_commit_id = _active_graph_commit_id(graph_store)
+    if active_graph_commit_id:
+        central_docs = _documents_for_nodes(
+            (
+                node
+                for node in graph_store.list_nodes(
+                    limit=node_limit,
+                    kinds=list(CENTRAL_RETRIEVAL_NODE_KINDS),
+                    session_id=session_id,
+                )
+                if _is_active_central_node(node, active_graph_commit_id)
+            ),
+            max_doc_chars=max_doc_chars,
+            pipeline_version=pipeline_version,
+            graph_schema_version=graph_schema_version,
+        )
+        if central_docs:
+            docs.extend(central_docs)
+
+    docs.extend(
+        _documents_for_nodes(
+            graph_store.list_nodes(
+                limit=max(node_limit, 1),
+                kinds=list(SESSION_RETRIEVAL_NODE_KINDS),
+                session_id=session_id,
+            ),
+            max_doc_chars=max_doc_chars,
+            pipeline_version=pipeline_version,
+            graph_schema_version=graph_schema_version,
+        )
     )
+    return docs
+
+
+def _documents_for_nodes(
+    nodes: Iterable[dict[str, Any]],
+    *,
+    max_doc_chars: int,
+    pipeline_version: str = "",
+    graph_schema_version: str = "",
+) -> list[RetrievalDocument]:
     docs: list[RetrievalDocument] = []
     for node in nodes:
         if pipeline_version and _node_version_value(node, "pipeline_version") != pipeline_version:
@@ -471,6 +586,30 @@ def build_retrieval_documents_from_graph(
             continue
         docs.extend(_documents_for_node(node, max_doc_chars=max_doc_chars))
     return docs
+
+
+def _active_graph_commit_id(graph_store: GraphStore) -> str:
+    for node in graph_store.list_nodes(limit=100, kinds=["GraphView"]):
+        metadata = node.get("metadata") if isinstance(node.get("metadata"), dict) else {}
+        branch = str(metadata.get("branch") or "")
+        mode = str(metadata.get("mode") or "")
+        status = str(node.get("status") or metadata.get("status") or "")
+        if branch == "main" and mode == "active" and status == "active":
+            return str(metadata.get("graph_commit_id") or "")
+    return ""
+
+
+def _is_active_central_node(node: dict[str, Any], active_graph_commit_id: str) -> bool:
+    node_kind = str(node.get("kind") or "")
+    metadata = node.get("metadata") if isinstance(node.get("metadata"), dict) else {}
+    graph_commit_id = str(metadata.get("graph_commit_id") or "")
+    if node_kind == "GraphView":
+        return str(metadata.get("branch") or "") == "main" and str(metadata.get("mode") or "") == "active"
+    if node_kind == "GraphCommit":
+        return str(node.get("id") or "") == active_graph_commit_id or graph_commit_id == active_graph_commit_id
+    if node_kind in {"KnowledgeAtom", "KnowledgeVersion"}:
+        return graph_commit_id == active_graph_commit_id and str(node.get("status") or metadata.get("status") or "active") == "active"
+    return False
 
 
 def embed_missing_retrieval_documents(
@@ -794,6 +933,11 @@ def _documents_for_node(node: dict[str, Any], *, max_doc_chars: int) -> list[Ret
 
 def _retrieval_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
     keep = {
+        "atom_id",
+        "atom_kind",
+        "branch",
+        "canonical_key",
+        "canonical_key_version",
         "packet_id",
         "source_packet_id",
         "commit_sha",
@@ -809,9 +953,17 @@ def _retrieval_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
         "paths",
         "evidence_refs",
         "version_count",
+        "graph_commit_id",
+        "idempotency_key",
+        "job_id",
+        "merge_plan_id",
+        "mode",
+        "repo_id",
+        "source_node_ids",
         "status",
         "pipeline_version",
         "graph_schema_version",
+        "version_metadata",
     }
     return {key: metadata[key] for key in keep if key in metadata}
 
@@ -859,6 +1011,21 @@ def _node_body(node: dict[str, Any]) -> str:
         f"commit: {node.get('commit_id') or metadata.get('commit_sha') or ''}",
         f"packet: {metadata.get('packet_id') or metadata.get('source_packet_id') or ''}",
     ]
+    for key in (
+        "atom_kind",
+        "canonical_key",
+        "atom_id",
+        "graph_commit_id",
+        "merge_plan_id",
+        "repo_id",
+        "source_node_ids",
+        "version_metadata",
+    ):
+        if key in metadata:
+            value = metadata[key]
+            if isinstance(value, (dict, list, tuple)):
+                value = json.dumps(value, sort_keys=True)
+            fields.append(f"{key}: {value}")
     for key in (
         "node_type",
         "subject",
@@ -998,15 +1165,31 @@ def _rerank_document(
         score += min(0.4, overlap_ratio * 0.4)
         reasons.append("term_overlap:" + ",".join(overlap[:8]))
     topic_terms = _topic_terms(query, intent)
+    topic_overlap_ratio = 0.0
     if topic_terms:
         topic_overlap = [term for term in topic_terms if term in primary_text]
         if topic_overlap:
-            topic_ratio = len(topic_overlap) / max(1, len(topic_terms))
-            score += min(0.5, topic_ratio * 0.5)
+            topic_overlap_ratio = len(topic_overlap) / max(1, len(topic_terms))
+            score += min(0.5, topic_overlap_ratio * 0.5)
             reasons.append("topic_focus_overlap:" + ",".join(topic_overlap[:8]))
         elif intent in {"code_why", "decision_history"}:
             score -= 0.18
             reasons.append("topic_focus_penalty")
+    if doc.doc_type == "central_version":
+        central_boost = _central_version_boost(doc, intent=intent, query=query, topic_overlap_ratio=topic_overlap_ratio)
+        score += central_boost
+        if central_boost:
+            reasons.append(f"central_active_boost:{round(central_boost, 3)}")
+        else:
+            score -= 0.05
+            reasons.append("central_low_topic_overlap_penalty")
+    elif doc.doc_type == "central_atom":
+        if topic_overlap_ratio >= 0.4 or intent == "version_flow" or _query_has_code_locator(query):
+            score += 0.10
+            reasons.append("central_atom_context_boost")
+    elif doc.doc_type == "graph_lineage" and intent not in {"version_flow"}:
+        score -= 0.12
+        reasons.append("graph_lineage_penalty")
     if intent in {"code_why", "decision_history"} and doc.doc_type == "reasoning":
         score += 0.25
         reasons.append("reasoning_boost")
@@ -1073,7 +1256,21 @@ def _doc_from_row(row: sqlite3.Row) -> RetrievalDocument:
     )
 
 
+def _table_columns(conn: sqlite3.Connection, table: str) -> tuple[str, ...]:
+    try:
+        rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
+    except sqlite3.OperationalError:
+        return ()
+    return tuple(str(row["name"]) for row in rows)
+
+
 def _doc_type(node_kind: str) -> str:
+    if node_kind == "KnowledgeVersion":
+        return "central_version"
+    if node_kind == "KnowledgeAtom":
+        return "central_atom"
+    if node_kind in {"GraphCommit", "GraphView"}:
+        return "graph_lineage"
     if node_kind in {"ReasoningNode", "DecisionUnit", "DecisionThread"}:
         return "reasoning"
     if node_kind in {"WorkChange", "GitCommit", "Commit"}:
@@ -1088,6 +1285,12 @@ def _doc_type(node_kind: str) -> str:
 
 
 def _memory_class(doc_type: str, node_kind: str) -> str:
+    if doc_type == "central_version":
+        return "central_active_memory"
+    if doc_type == "central_atom":
+        return "central_canonical_atom"
+    if doc_type == "graph_lineage":
+        return "graph_lineage"
     if doc_type == "reasoning":
         return "answer_grade_reasoning"
     if doc_type == "code":
@@ -1104,6 +1307,12 @@ def _memory_class(doc_type: str, node_kind: str) -> str:
 def _importance(doc_type: str, node_kind: str, metadata: dict[str, Any]) -> float:
     if isinstance(metadata.get("importance"), (int, float)):
         return float(metadata["importance"])
+    if doc_type == "central_version":
+        return 0.95
+    if doc_type == "central_atom":
+        return 0.75
+    if doc_type == "graph_lineage":
+        return 0.25
     if doc_type == "reasoning":
         return 0.9
     if node_kind == "WorkChange" or doc_type == "commit":
@@ -1211,6 +1420,26 @@ def _doc_node_type(doc: RetrievalDocument) -> str:
     if isinstance(metadata, dict):
         return str(metadata.get("node_type") or "")
     return str(doc.metadata.get("node_type") or "") if isinstance(doc.metadata, dict) else ""
+
+
+def _central_version_boost(
+    doc: RetrievalDocument,
+    *,
+    intent: str,
+    query: str,
+    topic_overlap_ratio: float,
+) -> float:
+    metadata = doc.metadata.get("node_metadata") if isinstance(doc.metadata, dict) else {}
+    atom_kind = str(metadata.get("atom_kind") or "") if isinstance(metadata, dict) else ""
+    if atom_kind in {"decision", "problem"}:
+        return 0.45
+    if intent == "version_flow" or _query_has_code_locator(query):
+        return 0.55
+    if topic_overlap_ratio >= 0.6:
+        return 0.45
+    if topic_overlap_ratio >= 0.4:
+        return 0.18
+    return 0.0
 
 
 def _looks_like_test_artifact(doc: RetrievalDocument) -> bool:
