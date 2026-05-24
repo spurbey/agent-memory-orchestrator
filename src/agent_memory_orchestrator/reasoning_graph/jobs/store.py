@@ -12,6 +12,7 @@ from typing import Any
 from ...core.config import Settings
 from ...core.db import connect
 from ...core.db import init_schema
+from ..central_merge.repo_identity import resolve_repo_identity
 from .constants import GRAPH_SCHEMA_VERSION
 from .constants import PIPELINE_VERSION
 from .constants import RESET_MARKER_KEY
@@ -61,6 +62,10 @@ class V2SessionJobStore:
         if not safe_session:
             raise ValueError("session_id is required")
         now = utc_now()
+        safe_repo_path = str(repo_path or "")
+        safe_repo_id = str(repo_id or "").strip()
+        if not safe_repo_id and safe_repo_path:
+            safe_repo_id = resolve_repo_identity(safe_repo_path).repo_id
         job_id = stable_job_id(safe_session, pipeline_version)
         artifact_dir = str(default_artifact_dir(self.settings.home, pipeline_version, safe_session, job_id))
         days = _dedupe([source_evidence_day, *[str(item) for item in source_evidence_days if str(item)]])
@@ -84,8 +89,8 @@ class V2SessionJobStore:
                     V2_STAGES[0],
                     artifact_dir,
                     source_app,
-                    repo_path,
-                    repo_id,
+                    safe_repo_path,
+                    safe_repo_id,
                     boundary_event_id,
                     source_evidence_day,
                     json.dumps(days),
@@ -98,6 +103,13 @@ class V2SessionJobStore:
             return EnqueueResult(self.get_job(job_id) or {}, created=True, updated=False, reason="created")
 
         if str(existing.get("boundary_event_id") or "") == str(boundary_event_id or ""):
+            if safe_repo_id and not str(existing.get("repo_id") or ""):
+                existing = self.update_job_repo_identity(
+                    job_id=str(existing["job_id"]),
+                    repo_path=safe_repo_path,
+                    repo_id=safe_repo_id,
+                    reason="enqueue_repo_resolved",
+                )
             return EnqueueResult(existing, created=False, updated=False, reason="already_enqueued")
 
         self.conn.execute(
@@ -121,8 +133,8 @@ class V2SessionJobStore:
             (
                 V2_STAGES[0],
                 source_app or str(existing.get("source_app") or ""),
-                repo_path or str(existing.get("repo_path") or ""),
-                repo_id or str(existing.get("repo_id") or ""),
+                safe_repo_path or str(existing.get("repo_path") or ""),
+                safe_repo_id or str(existing.get("repo_id") or ""),
                 boundary_event_id,
                 source_evidence_day,
                 json.dumps(days),
