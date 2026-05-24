@@ -18,6 +18,8 @@ import (
 
 func main() {
 	cfg := config.Default()
+	var printCapabilities bool
+	flag.BoolVar(&printCapabilities, "capabilities", false, "print machine-readable sidecar capability metadata and exit")
 	flag.StringVar(&cfg.NodeID, "node-id", cfg.NodeID, "stable AMO node id")
 	flag.StringVar(&cfg.ListenAddr, "listen", cfg.ListenAddr, "libp2p listen multiaddr")
 	flag.StringVar(&cfg.APIAddr, "api", cfg.APIAddr, "local HTTP API bind address")
@@ -40,6 +42,16 @@ func main() {
 	flag.Var((*stringList)(&cfg.AdvertiseAddrs), "advertise-addr", "public libp2p listen multiaddr to advertise; repeat for multiple addresses")
 	flag.Var((*stringList)(&cfg.StaticRelayAddrs), "static-relay", "static relay multiaddr; can be repeated")
 	flag.Parse()
+	if printCapabilities {
+		encoded, _ := json.Marshal(map[string]any{
+			"ok": true,
+			"protocol_capabilities": []string{
+				"remote_peer_id",
+			},
+		})
+		fmt.Println(string(encoded))
+		return
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
