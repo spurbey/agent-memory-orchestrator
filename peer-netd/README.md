@@ -114,7 +114,7 @@ python -m agent_memory_orchestrator.app.cli peer --amo-home <amo_home> netd inst
 python -m agent_memory_orchestrator.app.cli peer --amo-home <amo_home> netd install-service --node-id zenbook-amo --with-watch
 ```
 
-Add `--apply` only when you want AMO to create the Windows Scheduled Task or user-systemd unit. Use `--with-watch` for the normal unattended peer setup: it adds a second startup entry for `peer-agent watch`, which drains delivered sidecar envelopes and performs peer-agent room behavior.
+Add `--apply` only when you want AMO to create the per-user startup entry. Windows uses Scheduled Tasks, macOS uses `launchd` LaunchAgents, and Linux uses user-systemd units. Use `--with-watch` for the normal unattended peer setup: it adds a second startup entry for `peer-agent watch`, which drains delivered sidecar envelopes and performs peer-agent room behavior.
 
 ## Relay Profile Setup
 
@@ -152,7 +152,13 @@ python -m agent_memory_orchestrator.app.cli peer --amo-home <home_b> setup `
   --install-startup
 ```
 
-`setup --install-startup` starts peer netd now and installs per-user startup entries for both netd and `peer-agent watch`. Without `--install-startup`, it only starts the current session.
+`setup --install-startup` starts peer netd now and installs per-user startup entries for both netd and `peer-agent watch`. Without `--install-startup`, it only starts the current session. Once startup is installed on both devices, users should not run room transport commands manually; the repeated path is:
+
+```powershell
+python -m agent_memory_orchestrator.app.cli peer-agent --amo-home <home_a> ask --query "<question>"
+```
+
+The asking agent opens the room, sends context requests, waits for peer-agent responses, and synthesizes the answer. The peer device only needs to be logged in with its startup watcher running.
 
 ## API
 
