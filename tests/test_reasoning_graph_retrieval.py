@@ -233,6 +233,72 @@ def test_retrieval_document_build_can_filter_to_v2_graph_schema() -> None:
     assert [doc.graph_node_id for doc in docs] == ["reason:v2"]
 
 
+def test_retrieval_documents_and_search_are_repo_scoped(tmp_path: Path) -> None:
+    graph = InMemoryGraphStore()
+    for repo_id, commit_id, topic in (
+        ("repo:amo", "g-amo", "central active memory for AMO retrieval"),
+        ("repo:dora", "g-dora", "central active memory for Dora advisory"),
+    ):
+        graph.upsert_node(
+            GraphNode(
+                id=f"kver:{repo_id}",
+                kind="KnowledgeVersion",
+                label=topic,
+                summary=topic,
+                status="active",
+                scope="central",
+                metadata={
+                    "atom_kind": "code_region",
+                    "graph_commit_id": commit_id,
+                    "repo_id": repo_id,
+                    "pipeline_version": PIPELINE_VERSION,
+                    "graph_schema_version": GRAPH_SCHEMA_VERSION,
+                },
+            )
+        )
+        graph.upsert_node(
+            GraphNode(
+                id=f"view:{repo_id}",
+                kind="GraphView",
+                label=f"{repo_id} active view",
+                summary=f"{repo_id} active view",
+                status="active",
+                scope="central",
+                metadata={
+                    "branch": "main",
+                    "mode": "active",
+                    "graph_commit_id": commit_id,
+                    "repo_id": repo_id,
+                    "pipeline_version": PIPELINE_VERSION,
+                    "graph_schema_version": GRAPH_SCHEMA_VERSION,
+                },
+            )
+        )
+    docs = build_retrieval_documents_from_graph(
+        graph,
+        pipeline_version=PIPELINE_VERSION,
+        graph_schema_version=GRAPH_SCHEMA_VERSION,
+    )
+    _conn, index_store, _embedding_store = _sqlite_store(tmp_path)
+    index_store.upsert_documents(docs)
+
+    assert {doc.repo_id for doc in docs if doc.doc_type == "central_version"} == {"repo:amo", "repo:dora"}
+    assert [doc.graph_node_id for doc in index_store.list_documents(repo_id="repo:amo")] == ["kver:repo:amo", "view:repo:amo"]
+
+    result = retrieve_session_graph(
+        query="central active memory",
+        index_store=index_store,
+        graph_store=graph,
+        repo_id="repo:dora",
+        limit=5,
+        expand_neighbors=0,
+    )
+
+    assert result.hits
+    assert {hit.document.repo_id for hit in result.hits} == {"repo:dora"}
+    assert all("amo" not in hit.document.body.lower() for hit in result.hits)
+
+
 def _central_graph() -> InMemoryGraphStore:
     graph = InMemoryGraphStore()
     graph.upsert_node(
