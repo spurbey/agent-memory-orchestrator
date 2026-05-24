@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import uuid
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 from ...core.config import Settings
@@ -11,6 +13,7 @@ from ...graph.store import GraphNode
 from ...graph.store import GraphStore
 from ...graph.store import KuzuGraphStore
 from ..jobs.store import V2SessionJobStore
+from ..jobs.store import graph_view_id
 from .models import CENTRAL_MERGE_PLAN_VERSION
 from .models import utc_now
 
@@ -57,7 +60,8 @@ def apply_merge_plan(
         if not graph_commit_id:
             raise CentralMergeApplyError(f"missing_graph_commit_preview:{plan_id}")
 
-        current_view = owned_store.ensure_graph_view(branch=branch, mode=mode)
+        repo_id = str(plan.get("repo_id") or "")
+        current_view = owned_store.ensure_graph_view(repo_id=repo_id, branch=branch, mode=mode)
         current_head = str(current_view.get("graph_commit_id") or "")
         expected_parent = str(plan.get("parent_graph_commit_id") or "")
         reapplies_applied_head = str(plan_row.get("status") or "") == "applied" and current_head == graph_commit_id
@@ -72,6 +76,7 @@ def apply_merge_plan(
 
         lock_expected_parent = current_head if reapplies_applied_head else expected_parent
         if not owned_store.acquire_central_merge_lock(
+            repo_id=repo_id,
             branch=branch,
             owner=owner,
             expected_parent_graph_commit_id=lock_expected_parent,
@@ -95,6 +100,7 @@ def apply_merge_plan(
                 graph_commit_id=graph_commit_id,
                 plan_id=plan_id,
                 job_id=str(plan.get("job_id") or ""),
+                repo_id=repo_id,
                 branch=branch,
                 parent_graph_commit_id=expected_parent,
                 pipeline_version=str(plan.get("pipeline_version") or ""),
@@ -108,12 +114,13 @@ def apply_merge_plan(
                 diagnostics={"apply_scope": "exact_atoms_only"},
             )
             graph_view = owned_store.update_graph_view_head(
+                repo_id=repo_id,
                 branch=branch,
                 mode=mode,
                 graph_commit_id=graph_commit_id,
                 metadata={"merge_plan_id": plan_id, "apply_scope": "exact_atoms_only"},
             )
-            owned_store.update_central_merge_plan_status(
+            updated_plan = owned_store.update_central_merge_plan_status(
                 plan_id=plan_id,
                 status="applied",
                 mode="apply_exact_atoms",
@@ -124,10 +131,16 @@ def apply_merge_plan(
                     "apply_scope": "exact_atoms_only",
                 },
             )
-            return {
+            result = {
                 "ok": True,
                 "plan_id": plan_id,
                 "status": "applied",
+                "mode": "apply_exact_atoms",
+                "job_id": str(plan.get("job_id") or ""),
+                "session_id": str(plan.get("session_id") or ""),
+                "repo_id": str(plan.get("repo_id") or ""),
+                "branch": branch,
+                "view_mode": mode,
                 "graph_commit": graph_commit_row,
                 "graph_view": graph_view,
                 "added_node_count": len(added_nodes),
@@ -135,18 +148,70 @@ def apply_merge_plan(
                 "added_nodes": added_nodes,
                 "added_edges": added_edges,
                 "idempotent": reapplies_applied_head,
+                "plan_status": updated_plan.get("status", "applied"),
+                "applied_at": utc_now(),
             }
+            artifact = _write_merge_result_artifact(store=owned_store, plan=plan, result=result)
+            if artifact:
+                result["result_artifact"] = artifact
+            return result
         except Exception as exc:
             diagnostics = {"reason": "central_merge_apply_failed", "error": str(exc)}
             owned_store.update_central_merge_plan_status(plan_id=plan_id, status="failed_partial", diagnostics=diagnostics)
             raise
         finally:
-            owned_store.release_central_merge_lock(branch=branch, owner=owner)
+            owned_store.release_central_merge_lock(repo_id=repo_id, branch=branch, owner=owner)
     finally:
         if close_graph:
             owned_graph.close()
         if close_store:
             owned_store.close()
+
+
+def _write_merge_result_artifact(*, store: V2SessionJobStore, plan: dict[str, Any], result: dict[str, Any]) -> str:
+    job_id = str(plan.get("job_id") or result.get("job_id") or "")
+    if not job_id:
+        return ""
+    job = store.get_job(job_id)
+    raw_artifact_dir = str((job or {}).get("artifact_dir") or "")
+    if not raw_artifact_dir:
+        return ""
+    artifact_dir = Path(raw_artifact_dir)
+    target_dir = artifact_dir / "central_version_merge"
+    try:
+        target_dir.mkdir(parents=True, exist_ok=True)
+        target = target_dir / "merge_result.json"
+        payload = {
+            "result_version": "central-merge-apply-result-v1",
+            "plan_id": result.get("plan_id", ""),
+            "job_id": job_id,
+            "session_id": result.get("session_id", ""),
+            "repo_id": result.get("repo_id", ""),
+            "status": result.get("status", ""),
+            "mode": result.get("mode", ""),
+            "branch": result.get("branch", ""),
+            "view_mode": result.get("view_mode", ""),
+            "graph_commit": result.get("graph_commit", {}),
+            "graph_view": result.get("graph_view", {}),
+            "added_node_count": result.get("added_node_count", 0),
+            "added_edge_count": result.get("added_edge_count", 0),
+            "added_nodes": result.get("added_nodes", []),
+            "added_edges": result.get("added_edges", []),
+            "idempotent": result.get("idempotent", False),
+            "applied_at": result.get("applied_at", utc_now()),
+            "apply_scope": "exact_atoms_only",
+            "result_artifact": str(target),
+        }
+        target.write_text(json.dumps(payload, indent=2, ensure_ascii=False, sort_keys=True), encoding="utf-8")
+        return str(target)
+    except OSError as exc:
+        store.update_central_merge_plan_status(
+            plan_id=str(result.get("plan_id") or ""),
+            status=str(result.get("status") or "applied"),
+            mode=str(result.get("mode") or "apply_exact_atoms"),
+            diagnostics={"merge_result_artifact_error": f"{type(exc).__name__}:{exc}"},
+        )
+        return ""
 
 
 def _write_exact_atoms(
@@ -160,12 +225,16 @@ def _write_exact_atoms(
     now = utc_now()
     base = _base_metadata(plan=plan, graph_commit_id=graph_commit_id)
     atoms = [atom for atom in plan.get("new_atoms", []) if isinstance(atom, dict) and atom.get("atom_kind") in EXACT_APPLY_ATOM_KINDS]
+    matched_atoms = [
+        atom for atom in plan.get("matched_atoms", []) if isinstance(atom, dict) and atom.get("atom_kind") in EXACT_APPLY_ATOM_KINDS
+    ]
     versions = [
         version
         for version in plan.get("new_versions", [])
         if isinstance(version, dict) and version.get("atom_kind") in EXACT_APPLY_ATOM_KINDS
     ]
     atom_ids = {str(atom.get("atom_id") or "") for atom in atoms}
+    atom_ids.update(str(atom.get("matched_atom_id") or atom.get("atom_id") or "") for atom in matched_atoms)
     resolve_source_id = _source_id_resolver(graph_store)
     added_nodes: list[str] = []
     added_edges: list[str] = []
@@ -281,10 +350,10 @@ def _write_exact_atoms(
         )
     )
     added_nodes.append(graph_commit_id)
-    graph_view_id = f"v2view:{branch}:{mode}"
+    graph_view_id_value = graph_view_id(repo_id=str(plan.get("repo_id") or ""), branch=branch, mode=mode)
     graph_store.upsert_node(
         GraphNode(
-            id=graph_view_id,
+            id=graph_view_id_value,
             kind="GraphView",
             label=f"{branch}/{mode}",
             summary=f"GraphView {branch}/{mode} at {graph_commit_id}",
@@ -298,16 +367,16 @@ def _write_exact_atoms(
                 "branch": branch,
                 "mode": mode,
                 "graph_commit_id": graph_commit_id,
-                "idempotency_key": _idempotency_key("node", graph_view_id, graph_commit_id),
+                "idempotency_key": _idempotency_key("node", graph_view_id_value, graph_commit_id),
             },
         )
     )
-    added_nodes.append(graph_view_id)
-    view_edge_id = _edge_id("GRAPH_VIEW_AT", graph_view_id, graph_commit_id, graph_commit_id)
+    added_nodes.append(graph_view_id_value)
+    view_edge_id = _edge_id("GRAPH_VIEW_AT", graph_view_id_value, graph_commit_id, graph_commit_id)
     graph_store.upsert_edge(
         GraphEdge(
             id=view_edge_id,
-            source_id=graph_view_id,
+            source_id=graph_view_id_value,
             target_id=graph_commit_id,
             kind="GRAPH_VIEW_AT",
             confidence=1.0,

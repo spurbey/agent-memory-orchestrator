@@ -16,6 +16,35 @@
 
 Before central merge, determine whether a session graph entity matches an existing central graph entity.
 
+## Current Production Slice
+
+The first applied production slice performs exact identity resolution only for:
+
+```text
+commit
+file
+symbol
+code_region
+```
+
+Exact canonical keys are built from `repo_id`, not local `repo_path`:
+
+```text
+commit      = repo_id + full_commit_sha
+file        = repo_id + normalized_file_path
+symbol      = repo_id + normalized_file_path + qualified_name
+code_region = repo_id + normalized_file_path + ast_kind + qualified_name
+```
+
+If the central graph already has a `KnowledgeAtom` with the same canonical key,
+the planner must emit it under `matched_atoms` and attach the new session's
+`KnowledgeVersion` to that atom. If no atom exists, the planner emits it under
+`new_atoms`.
+
+Decision and problem matching do not use exact canonical keys yet. They remain
+semantic dry-run/review candidates until the merge judge proves duplicate,
+refine, supersede, conflict, and revert classifications are safe.
+
 ## Candidate Query
 
 Fetch candidates by compatible kind, shared normalized name tokens, shared file path, shared subject, or nearby embedding result. Do not compare against raw/timeline/support-only nodes unless resolving support entities.

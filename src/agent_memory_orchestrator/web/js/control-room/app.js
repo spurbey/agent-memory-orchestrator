@@ -5,6 +5,7 @@ import {
   renderDashboard,
   renderHealth,
   renderJobs,
+  renderRepoScope,
   renderSessionDetail,
   renderSessions,
   setDaemon,
@@ -15,6 +16,7 @@ import {
   loadConnectorStatus,
   loadHealth,
   loadJobs,
+  loadRepos,
   loadSessions,
   loadVersionFlow,
 } from "./loaders.js";
@@ -51,6 +53,8 @@ async function refreshAll() {
   if (refreshAllInFlight) return;
   refreshAllInFlight = true;
   try {
+    await loadRepos();
+    renderRepoScope(state);
     await Promise.allSettled([
       loadHealth(),
       loadJobs(),
@@ -113,6 +117,13 @@ function bindEvents() {
   }));
   qsa("[data-jump]").forEach(btn => btn.addEventListener("click", () => setView(btn.dataset.jump)));
   $("refreshBtn").addEventListener("click", refreshAll);
+  $("repoScopeSelect")?.addEventListener("change", async event => {
+    state.selectedRepoId = event.target.value || "";
+    state.selectedSessionId = "";
+    state.selectedSession = null;
+    state.selectedJobDetail = null;
+    await refreshAll();
+  });
   $("runRetrievalBtn").addEventListener("click", () => runRetrieval(setView));
   $("retrievalQuery").addEventListener("keydown", event => { if (event.key === "Enter") runRetrieval(setView); });
   $("globalSearch").addEventListener("keydown", event => {

@@ -75,6 +75,18 @@ export function renderDashboard(state) {
   $("recentSessions").innerHTML = sessions.slice(0, 7).map(row => sessionCard(row, state)).join("") || empty("No captured sessions yet.");
 }
 
+export function renderRepoScope(state) {
+  const select = $("repoScopeSelect");
+  if (!select) return;
+  const repos = state.repos || [];
+  const options = [
+    `<option value="">All repositories</option>`,
+    ...repos.map(repo => `<option value="${escapeHtml(repo.repo_id)}">${escapeHtml(repoLabel(repo))}</option>`),
+  ];
+  select.innerHTML = options.join("");
+  select.value = state.selectedRepoId || "";
+}
+
 export function renderSessions(state) {
   const html = (state.sessions || []).map(row => sessionCard(row, state)).join("") || empty("No captured sessions yet.");
   $("sessionList").innerHTML = html;
@@ -177,7 +189,7 @@ export function renderRetrievalResult(result) {
         <div>
           <p class="eyebrow">Indexed V2 retrieval</p>
           <h2>${escapeHtml(retrieval.intent || "general")}</h2>
-          <p class="muted">${escapeHtml(result.graph_scope || "v2 graph")} | ${escapeHtml(truncate(result.db_path || "", 84))}</p>
+          <p class="muted">${escapeHtml(result.graph_scope || "v2 graph")} | repo ${escapeHtml(result.repo_id || "all")} | ${escapeHtml(truncate(result.db_path || "", 84))}</p>
           <div class="session-meta">
             <span class="pill ${String(retrieval.vector_status || "").includes("completed") ? "good" : "warn"}">vector ${escapeHtml(retrieval.vector_status || "unknown")}</span>
             <span class="pill blue">${escapeHtml(retrieval.reranker || "deterministic")}</span>
@@ -212,18 +224,30 @@ function sessionCard(row, state) {
   const job = jobForSession(id, state.jobs.jobs || []);
   const sources = (row.source_apps || []).join(", ") || "unknown";
   const status = job?.status || "not queued";
+  const repoLabelText = row.repo_path || row.repo || row.cwd || "local session";
   return `<article class="session-card${selected}" data-session-id="${escapeHtml(id)}">
     <div class="id">${escapeHtml(id)}</div>
-    <div class="muted small">${escapeHtml(truncate(row.cwd || row.repo || "local session", 72))}</div>
+    <div class="muted small">${escapeHtml(truncate(repoLabelText, 72))}</div>
     <div class="session-meta">
       <span class="pill good">${Number(row.raw_events || 0)} raw</span>
       <span class="pill blue">${escapeHtml(row.latest_event || "event")}</span>
       <span class="pill">${escapeHtml(sources)}</span>
+      ${row.repo_id ? `<span class="pill">${escapeHtml(truncate(row.repo_id, 30))}</span>` : ""}
       <span class="pill ${statusTone(status)}">${escapeHtml(status)}</span>
       ${job?.current_stage ? `<span class="pill">${escapeHtml(job.current_stage)}</span>` : ""}
       <span class="pill">${escapeHtml(timeAgo(row.latest_at))}</span>
     </div>
   </article>`;
+}
+
+function repoLabel(repo) {
+  const path = text(repo.repo_path || "");
+  const leaf = path.split(/[\\/]/).filter(Boolean).pop();
+  const name = leaf || truncate(repo.repo_id || "repo", 42);
+  const count = Number(repo.job_count || 0);
+  const nodes = Number(repo.node_count || 0);
+  const scope = count ? `${count} jobs` : nodes ? `${nodes} nodes` : "repo";
+  return `${name} - ${scope}`;
 }
 
 function renderSelectedJob(job, detail) {

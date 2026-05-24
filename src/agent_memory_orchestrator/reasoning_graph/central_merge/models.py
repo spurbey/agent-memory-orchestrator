@@ -22,6 +22,18 @@ def stable_hash(payload: Any) -> str:
     return hashlib.sha256(json.dumps(payload, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
 
 
+def merge_plan_id_for(*, job_id: str, session_id: str, repo_id: str, parent_graph_commit_id: str, input_graph_hash: str) -> str:
+    seed = {
+        "job_id": job_id,
+        "session_id": session_id,
+        "repo_id": repo_id,
+        "parent_graph_commit_id": parent_graph_commit_id,
+        "input_graph_hash": input_graph_hash,
+        "plan_version": CENTRAL_MERGE_PLAN_VERSION,
+    }
+    return f"v2plan:{stable_hash(seed)[:32]}"
+
+
 @dataclass(slots=True, frozen=True)
 class KnowledgeAtomPreview:
     atom_id: str
@@ -118,15 +130,13 @@ class MergePlan:
         metrics: dict[str, Any] | None = None,
         diagnostics: dict[str, Any] | None = None,
     ) -> "MergePlan":
-        seed = {
-            "job_id": job_id,
-            "session_id": session_id,
-            "repo_id": repo_id,
-            "parent_graph_commit_id": parent_graph_commit_id,
-            "input_graph_hash": input_graph_hash,
-            "plan_version": CENTRAL_MERGE_PLAN_VERSION,
-        }
-        plan_id = f"v2plan:{stable_hash(seed)[:32]}"
+        plan_id = merge_plan_id_for(
+            job_id=job_id,
+            session_id=session_id,
+            repo_id=repo_id,
+            parent_graph_commit_id=parent_graph_commit_id,
+            input_graph_hash=input_graph_hash,
+        )
         graph_commit_preview = {
             "graph_commit_id": f"v2gcommit:{stable_hash({'plan_id': plan_id, 'input_graph_hash': input_graph_hash})[:32]}",
             "status": "preview",

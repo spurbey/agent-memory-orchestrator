@@ -17,7 +17,7 @@ from .embedding_store import hash_content
 
 
 RETRIEVAL_EMBEDDING_KIND = "retrieval_text"
-DEFAULT_RETRIEVAL_NODE_KINDS = (
+SESSION_RETRIEVAL_NODE_KINDS = (
     "ReasoningNode",
     "DecisionUnit",
     "DecisionThread",
@@ -30,6 +30,13 @@ DEFAULT_RETRIEVAL_NODE_KINDS = (
     "EvidenceRef",
     "Evidence",
 )
+CENTRAL_RETRIEVAL_NODE_KINDS = (
+    "KnowledgeVersion",
+    "KnowledgeAtom",
+    "GraphCommit",
+    "GraphView",
+)
+DEFAULT_RETRIEVAL_NODE_KINDS = SESSION_RETRIEVAL_NODE_KINDS + CENTRAL_RETRIEVAL_NODE_KINDS
 
 QUERY_STOPWORDS = {
     "about",
@@ -111,6 +118,7 @@ class RetrievalDocument:
     commit_sha: str
     title: str
     body: str
+    repo_id: str = ""
     chunk_index: int = 1
     chunk_count: int = 1
     memory_class: str = "graph_context"
@@ -130,6 +138,7 @@ class RetrievalDocument:
             "doc_type": self.doc_type,
             "graph_node_id": self.graph_node_id,
             "node_kind": self.node_kind,
+            "repo_id": self.repo_id,
             "packet_id": self.packet_id,
             "commit_sha": self.commit_sha,
             "title": self.title,
@@ -222,6 +231,7 @@ class RetrievalIndexStore:
 
     def __init__(self, conn: sqlite3.Connection) -> None:
         self.conn = conn
+        self._fts_enabled = True
         init_schema(conn)
         self.init_schema()
 
@@ -233,6 +243,7 @@ class RetrievalIndexStore:
               doc_type TEXT NOT NULL,
               graph_node_id TEXT NOT NULL,
               node_kind TEXT NOT NULL,
+              repo_id TEXT NOT NULL DEFAULT '',
               packet_id TEXT NOT NULL DEFAULT '',
               commit_sha TEXT NOT NULL DEFAULT '',
               title TEXT NOT NULL,
@@ -246,6 +257,7 @@ class RetrievalIndexStore:
             )
             """
         )
+        self._ensure_retrieval_document_columns()
         self.conn.execute(
             """
             CREATE INDEX IF NOT EXISTS idx_retrieval_documents_node
@@ -260,6 +272,42 @@ class RetrievalIndexStore:
         )
         self.conn.execute(
             """
+            CREATE INDEX IF NOT EXISTS idx_retrieval_documents_repo
+            ON retrieval_documents(repo_id, doc_type, node_kind)
+            """
+        )
+        try:
+            self._ensure_retrieval_fts_schema()
+        except sqlite3.OperationalError:
+            self._fts_enabled = False
+        self.conn.commit()
+
+    def _ensure_retrieval_document_columns(self) -> None:
+        columns = _table_columns(self.conn, "retrieval_documents")
+        migrations = {
+            "repo_id": "repo_id TEXT NOT NULL DEFAULT ''",
+            "packet_id": "packet_id TEXT NOT NULL DEFAULT ''",
+            "commit_sha": "commit_sha TEXT NOT NULL DEFAULT ''",
+            "body_char_count": "body_char_count INTEGER NOT NULL DEFAULT 0",
+            "chunk_index": "chunk_index INTEGER NOT NULL DEFAULT 1",
+            "chunk_count": "chunk_count INTEGER NOT NULL DEFAULT 1",
+            "memory_class": "memory_class TEXT NOT NULL DEFAULT 'graph_context'",
+            "importance": "importance REAL NOT NULL DEFAULT 0.5",
+            "metadata_json": "metadata_json TEXT NOT NULL DEFAULT '{}'",
+        }
+        for column, ddl in migrations.items():
+            if column not in columns:
+                self.conn.execute(f"ALTER TABLE retrieval_documents ADD COLUMN {ddl}")
+
+    def _ensure_retrieval_fts_schema(self) -> None:
+        expected = ("doc_id", "title", "body", "packet_id", "commit_sha", "node_kind", "memory_class")
+        existing = _table_columns(self.conn, "retrieval_documents_fts")
+        recreated = False
+        if existing and tuple(existing) != expected:
+            self.conn.execute("DROP TABLE retrieval_documents_fts")
+            recreated = True
+        self.conn.execute(
+            """
             CREATE VIRTUAL TABLE IF NOT EXISTS retrieval_documents_fts USING fts5(
               doc_id UNINDEXED,
               title,
@@ -271,7 +319,34 @@ class RetrievalIndexStore:
             )
             """
         )
-        self.conn.commit()
+        if recreated:
+            self._rebuild_fts_from_documents()
+
+    def _rebuild_fts_from_documents(self) -> None:
+        rows = self.conn.execute(
+            """
+            SELECT doc_id, title, body, packet_id, commit_sha, node_kind, memory_class
+            FROM retrieval_documents
+            """
+        ).fetchall()
+        for row in rows:
+            self.conn.execute(
+                """
+                INSERT INTO retrieval_documents_fts(
+                  doc_id, title, body, packet_id, commit_sha, node_kind, memory_class
+                )
+                VALUES(?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    row["doc_id"],
+                    row["title"],
+                    row["body"],
+                    row["packet_id"],
+                    row["commit_sha"],
+                    row["node_kind"],
+                    row["memory_class"],
+                ),
+            )
 
     def upsert_documents(self, docs: Iterable[RetrievalDocument]) -> int:
         count = 0
@@ -280,14 +355,15 @@ class RetrievalIndexStore:
                 """
                 INSERT INTO retrieval_documents(
                   doc_id, doc_type, graph_node_id, node_kind, packet_id, commit_sha,
-                  title, body, body_char_count, chunk_index, chunk_count,
+                  repo_id, title, body, body_char_count, chunk_index, chunk_count,
                   memory_class, importance, metadata_json
                 )
-                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(doc_id) DO UPDATE SET
                   doc_type=excluded.doc_type,
                   graph_node_id=excluded.graph_node_id,
                   node_kind=excluded.node_kind,
+                  repo_id=excluded.repo_id,
                   packet_id=excluded.packet_id,
                   commit_sha=excluded.commit_sha,
                   title=excluded.title,
@@ -306,6 +382,7 @@ class RetrievalIndexStore:
                     doc.node_kind,
                     doc.packet_id,
                     doc.commit_sha,
+                    doc.repo_id,
                     doc.title,
                     doc.body,
                     doc.body_char_count,
@@ -316,88 +393,132 @@ class RetrievalIndexStore:
                     json.dumps(doc.metadata, sort_keys=True),
                 ),
             )
-            self.conn.execute("DELETE FROM retrieval_documents_fts WHERE doc_id = ?", (doc.doc_id,))
-            self.conn.execute(
-                """
-                INSERT INTO retrieval_documents_fts(
-                  doc_id, title, body, packet_id, commit_sha, node_kind, memory_class
+            if self._fts_enabled:
+                self.conn.execute("DELETE FROM retrieval_documents_fts WHERE doc_id = ?", (doc.doc_id,))
+                self.conn.execute(
+                    """
+                    INSERT INTO retrieval_documents_fts(
+                      doc_id, title, body, packet_id, commit_sha, node_kind, memory_class
+                    )
+                    VALUES(?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        doc.doc_id,
+                        doc.title,
+                        doc.body,
+                        doc.packet_id,
+                        doc.commit_sha,
+                        doc.node_kind,
+                        doc.memory_class,
+                    ),
                 )
-                VALUES(?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    doc.doc_id,
-                    doc.title,
-                    doc.body,
-                    doc.packet_id,
-                    doc.commit_sha,
-                    doc.node_kind,
-                    doc.memory_class,
-                ),
-            )
             count += 1
         self.conn.commit()
         return count
 
     def replace_documents(self, docs: Iterable[RetrievalDocument]) -> int:
         self.conn.execute("DELETE FROM retrieval_documents")
-        self.conn.execute("DELETE FROM retrieval_documents_fts")
+        if self._fts_enabled:
+            self.conn.execute("DELETE FROM retrieval_documents_fts")
         self.conn.commit()
         return self.upsert_documents(docs)
 
-    def list_documents(self, *, limit: int = 10000) -> list[RetrievalDocument]:
-        rows = self.conn.execute(
-            """
-            SELECT * FROM retrieval_documents
-            ORDER BY doc_type, graph_node_id, chunk_index
-            LIMIT ?
-            """,
-            (int(limit),),
-        ).fetchall()
+    def list_documents(self, *, limit: int = 10000, repo_id: str = "") -> list[RetrievalDocument]:
+        safe_repo_id = str(repo_id or "").strip()
+        if safe_repo_id:
+            rows = self.conn.execute(
+                """
+                SELECT * FROM retrieval_documents
+                WHERE repo_id = ?
+                ORDER BY doc_type, graph_node_id, chunk_index
+                LIMIT ?
+                """,
+                (safe_repo_id, int(limit)),
+            ).fetchall()
+        else:
+            rows = self.conn.execute(
+                """
+                SELECT * FROM retrieval_documents
+                ORDER BY doc_type, graph_node_id, chunk_index
+                LIMIT ?
+                """,
+                (int(limit),),
+            ).fetchall()
         return [_doc_from_row(row) for row in rows]
 
-    def get_documents_by_ids(self, doc_ids: Iterable[str]) -> dict[str, RetrievalDocument]:
+    def get_documents_by_ids(self, doc_ids: Iterable[str], *, repo_id: str = "") -> dict[str, RetrievalDocument]:
         ids = list(dict.fromkeys(doc_ids))
         if not ids:
             return {}
         placeholders = ",".join("?" for _ in ids)
-        rows = self.conn.execute(
-            f"SELECT * FROM retrieval_documents WHERE doc_id IN ({placeholders})",
-            ids,
-        ).fetchall()
+        safe_repo_id = str(repo_id or "").strip()
+        if safe_repo_id:
+            rows = self.conn.execute(
+                f"SELECT * FROM retrieval_documents WHERE doc_id IN ({placeholders}) AND repo_id = ?",
+                [*ids, safe_repo_id],
+            ).fetchall()
+        else:
+            rows = self.conn.execute(
+                f"SELECT * FROM retrieval_documents WHERE doc_id IN ({placeholders})",
+                ids,
+            ).fetchall()
         return {str(row["doc_id"]): _doc_from_row(row) for row in rows}
 
-    def documents_by_graph_node_ids(self, node_ids: Iterable[str]) -> dict[str, list[RetrievalDocument]]:
+    def documents_by_graph_node_ids(self, node_ids: Iterable[str], *, repo_id: str = "") -> dict[str, list[RetrievalDocument]]:
         ids = list(dict.fromkeys(node_ids))
         if not ids:
             return {}
         placeholders = ",".join("?" for _ in ids)
-        rows = self.conn.execute(
-            f"SELECT * FROM retrieval_documents WHERE graph_node_id IN ({placeholders})",
-            ids,
-        ).fetchall()
+        safe_repo_id = str(repo_id or "").strip()
+        if safe_repo_id:
+            rows = self.conn.execute(
+                f"SELECT * FROM retrieval_documents WHERE graph_node_id IN ({placeholders}) AND repo_id = ?",
+                [*ids, safe_repo_id],
+            ).fetchall()
+        else:
+            rows = self.conn.execute(
+                f"SELECT * FROM retrieval_documents WHERE graph_node_id IN ({placeholders})",
+                ids,
+            ).fetchall()
         out: dict[str, list[RetrievalDocument]] = {}
         for row in rows:
             doc = _doc_from_row(row)
             out.setdefault(doc.graph_node_id, []).append(doc)
         return out
 
-    def bm25_search(self, query: str, *, limit: int = 50) -> list[RetrievalCandidate]:
+    def bm25_search(self, query: str, *, limit: int = 50, repo_id: str = "") -> list[RetrievalCandidate]:
         fts_query = _fts_query(query)
         if not fts_query:
             return []
+        if not self._fts_enabled:
+            return self.like_search(query, limit=limit, repo_id=repo_id)
         try:
-            rows = self.conn.execute(
-                """
-                SELECT doc_id, bm25(retrieval_documents_fts) AS score
-                FROM retrieval_documents_fts
-                WHERE retrieval_documents_fts MATCH ?
-                ORDER BY score ASC
-                LIMIT ?
-                """,
-                (fts_query, int(limit)),
-            ).fetchall()
+            safe_repo_id = str(repo_id or "").strip()
+            if safe_repo_id:
+                rows = self.conn.execute(
+                    """
+                    SELECT retrieval_documents_fts.doc_id, bm25(retrieval_documents_fts) AS score
+                    FROM retrieval_documents_fts
+                    JOIN retrieval_documents ON retrieval_documents.doc_id = retrieval_documents_fts.doc_id
+                    WHERE retrieval_documents_fts MATCH ? AND retrieval_documents.repo_id = ?
+                    ORDER BY score ASC
+                    LIMIT ?
+                    """,
+                    (fts_query, safe_repo_id, int(limit)),
+                ).fetchall()
+            else:
+                rows = self.conn.execute(
+                    """
+                    SELECT doc_id, bm25(retrieval_documents_fts) AS score
+                    FROM retrieval_documents_fts
+                    WHERE retrieval_documents_fts MATCH ?
+                    ORDER BY score ASC
+                    LIMIT ?
+                    """,
+                    (fts_query, int(limit)),
+                ).fetchall()
         except sqlite3.OperationalError:
-            return self.like_search(query, limit=limit)
+            return self.like_search(query, limit=limit, repo_id=repo_id)
         candidates: list[RetrievalCandidate] = []
         for rank, row in enumerate(rows, start=1):
             # SQLite bm25 is lower-is-better and often negative.
@@ -411,11 +532,11 @@ class RetrievalIndexStore:
             )
         return candidates
 
-    def like_search(self, query: str, *, limit: int = 50) -> list[RetrievalCandidate]:
+    def like_search(self, query: str, *, limit: int = 50, repo_id: str = "") -> list[RetrievalCandidate]:
         terms = sorted(_terms(query))[:8]
         if not terms:
             return []
-        rows = self.list_documents(limit=10000)
+        rows = self.list_documents(limit=10000, repo_id=repo_id)
         scored: list[tuple[float, RetrievalDocument]] = []
         for doc in rows:
             text = _normalize(f"{doc.title} {doc.body} {doc.packet_id} {doc.commit_sha} {doc.node_kind}")
@@ -428,12 +549,12 @@ class RetrievalIndexStore:
             for rank, (score, doc) in enumerate(scored[:limit], start=1)
         ]
 
-    def exact_search(self, query: str, *, limit: int = 50) -> list[RetrievalCandidate]:
+    def exact_search(self, query: str, *, limit: int = 50, repo_id: str = "") -> list[RetrievalCandidate]:
         tokens = _exact_tokens(query)
         if not tokens:
             return []
         candidates: list[tuple[float, RetrievalDocument]] = []
-        for doc in self.list_documents(limit=10000):
+        for doc in self.list_documents(limit=10000, repo_id=repo_id):
             haystack = f"{doc.doc_id} {doc.graph_node_id} {doc.title} {doc.body} {json.dumps(doc.metadata, sort_keys=True)}".lower()
             score = 0.0
             for token in tokens:
@@ -457,20 +578,109 @@ def build_retrieval_documents_from_graph(
     max_doc_chars: int = 5000,
     pipeline_version: str = "",
     graph_schema_version: str = "",
+    repo_id: str = "",
 ) -> list[RetrievalDocument]:
-    nodes = graph_store.list_nodes(
-        limit=node_limit,
-        kinds=kinds if kinds is not None else list(DEFAULT_RETRIEVAL_NODE_KINDS),
-        session_id=session_id,
+    docs: list[RetrievalDocument] = []
+
+    if kinds is not None:
+        return _documents_for_nodes(
+            graph_store.list_nodes(limit=node_limit, kinds=kinds, session_id=session_id),
+            max_doc_chars=max_doc_chars,
+            pipeline_version=pipeline_version,
+            graph_schema_version=graph_schema_version,
+            repo_id=repo_id,
+        )
+
+    active_graph_commit_ids = _active_graph_commit_ids(graph_store, repo_id=repo_id)
+    if active_graph_commit_ids:
+        central_docs = _documents_for_nodes(
+            (
+                node
+                for node in graph_store.list_nodes(
+                    limit=node_limit,
+                    kinds=list(CENTRAL_RETRIEVAL_NODE_KINDS),
+                    session_id=session_id,
+                )
+                if _is_active_central_node(node, active_graph_commit_ids, repo_id=repo_id)
+            ),
+            max_doc_chars=max_doc_chars,
+            pipeline_version=pipeline_version,
+            graph_schema_version=graph_schema_version,
+            repo_id=repo_id,
+        )
+        if central_docs:
+            docs.extend(central_docs)
+
+    docs.extend(
+        _documents_for_nodes(
+            graph_store.list_nodes(
+                limit=max(node_limit, 1),
+                kinds=list(SESSION_RETRIEVAL_NODE_KINDS),
+                session_id=session_id,
+            ),
+            max_doc_chars=max_doc_chars,
+            pipeline_version=pipeline_version,
+            graph_schema_version=graph_schema_version,
+            repo_id=repo_id,
+        )
     )
+    return docs
+
+
+def _documents_for_nodes(
+    nodes: Iterable[dict[str, Any]],
+    *,
+    max_doc_chars: int,
+    pipeline_version: str = "",
+    graph_schema_version: str = "",
+    repo_id: str = "",
+) -> list[RetrievalDocument]:
     docs: list[RetrievalDocument] = []
     for node in nodes:
         if pipeline_version and _node_version_value(node, "pipeline_version") != pipeline_version:
             continue
         if graph_schema_version and _node_version_value(node, "graph_schema_version") != graph_schema_version:
             continue
+        if repo_id and _node_repo_id(node) != repo_id:
+            continue
         docs.extend(_documents_for_node(node, max_doc_chars=max_doc_chars))
     return docs
+
+
+def _active_graph_commit_ids(graph_store: GraphStore, *, repo_id: str = "") -> set[str]:
+    safe_repo_id = str(repo_id or "").strip()
+    commit_ids: set[str] = set()
+    for node in graph_store.list_nodes(limit=100, kinds=["GraphView"]):
+        metadata = node.get("metadata") if isinstance(node.get("metadata"), dict) else {}
+        branch = str(metadata.get("branch") or "")
+        mode = str(metadata.get("mode") or "")
+        status = str(node.get("status") or metadata.get("status") or "")
+        node_repo_id = _node_repo_id(node)
+        if safe_repo_id and node_repo_id != safe_repo_id:
+            continue
+        if branch == "main" and mode == "active" and status == "active" and metadata.get("graph_commit_id"):
+            commit_ids.add(str(metadata.get("graph_commit_id") or ""))
+    return commit_ids
+
+
+def _is_active_central_node(node: dict[str, Any], active_graph_commit_ids: set[str], *, repo_id: str = "") -> bool:
+    node_kind = str(node.get("kind") or "")
+    metadata = node.get("metadata") if isinstance(node.get("metadata"), dict) else {}
+    graph_commit_id = str(metadata.get("graph_commit_id") or "")
+    safe_repo_id = str(repo_id or "").strip()
+    if safe_repo_id and _node_repo_id(node) != safe_repo_id:
+        return False
+    if node_kind == "GraphView":
+        return (
+            str(metadata.get("branch") or "") == "main"
+            and str(metadata.get("mode") or "") == "active"
+            and (not active_graph_commit_ids or graph_commit_id in active_graph_commit_ids)
+        )
+    if node_kind == "GraphCommit":
+        return str(node.get("id") or "") in active_graph_commit_ids or graph_commit_id in active_graph_commit_ids
+    if node_kind in {"KnowledgeAtom", "KnowledgeVersion"}:
+        return graph_commit_id in active_graph_commit_ids and str(node.get("status") or metadata.get("status") or "active") == "active"
+    return False
 
 
 def embed_missing_retrieval_documents(
@@ -481,11 +691,12 @@ def embed_missing_retrieval_documents(
     model: str,
     graph_scope: str,
     session_id: str = "",
+    repo_id: str = "",
     extraction_run_id: str = "",
     limit: int = 0,
     embedding_kind: str = RETRIEVAL_EMBEDDING_KIND,
 ) -> EmbeddingRunResult:
-    docs = index_store.list_documents(limit=100000)
+    docs = index_store.list_documents(limit=100000, repo_id=repo_id)
     existing = embedding_store.list_records(
         embedding_kind=embedding_kind,
         model=model,
@@ -556,6 +767,7 @@ def retrieve_session_graph(
     embedding_model: str = "",
     graph_scope: str = "",
     session_id: str = "",
+    repo_id: str = "",
     limit: int = 10,
     candidate_limit: int = 80,
     expand_neighbors: int = 12,
@@ -569,8 +781,9 @@ def retrieve_session_graph(
     include_graph_nodes: bool = True,
 ) -> RetrievalResult:
     intent = classify_query(query)
-    exact = index_store.exact_search(query, limit=candidate_limit)
-    bm25 = index_store.bm25_search(query, limit=candidate_limit)
+    safe_repo_id = str(repo_id or "").strip()
+    exact = index_store.exact_search(query, limit=candidate_limit, repo_id=safe_repo_id)
+    bm25 = index_store.bm25_search(query, limit=candidate_limit, repo_id=safe_repo_id)
     vector, vector_status = _vector_candidates(
         query=query,
         index_store=index_store,
@@ -578,6 +791,7 @@ def retrieve_session_graph(
         embedder=embedder,
         embedding_model=embedding_model,
         graph_scope=graph_scope,
+        repo_id=safe_repo_id,
         candidate_limit=candidate_limit,
         embedding_kind=embedding_kind,
     )
@@ -586,7 +800,7 @@ def retrieve_session_graph(
     candidate_sets = {"exact": exact, "bm25": bm25, "vector": vector}
     source_scores = _candidate_raw_scores(candidate_sets)
     fused = _rrf_fuse(candidate_sets)
-    docs_by_id = index_store.get_documents_by_ids(doc_id for doc_id, _score, _sources in fused)
+    docs_by_id = index_store.get_documents_by_ids((doc_id for doc_id, _score, _sources in fused), repo_id=safe_repo_id)
     ranked: list[tuple[RetrievalDocument, float, tuple[str, ...], tuple[str, ...], tuple[dict[str, Any], ...]]] = []
     for doc_id, fused_score, sources in fused:
         doc = docs_by_id.get(doc_id)
@@ -759,6 +973,7 @@ def _documents_for_node(node: dict[str, Any], *, max_doc_chars: int) -> list[Ret
     doc_type = _doc_type(node_kind)
     memory_class = _memory_class(doc_type, node_kind)
     packet_id = str(metadata.get("packet_id") or metadata.get("source_packet_id") or node.get("packet_id") or "")
+    repo_id = _node_repo_id(node)
     commit_sha = str(
         metadata.get("commit_sha")
         or metadata.get("source_commit_sha")
@@ -782,11 +997,12 @@ def _documents_for_node(node: dict[str, Any], *, max_doc_chars: int) -> list[Ret
                 commit_sha=commit_sha,
                 title=title,
                 body=chunk,
+                repo_id=repo_id,
                 chunk_index=index,
                 chunk_count=len(chunks),
                 memory_class=memory_class,
                 importance=_importance(doc_type, node_kind, metadata),
-                metadata={"node_metadata": _retrieval_metadata(metadata), "chunked": len(chunks) > 1},
+                metadata={"repo_id": repo_id, "node_metadata": _retrieval_metadata(metadata), "chunked": len(chunks) > 1},
             )
         )
     return out
@@ -794,6 +1010,11 @@ def _documents_for_node(node: dict[str, Any], *, max_doc_chars: int) -> list[Ret
 
 def _retrieval_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
     keep = {
+        "atom_id",
+        "atom_kind",
+        "branch",
+        "canonical_key",
+        "canonical_key_version",
         "packet_id",
         "source_packet_id",
         "commit_sha",
@@ -809,9 +1030,17 @@ def _retrieval_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
         "paths",
         "evidence_refs",
         "version_count",
+        "graph_commit_id",
+        "idempotency_key",
+        "job_id",
+        "merge_plan_id",
+        "mode",
+        "repo_id",
+        "source_node_ids",
         "status",
         "pipeline_version",
         "graph_schema_version",
+        "version_metadata",
     }
     return {key: metadata[key] for key in keep if key in metadata}
 
@@ -819,6 +1048,11 @@ def _retrieval_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
 def _node_version_value(node: dict[str, Any], key: str) -> str:
     metadata = node.get("metadata") if isinstance(node.get("metadata"), dict) else {}
     return str(node.get(key) or metadata.get(key) or "")
+
+
+def _node_repo_id(node: dict[str, Any]) -> str:
+    metadata = node.get("metadata") if isinstance(node.get("metadata"), dict) else {}
+    return str(node.get("repo_id") or metadata.get("repo_id") or "")
 
 
 def _compact_output_node(node: dict[str, Any]) -> dict[str, Any]:
@@ -859,6 +1093,21 @@ def _node_body(node: dict[str, Any]) -> str:
         f"commit: {node.get('commit_id') or metadata.get('commit_sha') or ''}",
         f"packet: {metadata.get('packet_id') or metadata.get('source_packet_id') or ''}",
     ]
+    for key in (
+        "atom_kind",
+        "canonical_key",
+        "atom_id",
+        "graph_commit_id",
+        "merge_plan_id",
+        "repo_id",
+        "source_node_ids",
+        "version_metadata",
+    ):
+        if key in metadata:
+            value = metadata[key]
+            if isinstance(value, (dict, list, tuple)):
+                value = json.dumps(value, sort_keys=True)
+            fields.append(f"{key}: {value}")
     for key in (
         "node_type",
         "subject",
@@ -915,6 +1164,7 @@ def _vector_candidates(
     graph_scope: str,
     candidate_limit: int,
     embedding_kind: str,
+    repo_id: str = "",
 ) -> tuple[list[RetrievalCandidate], str]:
     if embedding_store is None or embedder is None or not embedding_model:
         return [], "not_requested"
@@ -936,11 +1186,17 @@ def _vector_candidates(
         else:
             hits_without_graph_path.append(hit)
     if hits_without_graph_path:
-        docs_by_node = index_store.documents_by_graph_node_ids(hit.node_id for hit in hits_without_graph_path)
+        docs_by_node = index_store.documents_by_graph_node_ids(
+            (hit.node_id for hit in hits_without_graph_path),
+            repo_id=repo_id,
+        )
         for hit in hits_without_graph_path:
             for doc in docs_by_node.get(hit.node_id, [])[:1]:
                 doc_ids.append(doc.doc_id)
                 scores[doc.doc_id] = max(scores.get(doc.doc_id, 0.0), hit.score)
+    if repo_id:
+        docs_by_id = index_store.get_documents_by_ids(doc_ids, repo_id=repo_id)
+        doc_ids = [doc_id for doc_id in doc_ids if doc_id in docs_by_id]
     return (
         [
             RetrievalCandidate(doc_id, "vector", rank, scores.get(doc_id, 0.0))
@@ -998,15 +1254,31 @@ def _rerank_document(
         score += min(0.4, overlap_ratio * 0.4)
         reasons.append("term_overlap:" + ",".join(overlap[:8]))
     topic_terms = _topic_terms(query, intent)
+    topic_overlap_ratio = 0.0
     if topic_terms:
         topic_overlap = [term for term in topic_terms if term in primary_text]
         if topic_overlap:
-            topic_ratio = len(topic_overlap) / max(1, len(topic_terms))
-            score += min(0.5, topic_ratio * 0.5)
+            topic_overlap_ratio = len(topic_overlap) / max(1, len(topic_terms))
+            score += min(0.5, topic_overlap_ratio * 0.5)
             reasons.append("topic_focus_overlap:" + ",".join(topic_overlap[:8]))
         elif intent in {"code_why", "decision_history"}:
             score -= 0.18
             reasons.append("topic_focus_penalty")
+    if doc.doc_type == "central_version":
+        central_boost = _central_version_boost(doc, intent=intent, query=query, topic_overlap_ratio=topic_overlap_ratio)
+        score += central_boost
+        if central_boost:
+            reasons.append(f"central_active_boost:{round(central_boost, 3)}")
+        else:
+            score -= 0.05
+            reasons.append("central_low_topic_overlap_penalty")
+    elif doc.doc_type == "central_atom":
+        if topic_overlap_ratio >= 0.4 or intent == "version_flow" or _query_has_code_locator(query):
+            score += 0.10
+            reasons.append("central_atom_context_boost")
+    elif doc.doc_type == "graph_lineage" and intent not in {"version_flow"}:
+        score -= 0.12
+        reasons.append("graph_lineage_penalty")
     if intent in {"code_why", "decision_history"} and doc.doc_type == "reasoning":
         score += 0.25
         reasons.append("reasoning_boost")
@@ -1065,6 +1337,7 @@ def _doc_from_row(row: sqlite3.Row) -> RetrievalDocument:
         commit_sha=str(row["commit_sha"]),
         title=str(row["title"]),
         body=str(row["body"]),
+        repo_id=str(row["repo_id"]),
         chunk_index=int(row["chunk_index"]),
         chunk_count=int(row["chunk_count"]),
         memory_class=str(row["memory_class"]),
@@ -1073,7 +1346,21 @@ def _doc_from_row(row: sqlite3.Row) -> RetrievalDocument:
     )
 
 
+def _table_columns(conn: sqlite3.Connection, table: str) -> tuple[str, ...]:
+    try:
+        rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
+    except sqlite3.OperationalError:
+        return ()
+    return tuple(str(row["name"]) for row in rows)
+
+
 def _doc_type(node_kind: str) -> str:
+    if node_kind == "KnowledgeVersion":
+        return "central_version"
+    if node_kind == "KnowledgeAtom":
+        return "central_atom"
+    if node_kind in {"GraphCommit", "GraphView"}:
+        return "graph_lineage"
     if node_kind in {"ReasoningNode", "DecisionUnit", "DecisionThread"}:
         return "reasoning"
     if node_kind in {"WorkChange", "GitCommit", "Commit"}:
@@ -1088,6 +1375,12 @@ def _doc_type(node_kind: str) -> str:
 
 
 def _memory_class(doc_type: str, node_kind: str) -> str:
+    if doc_type == "central_version":
+        return "central_active_memory"
+    if doc_type == "central_atom":
+        return "central_canonical_atom"
+    if doc_type == "graph_lineage":
+        return "graph_lineage"
     if doc_type == "reasoning":
         return "answer_grade_reasoning"
     if doc_type == "code":
@@ -1104,6 +1397,12 @@ def _memory_class(doc_type: str, node_kind: str) -> str:
 def _importance(doc_type: str, node_kind: str, metadata: dict[str, Any]) -> float:
     if isinstance(metadata.get("importance"), (int, float)):
         return float(metadata["importance"])
+    if doc_type == "central_version":
+        return 0.95
+    if doc_type == "central_atom":
+        return 0.75
+    if doc_type == "graph_lineage":
+        return 0.25
     if doc_type == "reasoning":
         return 0.9
     if node_kind == "WorkChange" or doc_type == "commit":
@@ -1211,6 +1510,26 @@ def _doc_node_type(doc: RetrievalDocument) -> str:
     if isinstance(metadata, dict):
         return str(metadata.get("node_type") or "")
     return str(doc.metadata.get("node_type") or "") if isinstance(doc.metadata, dict) else ""
+
+
+def _central_version_boost(
+    doc: RetrievalDocument,
+    *,
+    intent: str,
+    query: str,
+    topic_overlap_ratio: float,
+) -> float:
+    metadata = doc.metadata.get("node_metadata") if isinstance(doc.metadata, dict) else {}
+    atom_kind = str(metadata.get("atom_kind") or "") if isinstance(metadata, dict) else ""
+    if atom_kind in {"decision", "problem"}:
+        return 0.45
+    if intent == "version_flow" or _query_has_code_locator(query):
+        return 0.55
+    if topic_overlap_ratio >= 0.6:
+        return 0.45
+    if topic_overlap_ratio >= 0.4:
+        return 0.18
+    return 0.0
 
 
 def _looks_like_test_artifact(doc: RetrievalDocument) -> bool:

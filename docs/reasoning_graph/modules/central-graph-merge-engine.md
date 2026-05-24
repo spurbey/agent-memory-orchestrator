@@ -19,29 +19,66 @@ Promote selected session graph nodes into central graph and preserve version his
 
 ## Inputs
 
-Selected extraction run, commit details, diff summary, patch id, session graph nodes, central candidates.
+Selected extraction run, commit details, diff summary, patch id, session graph
+nodes, `repo_id`, and existing central candidates for the same repository.
 
 ## Outputs
 
-Central nodes, merge/version edges, status updates, review candidates, contested propagation.
+Central nodes, merge/version edges, status updates, review candidates,
+contested propagation, `GraphCommit`, and repo-scoped `GraphView`.
 
 ## Owned state
 
-Merge plan and merge result records.
+Merge plan, merge result records, central merge locks, graph commits, graph
+views, and review candidates in SQLite. Kuzu stores graph-visible central nodes
+and lineage.
 
 ## Public interfaces planned
 
 - `plan_merge(session_id, extraction_run_id, commit) -> MergePlan`
 - `apply_merge(plan_id) -> MergeResult`
 
+Production V2 currently exposes this through `central_version_merge` job
+artifacts plus:
+
+```text
+amo-cli v2-merge-plan --job-id ...
+amo-cli v2-merge-apply --plan-id ...
+amo-cli graph-version-flow --repo-id ...
+```
+
 ## Kuzu writes
 
-Writes central answer-grade nodes, `COMMITTED_AS`, `DUPLICATE_OF`, `REFINES`, `SUPERSEDES`, `CONFLICTS_WITH`, `REVERTS`, `MODIFIES`, `LINKED_TO_COMMIT`, and status updates.
+The exact-atom implementation writes `KnowledgeAtom`, `KnowledgeVersion`,
+`GraphCommit`, `GraphView`, `VERSION_OF`, `DERIVED_FROM_SESSION_NODE`,
+`TOUCHES_FILE`, `TOUCHES_SYMBOL`, and `IMPLEMENTED_BY_COMMIT`.
+
+Every central write carries `repo_id`, `merge_plan_id`, `graph_commit_id`,
+`pipeline_version`, `graph_schema_version`, and an idempotency key. Locks and
+GraphView heads are scoped by `repo_id + branch + mode`, so two repositories do
+not block or overwrite each other.
+
+Decision/problem evolution edges (`DUPLICATE_OF`, `REFINES`, `SUPERSEDES`,
+`CONFLICTS_WITH`, `REVERTS`) are intentionally deferred until semantic evals
+prove safe matching. They should start as review candidates, not automatic
+truth.
+
+The current decision/problem phase is dry-run only. It extracts decision frames
+from accepted session `ReasoningNode` nodes and their typed `REASON_NODE_*`
+edges, then persists only review candidates. `RELATED_REVIEW` means "inspect
+this possible relation"; it is not canonical truth and does not change the
+active `GraphView`.
 
 ## Failure modes
 
-Low-confidence Qwen relation becomes review candidate. Missing commit blocks code-linked central promotion unless explicit non-code finalize is requested. Invalid provenance rejects node promotion.
+Missing `repo_id` blocks answer-grade central promotion because canonical keys
+would be ambiguous. Branch-head mismatch for the same `repo_id` forces replan.
+Low-confidence relation becomes review candidate. Missing commit blocks
+code-linked central promotion unless explicit non-code finalize is requested.
+Invalid provenance rejects node promotion.
 
 ## Validation checks
 
-No raw/support node promoted. Every promoted node has evidence, extraction run, and commit when code-linked.
+No raw/support node promoted. Every promoted node has evidence, extraction run,
+`repo_id`, and commit when code-linked. Retrieval should be able to ask for one
+repo and see only that repo's active central view plus session provenance.

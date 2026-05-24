@@ -80,7 +80,7 @@ h3 { margin: 0; font-size: 15px; }
   box-shadow: 0 18px 48px rgba(183, 245, 110, 0.18);
 }
 .hud-actions { display: flex; align-items: center; justify-content: flex-end; gap: 9px; flex-wrap: wrap; }
-.status-chip, .control-btn, .primary-btn, .ghost-btn {
+.status-chip, .control-btn, .primary-btn, .ghost-btn, .repo-select {
   min-height: 38px;
   border-radius: 14px;
   border: 1px solid var(--line);
@@ -88,6 +88,7 @@ h3 { margin: 0; font-size: 15px; }
   color: var(--ink);
   padding: 0 13px;
 }
+.repo-select { max-width: 280px; color: var(--accent); }
 .status-chip { display: inline-flex; align-items: center; color: var(--muted); font: 12px var(--mono); }
 .status-chip.good { color: var(--accent); border-color: rgba(183, 245, 110, 0.38); }
 .status-chip.warn { color: var(--gold); border-color: rgba(242, 207, 120, 0.36); }

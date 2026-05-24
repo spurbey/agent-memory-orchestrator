@@ -11,6 +11,7 @@ from agent_memory_orchestrator.core.db import connect
 from agent_memory_orchestrator.reasoning_graph.embedding_store import GraphEmbeddingRecord
 from agent_memory_orchestrator.reasoning_graph.embedding_store import GraphEmbeddingStore
 from agent_memory_orchestrator.reasoning_graph.jobs import V2SessionJobStore
+from agent_memory_orchestrator.reasoning_graph.jobs.store import graph_view_id
 from agent_memory_orchestrator.reasoning_graph.jobs.constants import GRAPH_SCHEMA_VERSION
 from agent_memory_orchestrator.reasoning_graph.jobs.constants import PIPELINE_VERSION
 from agent_memory_orchestrator.reasoning_graph.jobs.reset import adopt_existing_v2_production_storage
@@ -165,6 +166,36 @@ def test_v2_schema_adds_central_merge_control_tables(tmp_path: Path) -> None:
     }.issubset(names)
 
 
+def test_v2_jobs_and_repository_list_are_repo_scoped(tmp_path: Path) -> None:
+    settings = make_settings(tmp_path)
+    repo_a = tmp_path / "repo-a"
+    repo_b = tmp_path / "repo-b"
+    repo_a.mkdir()
+    repo_b.mkdir()
+    store = V2SessionJobStore(settings)
+    try:
+        job_a = store.enqueue_session(
+            session_id="s-repo-a",
+            boundary_event_id="raw_a",
+            repo_path=str(repo_a),
+            repo_id="repo:test:a",
+        ).job
+        job_b = store.enqueue_session(
+            session_id="s-repo-b",
+            boundary_event_id="raw_b",
+            repo_path=str(repo_b),
+            repo_id="repo:test:b",
+        ).job
+
+        scoped = store.list_jobs(repo_id=job_a["repo_id"])
+        repos = store.list_repositories()
+    finally:
+        store.close()
+
+    assert [job["session_id"] for job in scoped] == ["s-repo-a"]
+    assert {row["repo_id"] for row in repos} >= {job_a["repo_id"], job_b["repo_id"]}
+
+
 def test_v2_central_merge_stage_writes_dry_run_plan_and_preserves_session_graph(tmp_path: Path) -> None:
     settings = make_settings(tmp_path)
     store = V2SessionJobStore(settings)
@@ -214,7 +245,7 @@ def test_v2_central_merge_stage_writes_dry_run_plan_and_preserves_session_graph(
         assert plan_row["metrics"]["review_candidate_count"] == 0
         assert plan_row["plan"]["new_atoms"]
         assert plan_row["plan"]["new_versions"]
-        assert store.graph_view(branch="main", mode="active") is not None
+        assert store.graph_view(repo_id=plan_row["repo_id"], branch="main", mode="active") is not None
         stage = store.stage_row(job_id=job["job_id"], stage="central_version_merge")
         assert stage is not None
         assert Path(stage["output_artifact"]).name == "merge_plan.json"
@@ -250,14 +281,20 @@ def test_v2_central_merge_apply_writes_exact_atoms_graph_commit_and_view(tmp_pat
 
         assert applied["ok"] is True
         assert applied["status"] == "applied"
+        result_artifact = Path(applied["result_artifact"])
+        assert result_artifact.name == "merge_result.json"
+        assert result_artifact.exists()
+        merge_result = json.loads(result_artifact.read_text(encoding="utf-8"))
+        assert merge_result["status"] == "applied"
+        assert merge_result["graph_commit"]["graph_commit_id"] == applied["graph_commit"]["graph_commit_id"]
         updated_plan = store.get_central_merge_plan(stored["plan_id"])
         assert updated_plan is not None
         assert updated_plan["status"] == "applied"
-        view = store.graph_view(branch="main", mode="active")
+        view = store.graph_view(repo_id=applied["repo_id"], branch="main", mode="active")
         assert view is not None
         assert view["graph_commit_id"] == applied["graph_commit"]["graph_commit_id"]
         assert graph.nodes[applied["graph_commit"]["graph_commit_id"]].kind == "GraphCommit"
-        assert graph.nodes["v2view:main:active"].kind == "GraphView"
+        assert graph.nodes[graph_view_id(repo_id=applied["repo_id"], branch="main", mode="active")].kind == "GraphView"
         atom_nodes = [node for node in graph.nodes.values() if node.kind == "KnowledgeAtom"]
         version_nodes = [node for node in graph.nodes.values() if node.kind == "KnowledgeVersion"]
         central_nodes = [
@@ -274,6 +311,14 @@ def test_v2_central_merge_apply_writes_exact_atoms_graph_commit_and_view(tmp_pat
         derived_targets = {edge.target_id for edge in graph.edges.values() if edge.kind == "DERIVED_FROM_SESSION_NODE"}
         assert "jobprefix:commit:abc123" in derived_targets
         assert "commit:abc123" not in derived_targets
+        fixture = export_job_fixture(settings, job_id=job["job_id"], out_dir=tmp_path / "applied-fixture")
+        central = fixture["fixture"]["semantic_context"]["central_version_merge"]
+        assert central["applied"] is True
+        assert central["status"] == "applied"
+        assert central["mode"] == "apply_exact_atoms"
+        assert central["graph_commit_id"] == applied["graph_commit"]["graph_commit_id"]
+        assert central["active_graph_view_head"] == applied["graph_commit"]["graph_commit_id"]
+        assert central["graph_commit_status"] == "applied"
 
         node_count = len(graph.nodes)
         edge_count = len(graph.edges)
@@ -309,6 +354,80 @@ def test_v2_central_merge_apply_requires_matching_graph_view_head(tmp_path: Path
         failed_plan = store.get_central_merge_plan(second["plan_id"])
         assert failed_plan is not None
         assert failed_plan["status"] == "failed_recoverable"
+    finally:
+        store.close()
+
+
+def test_v2_central_merge_planner_reports_matched_exact_atoms(tmp_path: Path) -> None:
+    settings = make_settings(tmp_path)
+    store = V2SessionJobStore(settings)
+    try:
+        first_job = store.enqueue_session(session_id="s-match-a", boundary_event_id="raw_boundary_a", repo_path=str(tmp_path)).job
+        second_job = store.enqueue_session(session_id="s-match-b", boundary_event_id="raw_boundary_b", repo_path=str(tmp_path)).job
+        compact_graph = {"nodes": [{"id": "commit:abc123", "kind": "Commit", "properties": {"full_sha": "abc123"}}], "edges": []}
+        first_plan = build_dry_run_merge_plan(job=first_job, compact_graph=compact_graph, parent_graph_commit_id="")
+        existing = {first_plan.new_atoms[0]["canonical_key"]: first_plan.new_atoms[0]}
+
+        second_plan = build_dry_run_merge_plan(
+            job=second_job,
+            compact_graph=compact_graph,
+            parent_graph_commit_id="v2gcommit:parent",
+            existing_atoms_by_canonical_key=existing,
+        )
+
+        assert second_plan.new_atoms == []
+        assert len(second_plan.matched_atoms) == 1
+        assert second_plan.matched_atoms[0]["match_reason"] == "canonical_key_exact"
+        assert second_plan.metrics["exact_atom_created_count"] == 0
+        assert second_plan.metrics["exact_atom_matched_count"] == 1
+        assert second_plan.new_versions[0]["atom_id"] == first_plan.new_atoms[0]["atom_id"]
+    finally:
+        store.close()
+
+
+def test_v2_central_merge_apply_attaches_versions_to_matched_atoms(tmp_path: Path) -> None:
+    settings = make_settings(tmp_path)
+    graph = InMemoryGraphStore()
+    store = V2SessionJobStore(settings)
+    try:
+        first_job = store.enqueue_session(session_id="s-match-apply-a", boundary_event_id="raw_boundary_a", repo_path=str(tmp_path)).job
+        second_job = store.enqueue_session(session_id="s-match-apply-b", boundary_event_id="raw_boundary_b", repo_path=str(tmp_path)).job
+        compact_graph = {"nodes": [{"id": "commit:abc123", "kind": "Commit", "properties": {"full_sha": "abc123"}}], "edges": []}
+        first_plan = build_dry_run_merge_plan(job=first_job, compact_graph=compact_graph, parent_graph_commit_id="")
+        existing_atom = first_plan.new_atoms[0]
+        graph.upsert_node(
+            GraphNode(
+                id=existing_atom["atom_id"],
+                kind="KnowledgeAtom",
+                label="abc123",
+                status="active",
+                scope="central",
+                metadata={
+                    "atom_kind": "commit",
+                    "repo_id": existing_atom["repo_id"],
+                    "canonical_key": existing_atom["canonical_key"],
+                    "canonical_key_version": existing_atom["canonical_key_version"],
+                },
+            )
+        )
+        second_plan = build_dry_run_merge_plan(
+            job=second_job,
+            compact_graph=compact_graph,
+            parent_graph_commit_id="",
+            existing_atoms_by_canonical_key={existing_atom["canonical_key"]: existing_atom},
+        )
+        stored = store.upsert_central_merge_plan(second_plan.as_dict())
+
+        applied = apply_merge_plan(settings=settings, plan_id=stored["plan_id"], store=store, graph_store=graph)
+
+        assert applied["ok"] is True
+        atom_nodes = [node for node in graph.nodes.values() if node.kind == "KnowledgeAtom"]
+        assert len(atom_nodes) == 1
+        version_nodes = [node for node in graph.nodes.values() if node.kind == "KnowledgeVersion"]
+        assert len(version_nodes) == 1
+        version_of_edges = [edge for edge in graph.edges.values() if edge.kind == "VERSION_OF"]
+        assert len(version_of_edges) == 1
+        assert version_of_edges[0].target_id == existing_atom["atom_id"]
     finally:
         store.close()
 
