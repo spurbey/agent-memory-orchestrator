@@ -272,6 +272,30 @@ class V2SessionJobStore:
         )
         self.conn.commit()
 
+    def update_job_repo_path(
+        self,
+        *,
+        job_id: str,
+        repo_path: str,
+        reason: str = "repo_resolved",
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any] | None:
+        now = utc_now()
+        safe_repo_path = str(repo_path or "").strip()
+        self.conn.execute(
+            "UPDATE v2_session_jobs SET repo_path=?, updated_at=? WHERE job_id=?",
+            (safe_repo_path, now, job_id),
+        )
+        self.conn.commit()
+        self.log_event(
+            job_id=job_id,
+            event_type="repo_resolved",
+            stage="",
+            message=reason,
+            metadata={"repo_path": safe_repo_path, **(metadata or {})},
+        )
+        return self.get_job(job_id)
+
     def list_jobs(self, *, limit: int = 100) -> list[dict[str, Any]]:
         rows = self.conn.execute(
             "SELECT * FROM v2_session_jobs ORDER BY updated_at DESC LIMIT ?",
