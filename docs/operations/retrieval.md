@@ -20,6 +20,9 @@ query
 The ranker is graph-first. Vector and cross-encoder scores improve ordering, but
 they do not replace graph provenance or packet-level reasoning.
 
+- Retrieval is repo-scoped when `repo_id` is provided. The default dashboard
+  view can show all repositories for inspection, but answer-grade searches
+  should use the selected repository when the user is working inside one repo.
 - When `GraphView(main, active)` exists, retrieval projects active central
   `KnowledgeVersion` documents first. Session graph nodes remain indexed as
   packet/commit/evidence/code support.
@@ -85,8 +88,8 @@ manual/smoke graph output out of the production retrieval ledger.
 Phase 5 retrieval is central-aware:
 
 ```text
-if active GraphView has central versions:
-  build central-first docs from active KnowledgeVersion/KnowledgeAtom
+if active GraphView(repo_id, main, active) has central versions:
+  build central-first docs from active KnowledgeVersion/KnowledgeAtom for repo_id
   also index session graph docs as provenance support
 else:
   fall back to V2 session graph docs
@@ -110,6 +113,13 @@ amo-cli graph-retrieval-build
 amo-cli graph-retrieval-embed --model BAAI/bge-m3
 ```
 
+Scope maintenance to one repository when needed:
+
+```bash
+amo-cli graph-retrieval-build --repo-id repo:remote:...
+amo-cli graph-retrieval-embed --repo-id repo:remote:... --model BAAI/bge-m3
+```
+
 These commands are maintenance/smoke tools. The normal closed-session production
 path uses the V2 job runner so stage status, errors, and retries are observable
 from `/api/jobs` and the dashboard Admin view.
@@ -118,6 +128,7 @@ from `/api/jobs` and the dashboard Admin view.
 
 ```bash
 amo-cli graph-retrieve --query "why did this code change?" --require-vector
+amo-cli graph-retrieve --repo-id repo:remote:... --query "why did this code change?"
 ```
 
 Enable cross-encoder reranking:
@@ -161,6 +172,12 @@ CLI: `/graph/retrieve`. It should show:
 - reranker label, for example `deterministic+bi_encoder+cross_encoder`
 - ranked hits
 - packet, commit, evidence, code-node, and answer-trace citations
+
+The repository selector at the top of the dashboard sets `repo_id` for sessions,
+jobs, central graph, version flow, and retrieval. The Graph Workbench has the
+same selector. Use `All repositories` only for operator/debug scans; use a
+specific repo for product retrieval so similarly named files or symbols in
+different projects do not compete.
 
 The dashboard no longer exposes the older `/graph/search` path. `/graph/search`
 remains only as a compatibility/smoke route for old tooling. Product retrieval
