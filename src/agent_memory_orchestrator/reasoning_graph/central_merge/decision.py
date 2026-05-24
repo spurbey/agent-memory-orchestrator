@@ -1,21 +1,467 @@
 from __future__ import annotations
 
+import json
+import re
+from dataclasses import asdict
+from dataclasses import dataclass
+from itertools import combinations
 from typing import Any
 
+from .models import ReviewCandidate
+from .models import stable_hash
 
-def build_decision_review_candidates(*, session_nodes: list[dict[str, Any]], central_nodes: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+
+REASONING_EDGE_PREFIX = "REASON_NODE_"
+
+STOPWORDS = {
+    "a",
+    "about",
+    "add",
+    "adds",
+    "after",
+    "an",
+    "and",
+    "are",
+    "as",
+    "be",
+    "because",
+    "before",
+    "by",
+    "change",
+    "commit",
+    "decision",
+    "did",
+    "do",
+    "done",
+    "for",
+    "from",
+    "has",
+    "have",
+    "in",
+    "into",
+    "is",
+    "it",
+    "make",
+    "of",
+    "on",
+    "or",
+    "problem",
+    "run",
+    "that",
+    "the",
+    "this",
+    "to",
+    "was",
+    "were",
+    "with",
+}
+
+
+@dataclass(slots=True, frozen=True)
+class DecisionFrame:
+    frame_id: str
+    source_node_id: str
+    repo_id: str
+    frame_kind: str
+    summary: str
+    subject: str
+    statement: str
+    rationale: str
+    linked_files: list[str]
+    linked_symbols: list[str]
+    linked_code_nodes: list[str]
+    linked_code_versions: list[str]
+    linked_commits: list[str]
+    linked_packets: list[str]
+    evidence_refs: list[str]
+    tokens: list[str]
+    graph_neighbor_signature: list[str]
+
+    def as_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+def build_decision_review_candidates(
+    *,
+    session_nodes: list[dict[str, Any]] | None = None,
+    central_nodes: list[dict[str, Any]] | None = None,
+    compact_graph: dict[str, Any] | None = None,
+    repo_id: str = "",
+    job_id: str = "",
+    plan_id: str = "",
+) -> dict[str, Any]:
+    """Build decision/problem dry-run frames and review candidates.
+
+    This intentionally does not create central decision atoms. It extracts a
+    debuggable frame from accepted reasoning nodes and their graph neighbors so
+    later phases can judge duplicate/refine/supersede candidates before any
+    status mutation is allowed.
+    """
+
     del central_nodes
+    frames = build_decision_frames(compact_graph=compact_graph or {}, session_nodes=session_nodes or [], repo_id=repo_id)
+    candidates = _review_candidates(frames=frames, job_id=job_id, plan_id=plan_id)
+    high_risk = [candidate for candidate in candidates if candidate["score"].get("false_positive_risk")]
+    relation_counts: dict[str, int] = {}
+    for candidate in candidates:
+        relation = str(candidate.get("proposed_relation") or "")
+        relation_counts[relation] = relation_counts.get(relation, 0) + 1
     return {
-        "candidates": [],
+        "frames": [frame.as_dict() for frame in frames],
+        "candidates": candidates,
         "metrics": {
-            "decision_candidate_count": 0,
-            "review_candidate_count": 0,
-            "deferred_session_decision_count": sum(1 for node in session_nodes if _is_decision_like(node)),
-            "note": "Decision/problem semantic matching is intentionally dry-run/deferred until exact atom merge is proven.",
+            "decision_frame_count": len(frames),
+            "decision_candidate_count": len(candidates),
+            "review_candidate_count": len(candidates),
+            "candidate_relation_counts": relation_counts,
+            "false_positive_risk_count": len(high_risk),
+            "deferred_central_decision_atom_count": len(frames),
+            "note": "Decision/problem matching is dry-run only; no central decision status is mutated.",
         },
     }
 
 
+def build_decision_frames(
+    *,
+    compact_graph: dict[str, Any] | None = None,
+    session_nodes: list[dict[str, Any]] | None = None,
+    repo_id: str = "",
+) -> list[DecisionFrame]:
+    nodes = _nodes(compact_graph) if compact_graph else list(session_nodes or [])
+    if not nodes:
+        return []
+    edges = _edges(compact_graph) if compact_graph else []
+    node_by_id = {_node_id(node): node for node in nodes if _node_id(node)}
+    edges_by_node = _edges_by_node(edges)
+    frames: list[DecisionFrame] = []
+    for node in nodes:
+        if not _is_decision_like(node):
+            continue
+        node_id = _node_id(node)
+        props = _properties(node)
+        summary = _first(props, "statement", "summary", "label")
+        subject = _first(props, "subject", "title", "label")
+        statement = _first(props, "statement", "summary")
+        rationale = _first(props, "reason", "rationale", "why")
+        edge_context = _edge_context(
+            node_id=node_id,
+            edges=edges_by_node.get(node_id, []),
+            node_by_id=node_by_id,
+        )
+        linked_packets = _dedupe([_first(props, "source_packet_id", "packet_id"), *edge_context["packets"]])
+        linked_commits = _dedupe([_first(props, "source_commit_sha", "commit_sha"), *edge_context["commits"]])
+        evidence_refs = _dedupe([*_list(props.get("evidence_refs")), *edge_context["evidence_refs"]])
+        linked_files = _dedupe(edge_context["files"])
+        linked_symbols = _dedupe(edge_context["symbols"])
+        text_for_tokens = " ".join([summary, subject, statement, rationale])
+        tokens = _tokens(text_for_tokens)
+        signature = _dedupe(edge_context["neighbor_signature"])
+        frame_seed = {"repo_id": repo_id, "source_node_id": node_id, "summary": summary}
+        frames.append(
+            DecisionFrame(
+                frame_id=f"dframe:{stable_hash(frame_seed)[:24]}",
+                source_node_id=node_id,
+                repo_id=repo_id,
+                frame_kind=_frame_kind(props, summary),
+                summary=summary,
+                subject=subject,
+                statement=statement,
+                rationale=rationale,
+                linked_files=linked_files,
+                linked_symbols=linked_symbols,
+                linked_code_nodes=_dedupe(edge_context["code_nodes"]),
+                linked_code_versions=_dedupe(edge_context["code_versions"]),
+                linked_commits=linked_commits,
+                linked_packets=linked_packets,
+                evidence_refs=evidence_refs,
+                tokens=tokens,
+                graph_neighbor_signature=signature,
+            )
+        )
+    return frames
+
+
+def _review_candidates(*, frames: list[DecisionFrame], job_id: str, plan_id: str) -> list[dict[str, Any]]:
+    candidates: list[dict[str, Any]] = []
+    for left, right in combinations(frames, 2):
+        score = _pair_score(left, right)
+        if score["total"] < 0.52 and not _is_text_only_review(score):
+            continue
+        relation, reason = _relation_for_score(score)
+        if relation == "":
+            continue
+        candidate_seed = {
+            "plan_id": plan_id,
+            "source": left.source_node_id,
+            "target": right.source_node_id,
+            "relation": relation,
+        }
+        candidates.append(
+            ReviewCandidate(
+                candidate_id=f"v2review:{stable_hash(candidate_seed)[:32]}",
+                plan_id=plan_id,
+                job_id=job_id,
+                source_node_id=left.source_node_id,
+                target_node_id=right.source_node_id,
+                proposed_relation=relation,
+                score={
+                    **score,
+                    "source_summary": left.summary,
+                    "target_summary": right.summary,
+                    "source_files": left.linked_files[:12],
+                    "target_files": right.linked_files[:12],
+                    "source_symbols": left.linked_symbols[:12],
+                    "target_symbols": right.linked_symbols[:12],
+                },
+                reason=reason,
+            ).as_dict()
+        )
+    return candidates
+
+
+def _pair_score(left: DecisionFrame, right: DecisionFrame) -> dict[str, Any]:
+    lexical = _jaccard(left.tokens, right.tokens)
+    file_overlap = _jaccard(left.linked_files, right.linked_files)
+    symbol_overlap = _jaccard(left.linked_symbols, right.linked_symbols)
+    code_overlap = max(file_overlap, symbol_overlap)
+    graph_overlap = _jaccard(left.graph_neighbor_signature, right.graph_neighbor_signature)
+    evidence_overlap = _jaccard(left.evidence_refs, right.evidence_refs)
+    commit_overlap = _jaccard(left.linked_commits, right.linked_commits)
+    total = (0.45 * lexical) + (0.35 * code_overlap) + (0.15 * graph_overlap) + (0.05 * max(evidence_overlap, commit_overlap))
+    return {
+        "total": round(total, 4),
+        "lexical": round(lexical, 4),
+        "code_entity_overlap": round(code_overlap, 4),
+        "file_overlap": round(file_overlap, 4),
+        "symbol_overlap": round(symbol_overlap, 4),
+        "graph_neighbor_overlap": round(graph_overlap, 4),
+        "evidence_overlap": round(evidence_overlap, 4),
+        "commit_overlap": round(commit_overlap, 4),
+        "false_positive_risk": lexical >= 0.25 and code_overlap < 0.15,
+    }
+
+
+def _relation_for_score(score: dict[str, Any]) -> tuple[str, str]:
+    total = float(score["total"])
+    code_overlap = float(score["code_entity_overlap"])
+    lexical = float(score["lexical"])
+    if total >= 0.88 and code_overlap >= 0.35:
+        return "DUPLICATE_OF", "high_overlap_same_code_context"
+    if total >= 0.76 and code_overlap >= 0.25:
+        return "REFINES", "high_overlap_possible_refinement"
+    if total >= 0.52 and (code_overlap >= 0.15 or lexical >= 0.45):
+        return "RELATED_REVIEW", "related_decision_needs_human_review"
+    if _is_text_only_review(score):
+        return "RELATED_REVIEW", "text_overlap_without_shared_code_context"
+    return "", ""
+
+
+def _is_text_only_review(score: dict[str, Any]) -> bool:
+    return float(score["lexical"]) >= 0.25 and float(score["code_entity_overlap"]) < 0.15
+
+
+def _edge_context(*, node_id: str, edges: list[dict[str, Any]], node_by_id: dict[str, dict[str, Any]]) -> dict[str, list[str]]:
+    context: dict[str, list[str]] = {
+        "packets": [],
+        "commits": [],
+        "evidence_refs": [],
+        "files": [],
+        "symbols": [],
+        "code_nodes": [],
+        "code_versions": [],
+        "neighbor_signature": [],
+    }
+    for edge in edges:
+        kind = _edge_kind(edge)
+        other_id = _other_node_id(edge, node_id)
+        other = node_by_id.get(other_id, {})
+        if not kind.startswith(REASONING_EDGE_PREFIX):
+            continue
+        context["neighbor_signature"].append(f"{kind}:{other_id}")
+        if kind == "REASON_NODE_IN_PACKET":
+            context["packets"].append(other_id)
+        elif kind == "REASON_NODE_EXPLAINS_COMMIT":
+            context["commits"].append(_strip_prefix(other_id, "commit:"))
+        elif kind == "REASON_NODE_EVIDENCED_BY":
+            context["evidence_refs"].append(other_id)
+        elif kind == "REASON_NODE_LINKED_TO_CODE_NODE":
+            context["code_nodes"].append(other_id)
+            context["files"].extend(_file_refs(other))
+        elif kind == "REASON_NODE_LINKED_TO_CODE_VERSION":
+            context["code_versions"].append(other_id)
+            context["files"].extend(_file_refs(other))
+        elif kind == "REASON_NODE_LINKED_TO_SYMBOL":
+            context["symbols"].append(_symbol_ref(other, other_id))
+            context["files"].extend(_file_refs(other))
+        elif kind == "REASON_NODE_LINKED_TO_HUNK":
+            context["files"].extend(_file_refs(other))
+    return context
+
+
+def _nodes(compact_graph: dict[str, Any] | None) -> list[dict[str, Any]]:
+    nodes = compact_graph.get("nodes") if isinstance(compact_graph, dict) else []
+    return [node for node in nodes if isinstance(node, dict)] if isinstance(nodes, list) else []
+
+
+def _edges(compact_graph: dict[str, Any] | None) -> list[dict[str, Any]]:
+    edges = compact_graph.get("edges") if isinstance(compact_graph, dict) else []
+    return [edge for edge in edges if isinstance(edge, dict)] if isinstance(edges, list) else []
+
+
+def _edges_by_node(edges: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+    rows: dict[str, list[dict[str, Any]]] = {}
+    for edge in edges:
+        source = _edge_source(edge)
+        target = _edge_target(edge)
+        if source:
+            rows.setdefault(source, []).append(edge)
+        if target and target != source:
+            rows.setdefault(target, []).append(edge)
+    return rows
+
+
 def _is_decision_like(node: dict[str, Any]) -> bool:
     kind = str(node.get("kind") or node.get("node_kind") or "").lower()
-    return kind in {"reasoningnode", "decision", "problem"}
+    if kind in {"decision", "problem"}:
+        return True
+    if kind != "reasoningnode":
+        return False
+    props = _properties(node)
+    node_type = str(props.get("node_type") or "").lower()
+    status = str(props.get("status") or "").lower()
+    text = " ".join([_first(props, "label"), _first(props, "summary"), _first(props, "statement")]).lower()
+    return status in {"", "accepted"} and (node_type in {"decision", "problem"} or "decision:" in text or "problem:" in text)
+
+
+def _frame_kind(props: dict[str, Any], summary: str) -> str:
+    node_type = str(props.get("node_type") or "").strip().lower()
+    if node_type in {"decision", "problem"}:
+        return node_type
+    lower = summary.lower()
+    if lower.startswith("problem:") or "problem with" in lower:
+        return "problem"
+    return "decision"
+
+
+def _properties(node: dict[str, Any]) -> dict[str, Any]:
+    raw: dict[str, Any] = dict(node)
+    props = node.get("properties") if isinstance(node.get("properties"), dict) else {}
+    raw.update(props)
+    metadata = props.get("metadata") if isinstance(props.get("metadata"), dict) else {}
+    raw.update(metadata)
+    encoded = raw.get("properties_json")
+    if isinstance(encoded, str) and encoded.strip():
+        try:
+            decoded = json.loads(encoded)
+        except json.JSONDecodeError:
+            decoded = {}
+        if isinstance(decoded, dict):
+            raw.update(decoded)
+    return raw
+
+
+def _file_refs(node: dict[str, Any]) -> list[str]:
+    props = _properties(node)
+    refs = [
+        _first(props, "normalized_file_path", "file_path", "path"),
+        _file_from_label(_first(props, "label", "summary", "name")),
+    ]
+    return [_normalize_path(ref) for ref in refs if _normalize_path(ref)]
+
+
+def _symbol_ref(node: dict[str, Any], fallback_id: str) -> str:
+    props = _properties(node)
+    file_path = _normalize_path(_first(props, "normalized_file_path", "file_path", "path") or _file_from_label(_first(props, "label", "summary", "name")))
+    name = _first(props, "qualified_name", "symbol_name", "name", "structural_id", "label")
+    if file_path and name:
+        return f"{file_path}::{name}"
+    return fallback_id
+
+
+def _file_from_label(label: str) -> str:
+    text = str(label or "").strip()
+    if not text:
+        return ""
+    candidate = text.split("::", 1)[0].strip()
+    candidate = re.sub(r":\d+(?::\d+)?$", "", candidate).strip()
+    if "/" not in candidate and "\\" not in candidate:
+        return ""
+    return candidate
+
+
+def _tokens(text: str) -> list[str]:
+    found = re.findall(r"[a-zA-Z][a-zA-Z0-9_/-]{2,}", text.lower())
+    return sorted({token for token in found if token not in STOPWORDS and len(token) > 2})
+
+
+def _jaccard(left: list[str], right: list[str]) -> float:
+    left_set = {item for item in left if item}
+    right_set = {item for item in right if item}
+    if not left_set or not right_set:
+        return 0.0
+    return len(left_set & right_set) / len(left_set | right_set)
+
+
+def _edge_source(edge: dict[str, Any]) -> str:
+    return str(edge.get("from_id") or edge.get("source_id") or edge.get("source") or "")
+
+
+def _edge_target(edge: dict[str, Any]) -> str:
+    return str(edge.get("to_id") or edge.get("target_id") or edge.get("target") or "")
+
+
+def _edge_kind(edge: dict[str, Any]) -> str:
+    return str(edge.get("kind") or edge.get("edge_kind") or "")
+
+
+def _other_node_id(edge: dict[str, Any], node_id: str) -> str:
+    source = _edge_source(edge)
+    target = _edge_target(edge)
+    if source == node_id:
+        return target
+    if target == node_id:
+        return source
+    return target or source
+
+
+def _node_id(node: dict[str, Any]) -> str:
+    return str(node.get("id") or node.get("node_id") or node.get("key") or "")
+
+
+def _first(mapping: dict[str, Any], *keys: str) -> str:
+    for key in keys:
+        value = mapping.get(key)
+        if value is not None and str(value).strip():
+            return str(value).strip()
+    return ""
+
+
+def _list(value: Any) -> list[str]:
+    if isinstance(value, list):
+        return [str(item) for item in value if str(item).strip()]
+    if isinstance(value, tuple):
+        return [str(item) for item in value if str(item).strip()]
+    if value is None or not str(value).strip():
+        return []
+    return [str(value).strip()]
+
+
+def _dedupe(values: list[str]) -> list[str]:
+    rows: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        text = str(value or "").strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        rows.append(text)
+    return rows
+
+
+def _normalize_path(value: str) -> str:
+    return str(value or "").strip().replace("\\", "/").lstrip("./")
+
+
+def _strip_prefix(value: str, prefix: str) -> str:
+    text = str(value or "")
+    return text[len(prefix) :] if text.startswith(prefix) else text
