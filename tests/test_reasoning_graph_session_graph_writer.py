@@ -5,6 +5,8 @@ from pathlib import Path
 
 import pytest
 
+from agent_memory_orchestrator.graph.store import GraphEdge
+from agent_memory_orchestrator.graph.store import GraphNode
 from agent_memory_orchestrator.graph.store import KuzuGraphStore
 from agent_memory_orchestrator.reasoning_graph import build_compact_session_graph
 from agent_memory_orchestrator.reasoning_graph import write_compact_session_graph
@@ -94,6 +96,46 @@ def test_compact_session_graph_writes_kuzu_when_available(tmp_path: Path) -> Non
     assert sum(status["counts"].values()) == 4
     assert len(edges) == 3
     assert any(hit["kind"] == "ReasoningNode" for hit in hits)
+
+
+def test_kuzu_store_upsert_supports_compact_v2_schema(tmp_path: Path) -> None:
+    pytest.importorskip("kuzu")
+    graph = _minimal_graph()
+    graph_path = tmp_path / "session_graph.kuzu"
+    write_compact_session_graph(graph_path=graph_path, nodes=graph.nodes, edges=graph.edges, force=True)
+
+    store = KuzuGraphStore(graph_path)
+    try:
+        store.upsert_node(
+            GraphNode(
+                id="v2job:node",
+                kind="ReasoningNode",
+                label="V2 node",
+                summary="Compact central V2 node",
+                status="active",
+                scope="central",
+                session_id="session-1",
+                commit_id="abc1234",
+                metadata={"pipeline_version": "v2-reset-2026-05", "graph_schema_version": "v2", "packet_id": "WP0001"},
+            )
+        )
+        store.upsert_edge(
+            GraphEdge(
+                id="v2edge:node-packet",
+                source_id="v2job:node",
+                target_id="WP0001",
+                kind="REASON_NODE_IN_PACKET",
+                metadata={"pipeline_version": "v2-reset-2026-05", "graph_schema_version": "v2"},
+            )
+        )
+        status = store.merge_status()
+        edges = store.list_edges(limit=20, kinds=["REASON_NODE_IN_PACKET"])
+    finally:
+        store.close()
+
+    assert status["schema"] == "compact"
+    assert status["counts"]["ReasoningNode"] == 2
+    assert any(edge["source_id"] == "v2job:node" and edge["target_id"] == "WP0001" for edge in edges)
 
 
 def test_real_stage5_artifacts_build_expected_compact_graph_manifest() -> None:

@@ -230,6 +230,9 @@ class KuzuGraphStore:
         now = _now()
         created_at = node.created_at or now
         updated = GraphNode(**{**node.as_dict(), "created_at": created_at, "updated_at": now})
+        if self._uses_compact_node_schema():
+            self._upsert_compact_node(updated)
+            return
         props = _node_props(updated)
         try:
             self._conn.execute(f"CREATE (:GraphNode {{{props}}})")
@@ -254,6 +257,9 @@ class KuzuGraphStore:
 
     def upsert_edge(self, edge: GraphEdge) -> None:
         created_at = edge.created_at or _now()
+        if self._uses_compact_node_schema():
+            self._upsert_compact_edge(edge, created_at=created_at)
+            return
         self._conn.execute(f"MATCH (a:GraphNode)-[e:GraphEdge]->(b:GraphNode) WHERE e.id = {_q(edge.id)} DELETE e")
         self._conn.execute(
             "MATCH (a:GraphNode), (b:GraphNode) "
@@ -434,6 +440,74 @@ class KuzuGraphStore:
             columns = set()
         self._node_columns_cache = columns
         return columns
+
+    def _upsert_compact_node(self, node: GraphNode) -> None:
+        metadata = dict(node.metadata)
+        metadata.setdefault("status", node.status)
+        metadata.setdefault("scope", node.scope)
+        metadata.setdefault("session_id", node.session_id)
+        metadata.setdefault("source_app", node.source_app)
+        metadata.setdefault("evidence_id", node.evidence_id)
+        metadata.setdefault("commit_id", node.commit_id)
+        metadata.setdefault("created_at", node.created_at)
+        metadata.setdefault("updated_at", node.updated_at)
+
+        packet_id = str(metadata.get("packet_id") or metadata.get("source_packet_id") or "")
+        if not packet_id and node.kind == "Packet":
+            packet_id = node.id
+        commit_sha = str(
+            node.commit_id
+            or metadata.get("commit_sha")
+            or metadata.get("source_commit_sha")
+            or metadata.get("short_sha")
+            or ""
+        )
+        properties_json = json.dumps(metadata, sort_keys=True)
+
+        try:
+            self._conn.execute(
+                "CREATE (:GraphNode {"
+                f"id: {_q(node.id)}, "
+                f"kind: {_q(node.kind)}, "
+                f"packet_id: {_q(packet_id)}, "
+                f"commit_sha: {_q(commit_sha)}, "
+                f"label: {_q(node.label)}, "
+                f"summary: {_q(node.summary)}, "
+                f"properties_json: {_q(properties_json)}"
+                "})"
+            )
+        except Exception:
+            self._conn.execute(
+                "MATCH (n:GraphNode) "
+                f"WHERE n.id = {_q(node.id)} "
+                "SET "
+                f"n.kind = {_q(node.kind)}, "
+                f"n.packet_id = {_q(packet_id)}, "
+                f"n.commit_sha = {_q(commit_sha)}, "
+                f"n.label = {_q(node.label)}, "
+                f"n.summary = {_q(node.summary)}, "
+                f"n.properties_json = {_q(properties_json)}"
+            )
+
+    def _upsert_compact_edge(self, edge: GraphEdge, *, created_at: str) -> None:
+        metadata = dict(edge.metadata)
+        metadata.setdefault("edge_id", edge.id)
+        metadata.setdefault("weight", edge.weight)
+        metadata.setdefault("confidence", edge.confidence)
+        metadata.setdefault("evidence_id", edge.evidence_id)
+        metadata.setdefault("created_at", created_at)
+        properties_json = json.dumps(metadata, sort_keys=True)
+
+        self._conn.execute(
+            "MATCH (a:GraphNode)-[e:GraphEdge]->(b:GraphNode) "
+            f"WHERE a.id = {_q(edge.source_id)} AND b.id = {_q(edge.target_id)} AND e.kind = {_q(edge.kind)} "
+            "DELETE e"
+        )
+        self._conn.execute(
+            "MATCH (a:GraphNode), (b:GraphNode) "
+            f"WHERE a.id = {_q(edge.source_id)} AND b.id = {_q(edge.target_id)} "
+            f"CREATE (a)-[:GraphEdge {{kind: {_q(edge.kind)}, properties_json: {_q(properties_json)}}}]->(b)"
+        )
 
 
 class InMemoryGraphStore:
