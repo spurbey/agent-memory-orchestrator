@@ -919,6 +919,8 @@ class GraphRagService:
                 graph_scope=scope,
                 session_id=session_id,
                 limit=max(1, min(50, int(limit))),
+                expand_neighbors=12 if include_answer else 0,
+                include_graph_nodes=include_answer,
                 require_vector=require_vector,
                 reranker_backend=self.settings.reranker_backend,
                 reranker_model=self.settings.reranker_model,

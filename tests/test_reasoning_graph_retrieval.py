@@ -36,6 +36,21 @@ class _KeywordEmbedder:
         return [0.0, 0.0, 1.0]
 
 
+class _NoGraphWalkStore:
+    def neighbors(self, node_id: str, *, limit: int = 25) -> list[dict[str, object]]:
+        raise AssertionError("fast retrieval smoke should not expand graph neighbors")
+
+    def list_nodes(
+        self,
+        *,
+        limit: int = 25,
+        kinds: list[str] | None = None,
+        session_id: str = "",
+        status: str = "",
+    ) -> list[dict[str, object]]:
+        raise AssertionError("fast retrieval smoke should not load graph nodes")
+
+
 def _settings(tmp_path: Path) -> Settings:
     return Settings(
         home=tmp_path,
@@ -260,6 +275,26 @@ def test_retrieve_session_graph_fuses_candidates_and_expands_after_ranking(tmp_p
     assert result.hits[0].document.graph_node_id == "reason:WP0001:decision:retrieval"
     assert any(reason.startswith("bi_encoder_score:") for reason in result.hits[0].reasons)
     assert any(neighbor["id"] == "code:retrieval:retrieve_session_graph" for neighbor in result.hits[0].neighbors)
+
+
+def test_retrieve_session_graph_can_skip_graph_walk_for_fast_smoke(tmp_path: Path) -> None:
+    graph = _graph()
+    _conn, index_store, _embedding_store = _sqlite_store(tmp_path)
+    index_store.upsert_documents(build_retrieval_documents_from_graph(graph, session_id="s1"))
+
+    result = retrieve_session_graph(
+        query="why use BM25 vector retrieval before graph expansion",
+        index_store=index_store,
+        graph_store=_NoGraphWalkStore(),
+        session_id="s1",
+        limit=2,
+        expand_neighbors=0,
+        include_graph_nodes=False,
+    )
+
+    assert result.hits
+    assert result.hits[0].neighbors == ()
+    assert result.hits[0].graph_node == {}
 
 
 def test_retrieve_session_graph_can_require_bi_encoder_candidates(tmp_path: Path) -> None:

@@ -13,6 +13,7 @@ V2_STAGES: tuple[str, ...] = (
     "symbol_versions",
     "reasoning_code_links",
     "kuzu_write",
+    "central_version_merge",
     "retrieval_docs",
     "embeddings",
     "faiss",

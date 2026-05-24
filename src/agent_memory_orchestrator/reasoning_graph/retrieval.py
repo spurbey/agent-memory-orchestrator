@@ -566,6 +566,7 @@ def retrieve_session_graph(
     reranker_model: str = "",
     rerank_top_k: int = 50,
     rerank_max_chars: int = 1800,
+    include_graph_nodes: bool = True,
 ) -> RetrievalResult:
     intent = classify_query(query)
     exact = index_store.exact_search(query, limit=candidate_limit)
@@ -613,10 +614,11 @@ def retrieve_session_graph(
         max_chars=rerank_max_chars,
     )
 
-    graph_nodes = {
-        str(node.get("id")): node
-        for node in graph_store.list_nodes(limit=100000, session_id=session_id)
-    }
+    graph_nodes = (
+        {str(node.get("id")): node for node in graph_store.list_nodes(limit=100000, session_id=session_id)}
+        if include_graph_nodes
+        else {}
+    )
     hits = tuple(
         RetrievalHit(
             document=doc,

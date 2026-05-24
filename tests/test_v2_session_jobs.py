@@ -18,12 +18,20 @@ from agent_memory_orchestrator.reasoning_graph.jobs.reset import initialize_fres
 from agent_memory_orchestrator.reasoning_graph.jobs.reset import reset_production_v2_storage
 from agent_memory_orchestrator.reasoning_graph.jobs.runner import require_complete_v2_reset_marker
 from agent_memory_orchestrator.reasoning_graph.jobs.runner import V2SessionJobRunner
+from agent_memory_orchestrator.reasoning_graph.central_merge.applier import apply_merge_plan
+from agent_memory_orchestrator.reasoning_graph.central_merge.backfill import backfill_central_merge_plan
+from agent_memory_orchestrator.reasoning_graph.central_merge.fixtures import export_job_fixture
+from agent_memory_orchestrator.reasoning_graph.central_merge.judge import judge_semantic_case
+from agent_memory_orchestrator.reasoning_graph.central_merge.judge import run_semantic_eval_fixture
+from agent_memory_orchestrator.reasoning_graph.central_merge.planner import build_dry_run_merge_plan
+from agent_memory_orchestrator.reasoning_graph.central_merge.repo_identity import normalize_remote_url
 from agent_memory_orchestrator.reasoning_graph.stage4_contract import STAGE4_CONTRACT_VERSION
 from agent_memory_orchestrator.reasoning_graph.stage4_contract import build_stage4_packet_prompt
 from agent_memory_orchestrator.reasoning_graph.stage4_contract import stage4_contract_hash
 from agent_memory_orchestrator.reasoning_graph.retrieval import RetrievalDocument
 from agent_memory_orchestrator.reasoning_graph.retrieval import RetrievalIndexStore
 from agent_memory_orchestrator.graph.service import GraphRagService
+from agent_memory_orchestrator.graph.store import GraphNode
 from agent_memory_orchestrator.graph.store import InMemoryGraphStore
 
 
@@ -134,6 +142,318 @@ def test_v2_stage_rows_track_hashes_and_config_hash(tmp_path: Path) -> None:
         assert updated["last_successful_stage"] == "evidence_view"
     finally:
         store.close()
+
+
+def test_v2_schema_adds_central_merge_control_tables(tmp_path: Path) -> None:
+    settings = make_settings(tmp_path)
+    store = V2SessionJobStore(settings)
+    try:
+        rows = store.conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
+    finally:
+        store.close()
+    names = {row["name"] for row in rows}
+
+    assert {
+        "v2_central_merge_plans",
+        "v2_central_review_candidates",
+        "v2_graph_commits",
+        "v2_graph_views",
+        "v2_central_merge_locks",
+        "v2_semantic_eval_runs",
+        "v2_semantic_eval_cases",
+        "v2_semantic_eval_judgments",
+    }.issubset(names)
+
+
+def test_v2_central_merge_stage_writes_dry_run_plan_and_preserves_session_graph(tmp_path: Path) -> None:
+    settings = make_settings(tmp_path)
+    store = V2SessionJobStore(settings)
+    try:
+        job = store.enqueue_session(session_id="s-central", boundary_event_id="raw_boundary", repo_path=str(tmp_path)).job
+        artifact_dir = Path(job["artifact_dir"])
+        kuzu_dir = artifact_dir / "kuzu_write"
+        kuzu_dir.mkdir(parents=True, exist_ok=True)
+        manifest = {
+            "nodes": [
+                {"id": "commit:abc123", "kind": "Commit", "properties": {"full_sha": "ABC123"}},
+                {"id": "hunk:1", "kind": "CodeHunk", "properties": {"path": "src/graph_service.py"}},
+                {"id": "symbol:GraphRagService", "kind": "Symbol", "properties": {"path": "src/graph_service.py", "qualified_name": "GraphRagService"}},
+                {"id": "code:GraphRagService.init", "kind": "CodeNode", "properties": {"path": "src/graph_service.py", "qualified_name": "GraphRagService.__init__", "symbol_kind": "function"}},
+                {"id": "decision:1", "kind": "ReasoningNode", "properties": {"summary": "Do not canonicalize decisions yet."}},
+            ],
+            "edges": [],
+            "inventory": {"node_count": 5, "edge_count": 0, "unresolved_edge_count": 0},
+        }
+        (kuzu_dir / "compact_graph_manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+        result_path = kuzu_dir / "kuzu_write_result.json"
+        result_path.write_text(json.dumps({"ok": True, "inventory": manifest["inventory"]}), encoding="utf-8")
+        store.start_stage(
+            job_id=job["job_id"],
+            stage="kuzu_write",
+            input_artifact="graph_edges.json",
+            input_hash="input",
+            stage_config_hash="config",
+        )
+        store.complete_stage(
+            job_id=job["job_id"],
+            stage="kuzu_write",
+            output_artifact=str(result_path),
+            output_hash="output",
+            diagnostics=manifest["inventory"],
+        )
+
+        runner = V2SessionJobRunner(settings, job_store=store)
+        run = runner.run_next()
+
+        assert run["stage"] == "central_version_merge"
+        assert run["status"] == "pending"
+        plan_row = store.get_central_merge_plan_for_job(job["job_id"])
+        assert plan_row is not None
+        assert plan_row["mode"] == "dry_run"
+        assert plan_row["metrics"]["exact_atom_created_count"] == 4
+        assert plan_row["metrics"]["review_candidate_count"] == 0
+        assert plan_row["plan"]["new_atoms"]
+        assert plan_row["plan"]["new_versions"]
+        assert store.graph_view(branch="main", mode="active") is not None
+        stage = store.stage_row(job_id=job["job_id"], stage="central_version_merge")
+        assert stage is not None
+        assert Path(stage["output_artifact"]).name == "merge_plan.json"
+        fixture = export_job_fixture(settings, job_id=job["job_id"], out_dir=tmp_path / "fixture")
+        semantic_context = fixture["fixture"]["semantic_context"]
+        assert semantic_context["central_version_merge"]["repo_id"].startswith("repo:")
+        result = run_semantic_eval_fixture(fixture_path=Path(fixture["path"]), case_set="baseline")
+        assert result["status"] == "passed"
+        assert result["metrics"]["case_count"] >= 5
+    finally:
+        store.close()
+
+
+def test_v2_central_merge_apply_writes_exact_atoms_graph_commit_and_view(tmp_path: Path) -> None:
+    settings = make_settings(tmp_path)
+    graph = InMemoryGraphStore()
+    store = V2SessionJobStore(settings)
+    try:
+        graph.upsert_node(GraphNode(id="jobprefix:commit:abc123", kind="Commit", label="abc123"))
+        job = store.enqueue_session(session_id="s-apply", boundary_event_id="raw_boundary", repo_path=str(tmp_path)).job
+        compact_graph = {
+            "nodes": [
+                {"id": "commit:abc123", "kind": "Commit", "properties": {"full_sha": "abc123"}},
+                {"id": "hunk:1", "kind": "CodeHunk", "properties": {"path": "src/graph_service.py"}},
+                {"id": "symbol:GraphRagService", "kind": "Symbol", "properties": {"path": "src/graph_service.py", "qualified_name": "GraphRagService"}},
+            ],
+            "edges": [],
+        }
+        plan = build_dry_run_merge_plan(job=job, compact_graph=compact_graph, parent_graph_commit_id="")
+        stored = store.upsert_central_merge_plan(plan.as_dict())
+
+        applied = apply_merge_plan(settings=settings, plan_id=stored["plan_id"], store=store, graph_store=graph)
+
+        assert applied["ok"] is True
+        assert applied["status"] == "applied"
+        updated_plan = store.get_central_merge_plan(stored["plan_id"])
+        assert updated_plan is not None
+        assert updated_plan["status"] == "applied"
+        view = store.graph_view(branch="main", mode="active")
+        assert view is not None
+        assert view["graph_commit_id"] == applied["graph_commit"]["graph_commit_id"]
+        assert graph.nodes[applied["graph_commit"]["graph_commit_id"]].kind == "GraphCommit"
+        assert graph.nodes["v2view:main:active"].kind == "GraphView"
+        atom_nodes = [node for node in graph.nodes.values() if node.kind == "KnowledgeAtom"]
+        version_nodes = [node for node in graph.nodes.values() if node.kind == "KnowledgeVersion"]
+        central_nodes = [
+            node
+            for node in graph.nodes.values()
+            if node.kind in {"KnowledgeAtom", "KnowledgeVersion", "GraphCommit", "GraphView"}
+        ]
+        assert {node.metadata["atom_kind"] for node in atom_nodes} == {"commit", "file", "symbol"}
+        assert all(node.metadata["graph_commit_id"] == applied["graph_commit"]["graph_commit_id"] for node in atom_nodes + version_nodes)
+        assert all(node.metadata["repo_id"].startswith("repo:") for node in atom_nodes)
+        assert all(node.metadata.get("idempotency_key") for node in central_nodes)
+        assert any(edge.kind == "VERSION_OF" for edge in graph.edges.values())
+        assert any(edge.kind == "DERIVED_FROM_SESSION_NODE" for edge in graph.edges.values())
+        derived_targets = {edge.target_id for edge in graph.edges.values() if edge.kind == "DERIVED_FROM_SESSION_NODE"}
+        assert "jobprefix:commit:abc123" in derived_targets
+        assert "commit:abc123" not in derived_targets
+
+        node_count = len(graph.nodes)
+        edge_count = len(graph.edges)
+        second = apply_merge_plan(settings=settings, plan_id=stored["plan_id"], store=store, graph_store=graph)
+        assert second["ok"] is True
+        assert second["idempotent"] is True
+        assert len(graph.nodes) == node_count
+        assert len(graph.edges) == edge_count
+    finally:
+        store.close()
+
+
+def test_v2_central_merge_apply_requires_matching_graph_view_head(tmp_path: Path) -> None:
+    settings = make_settings(tmp_path)
+    graph = InMemoryGraphStore()
+    store = V2SessionJobStore(settings)
+    try:
+        first_job = store.enqueue_session(session_id="s-apply-a", boundary_event_id="raw_boundary_a", repo_path=str(tmp_path)).job
+        second_job = store.enqueue_session(session_id="s-apply-b", boundary_event_id="raw_boundary_b", repo_path=str(tmp_path)).job
+        compact_graph = {"nodes": [{"id": "commit:abc123", "kind": "Commit", "properties": {"full_sha": "abc123"}}], "edges": []}
+        first_plan = build_dry_run_merge_plan(job=first_job, compact_graph=compact_graph, parent_graph_commit_id="")
+        second_plan = build_dry_run_merge_plan(job=second_job, compact_graph=compact_graph, parent_graph_commit_id="")
+        first = store.upsert_central_merge_plan(first_plan.as_dict())
+        second = store.upsert_central_merge_plan(second_plan.as_dict())
+
+        applied = apply_merge_plan(settings=settings, plan_id=first["plan_id"], store=store, graph_store=graph)
+        conflicted = apply_merge_plan(settings=settings, plan_id=second["plan_id"], store=store, graph_store=graph)
+
+        assert applied["ok"] is True
+        assert conflicted["ok"] is False
+        assert conflicted["status"] == "failed_recoverable"
+        assert conflicted["error"]["reason"] == "replan_required"
+        failed_plan = store.get_central_merge_plan(second["plan_id"])
+        assert failed_plan is not None
+        assert failed_plan["status"] == "failed_recoverable"
+    finally:
+        store.close()
+
+
+def test_v2_repo_identity_normalizes_remote_urls() -> None:
+    assert normalize_remote_url("git@github.com:Spurbey/Agent-Memory-Orchestrator.git") == "https://github.com/Spurbey/Agent-Memory-Orchestrator"
+    assert normalize_remote_url("https://github.com/spurbey/agent-memory-orchestrator.git/") == "https://github.com/spurbey/agent-memory-orchestrator"
+
+
+def test_v2_central_merge_backfill_does_not_reopen_completed_job(tmp_path: Path) -> None:
+    settings = make_settings(tmp_path)
+    store = V2SessionJobStore(settings)
+    try:
+        job = store.enqueue_session(session_id="s-old-complete", boundary_event_id="raw_boundary", repo_path=str(tmp_path)).job
+        artifact_dir = Path(job["artifact_dir"])
+        kuzu_dir = artifact_dir / "kuzu_write"
+        kuzu_dir.mkdir(parents=True, exist_ok=True)
+        manifest = {
+            "nodes": [{"id": "commit:abc123", "kind": "Commit", "properties": {"full_sha": "abc123"}}],
+            "edges": [],
+            "inventory": {"node_count": 1, "edge_count": 0, "unresolved_edge_count": 0},
+        }
+        (kuzu_dir / "compact_graph_manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+        (kuzu_dir / "kuzu_write_result.json").write_text(json.dumps({"ok": True, "inventory": manifest["inventory"]}), encoding="utf-8")
+        store.conn.execute(
+            "UPDATE v2_session_jobs SET status='complete', current_stage='', last_successful_stage='quality_eval' WHERE job_id=?",
+            (job["job_id"],),
+        )
+        store.conn.commit()
+    finally:
+        store.close()
+
+    result = backfill_central_merge_plan(settings, job_id=job["job_id"], forced_by="test")
+
+    store = V2SessionJobStore(settings)
+    try:
+        updated = store.get_job(job["job_id"])
+        stage = store.stage_row(job_id=job["job_id"], stage="central_version_merge")
+        events = store.list_events(job["job_id"], limit=5)
+    finally:
+        store.close()
+
+    assert result["ok"] is True
+    assert updated is not None
+    assert updated["status"] == "complete"
+    assert updated["current_stage"] == ""
+    assert stage is not None
+    assert stage["status"] == "complete"
+    assert stage["diagnostics"]["backfilled"] is True
+    assert any(event["event_type"] == "central_merge_backfilled" for event in events)
+
+
+def test_v2_fixture_embedding_coverage_counts_only_current_retrieval_docs(tmp_path: Path) -> None:
+    settings = make_settings(tmp_path)
+    settings.retrieval_db_path.parent.mkdir(parents=True, exist_ok=True)
+    conn = connect(settings.retrieval_db_path)
+    try:
+        RetrievalIndexStore(conn).replace_documents(
+            [
+                RetrievalDocument(
+                    doc_id="doc:current:1",
+                    doc_type="packet",
+                    graph_node_id="node:1",
+                    node_kind="Packet",
+                    packet_id="WP0001",
+                    commit_sha="abc123",
+                    title="current",
+                    body="current doc",
+                ),
+                RetrievalDocument(
+                    doc_id="doc:current:2",
+                    doc_type="packet",
+                    graph_node_id="node:2",
+                    node_kind="Packet",
+                    packet_id="WP0002",
+                    commit_sha="def456",
+                    title="current 2",
+                    body="current doc 2",
+                ),
+            ]
+        )
+        embeddings = GraphEmbeddingStore(conn, db_path=settings.retrieval_db_path)
+        embeddings.upsert(
+            GraphEmbeddingRecord.create(
+                node_id="node:1",
+                node_kind="Packet",
+                memory_class="graph_context",
+                graph_scope="v2",
+                graph_path="doc:current:1",
+                session_id="s-coverage",
+                extraction_run_id="run",
+                embedding_kind="retrieval_text",
+                model="hash-fallback",
+                text="current doc",
+                vector=[0.1, 0.2],
+            )
+        )
+        embeddings.upsert(
+            GraphEmbeddingRecord.create(
+                node_id="old-node",
+                node_kind="Packet",
+                memory_class="graph_context",
+                graph_scope="v2",
+                graph_path="doc:stale:old",
+                session_id="s-coverage",
+                extraction_run_id="old-run",
+                embedding_kind="retrieval_text",
+                model="hash-fallback",
+                text="stale doc",
+                vector=[0.1, 0.2],
+            )
+        )
+    finally:
+        conn.close()
+
+    store = V2SessionJobStore(settings)
+    try:
+        job = store.enqueue_session(session_id="s-coverage", boundary_event_id="raw_boundary").job
+    finally:
+        store.close()
+    fixture = export_job_fixture(settings, job_id=job["job_id"], out_dir=tmp_path / "coverage-fixture")
+    coverage = fixture["fixture"]["embedding_coverage"]
+
+    assert coverage["total_docs"] == 2
+    assert coverage["embedded_docs"] == 1
+    assert coverage["status"] == "partial"
+
+
+def test_semantic_judge_checks_mentions_citations_and_forbidden_claims() -> None:
+    case = {
+        "case_id": "why-graph-service",
+        "must_mention": ["reasoning", "commit"],
+        "must_cite": ["packet", "evidence"],
+        "must_not_claim": ["unsupported final decision"],
+    }
+    good = {
+        "answer": "The reasoning changed after a commit connected graph_service.py to V2 retrieval.",
+        "citations": [{"type": "packet", "id": "WP0001"}, {"type": "evidence", "id": "raw_1"}],
+    }
+    bad = {"answer": "Unsupported final decision.", "citations": []}
+
+    assert judge_semantic_case(case=case, answer_payload=good)["passed"] is True
+    failed = judge_semantic_case(case=case, answer_payload=bad)
+    assert failed["passed"] is False
+    assert failed["blocking_failures"]
 
 
 def test_v2_runner_fails_instead_of_completing_empty_graph_when_no_work_packets(tmp_path: Path) -> None:
