@@ -124,7 +124,7 @@ python -m agent_memory_orchestrator.app.cli peer --amo-home <amo_home> netd serv
 python -m agent_memory_orchestrator.app.cli peer --amo-home <amo_home> netd uninstall-service --with-watch --apply
 ```
 
-The default is a plan, not mutation. On Windows the apply path creates per-user Scheduled Tasks at logon. On Linux it writes user systemd units and enables them. Use `--with-watch` for the normal bot-participation setup: one startup entry keeps `amo-peer-netd` online, and the second runs `peer-agent watch` so trusted room invites, memory requests, responses, summaries, and finalization are processed without manual polling.
+The default is a plan, not mutation. On Windows the apply path creates per-user Scheduled Tasks at logon. On macOS it writes user `launchd` LaunchAgents. On Linux it writes user systemd units and enables them. Use `--with-watch` for the normal bot-participation setup: one startup entry keeps `amo-peer-netd` online, and the second runs `peer-agent watch` so trusted room invites, memory requests, responses, summaries, and finalization are processed without manual polling.
 
 Short relay setup:
 
@@ -136,6 +136,26 @@ python -m agent_memory_orchestrator.app.cli peer --amo-home <home_b> setup --nod
 ```
 
 The accepting setup command reads the invite's rendezvous fields, saves the relay profile locally, starts its sidecar through that relay, then accepts the invite and sends the join request back when the initiator is reachable.
+
+After startup is installed on both devices, repeated usage should stay at the bot level:
+
+```powershell
+python -m agent_memory_orchestrator.app.cli peer-agent --amo-home <home_a> ask --query "<question>"
+```
+
+Users should not need to run `peer-agent watch`, `poll-netd`, `open-room`, or `send-message` during normal operation. Those commands remain useful for debugging and low-level smoke tests.
+
+If a device has old test peers configured, remove them once so future asks do not waste time dialing stale reservations:
+
+```powershell
+python -m agent_memory_orchestrator.app.cli peer --amo-home <home_a> remove --node-id <old-peer-node-id>
+```
+
+To ask only one trusted peer without changing config:
+
+```powershell
+python -m agent_memory_orchestrator.app.cli peer-agent --amo-home <home_a> ask --peer node-b --query "<question>"
+```
 
 ## Room Flow Over Netd
 
@@ -167,7 +187,7 @@ Manual config still exists for smoke tests and advanced use:
 python -m agent_memory_orchestrator.app.cli peer --amo-home <home_a> add --node-id node-b --peer-id <node_b_libp2p_peer_id> --multiaddr <node_b_multiaddr>
 ```
 
-Then the normal room path is:
+Then the low-level room smoke path is:
 
 ```powershell
 python -m agent_memory_orchestrator.app.cli peer --amo-home <home_a> open-room --topic "..." --peer node-b
