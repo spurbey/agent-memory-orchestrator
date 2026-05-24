@@ -95,6 +95,14 @@ class PeerStore:
         config = self.load_config()
         return self.save_config(config.with_peer(peer))
 
+    def remove_peer(self, node_id: str) -> dict[str, Any]:
+        peer_id = _safe_peer_record_id(node_id)
+        config = self.load_config()
+        peers = tuple(peer for peer in config.peers if peer.node_id != peer_id)
+        removed = len(peers) != len(config.peers)
+        self.save_config(replace(config, peers=peers))
+        return {"ok": True, "removed": removed, "node_id": peer_id}
+
     def save_relay_profile(
         self,
         *,

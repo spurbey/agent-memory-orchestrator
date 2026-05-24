@@ -85,6 +85,7 @@ def test_peer_netd_rebuilds_stale_binary_when_go_is_available(tmp_path: Path, mo
 
     monkeypatch.setattr(PeerNetdRuntime, "binary_capabilities", fake_capabilities)
     monkeypatch.setattr(PeerNetdRuntime, "build", fake_build)
+    monkeypatch.setattr(PeerNetdRuntime, "packaged_binary_path", lambda self: None)
 
     assert runtime.prepare_binary(build_if_missing=True) == binary_path
     assert binary_path.read_text(encoding="utf-8") == "fresh"
@@ -155,6 +156,11 @@ def test_peer_netd_reuses_running_sidecar_when_launch_config_matches(tmp_path: P
     )
     monkeypatch.setattr(PeerNetdRuntime, "stop", lambda self: stopped.append(True) or {"ok": True})
     monkeypatch.setattr(PeerNetdRuntime, "post_start", lambda self, options, api_url: {})
+    monkeypatch.setattr(
+        PeerNetdRuntime,
+        "binary_capabilities",
+        lambda self, binary=None: {"ok": True, "missing_required_flags": [], "missing_protocol_capabilities": []},
+    )
 
     result = runtime.start(options, build_if_missing=False)
 
@@ -202,6 +208,37 @@ def test_peer_add_accepts_libp2p_identity_without_base_url(tmp_path: Path, capsy
     assert payload["peer"]["base_url"] == ""
     assert payload["peer"]["peer_id"] == "12D3KooWPeer"
     assert payload["peer"]["multiaddrs"] == ["/ip4/127.0.0.1/tcp/9001/p2p/12D3KooWPeer"]
+
+
+def test_peer_remove_deletes_configured_peer(tmp_path: Path, capsys) -> None:
+    assert main(["peer", "--amo-home", str(tmp_path), "init", "--node-id", "zenbook-amo"]) == 0
+    capsys.readouterr()
+    assert (
+        main(
+            [
+                "peer",
+                "--amo-home",
+                str(tmp_path),
+                "add",
+                "--node-id",
+                "stale-vm",
+                "--peer-id",
+                "12D3KooWPeer",
+            ]
+        )
+        == 0
+    )
+    capsys.readouterr()
+
+    code = main(["peer", "--amo-home", str(tmp_path), "remove", "--node-id", "stale-vm"])
+    payload = json.loads(capsys.readouterr().out)
+    status_code = main(["peer", "--amo-home", str(tmp_path), "status"])
+    status = json.loads(capsys.readouterr().out)
+
+    assert code == 0
+    assert payload == {"ok": True, "removed": True, "node_id": "stale-vm"}
+    assert status_code == 0
+    assert status["peers"] == []
 
 
 def test_peer_relay_profile_save_list_and_show(tmp_path: Path, capsys) -> None:
@@ -416,6 +453,35 @@ def test_peer_setup_returns_nonzero_when_startup_install_fails(tmp_path: Path, c
     assert code == 1
     assert payload["ok"] is False
     assert payload["startup"]["error"] == "boom"
+
+
+def test_peer_setup_with_startup_points_to_bot_level_repeated_use(tmp_path: Path, capsys, monkeypatch) -> None:
+    from agent_memory_orchestrator.app import cli as cli_module
+
+    def fake_start(self: PeerNetdRuntime, options, *, build_if_missing: bool = True) -> dict:
+        return {"ok": True, "api_url": "http://127.0.0.1:8788"}
+
+    monkeypatch.setattr(PeerNetdRuntime, "start", fake_start)
+    monkeypatch.setattr(cli_module, "install_peer_netd_service", lambda *args, **kwargs: {"ok": True})
+
+    code = main(
+        [
+            "peer",
+            "--amo-home",
+            str(tmp_path),
+            "setup",
+            "--node-id",
+            "node-a",
+            "--install-startup",
+            "--no-build",
+        ]
+    )
+    payload = json.loads(capsys.readouterr().out)
+
+    assert code == 0
+    assert "amo-cli peer netd service-status --with-watch" in payload["next_commands"]
+    assert 'amo-cli peer-agent ask --query "<question>"' in payload["next_commands"]
+    assert not any("open-room" in command for command in payload["next_commands"])
 
 
 def test_peer_share_and_import_card_with_base_url(tmp_path: Path, capsys) -> None:
