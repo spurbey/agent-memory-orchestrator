@@ -477,6 +477,29 @@ def test_netd_peer_agent_message_requires_remote_peer_id_or_signature(tmp_path: 
     assert "remote peer id or signed envelope required" in result["error"]
 
 
+def test_process_netd_inbox_does_not_hide_failed_peer_agent_envelope(tmp_path: Path) -> None:
+    peer_store = PeerStore(make_settings(tmp_path / "peer"))
+    peer_store.init_config(node_id="poco-amo")
+    peer_store.add_peer(PeerNode(node_id="zenbook-amo", peer_id="12D3KooWGood", trust="trusted"))
+    room = peer_store.create_room(
+        topic="trusted room",
+        participants=["zenbook-amo", "poco-amo"],
+        initiator_node_id="zenbook-amo",
+    )
+    netd = FakeNetdClient(messages=[_context_request_envelope(room_id=room["room_id"])])
+    service = PeerService(peer_store.settings, store=peer_store, netd_client=netd)
+
+    first = service.process_netd_inbox()
+    second = service.process_netd_inbox()
+
+    assert first["results"][0]["ok"] is False
+    assert first["results"][0]["processed"] is False
+    assert "remote peer id or signed envelope required" in first["results"][0]["error"]
+    assert second["results"][0]["ok"] is False
+    assert second["results"][0]["processed"] is False
+    assert peer_store.load_processed_netd_ids() == set()
+
+
 def test_netd_peer_agent_message_without_peer_id_requires_signature(tmp_path: Path) -> None:
     peer_store = PeerStore(make_settings(tmp_path / "peer"))
     peer_store.init_config(node_id="poco-amo")
