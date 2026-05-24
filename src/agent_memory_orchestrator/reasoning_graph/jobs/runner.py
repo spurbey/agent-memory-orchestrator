@@ -887,7 +887,17 @@ def _versioned_items(value: Any, job: dict[str, Any]) -> list[dict[str, Any]]:
     for item in value:
         if not isinstance(item, dict):
             continue
-        out.append({**item, "pipeline_version": PIPELINE_VERSION, "graph_schema_version": GRAPH_SCHEMA_VERSION, "session_id": job.get("session_id"), "job_id": job.get("job_id")})
+        out.append(
+            {
+                **item,
+                "pipeline_version": PIPELINE_VERSION,
+                "graph_schema_version": GRAPH_SCHEMA_VERSION,
+                "session_id": job.get("session_id"),
+                "job_id": job.get("job_id"),
+                "repo_id": job.get("repo_id") or "",
+                "repo_path": job.get("repo_path") or "",
+            }
+        )
     return out
 
 

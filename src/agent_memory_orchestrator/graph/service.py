@@ -803,6 +803,7 @@ class GraphRagService:
         *,
         db_path: Path | None = None,
         session_id: str = "",
+        repo_id: str = "",
         limit: int = 10000,
         max_doc_chars: int = 5000,
     ) -> dict[str, Any]:
@@ -813,6 +814,7 @@ class GraphRagService:
             docs = build_retrieval_documents_from_graph(
                 self.store,
                 session_id=session_id,
+                repo_id=repo_id,
                 node_limit=max(1, min(100000, int(limit))),
                 max_doc_chars=max(1000, int(max_doc_chars)),
             )
@@ -822,6 +824,7 @@ class GraphRagService:
                 "db_path": str(target_db),
                 "graph_path": str(self.settings.graph_path),
                 "session_id": session_id,
+                "repo_id": repo_id,
                 "retrieval_document_count": written,
                 "doc_type_counts": _count_by(docs, "doc_type"),
                 "node_kind_counts": _count_by(docs, "node_kind"),
@@ -834,6 +837,7 @@ class GraphRagService:
         *,
         db_path: Path | None = None,
         session_id: str = "",
+        repo_id: str = "",
         limit: int = 0,
         model: str = "",
         graph_scope: str = "",
@@ -854,6 +858,7 @@ class GraphRagService:
                 model=embedding_model,
                 graph_scope=scope,
                 session_id=session_id,
+                repo_id=repo_id,
                 extraction_run_id="graph_retrieval_index",
                 limit=max(0, int(limit)),
             )
@@ -871,6 +876,7 @@ class GraphRagService:
                 "db_path": str(target_db),
                 "graph_path": str(self.settings.graph_path),
                 "graph_scope": scope,
+                "repo_id": repo_id,
                 "embedding": result.as_dict(),
                 "faiss": faiss,
             }
@@ -883,6 +889,7 @@ class GraphRagService:
         query: str,
         db_path: Path | None = None,
         session_id: str = "",
+        repo_id: str = "",
         limit: int = 8,
         use_vector: bool = True,
         model: str = "",
@@ -918,6 +925,7 @@ class GraphRagService:
                 embedding_model=embedding_model if embedder is not None else "",
                 graph_scope=scope,
                 session_id=session_id,
+                repo_id=repo_id,
                 limit=max(1, min(50, int(limit))),
                 expand_neighbors=12 if include_answer else 0,
                 include_graph_nodes=include_answer,
@@ -932,6 +940,7 @@ class GraphRagService:
                 "db_path": str(target_db),
                 "graph_path": str(self.settings.graph_path),
                 "graph_scope": scope,
+                "repo_id": repo_id,
                 "retrieval": result.as_dict(),
             }
             if include_answer:
