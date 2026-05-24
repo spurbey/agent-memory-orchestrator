@@ -298,6 +298,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     graph_retrieval_build = sub.add_parser("graph-retrieval-build", help="Build SQLite/FTS retrieval docs from the graph")
     graph_retrieval_build.add_argument("--session-id", default="")
+    graph_retrieval_build.add_argument("--repo-id", default="", help="Limit retrieval docs to one canonical repo id.")
     graph_retrieval_build.add_argument("--limit", type=int, default=10000)
     graph_retrieval_build.add_argument("--max-doc-chars", type=int, default=5000)
     graph_retrieval_build.add_argument("--db-path", type=Path, default=None)
@@ -306,6 +307,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     graph_retrieval_embed = sub.add_parser("graph-retrieval-embed", help="Resume embedding missing graph retrieval docs")
     graph_retrieval_embed.add_argument("--session-id", default="")
+    graph_retrieval_embed.add_argument("--repo-id", default="", help="Limit embedding work to one canonical repo id.")
     graph_retrieval_embed.add_argument("--limit", type=int, default=100)
     graph_retrieval_embed.add_argument("--model", default="")
     graph_retrieval_embed.add_argument("--graph-scope", default="")
@@ -317,6 +319,7 @@ def _build_parser() -> argparse.ArgumentParser:
     graph_retrieve = sub.add_parser("graph-retrieve", help="Retrieve over graph docs with exact/BM25/vector/Kuzu expansion")
     graph_retrieve.add_argument("--query", required=True)
     graph_retrieve.add_argument("--session-id", default="")
+    graph_retrieve.add_argument("--repo-id", default="", help="Search one canonical repo id.")
     graph_retrieve.add_argument("--limit", type=int, default=8)
     graph_retrieve.add_argument("--model", default="")
     graph_retrieve.add_argument("--graph-scope", default="")
@@ -346,6 +349,7 @@ def _build_parser() -> argparse.ArgumentParser:
     graph_version_flow = sub.add_parser("graph-version-flow", help="Show commit-centric graph versioning flow")
     graph_version_flow.add_argument("--commit", default="", help="Commit SHA/prefix to inspect. Omit to list recent flows.")
     graph_version_flow.add_argument("--session-id", default="", help="Restrict version flow to one AMO session.")
+    graph_version_flow.add_argument("--repo-id", default="", help="Limit version flow to one canonical repo id.")
     graph_version_flow.add_argument("--limit", type=int, default=100)
     graph_version_flow.add_argument("--offline", action="store_true", help="Open Kuzu directly for single-process maintenance.")
 
@@ -1543,6 +1547,7 @@ def main(argv: list[str] | None = None) -> int:
                         result = graph.rebuild_retrieval_index(
                             db_path=args.db_path,
                             session_id=args.session_id,
+                            repo_id=args.repo_id,
                             limit=args.limit,
                             max_doc_chars=args.max_doc_chars,
                         )
@@ -1550,6 +1555,7 @@ def main(argv: list[str] | None = None) -> int:
                         result = graph.embed_retrieval_index(
                             db_path=args.db_path,
                             session_id=args.session_id,
+                            repo_id=args.repo_id,
                             limit=args.limit,
                             model=args.model,
                             graph_scope=args.graph_scope,
@@ -1560,6 +1566,7 @@ def main(argv: list[str] | None = None) -> int:
                             query=args.query,
                             db_path=args.db_path,
                             session_id=args.session_id,
+                            repo_id=args.repo_id,
                             limit=args.limit,
                             use_vector=not args.no_vector,
                             model=args.model,
@@ -1583,7 +1590,7 @@ def main(argv: list[str] | None = None) -> int:
                             max_windows=args.max_windows,
                         )
                     elif args.command == "graph-version-flow":
-                        result = graph.version_flow(commit=args.commit, session_id=args.session_id, limit=args.limit)
+                        result = graph.version_flow(commit=args.commit, session_id=args.session_id, repo_id=args.repo_id, limit=args.limit)
                     else:
                         result = graph.merge_status(session_id=args.session_id)
                     _print(result)
@@ -1641,6 +1648,7 @@ def main(argv: list[str] | None = None) -> int:
                             "/graph/retrieval-build",
                             {
                                 "session_id": args.session_id,
+                                "repo_id": args.repo_id,
                                 "limit": args.limit,
                                 "max_doc_chars": args.max_doc_chars,
                                 "db_path": str(args.db_path) if args.db_path else "",
@@ -1652,6 +1660,7 @@ def main(argv: list[str] | None = None) -> int:
                             "/graph/retrieval-embed",
                             {
                                 "session_id": args.session_id,
+                                "repo_id": args.repo_id,
                                 "limit": args.limit,
                                 "model": args.model,
                                 "graph_scope": args.graph_scope,
@@ -1666,6 +1675,7 @@ def main(argv: list[str] | None = None) -> int:
                             {
                                 "query": args.query,
                                 "session_id": args.session_id,
+                                "repo_id": args.repo_id,
                                 "limit": args.limit,
                                 "model": args.model,
                                 "graph_scope": args.graph_scope,
@@ -1701,7 +1711,7 @@ def main(argv: list[str] | None = None) -> int:
                     elif args.command == "graph-version-flow":
                         result = client.post(
                             "/graph/version-flow",
-                            {"commit": args.commit, "session_id": args.session_id, "limit": args.limit},
+                            {"commit": args.commit, "session_id": args.session_id, "repo_id": args.repo_id, "limit": args.limit},
                         )
                     else:
                         result = client.get("/api/graph/status", {"session_id": args.session_id})

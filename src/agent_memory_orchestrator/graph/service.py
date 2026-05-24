@@ -24,6 +24,8 @@ from ..evidence.window import clean_evidence_window
 from ..llm.embeddings import embed_text
 from ..llm.qwen import DeterministicPlanner, OllamaQwenClient, QueryPlan, QwenPlanner, QwenUnavailable
 from ..reasoning_graph.embedding_store import GraphEmbeddingStore
+from ..reasoning_graph.central_merge.repo_identity import resolve_repo_identity
+from ..reasoning_graph.jobs import V2SessionJobStore
 from ..reasoning_graph.retrieval import RetrievalIndexStore
 from ..reasoning_graph.retrieval import RETRIEVAL_EMBEDDING_KIND
 from ..reasoning_graph.retrieval import build_retrieval_documents_from_graph
@@ -531,9 +533,12 @@ class GraphRagService:
         total["cursor_path"] = str(cursor_path)
         return total
 
-    def session_overview(self, *, limit: int = 25) -> dict[str, Any]:
+    def session_overview(self, *, limit: int = 25, repo_id: str = "") -> dict[str, Any]:
         safe_limit = max(1, min(100, int(limit)))
+        safe_repo_id = str(repo_id or "").strip()
         records = _load_evidence_records(_evidence_roots(self.settings), limit=5000)
+        jobs_by_session = self._jobs_by_session(limit=5000)
+        repo_cache: dict[str, str] = {}
         sessions: dict[str, dict[str, Any]] = {}
         for record in records:
             session_id = str(record.get("session_id") or "default")
@@ -549,6 +554,7 @@ class GraphRagService:
                     "first_at": "",
                     "cwd": "",
                     "repo": "",
+                    "repo_id": "",
                     "branch": "",
                     "latest_event": "",
                 },
@@ -566,6 +572,7 @@ class GraphRagService:
                 row["cwd"] = str(payload.get("cwd") or row.get("cwd") or "")
                 git = payload.get("git") if isinstance(payload.get("git"), dict) else {}
                 row["repo"] = str(git.get("repo_root") or payload.get("repo_root") or row.get("repo") or "")
+                row["repo_id"] = _repo_id_for_path(row["repo"] or row["cwd"], repo_cache)
                 row["branch"] = str(git.get("branch") or row.get("branch") or "")
 
         contexts = {
@@ -575,11 +582,19 @@ class GraphRagService:
         }
         rows: list[dict[str, Any]] = []
         for session_id, row in sessions.items():
+            job = jobs_by_session.get(session_id, {})
+            effective_repo_id = str(job.get("repo_id") or row.get("repo_id") or "")
+            if not effective_repo_id:
+                effective_repo_id = _repo_id_for_path(str(row.get("repo") or row.get("cwd") or ""), repo_cache)
+            if safe_repo_id and effective_repo_id != safe_repo_id:
+                continue
             context = contexts.get(session_id)
             counts = self.store.merge_status(session_id=session_id).get("counts", {})
             rows.append(
                 {
                     **{key: value for key, value in row.items() if key != "source_apps"},
+                    "repo_id": effective_repo_id,
+                    "repo_path": str(job.get("repo_path") or row.get("repo") or row.get("cwd") or ""),
                     "source_apps": sorted(row["source_apps"]),
                     "graph_counts": counts,
                     "latest_context": context,
@@ -588,9 +603,62 @@ class GraphRagService:
         rows.sort(key=lambda item: str(item.get("latest_at") or ""), reverse=True)
         return {
             "ok": True,
+            "repo_id": safe_repo_id,
             "graph_status": self.merge_status(),
             "sessions": rows[:safe_limit],
         }
+
+    def list_repositories(self, *, limit: int = 200) -> dict[str, Any]:
+        repos: dict[str, dict[str, Any]] = {}
+
+        def add(repo_id: str, repo_path: str = "", *, source: str = "", updated_at: str = "", job_count: int = 0, plan_count: int = 0) -> None:
+            key = str(repo_id or "").strip()
+            if not key:
+                return
+            row = repos.setdefault(
+                key,
+                {"repo_id": key, "repo_path": "", "sources": set(), "job_count": 0, "plan_count": 0, "node_count": 0, "updated_at": ""},
+            )
+            if repo_path and not row["repo_path"]:
+                row["repo_path"] = repo_path
+            if source:
+                row["sources"].add(source)
+            row["job_count"] += int(job_count)
+            row["plan_count"] += int(plan_count)
+            if updated_at and updated_at > str(row["updated_at"]):
+                row["updated_at"] = updated_at
+
+        job_store = V2SessionJobStore(self.settings)
+        try:
+            for repo in job_store.list_repositories(limit=limit):
+                add(
+                    str(repo.get("repo_id") or ""),
+                    str(repo.get("repo_path") or ""),
+                    source="jobs",
+                    updated_at=str(repo.get("updated_at") or ""),
+                    job_count=int(repo.get("job_count") or 0),
+                    plan_count=int(repo.get("plan_count") or 0),
+                )
+        finally:
+            job_store.close()
+        for node in self.store.list_nodes(limit=10000, kinds=["KnowledgeAtom", "KnowledgeVersion", "GraphView"]):
+            node_repo_id = _node_repo_id(node)
+            if not node_repo_id:
+                continue
+            add(node_repo_id, _node_repo_path(node), source="central_graph")
+            repos[node_repo_id]["node_count"] += 1
+        out = []
+        for row in repos.values():
+            out.append({**row, "sources": sorted(row["sources"])})
+        out.sort(key=lambda item: (str(item.get("updated_at") or ""), int(item.get("node_count") or 0)), reverse=True)
+        return {"ok": True, "repos": out[: max(1, int(limit))]}
+
+    def _jobs_by_session(self, *, limit: int = 5000) -> dict[str, dict[str, Any]]:
+        job_store = V2SessionJobStore(self.settings)
+        try:
+            return {str(job.get("session_id") or ""): job for job in job_store.list_jobs(limit=limit) if job.get("session_id")}
+        finally:
+            job_store.close()
 
     def session_detail(self, *, session_id: str, limit: int = 120) -> dict[str, Any]:
         session_id = str(session_id or "").strip()
@@ -624,13 +692,18 @@ class GraphRagService:
             "central_graph": self.central_graph(limit=80),
         }
 
-    def central_graph(self, *, limit: int = 100, full: bool = False) -> dict[str, Any]:
+    def central_graph(self, *, limit: int = 100, full: bool = False, repo_id: str = "") -> dict[str, Any]:
         max_limit = 10000 if full else 500
         safe_limit = max(1, min(max_limit, int(limit)))
-        all_nodes = self.store.list_nodes(limit=safe_limit * 8)
+        safe_repo_id = str(repo_id or "").strip()
+        all_nodes = [
+            node
+            for node in self.store.list_nodes(limit=safe_limit * 8)
+            if _matches_repo_scope(node, safe_repo_id)
+        ]
         pool = [
-            *self.store.list_nodes(status="committed", limit=safe_limit),
-            *self.store.list_nodes(status="active", limit=safe_limit),
+            *[node for node in self.store.list_nodes(status="committed", limit=safe_limit) if _matches_repo_scope(node, safe_repo_id)],
+            *[node for node in self.store.list_nodes(status="active", limit=safe_limit) if _matches_repo_scope(node, safe_repo_id)],
             *all_nodes,
         ]
         output_ids: set[str] = set()
@@ -702,6 +775,7 @@ class GraphRagService:
                 break
         return {
             "ok": True,
+            "repo_id": safe_repo_id,
             "nodes": nodes,
             "edges": central_edges[: safe_limit * 4],
             "full": full,
@@ -710,7 +784,7 @@ class GraphRagService:
             "warnings": _central_graph_warnings(nodes, central_edges),
         }
 
-    def version_flow(self, *, commit: str = "", session_id: str = "", limit: int = 100) -> dict[str, Any]:
+    def version_flow(self, *, commit: str = "", session_id: str = "", repo_id: str = "", limit: int = 100) -> dict[str, Any]:
         """Return commit-centric provenance and versioning flow for the web UI.
 
         This is intentionally graph-derived. It does not infer from raw logs;
@@ -718,9 +792,14 @@ class GraphRagService:
         """
 
         safe_limit = max(1, min(500, int(limit)))
+        safe_repo_id = str(repo_id or "").strip()
         node_limit = max(1000, safe_limit * 16)
         edge_limit = max(2000, safe_limit * 32)
-        nodes = [_sanitize_output_node(node) for node in self.store.list_nodes(limit=node_limit)]
+        nodes = [
+            _sanitize_output_node(node)
+            for node in self.store.list_nodes(limit=node_limit)
+            if _matches_repo_scope(node, safe_repo_id)
+        ]
         edges = self.store.list_edges(limit=edge_limit)
         node_by_id = {str(node.get("id") or ""): node for node in nodes}
         commit_nodes = [
@@ -752,6 +831,7 @@ class GraphRagService:
             "ok": True,
             "commit": commit,
             "session_id": session_id,
+            "repo_id": safe_repo_id,
             "count": len(flows),
             "flows": flows,
             "nodes": visible_nodes,
@@ -1388,6 +1468,31 @@ def _fallback_event(payload: dict[str, Any], default_agent: str) -> dict[str, An
 def _event_cwd(payload: dict[str, Any], normalized: dict[str, Any]) -> str | Path | None:
     metadata = normalized.get("metadata") if isinstance(normalized.get("metadata"), dict) else {}
     return payload.get("cwd") or metadata.get("cwd") or os.getenv("AMO_WORKSPACE_CWD") or None
+
+
+def _repo_id_for_path(path: str | Path, cache: dict[str, str]) -> str:
+    text = str(path or "").strip()
+    if not text:
+        return ""
+    if text not in cache:
+        cache[text] = resolve_repo_identity(text).repo_id
+    return cache[text]
+
+
+def _node_repo_id(node: dict[str, Any]) -> str:
+    metadata = node.get("metadata") if isinstance(node.get("metadata"), dict) else {}
+    return str(node.get("repo_id") or metadata.get("repo_id") or "")
+
+
+def _node_repo_path(node: dict[str, Any]) -> str:
+    metadata = node.get("metadata") if isinstance(node.get("metadata"), dict) else {}
+    return str(node.get("repo_path") or metadata.get("repo_path") or "")
+
+
+def _matches_repo_scope(node: dict[str, Any], repo_id: str) -> bool:
+    if not repo_id:
+        return True
+    return _node_repo_id(node) == repo_id
 
 
 def _node_kind_for_event(event_type: str) -> str:

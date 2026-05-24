@@ -166,6 +166,36 @@ def test_v2_schema_adds_central_merge_control_tables(tmp_path: Path) -> None:
     }.issubset(names)
 
 
+def test_v2_jobs_and_repository_list_are_repo_scoped(tmp_path: Path) -> None:
+    settings = make_settings(tmp_path)
+    repo_a = tmp_path / "repo-a"
+    repo_b = tmp_path / "repo-b"
+    repo_a.mkdir()
+    repo_b.mkdir()
+    store = V2SessionJobStore(settings)
+    try:
+        job_a = store.enqueue_session(
+            session_id="s-repo-a",
+            boundary_event_id="raw_a",
+            repo_path=str(repo_a),
+            repo_id="repo:test:a",
+        ).job
+        job_b = store.enqueue_session(
+            session_id="s-repo-b",
+            boundary_event_id="raw_b",
+            repo_path=str(repo_b),
+            repo_id="repo:test:b",
+        ).job
+
+        scoped = store.list_jobs(repo_id=job_a["repo_id"])
+        repos = store.list_repositories()
+    finally:
+        store.close()
+
+    assert [job["session_id"] for job in scoped] == ["s-repo-a"]
+    assert {row["repo_id"] for row in repos} >= {job_a["repo_id"], job_b["repo_id"]}
+
+
 def test_v2_central_merge_stage_writes_dry_run_plan_and_preserves_session_graph(tmp_path: Path) -> None:
     settings = make_settings(tmp_path)
     store = V2SessionJobStore(settings)
