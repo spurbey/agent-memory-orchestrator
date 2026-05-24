@@ -6,6 +6,11 @@ The Reasoning Graph explains why code changed.
 
 Git already records what changed. AMO V2 adds the reasoning layer around it: problems, causes, decisions, fixes, constraints, evidence, tests, code hunks, symbols, commits, and version relationships.
 
+Before commit-backed stages run, V2 resolves the actual Git root for the closed
+session. Hook cwd is only a hint; transcript tool workdirs and commit ownership
+decide the repo scope so nested repositories do not get attributed to a parent
+workspace.
+
 ## V2 Flow
 
 ```text
