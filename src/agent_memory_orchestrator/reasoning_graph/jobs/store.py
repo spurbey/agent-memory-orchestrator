@@ -484,6 +484,17 @@ class V2SessionJobStore:
         ).fetchone()
         return _row(row) if row is not None else None
 
+    def get_graph_commit(self, graph_commit_id: str) -> dict[str, Any] | None:
+        row = self.conn.execute("SELECT * FROM v2_graph_commits WHERE graph_commit_id = ?", (graph_commit_id,)).fetchone()
+        return _row(row) if row is not None else None
+
+    def get_graph_commit_for_plan(self, plan_id: str) -> dict[str, Any] | None:
+        row = self.conn.execute(
+            "SELECT * FROM v2_graph_commits WHERE plan_id = ? ORDER BY updated_at DESC LIMIT 1",
+            (plan_id,),
+        ).fetchone()
+        return _row(row) if row is not None else None
+
     def update_central_merge_plan_status(
         self,
         *,
