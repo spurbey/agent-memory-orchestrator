@@ -21,6 +21,8 @@ import {
 const state = {
   canvas: null,
   ctx: null,
+  repos: [],
+  repoId: "",
   centralGraph: { nodes: [], edges: [], warnings: [], full: false, limit: 500 },
   visibleNodes: [],
   visibleEdges: [],
@@ -55,6 +57,32 @@ const state = {
   lastFrame: 0,
 };
 
+async function loadRepos() {
+  const data = await apiGet("/api/repos?limit=200");
+  state.repos = data.repos || [];
+  if (state.repoId && !state.repos.some(repo => repo.repo_id === state.repoId)) state.repoId = "";
+  renderRepoScope();
+}
+
+function renderRepoScope() {
+  const select = $("repoScopeSelect");
+  if (!select) return;
+  select.innerHTML = [
+    `<option value="">All repositories</option>`,
+    ...state.repos.map(repo => `<option value="${escapeHtml(repo.repo_id)}">${escapeHtml(repoLabel(repo))}</option>`),
+  ].join("");
+  select.value = state.repoId || "";
+}
+
+function repoLabel(repo) {
+  const path = String(repo.repo_path || "");
+  const leaf = path.split(/[\\/]/).filter(Boolean).pop();
+  const name = leaf || truncate(repo.repo_id || "repo", 42);
+  const count = Number(repo.job_count || 0);
+  const nodes = Number(repo.node_count || 0);
+  return `${name} - ${count ? `${count} jobs` : nodes ? `${nodes} nodes` : "repo"}`;
+}
+
 function setStatus(message, tone = "") {
   const target = $("graphStatus");
   if (!target) return;
@@ -66,6 +94,7 @@ async function loadGraph({ full = state.centralGraph.full } = {}) {
   const limit = full ? 5000 : state.graphLimit;
   const params = new URLSearchParams({ limit: String(limit) });
   if (full) params.set("full", "true");
+  if (state.repoId) params.set("repo_id", state.repoId);
   setStatus("loading graph", "warn");
   const data = await apiGet(`/api/graph/central?${params.toString()}`);
   state.centralGraph = {
@@ -210,6 +239,7 @@ async function runTrace() {
   try {
     const result = await apiPost("/graph/retrieve", {
       query,
+      repo_id: state.repoId || "",
       limit: 10,
       use_vector: true,
       require_vector: false,
@@ -423,6 +453,11 @@ function focusNeighborhood() {
 
 function bindEvents() {
   $("reloadBtn").addEventListener("click", () => loadGraph({ full: state.centralGraph.full }).catch(showFatal));
+  $("repoScopeSelect")?.addEventListener("change", event => {
+    state.repoId = event.target.value || "";
+    state.selectedId = "";
+    loadGraph({ full: state.centralGraph.full }).catch(showFatal);
+  });
   $("sliceBtn").addEventListener("click", () => loadGraph({ full: false }).catch(showFatal));
   $("wholeBtn").addEventListener("click", () => loadGraph({ full: true }).catch(showFatal));
   $("traceBtn").addEventListener("click", runTrace);
@@ -561,6 +596,7 @@ async function init() {
   bindEvents();
   renderLegend();
   setMode("atlas");
+  await loadRepos();
   await loadGraph({ full: false });
   state.running = true;
   requestAnimationFrame(animationLoop);

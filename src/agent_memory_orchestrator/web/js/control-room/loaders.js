@@ -6,15 +6,30 @@ export async function loadHealth() {
   return state.health;
 }
 
+function repoParams(params = {}) {
+  const out = new URLSearchParams(params);
+  if (state.selectedRepoId) out.set("repo_id", state.selectedRepoId);
+  return out;
+}
+
+export async function loadRepos() {
+  const data = await apiGet("/api/repos?limit=200");
+  state.repos = data.repos || [];
+  if (state.selectedRepoId && !state.repos.some(repo => repo.repo_id === state.selectedRepoId)) {
+    state.selectedRepoId = "";
+  }
+  return state.repos;
+}
+
 export async function loadSessions() {
-  const data = await apiGet("/api/graph/sessions?limit=80");
+  const data = await apiGet(`/api/graph/sessions?${repoParams({ limit: "80" }).toString()}`);
   state.sessions = data.sessions || [];
   return state.sessions;
 }
 
 export async function loadJobs() {
   try {
-    state.jobs = await apiGet("/api/jobs?limit=100");
+    state.jobs = await apiGet(`/api/jobs?${repoParams({ limit: "100" }).toString()}`);
   } catch (error) {
     state.jobs = { ok: false, error: error.message, jobs: [], reset_marker: null };
   }
@@ -40,7 +55,7 @@ export async function loadSessionDetail(sessionId) {
 
 export async function loadCentralGraph({ full = false } = {}) {
   const limit = full ? 5000 : 500;
-  const params = new URLSearchParams({ limit: String(limit) });
+  const params = repoParams({ limit: String(limit) });
   if (full) params.set("full", "true");
   const data = await apiGet(`/api/graph/central?${params.toString()}`);
   state.centralGraph = {
@@ -64,7 +79,7 @@ export async function loadConnectorStatus() {
 }
 
 export async function loadVersionFlow(commit = "", sessionId = "") {
-  const params = new URLSearchParams({ limit: "120" });
+  const params = repoParams({ limit: "120" });
   if (commit) params.set("commit", commit);
   if (sessionId) params.set("session_id", sessionId);
   const data = await apiGet(`/api/graph/version-flow?${params.toString()}`);

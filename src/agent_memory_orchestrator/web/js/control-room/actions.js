@@ -41,6 +41,7 @@ export async function runRetrieval(setView) {
   try {
     const result = await apiPost("/graph/retrieve", {
       query,
+      repo_id: state.selectedRepoId || "",
       limit: 10,
       use_vector: true,
       require_vector: $("requireVector")?.checked ?? false,

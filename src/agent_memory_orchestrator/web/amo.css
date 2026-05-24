@@ -116,6 +116,7 @@ h3 { font-size: 16px; }
 }
 .search { min-width: min(460px, 42vw); }
 .search.small { min-width: 210px; }
+.repo-select { min-width: min(300px, 26vw); color: var(--accent); }
 .search:focus, select:focus { border-color: rgba(183, 245, 110, 0.54); box-shadow: 0 0 0 4px rgba(183, 245, 110, 0.08); }
 .btn {
   border: 1px solid var(--line);
