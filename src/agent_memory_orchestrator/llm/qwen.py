@@ -163,34 +163,73 @@ class OllamaQwenClient:
         timeout_seconds: float | None = None,
         schema: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        body = json.dumps(
+        payload = {
+            "model": self.model,
+            "prompt": prompt,
+            "stream": False,
+            "format": schema or "json",
+            "think": False,
+            "options": {
+                "temperature": 0,
+                "num_predict": num_predict,
+                "num_ctx": self.num_ctx,
+            },
+        }
+        raw = self._post_json("/api/generate", payload, timeout_seconds=timeout_seconds)
+        text = str(raw.get("response") or "").strip()
+        if not text and raw.get("thinking"):
+            raw = self._generate_json_with_chat_fallback(
+                prompt,
+                num_predict=num_predict,
+                timeout_seconds=timeout_seconds,
+                schema=schema,
+            )
+            text = str(raw.get("message", {}).get("content") or "").strip()
+        if not text:
+            raise QwenUnavailable("qwen_ollama_empty_response")
+        return _parse_json_object(text)
+
+    def _generate_json_with_chat_fallback(
+        self,
+        prompt: str,
+        *,
+        num_predict: int,
+        timeout_seconds: float | None,
+        schema: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        return self._post_json(
+            "/api/chat",
             {
                 "model": self.model,
-                "prompt": prompt,
+                "messages": [{"role": "user", "content": prompt}],
                 "stream": False,
                 "format": schema or "json",
+                "think": False,
                 "options": {
                     "temperature": 0,
                     "num_predict": num_predict,
                     "num_ctx": self.num_ctx,
                 },
-            }
-        ).encode("utf-8")
+            },
+            timeout_seconds=timeout_seconds,
+        )
+
+    def _post_json(self, path: str, payload: dict[str, Any], *, timeout_seconds: float | None = None) -> dict[str, Any]:
+        body = json.dumps(payload).encode("utf-8")
         request = urllib.request.Request(
-            f"{self.endpoint}/api/generate",
+            f"{self.endpoint}{path}",
             data=body,
             headers={"Content-Type": "application/json"},
             method="POST",
         )
         try:
             with urllib.request.urlopen(request, timeout=timeout_seconds or self.timeout_seconds) as response:  # noqa: S310
-                raw = json.loads(response.read().decode("utf-8"))
+                parsed = json.loads(response.read().decode("utf-8"))
         except (OSError, urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
             raise QwenUnavailable(f"qwen_ollama_unavailable:{exc}") from exc
-        text = str(raw.get("response") or "").strip()
-        if not text:
-            raise QwenUnavailable("qwen_ollama_empty_response")
-        return _parse_json_object(text)
+        if not isinstance(parsed, dict):
+            raise QwenUnavailable("qwen_ollama_response_must_be_object")
+        return parsed
 
 
 def _parse_json_object(text: str) -> dict[str, Any]:
