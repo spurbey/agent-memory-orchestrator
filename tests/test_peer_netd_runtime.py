@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -123,6 +124,35 @@ def test_peer_netd_runtime_lists_packaged_binary_candidates(tmp_path: Path) -> N
     assert any(platform_binary_dir_name() in str(candidate) for candidate in candidates)
     assert all(candidate.name == binary_name() for candidate in candidates)
     assert len(candidates) == len(set(candidates))
+
+
+def test_peer_netd_binary_capabilities_require_remote_peer_id_protocol(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    binary = tmp_path / binary_name()
+    binary.write_text("fake", encoding="utf-8")
+    runtime = PeerNetdRuntime(make_settings(tmp_path / "home"))
+
+    def fake_run(args: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        if args[1] == "-h":
+            return subprocess.CompletedProcess(args, 0, stdout="-identity-key\n-advertise-addr\n", stderr="")
+        if args[1] == "--capabilities":
+            return subprocess.CompletedProcess(
+                args,
+                0,
+                stdout=json.dumps({"ok": True, "protocol_capabilities": []}),
+                stderr="",
+            )
+        raise AssertionError(args)
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    capabilities = runtime.binary_capabilities(binary)
+
+    assert capabilities["ok"] is False
+    assert capabilities["missing_required_flags"] == []
+    assert capabilities["missing_protocol_capabilities"] == ["remote_peer_id"]
 
 
 def test_peer_netd_runtime_installs_packaged_binary(tmp_path: Path) -> None:
