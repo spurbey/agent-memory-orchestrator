@@ -11,6 +11,7 @@ from agent_memory_orchestrator.core.db import connect
 from agent_memory_orchestrator.reasoning_graph.embedding_store import GraphEmbeddingRecord
 from agent_memory_orchestrator.reasoning_graph.embedding_store import GraphEmbeddingStore
 from agent_memory_orchestrator.reasoning_graph.jobs import V2SessionJobStore
+from agent_memory_orchestrator.reasoning_graph.jobs.store import graph_view_id
 from agent_memory_orchestrator.reasoning_graph.jobs.constants import GRAPH_SCHEMA_VERSION
 from agent_memory_orchestrator.reasoning_graph.jobs.constants import PIPELINE_VERSION
 from agent_memory_orchestrator.reasoning_graph.jobs.reset import adopt_existing_v2_production_storage
@@ -214,7 +215,7 @@ def test_v2_central_merge_stage_writes_dry_run_plan_and_preserves_session_graph(
         assert plan_row["metrics"]["review_candidate_count"] == 0
         assert plan_row["plan"]["new_atoms"]
         assert plan_row["plan"]["new_versions"]
-        assert store.graph_view(branch="main", mode="active") is not None
+        assert store.graph_view(repo_id=plan_row["repo_id"], branch="main", mode="active") is not None
         stage = store.stage_row(job_id=job["job_id"], stage="central_version_merge")
         assert stage is not None
         assert Path(stage["output_artifact"]).name == "merge_plan.json"
@@ -259,11 +260,11 @@ def test_v2_central_merge_apply_writes_exact_atoms_graph_commit_and_view(tmp_pat
         updated_plan = store.get_central_merge_plan(stored["plan_id"])
         assert updated_plan is not None
         assert updated_plan["status"] == "applied"
-        view = store.graph_view(branch="main", mode="active")
+        view = store.graph_view(repo_id=applied["repo_id"], branch="main", mode="active")
         assert view is not None
         assert view["graph_commit_id"] == applied["graph_commit"]["graph_commit_id"]
         assert graph.nodes[applied["graph_commit"]["graph_commit_id"]].kind == "GraphCommit"
-        assert graph.nodes["v2view:main:active"].kind == "GraphView"
+        assert graph.nodes[graph_view_id(repo_id=applied["repo_id"], branch="main", mode="active")].kind == "GraphView"
         atom_nodes = [node for node in graph.nodes.values() if node.kind == "KnowledgeAtom"]
         version_nodes = [node for node in graph.nodes.values() if node.kind == "KnowledgeVersion"]
         central_nodes = [
