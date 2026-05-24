@@ -24,9 +24,10 @@ def export_job_fixture(settings: Settings, *, job_id: str, out_dir: Path | None 
         marker = store.marker()
         central_plan = store.get_central_merge_plan_for_job(job_id)
         central_plan_id = str((central_plan or {}).get("plan_id") or "")
+        central_repo_id = str((central_plan or {}).get("repo_id") or job.get("repo_id") or "")
         central_review_candidates = store.list_review_candidates(plan_id=central_plan_id) if central_plan_id else []
         central_graph_commit = store.get_graph_commit_for_plan(central_plan_id) if central_plan_id else None
-        central_graph_view = store.graph_view(branch="main", mode="active")
+        central_graph_view = store.graph_view(repo_id=central_repo_id, branch="main", mode="active")
     finally:
         store.close()
 

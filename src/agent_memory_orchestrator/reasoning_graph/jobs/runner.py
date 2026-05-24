@@ -24,6 +24,7 @@ from ..evidence_view import git_commit_truth
 from ..evidence_view import write_reasoning_evidence_view_artifacts
 from ..reasoning_extraction import review_reasoning_extraction_results
 from ..repo_resolution import resolve_session_repo_root
+from ..central_merge.repo_identity import resolve_repo_identity
 from ..retrieval import RETRIEVAL_EMBEDDING_KIND
 from ..retrieval import RetrievalIndexStore
 from ..retrieval import build_retrieval_documents_from_graph
@@ -161,14 +162,20 @@ class V2SessionJobRunner:
             fallback_repo_path=str(job.get("repo_path") or ""),
         )
         repo_root = Path(str(repo_resolution.repo_root or job.get("repo_path") or ".")).resolve()
-        if repo_resolution.resolved and _path_changed(str(job.get("repo_path") or ""), str(repo_root)):
-            self.job_store.update_job_repo_path(
+        repo_identity = resolve_repo_identity(repo_root)
+        if repo_resolution.resolved and (
+            _path_changed(str(job.get("repo_path") or ""), str(repo_root))
+            or str(job.get("repo_id") or "") != repo_identity.repo_id
+        ):
+            self.job_store.update_job_repo_identity(
                 job_id=str(job["job_id"]),
                 repo_path=str(repo_root),
+                repo_id=repo_identity.repo_id,
                 reason="session repo root resolved from evidence commits",
-                metadata=repo_resolution.as_dict(),
+                metadata={"repo_resolution": repo_resolution.as_dict(), "repo_identity": repo_identity.as_dict()},
             )
             job["repo_path"] = str(repo_root)
+            job["repo_id"] = repo_identity.repo_id
         build = build_reasoning_evidence_view(
             session_jsonl,
             transcript_path=Path(transcript_path) if transcript_path else None,
@@ -236,6 +243,7 @@ class V2SessionJobRunner:
         if not repo_resolution.resolved:
             return view, repo_resolution.as_dict()
         repo_root = Path(repo_resolution.repo_root).resolve()
+        repo_identity = resolve_repo_identity(repo_root)
         repaired = json.loads(json.dumps(view))
         repaired_commits: list[dict[str, Any]] = []
         for commit in commit_facts:
@@ -246,14 +254,19 @@ class V2SessionJobRunner:
         repaired["repo_resolution"] = repo_resolution.as_dict()
         repaired_count = sum(1 for item in repaired_commits if item.get("git_truth", {}).get("resolved") is True)
         resolution_payload = {**repo_resolution.as_dict(), "repaired_commit_truth_count": repaired_count}
-        if repaired_count and _path_changed(str(job.get("repo_path") or ""), str(repo_root)):
-            self.job_store.update_job_repo_path(
+        if repaired_count and (
+            _path_changed(str(job.get("repo_path") or ""), str(repo_root))
+            or str(job.get("repo_id") or "") != repo_identity.repo_id
+        ):
+            self.job_store.update_job_repo_identity(
                 job_id=str(job["job_id"]),
                 repo_path=str(repo_root),
+                repo_id=repo_identity.repo_id,
                 reason="work packet repo root repaired from evidence commits",
-                metadata=resolution_payload,
+                metadata={**resolution_payload, "repo_identity": repo_identity.as_dict()},
             )
             job["repo_path"] = str(repo_root)
+            job["repo_id"] = repo_identity.repo_id
         return repaired, resolution_payload
 
     def _stage_qwen_reasoning(self, job: dict[str, Any], artifact_dir: Path, stage_dir: Path) -> StageResult:
@@ -433,7 +446,8 @@ class V2SessionJobRunner:
         kuzu_result = _read_json(_stage_output(Path(str(job["artifact_dir"])), "kuzu_write"))
         manifest_path = Path(str(job["artifact_dir"])) / "kuzu_write" / "compact_graph_manifest.json"
         compact_graph = _read_json(manifest_path)
-        active_view = self.job_store.ensure_graph_view(branch="main", mode="active")
+        repo_id = str(job.get("repo_id") or "") or resolve_repo_identity(str(job.get("repo_path") or "")).repo_id
+        active_view = self.job_store.ensure_graph_view(repo_id=repo_id, branch="main", mode="active")
         parent_graph_commit_id = str(active_view.get("graph_commit_id") or "")
         existing_atoms = self._central_atoms_by_canonical_key()
         plan = build_dry_run_merge_plan(

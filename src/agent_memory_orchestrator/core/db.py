@@ -289,6 +289,7 @@ CREATE TABLE IF NOT EXISTS v2_session_jobs (
   artifact_dir TEXT NOT NULL DEFAULT '',
   source_app TEXT NOT NULL DEFAULT '',
   repo_path TEXT NOT NULL DEFAULT '',
+  repo_id TEXT NOT NULL DEFAULT '',
   boundary_event_id TEXT NOT NULL DEFAULT '',
   source_evidence_day TEXT NOT NULL DEFAULT '',
   source_evidence_days_json TEXT NOT NULL DEFAULT '[]',
@@ -380,6 +381,7 @@ CREATE TABLE IF NOT EXISTS v2_graph_commits (
   graph_commit_id TEXT PRIMARY KEY,
   plan_id TEXT NOT NULL DEFAULT '',
   job_id TEXT NOT NULL DEFAULT '',
+  repo_id TEXT NOT NULL DEFAULT '',
   branch TEXT NOT NULL DEFAULT 'main',
   parent_graph_commit_id TEXT NOT NULL DEFAULT '',
   status TEXT NOT NULL DEFAULT 'planned',
@@ -396,6 +398,7 @@ CREATE TABLE IF NOT EXISTS v2_graph_commits (
 
 CREATE TABLE IF NOT EXISTS v2_graph_views (
   view_id TEXT PRIMARY KEY,
+  repo_id TEXT NOT NULL DEFAULT '',
   branch TEXT NOT NULL DEFAULT 'main',
   mode TEXT NOT NULL DEFAULT 'active',
   graph_commit_id TEXT NOT NULL DEFAULT '',
@@ -403,16 +406,18 @@ CREATE TABLE IF NOT EXISTS v2_graph_views (
   metadata_json TEXT NOT NULL DEFAULT '{}',
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
-  UNIQUE(branch, mode, status)
+  UNIQUE(repo_id, branch, mode, status)
 );
 
 CREATE TABLE IF NOT EXISTS v2_central_merge_locks (
-  branch TEXT PRIMARY KEY,
+  repo_id TEXT NOT NULL DEFAULT '',
+  branch TEXT NOT NULL DEFAULT 'main',
   lock_owner TEXT NOT NULL DEFAULT '',
   lock_expires_at TEXT NOT NULL DEFAULT '',
   expected_parent_graph_commit_id TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY(repo_id, branch)
 );
 
 CREATE TABLE IF NOT EXISTS v2_semantic_eval_runs (
@@ -503,6 +508,9 @@ ON v2_session_jobs(status, updated_at);
 CREATE INDEX IF NOT EXISTS idx_v2_session_jobs_session
 ON v2_session_jobs(session_id, pipeline_version);
 
+CREATE INDEX IF NOT EXISTS idx_v2_session_jobs_repo
+ON v2_session_jobs(repo_id, updated_at DESC);
+
 CREATE INDEX IF NOT EXISTS idx_v2_session_job_events_job
 ON v2_session_job_events(job_id, created_at DESC);
 
@@ -516,10 +524,10 @@ CREATE INDEX IF NOT EXISTS idx_v2_central_review_candidates_plan
 ON v2_central_review_candidates(plan_id, status);
 
 CREATE INDEX IF NOT EXISTS idx_v2_graph_commits_branch
-ON v2_graph_commits(branch, created_at DESC);
+ON v2_graph_commits(repo_id, branch, created_at DESC);
 
 CREATE INDEX IF NOT EXISTS idx_v2_graph_views_lookup
-ON v2_graph_views(branch, mode, status);
+ON v2_graph_views(repo_id, branch, mode, status);
 
 CREATE INDEX IF NOT EXISTS idx_v2_semantic_eval_runs_status
 ON v2_semantic_eval_runs(status, updated_at DESC);
@@ -563,6 +571,78 @@ def _add_column_if_missing(conn: sqlite3.Connection, table: str, column: str, dd
         conn.execute(f"ALTER TABLE {table} ADD COLUMN {ddl}")
 
 
+def _rebuild_v2_graph_views_for_repo_scope(conn: sqlite3.Connection) -> None:
+    """Replace the old branch-only unique constraint with repo-scoped views."""
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS v2_graph_views_new (
+          view_id TEXT PRIMARY KEY,
+          repo_id TEXT NOT NULL DEFAULT '',
+          branch TEXT NOT NULL DEFAULT 'main',
+          mode TEXT NOT NULL DEFAULT 'active',
+          graph_commit_id TEXT NOT NULL DEFAULT '',
+          status TEXT NOT NULL DEFAULT 'active',
+          metadata_json TEXT NOT NULL DEFAULT '{}',
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          UNIQUE(repo_id, branch, mode, status)
+        )
+        """
+    )
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO v2_graph_views_new(
+          view_id, repo_id, branch, mode, graph_commit_id, status,
+          metadata_json, created_at, updated_at
+        )
+        SELECT view_id, COALESCE(repo_id, ''), branch, mode, graph_commit_id, status,
+               metadata_json, created_at, updated_at
+        FROM v2_graph_views
+        """
+    )
+    conn.execute("DROP TABLE v2_graph_views")
+    conn.execute("ALTER TABLE v2_graph_views_new RENAME TO v2_graph_views")
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_v2_graph_views_lookup
+        ON v2_graph_views(repo_id, branch, mode, status)
+        """
+    )
+
+
+def _rebuild_v2_central_merge_locks_for_repo_scope(conn: sqlite3.Connection) -> None:
+    """Replace the old branch-only lock key with repo-scoped branch locks."""
+
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS v2_central_merge_locks_new (
+          repo_id TEXT NOT NULL DEFAULT '',
+          branch TEXT NOT NULL DEFAULT 'main',
+          lock_owner TEXT NOT NULL DEFAULT '',
+          lock_expires_at TEXT NOT NULL DEFAULT '',
+          expected_parent_graph_commit_id TEXT NOT NULL DEFAULT '',
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          PRIMARY KEY(repo_id, branch)
+        )
+        """
+    )
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO v2_central_merge_locks_new(
+          repo_id, branch, lock_owner, lock_expires_at,
+          expected_parent_graph_commit_id, created_at, updated_at
+        )
+        SELECT COALESCE(repo_id, ''), branch, lock_owner, lock_expires_at,
+               expected_parent_graph_commit_id, created_at, updated_at
+        FROM v2_central_merge_locks
+        """
+    )
+    conn.execute("DROP TABLE v2_central_merge_locks")
+    conn.execute("ALTER TABLE v2_central_merge_locks_new RENAME TO v2_central_merge_locks")
+
+
 def _run_light_migrations(conn: sqlite3.Connection) -> None:
     _add_column_if_missing(conn, "sessions", "owner_user_id", "owner_user_id TEXT NOT NULL DEFAULT 'local'")
     _add_column_if_missing(conn, "sessions", "workspace_id", "workspace_id TEXT NOT NULL DEFAULT 'local'")
@@ -583,9 +663,19 @@ def _run_light_migrations(conn: sqlite3.Connection) -> None:
     _add_column_if_missing(conn, "v2_session_jobs", "last_successful_stage", "last_successful_stage TEXT NOT NULL DEFAULT ''")
     _add_column_if_missing(conn, "v2_session_jobs", "source_app", "source_app TEXT NOT NULL DEFAULT ''")
     _add_column_if_missing(conn, "v2_session_jobs", "repo_path", "repo_path TEXT NOT NULL DEFAULT ''")
+    _add_column_if_missing(conn, "v2_session_jobs", "repo_id", "repo_id TEXT NOT NULL DEFAULT ''")
     _add_column_if_missing(conn, "v2_session_jobs", "forced_at", "forced_at TEXT NOT NULL DEFAULT ''")
     _add_column_if_missing(conn, "v2_session_jobs", "forced_by", "forced_by TEXT NOT NULL DEFAULT ''")
     _add_column_if_missing(conn, "v2_session_job_stages", "stage_config_hash", "stage_config_hash TEXT NOT NULL DEFAULT ''")
+    _add_column_if_missing(conn, "v2_graph_commits", "repo_id", "repo_id TEXT NOT NULL DEFAULT ''")
+    graph_views_had_repo_id = "repo_id" in _existing_columns(conn, "v2_graph_views")
+    _add_column_if_missing(conn, "v2_graph_views", "repo_id", "repo_id TEXT NOT NULL DEFAULT ''")
+    if not graph_views_had_repo_id:
+        _rebuild_v2_graph_views_for_repo_scope(conn)
+    locks_had_repo_id = "repo_id" in _existing_columns(conn, "v2_central_merge_locks")
+    _add_column_if_missing(conn, "v2_central_merge_locks", "repo_id", "repo_id TEXT NOT NULL DEFAULT ''")
+    if not locks_had_repo_id:
+        _rebuild_v2_central_merge_locks_for_repo_scope(conn)
 
 
 def init_schema(conn: sqlite3.Connection) -> None:
