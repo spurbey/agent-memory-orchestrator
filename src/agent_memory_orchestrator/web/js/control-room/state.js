@@ -1,6 +1,8 @@
 export const state = {
   view: "dashboard",
   sessions: [],
+  repos: [],
+  selectedRepoId: "",
   selectedSessionId: "",
   selectedSession: null,
   selectedJobDetail: null,
