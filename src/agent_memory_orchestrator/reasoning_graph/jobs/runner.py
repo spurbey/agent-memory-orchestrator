@@ -451,7 +451,7 @@ class V2SessionJobRunner:
         parent_graph_commit_id = str(active_view.get("graph_commit_id") or "")
         existing_atoms = self._central_atoms_by_canonical_key()
         plan = build_dry_run_merge_plan(
-            job=job,
+            job={**job, "repo_id": repo_id},
             compact_graph=compact_graph if isinstance(compact_graph, dict) else {},
             parent_graph_commit_id=parent_graph_commit_id,
             existing_atoms_by_canonical_key=existing_atoms,

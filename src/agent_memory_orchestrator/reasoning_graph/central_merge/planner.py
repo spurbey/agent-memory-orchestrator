@@ -7,11 +7,14 @@ from typing import Any
 
 from ..jobs.constants import GRAPH_SCHEMA_VERSION
 from ..jobs.constants import PIPELINE_VERSION
+from .decision import build_decision_review_candidates
 from .models import CANONICAL_KEY_VERSION
 from .models import KnowledgeAtomPreview
 from .models import KnowledgeVersionPreview
 from .models import MergePlan
+from .models import merge_plan_id_for
 from .models import stable_hash
+from .repo_identity import RepoIdentity
 from .repo_identity import resolve_repo_identity
 
 
@@ -25,21 +28,39 @@ def build_dry_run_merge_plan(
     parent_graph_commit_id: str = "",
     existing_atoms_by_canonical_key: dict[str, dict[str, Any]] | None = None,
 ) -> MergePlan:
-    repo = resolve_repo_identity(str(job.get("repo_path") or ""))
+    repo = _repo_identity_from_job(job)
     nodes = _nodes(compact_graph)
     input_graph_hash = stable_hash({"nodes": nodes, "edges": compact_graph.get("edges", [])})
+    job_id = str(job["job_id"])
+    session_id = str(job["session_id"])
+    plan_id = merge_plan_id_for(
+        job_id=job_id,
+        session_id=session_id,
+        repo_id=repo.repo_id,
+        parent_graph_commit_id=parent_graph_commit_id,
+        input_graph_hash=input_graph_hash,
+    )
     atoms, versions, unresolved = _exact_atom_previews(
         nodes=nodes,
         repo_id=repo.repo_id,
         repo_path=repo.repo_path,
-        job_id=str(job["job_id"]),
-        session_id=str(job["session_id"]),
+        job_id=job_id,
+        session_id=session_id,
     )
     new_atoms, matched_atoms, remapped_versions = _split_new_and_matched_atoms(
         atoms=[atom.as_dict() for atom in atoms],
         versions=[version.as_dict() for version in versions],
         existing_atoms_by_canonical_key=existing_atoms_by_canonical_key or {},
     )
+    decision_result = build_decision_review_candidates(
+        compact_graph=compact_graph,
+        repo_id=repo.repo_id,
+        job_id=job_id,
+        plan_id=plan_id,
+    )
+    review_candidates = decision_result.get("candidates") if isinstance(decision_result.get("candidates"), list) else []
+    decision_metrics = decision_result.get("metrics") if isinstance(decision_result.get("metrics"), dict) else {}
+    decision_frames = decision_result.get("frames") if isinstance(decision_result.get("frames"), list) else []
     metrics = {
         "mode": "dry_run",
         "node_count": len(nodes),
@@ -49,15 +70,17 @@ def build_dry_run_merge_plan(
         "new_version_count": len(remapped_versions),
         "unresolved_identity_count": len(unresolved),
         "repo_id_resolution_status": repo.source,
-        "review_candidate_count": 0,
+        "review_candidate_count": len(review_candidates),
+        **decision_metrics,
     }
     diagnostics = {
         "repo_identity": repo.as_dict(),
+        "decision_frames": decision_frames,
         "note": "Dry-run only. No central Kuzu mutation is performed by this stage.",
     }
     return MergePlan.build(
-        job_id=str(job["job_id"]),
-        session_id=str(job["session_id"]),
+        job_id=job_id,
+        session_id=session_id,
         repo_id=repo.repo_id,
         repo_path=repo.repo_path,
         parent_graph_commit_id=parent_graph_commit_id,
@@ -68,7 +91,7 @@ def build_dry_run_merge_plan(
         matched_atoms=matched_atoms,
         new_versions=remapped_versions,
         version_edges=[],
-        review_candidates=[],
+        review_candidates=review_candidates,
         unresolved_identity=unresolved,
         metrics=metrics,
         diagnostics=diagnostics,
@@ -112,6 +135,23 @@ def _split_new_and_matched_atoms(
         atom_id = atom_id_by_key.get(canonical_key) or str(version.get("atom_id") or "")
         remapped_versions.append({**version, "atom_id": atom_id})
     return new_atoms, matched_atoms, remapped_versions
+
+
+def _repo_identity_from_job(job: dict[str, Any]) -> RepoIdentity:
+    resolved = resolve_repo_identity(str(job.get("repo_path") or ""))
+    job_repo_id = str(job.get("repo_id") or "").strip()
+    if not job_repo_id:
+        return resolved
+    diagnostics = dict(resolved.diagnostics or {})
+    diagnostics["resolved_source"] = resolved.source
+    return RepoIdentity(
+        repo_id=job_repo_id,
+        repo_path=resolved.repo_path,
+        source="job_repo_id",
+        normalized_remote=resolved.normalized_remote,
+        git_root=resolved.git_root,
+        diagnostics=diagnostics,
+    )
 
 
 def _nodes(compact_graph: dict[str, Any]) -> list[dict[str, Any]]:
