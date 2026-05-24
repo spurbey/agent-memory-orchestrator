@@ -439,6 +439,8 @@ def _build_parser() -> argparse.ArgumentParser:
         default="",
         help="Optional environment variable containing this peer's HMAC shared secret.",
     )
+    peer_remove = peer_sub.add_parser("remove", help="Remove a configured peer identity")
+    peer_remove.add_argument("--node-id", required=True)
     peer_sub.add_parser("status", help="Show peer node, policy, configured peers, and room count")
     peer_share = peer_sub.add_parser("share-card", help="Print or write this node's importable peer card")
     peer_share.add_argument("--out", type=Path, help="Optional JSON output path.")
@@ -577,6 +579,7 @@ def _build_parser() -> argparse.ArgumentParser:
     peer_agent_sub = peer_agent.add_subparsers(dest="peer_agent_command", required=True)
     peer_agent_ask = peer_agent_sub.add_parser("ask", help="Ask local memory first, then open a peer room if needed")
     peer_agent_ask.add_argument("--query", required=True)
+    peer_agent_ask.add_argument("--peer", action="append", default=[], help="Trusted peer node id to ask. Repeat for multiple peers.")
     peer_agent_ask.add_argument("--session-id", default="")
     peer_agent_ask.add_argument("--min-confidence", type=float, default=None)
     peer_agent_ask.add_argument("--timeout-seconds", type=float, default=None)
@@ -1098,12 +1101,7 @@ def main(argv: list[str] | None = None) -> int:
                         "netd": netd_result,
                         "accept_invite": accept_result,
                         "startup": startup_result,
-                        "next_commands": [
-                            "amo-cli peer create-invite --relay "
-                            + (args.relay_profile or "<relay-profile>")
-                            + " --auto-approve --out host.invite.json",
-                            'amo-cli peer open-room --topic "<topic>" --peer <peer-node-id>',
-                        ],
+                        "next_commands": _peer_setup_next_commands(args),
                     }
                 )
                 return 0 if setup_ok else 1
@@ -1219,6 +1217,9 @@ def main(argv: list[str] | None = None) -> int:
                         shared_secret_env=args.shared_secret_env,
                     )
                 )
+                return 0
+            if args.peer_command == "remove":
+                _print(svc.store.remove_peer(args.node_id))
                 return 0
             if args.peer_command == "status":
                 _print(svc.status())
@@ -1343,6 +1344,7 @@ def main(argv: list[str] | None = None) -> int:
             if args.peer_agent_command == "ask":
                 result = svc.ask(
                     query=args.query,
+                    peer_ids=args.peer or None,
                     session_id=args.session_id,
                     min_confidence=args.min_confidence,
                     timeout_seconds=args.timeout_seconds,
@@ -2075,6 +2077,31 @@ def _relay_values_from_args(args: argparse.Namespace, settings: Settings | None)
         "auto_relay": auto_relay,
         "hole_punching": hole_punching,
     }
+
+
+def _peer_setup_next_commands(args: argparse.Namespace) -> list[str]:
+    commands: list[str] = []
+    if not getattr(args, "invite", "") and not getattr(args, "invite_code", ""):
+        commands.append(
+            "amo-cli peer create-invite --relay "
+            + (getattr(args, "relay_profile", "") or "<relay-profile>")
+            + " --auto-approve"
+        )
+    if getattr(args, "install_startup", False):
+        commands.extend(
+            [
+                "amo-cli peer netd service-status --with-watch",
+                'amo-cli peer-agent ask --query "<question>"',
+            ]
+        )
+    else:
+        commands.extend(
+            [
+                "amo-cli peer-agent watch",
+                'amo-cli peer-agent ask --query "<question>"',
+            ]
+        )
+    return commands
 
 
 def _peer_invite_from_setup_args(args: argparse.Namespace) -> dict[str, Any] | None:
