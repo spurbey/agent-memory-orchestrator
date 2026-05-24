@@ -17,6 +17,7 @@ from ...llm.qwen import OllamaQwenClient
 from ...llm.qwen import QwenUnavailable
 from ..code_analysis import extract_code_nodes_from_commit
 from ..central_merge import build_dry_run_merge_plan
+from ..central_merge.identity import atoms_by_canonical_key
 from ..embedding_store import GraphEmbeddingStore
 from ..evidence_view import build_reasoning_evidence_view
 from ..evidence_view import write_reasoning_evidence_view_artifacts
@@ -364,10 +365,12 @@ class V2SessionJobRunner:
         compact_graph = _read_json(manifest_path)
         active_view = self.job_store.ensure_graph_view(branch="main", mode="active")
         parent_graph_commit_id = str(active_view.get("graph_commit_id") or "")
+        existing_atoms = self._central_atoms_by_canonical_key()
         plan = build_dry_run_merge_plan(
             job=job,
             compact_graph=compact_graph if isinstance(compact_graph, dict) else {},
             parent_graph_commit_id=parent_graph_commit_id,
+            existing_atoms_by_canonical_key=existing_atoms,
         )
         plan_payload = plan.as_dict()
         plan_payload["session_graph_write"] = kuzu_result if isinstance(kuzu_result, dict) else {}
@@ -386,6 +389,15 @@ class V2SessionJobRunner:
             "review_candidate_count": len(plan.review_candidates),
         }
         return StageResult(output_path=output, diagnostics=diagnostics)
+
+    def _central_atoms_by_canonical_key(self) -> dict[str, dict[str, Any]]:
+        graph = self.graph_store_factory(self.settings.graph_path)
+        try:
+            graph.init_schema()
+            nodes = graph.list_nodes(limit=1_000_000, kinds=["KnowledgeAtom"])
+        finally:
+            graph.close()
+        return atoms_by_canonical_key(nodes)
 
     def _stage_retrieval_docs(self, job: dict[str, Any], artifact_dir: Path, stage_dir: Path) -> StageResult:
         del artifact_dir

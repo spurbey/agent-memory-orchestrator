@@ -23,6 +23,7 @@ def build_dry_run_merge_plan(
     job: dict[str, Any],
     compact_graph: dict[str, Any],
     parent_graph_commit_id: str = "",
+    existing_atoms_by_canonical_key: dict[str, dict[str, Any]] | None = None,
 ) -> MergePlan:
     repo = resolve_repo_identity(str(job.get("repo_path") or ""))
     nodes = _nodes(compact_graph)
@@ -34,12 +35,18 @@ def build_dry_run_merge_plan(
         job_id=str(job["job_id"]),
         session_id=str(job["session_id"]),
     )
+    new_atoms, matched_atoms, remapped_versions = _split_new_and_matched_atoms(
+        atoms=[atom.as_dict() for atom in atoms],
+        versions=[version.as_dict() for version in versions],
+        existing_atoms_by_canonical_key=existing_atoms_by_canonical_key or {},
+    )
     metrics = {
         "mode": "dry_run",
         "node_count": len(nodes),
         "edge_count": len(compact_graph.get("edges", []) if isinstance(compact_graph.get("edges"), list) else []),
-        "exact_atom_created_count": len(atoms),
-        "new_version_count": len(versions),
+        "exact_atom_created_count": len(new_atoms),
+        "exact_atom_matched_count": len(matched_atoms),
+        "new_version_count": len(remapped_versions),
         "unresolved_identity_count": len(unresolved),
         "repo_id_resolution_status": repo.source,
         "review_candidate_count": 0,
@@ -57,15 +64,54 @@ def build_dry_run_merge_plan(
         input_graph_hash=input_graph_hash,
         pipeline_version=PIPELINE_VERSION,
         graph_schema_version=GRAPH_SCHEMA_VERSION,
-        new_atoms=[atom.as_dict() for atom in atoms],
-        matched_atoms=[],
-        new_versions=[version.as_dict() for version in versions],
+        new_atoms=new_atoms,
+        matched_atoms=matched_atoms,
+        new_versions=remapped_versions,
         version_edges=[],
         review_candidates=[],
         unresolved_identity=unresolved,
         metrics=metrics,
         diagnostics=diagnostics,
     )
+
+
+def _split_new_and_matched_atoms(
+    *,
+    atoms: list[dict[str, Any]],
+    versions: list[dict[str, Any]],
+    existing_atoms_by_canonical_key: dict[str, dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
+    if not existing_atoms_by_canonical_key:
+        return atoms, [], versions
+    new_atoms: list[dict[str, Any]] = []
+    matched_atoms: list[dict[str, Any]] = []
+    atom_id_by_key: dict[str, str] = {}
+    for atom in atoms:
+        canonical_key = str(atom.get("canonical_key") or "")
+        existing = existing_atoms_by_canonical_key.get(canonical_key)
+        if existing:
+            existing_atom_id = str(existing.get("atom_id") or atom.get("atom_id") or "")
+            matched_atoms.append(
+                {
+                    **atom,
+                    "atom_id": existing_atom_id,
+                    "planned_atom_id": str(atom.get("atom_id") or ""),
+                    "matched_atom_id": existing_atom_id,
+                    "match_reason": "canonical_key_exact",
+                    "existing_atom": existing,
+                }
+            )
+            atom_id_by_key[canonical_key] = existing_atom_id
+        else:
+            new_atoms.append(atom)
+            atom_id_by_key[canonical_key] = str(atom.get("atom_id") or "")
+    remapped_versions: list[dict[str, Any]] = []
+    for version in versions:
+        metadata = version.get("metadata") if isinstance(version.get("metadata"), dict) else {}
+        canonical_key = str(metadata.get("canonical_key") or "")
+        atom_id = atom_id_by_key.get(canonical_key) or str(version.get("atom_id") or "")
+        remapped_versions.append({**version, "atom_id": atom_id})
+    return new_atoms, matched_atoms, remapped_versions
 
 
 def _nodes(compact_graph: dict[str, Any]) -> list[dict[str, Any]]:

@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import uuid
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 from ...core.config import Settings
@@ -113,7 +115,7 @@ def apply_merge_plan(
                 graph_commit_id=graph_commit_id,
                 metadata={"merge_plan_id": plan_id, "apply_scope": "exact_atoms_only"},
             )
-            owned_store.update_central_merge_plan_status(
+            updated_plan = owned_store.update_central_merge_plan_status(
                 plan_id=plan_id,
                 status="applied",
                 mode="apply_exact_atoms",
@@ -124,10 +126,16 @@ def apply_merge_plan(
                     "apply_scope": "exact_atoms_only",
                 },
             )
-            return {
+            result = {
                 "ok": True,
                 "plan_id": plan_id,
                 "status": "applied",
+                "mode": "apply_exact_atoms",
+                "job_id": str(plan.get("job_id") or ""),
+                "session_id": str(plan.get("session_id") or ""),
+                "repo_id": str(plan.get("repo_id") or ""),
+                "branch": branch,
+                "view_mode": mode,
                 "graph_commit": graph_commit_row,
                 "graph_view": graph_view,
                 "added_node_count": len(added_nodes),
@@ -135,7 +143,13 @@ def apply_merge_plan(
                 "added_nodes": added_nodes,
                 "added_edges": added_edges,
                 "idempotent": reapplies_applied_head,
+                "plan_status": updated_plan.get("status", "applied"),
+                "applied_at": utc_now(),
             }
+            artifact = _write_merge_result_artifact(store=owned_store, plan=plan, result=result)
+            if artifact:
+                result["result_artifact"] = artifact
+            return result
         except Exception as exc:
             diagnostics = {"reason": "central_merge_apply_failed", "error": str(exc)}
             owned_store.update_central_merge_plan_status(plan_id=plan_id, status="failed_partial", diagnostics=diagnostics)
@@ -149,6 +163,52 @@ def apply_merge_plan(
             owned_store.close()
 
 
+def _write_merge_result_artifact(*, store: V2SessionJobStore, plan: dict[str, Any], result: dict[str, Any]) -> str:
+    job_id = str(plan.get("job_id") or result.get("job_id") or "")
+    if not job_id:
+        return ""
+    job = store.get_job(job_id)
+    raw_artifact_dir = str((job or {}).get("artifact_dir") or "")
+    if not raw_artifact_dir:
+        return ""
+    artifact_dir = Path(raw_artifact_dir)
+    target_dir = artifact_dir / "central_version_merge"
+    try:
+        target_dir.mkdir(parents=True, exist_ok=True)
+        target = target_dir / "merge_result.json"
+        payload = {
+            "result_version": "central-merge-apply-result-v1",
+            "plan_id": result.get("plan_id", ""),
+            "job_id": job_id,
+            "session_id": result.get("session_id", ""),
+            "repo_id": result.get("repo_id", ""),
+            "status": result.get("status", ""),
+            "mode": result.get("mode", ""),
+            "branch": result.get("branch", ""),
+            "view_mode": result.get("view_mode", ""),
+            "graph_commit": result.get("graph_commit", {}),
+            "graph_view": result.get("graph_view", {}),
+            "added_node_count": result.get("added_node_count", 0),
+            "added_edge_count": result.get("added_edge_count", 0),
+            "added_nodes": result.get("added_nodes", []),
+            "added_edges": result.get("added_edges", []),
+            "idempotent": result.get("idempotent", False),
+            "applied_at": result.get("applied_at", utc_now()),
+            "apply_scope": "exact_atoms_only",
+            "result_artifact": str(target),
+        }
+        target.write_text(json.dumps(payload, indent=2, ensure_ascii=False, sort_keys=True), encoding="utf-8")
+        return str(target)
+    except OSError as exc:
+        store.update_central_merge_plan_status(
+            plan_id=str(result.get("plan_id") or ""),
+            status=str(result.get("status") or "applied"),
+            mode=str(result.get("mode") or "apply_exact_atoms"),
+            diagnostics={"merge_result_artifact_error": f"{type(exc).__name__}:{exc}"},
+        )
+        return ""
+
+
 def _write_exact_atoms(
     *,
     graph_store: GraphStore,
@@ -160,12 +220,16 @@ def _write_exact_atoms(
     now = utc_now()
     base = _base_metadata(plan=plan, graph_commit_id=graph_commit_id)
     atoms = [atom for atom in plan.get("new_atoms", []) if isinstance(atom, dict) and atom.get("atom_kind") in EXACT_APPLY_ATOM_KINDS]
+    matched_atoms = [
+        atom for atom in plan.get("matched_atoms", []) if isinstance(atom, dict) and atom.get("atom_kind") in EXACT_APPLY_ATOM_KINDS
+    ]
     versions = [
         version
         for version in plan.get("new_versions", [])
         if isinstance(version, dict) and version.get("atom_kind") in EXACT_APPLY_ATOM_KINDS
     ]
     atom_ids = {str(atom.get("atom_id") or "") for atom in atoms}
+    atom_ids.update(str(atom.get("matched_atom_id") or atom.get("atom_id") or "") for atom in matched_atoms)
     resolve_source_id = _source_id_resolver(graph_store)
     added_nodes: list[str] = []
     added_edges: list[str] = []

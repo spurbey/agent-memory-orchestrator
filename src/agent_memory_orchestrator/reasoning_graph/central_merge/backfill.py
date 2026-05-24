@@ -6,8 +6,10 @@ from pathlib import Path
 from typing import Any
 
 from ...core.config import Settings
+from ...graph.store import KuzuGraphStore
 from ..jobs.store import V2SessionJobStore
 from ..jobs.store import utc_now
+from .identity import atoms_by_canonical_key
 from .planner import build_dry_run_merge_plan
 
 
@@ -27,10 +29,12 @@ def backfill_central_merge_plan(settings: Settings, *, job_id: str, forced_by: s
         kuzu_result = _read_json(kuzu_result_path)
         compact_graph = _read_json(manifest_path)
         active_view = store.ensure_graph_view(branch="main", mode="active")
+        existing_atoms = _central_atoms_by_canonical_key(settings)
         plan = build_dry_run_merge_plan(
             job=job,
             compact_graph=compact_graph if isinstance(compact_graph, dict) else {},
             parent_graph_commit_id=str(active_view.get("graph_commit_id") or ""),
+            existing_atoms_by_canonical_key=existing_atoms,
         )
         stage_dir = artifact_dir / "central_version_merge"
         stage_dir.mkdir(parents=True, exist_ok=True)
@@ -109,6 +113,16 @@ def _upsert_backfill_stage(
 
 def _read_json(path: Path) -> Any:
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _central_atoms_by_canonical_key(settings: Settings) -> dict[str, dict[str, Any]]:
+    graph = KuzuGraphStore(settings.graph_path)
+    try:
+        graph.init_schema()
+        nodes = graph.list_nodes(limit=1_000_000, kinds=["KnowledgeAtom"])
+    finally:
+        graph.close()
+    return atoms_by_canonical_key(nodes)
 
 
 def _file_hash(path: Path) -> str:

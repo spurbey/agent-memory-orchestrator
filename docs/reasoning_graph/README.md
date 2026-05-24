@@ -17,7 +17,8 @@ raw evidence and transcripts
 -> Git hunks and AST CodeNodes
 -> reasoning-to-code linking
 -> graph validation
--> V2 Kuzu graph write
+-> session graph write
+-> central_version_merge
 -> retrieval docs, embeddings, graph expansion, reranking
 ```
 
@@ -39,6 +40,36 @@ V2 uses deterministic facts as the spine:
 - FAISS is a rebuildable vector cache.
 - SQLite also stores V2 job state, stage rows, lock leases, retry metadata, and
   the explicit production reset marker.
+
+## Central Merge
+
+The session graph is immutable provenance. It keeps the exact packet, commit,
+evidence, hunk, code node, and symbol facts produced by a closed-session V2 job.
+
+`central_version_merge` creates the durable canonical layer beside that session
+graph:
+
+```text
+session Commit/File/Symbol/CodeRegion
+-> KnowledgeVersion
+-> VERSION_OF
+-> KnowledgeAtom
+```
+
+The first production implementation applies only exact deterministic atoms:
+`commit`, `file`, `symbol`, and `code_region`. Exact matching uses `repo_id` plus
+canonical keys, not local machine paths. If a canonical atom already exists, the
+planner emits it as `matched_atoms` and still creates a new `KnowledgeVersion`
+for the new session provenance.
+
+Apply writes a `GraphCommit`, updates `GraphView(main, active)`, and writes a
+`central_version_merge/merge_result.json` sidecar. `merge_plan.json` remains the
+dry-run plan; `merge_result.json`, SQLite `v2_graph_commits`, and SQLite
+`v2_graph_views` are the applied-state audit trail.
+
+Decision/problem duplicate, refine, supersede, conflict, and revert relations
+are not automatic yet. They remain dry-run/review territory until semantic evals
+prove the matching rules are safe.
 
 ## Production Reset
 
@@ -74,6 +105,10 @@ V2 node kinds such as `Packet`, `Commit`, `EvidenceRef`, `ReasoningNode`,
 | Reasoning node | Validated `Problem`, `Cause`, `Decision`, `Fix`, `Constraint`, or `OpenQuestion` |
 | Code node | Hunk or AST-derived code region linked to a packet and commit |
 | Symbol version | A versioned symbol view across commits |
+| Knowledge atom | Central canonical identity for an exact commit, file, symbol, or code region |
+| Knowledge version | Session-derived version of a central atom with provenance back to session graph |
+| Graph commit | Audit object for facts promoted into central memory by one merge apply |
+| Graph view | Resolved branch/mode pointer, normally `main/active`, used by retrieval |
 | Retrieval document | Searchable text projection of graph nodes for BM25, vector, and rerank retrieval |
 
 ## Read Order

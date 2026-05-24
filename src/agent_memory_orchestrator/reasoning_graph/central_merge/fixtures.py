@@ -22,6 +22,11 @@ def export_job_fixture(settings: Settings, *, job_id: str, out_dir: Path | None 
         stages = store.list_stages(job_id)
         events = store.list_events(job_id, limit=500)
         marker = store.marker()
+        central_plan = store.get_central_merge_plan_for_job(job_id)
+        central_plan_id = str((central_plan or {}).get("plan_id") or "")
+        central_review_candidates = store.list_review_candidates(plan_id=central_plan_id) if central_plan_id else []
+        central_graph_commit = store.get_graph_commit_for_plan(central_plan_id) if central_plan_id else None
+        central_graph_view = store.graph_view(branch="main", mode="active")
     finally:
         store.close()
 
@@ -31,7 +36,14 @@ def export_job_fixture(settings: Settings, *, job_id: str, out_dir: Path | None 
     if copy_artifacts:
         _copy_artifacts(artifact_inventory, target / "artifacts")
     retrieval = _retrieval_inventory(settings)
-    semantic_context = _semantic_context(stages, retrieval)
+    semantic_context = _semantic_context(
+        stages,
+        retrieval,
+        central_plan=central_plan,
+        central_graph_commit=central_graph_commit,
+        central_graph_view=central_graph_view,
+        central_review_candidates=central_review_candidates,
+    )
     payload = {
         "ok": True,
         "fixture_version": "v2-semantic-fixture-v1",
@@ -44,6 +56,12 @@ def export_job_fixture(settings: Settings, *, job_id: str, out_dir: Path | None 
         "retrieval": retrieval,
         "embedding_coverage": retrieval.get("embedding_coverage", {}),
         "faiss": _faiss_inventory(settings),
+        "central_merge": {
+            "plan": central_plan,
+            "graph_commit": central_graph_commit,
+            "graph_view": central_graph_view,
+            "review_candidates": central_review_candidates,
+        },
         "semantic_context": semantic_context,
     }
     fixture_path = target / "fixture.json"
@@ -69,16 +87,37 @@ def _artifact_inventory(stages: list[dict[str, Any]]) -> list[dict[str, Any]]:
                     "hash": _path_hash(path),
                 }
             )
+            if stage.get("stage") == "central_version_merge" and key == "output_artifact" and path.name == "merge_plan.json":
+                sidecar = path.parent / "merge_result.json"
+                rows.append(
+                    {
+                        "stage": stage.get("stage"),
+                        "role": "sidecar",
+                        "path": str(sidecar),
+                        "exists": sidecar.exists(),
+                        "is_dir": sidecar.is_dir() if sidecar.exists() else False,
+                        "hash": _path_hash(sidecar),
+                    }
+                )
     return rows
 
 
-def _semantic_context(stages: list[dict[str, Any]], retrieval: dict[str, Any]) -> dict[str, Any]:
+def _semantic_context(
+    stages: list[dict[str, Any]],
+    retrieval: dict[str, Any],
+    *,
+    central_plan: dict[str, Any] | None = None,
+    central_graph_commit: dict[str, Any] | None = None,
+    central_graph_view: dict[str, Any] | None = None,
+    central_review_candidates: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     by_stage = {str(stage.get("stage") or ""): stage for stage in stages}
     artifacts = {name: _load_stage_json(row) for name, row in by_stage.items()}
     work_packets = artifacts.get("work_packets") if isinstance(artifacts.get("work_packets"), list) else []
     qwen_results = artifacts.get("qwen_reasoning") if isinstance(artifacts.get("qwen_reasoning"), list) else []
     reasoning_nodes = artifacts.get("reasoning_review") if isinstance(artifacts.get("reasoning_review"), list) else []
     merge_plan = artifacts.get("central_version_merge") if isinstance(artifacts.get("central_version_merge"), dict) else {}
+    merge_result = _load_central_merge_result(by_stage.get("central_version_merge", {}))
     return {
         "stage_status": {name: str(row.get("status") or "") for name, row in by_stage.items()},
         "completed_stages": [name for name, row in by_stage.items() if row.get("status") == "complete"],
@@ -90,7 +129,14 @@ def _semantic_context(stages: list[dict[str, Any]], retrieval: dict[str, Any]) -
         "qwen_reasoning": {"result_count": len(qwen_results)},
         "reasoning_review": {"accepted_count": len(reasoning_nodes)},
         "session_graph_write": _session_graph_summary(artifacts.get("kuzu_write")),
-        "central_version_merge": _merge_plan_summary(merge_plan),
+        "central_version_merge": _merge_plan_summary(
+            merge_plan,
+            plan_row=central_plan,
+            merge_result=merge_result,
+            graph_commit=central_graph_commit,
+            graph_view=central_graph_view,
+            review_candidates=central_review_candidates or [],
+        ),
         "retrieval": {
             "doc_count": retrieval.get("doc_count", 0),
             "embedding_coverage": retrieval.get("embedding_coverage", {}),
@@ -106,6 +152,20 @@ def _load_stage_json(stage: dict[str, Any]) -> Any:
         return json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return None
+
+
+def _load_central_merge_result(stage: dict[str, Any]) -> dict[str, Any]:
+    path = Path(str(stage.get("output_artifact") or ""))
+    if not path.exists() or not path.is_file():
+        return {}
+    result_path = path.parent / "merge_result.json"
+    if not result_path.exists() or not result_path.is_file():
+        return {}
+    try:
+        payload = json.loads(result_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
 
 
 def _packet_commit_shas(work_packets: list[Any]) -> list[str]:
@@ -133,33 +193,71 @@ def _session_graph_summary(payload: Any) -> dict[str, Any]:
     }
 
 
-def _merge_plan_summary(plan: dict[str, Any]) -> dict[str, Any]:
-    if not plan:
+def _merge_plan_summary(
+    plan: dict[str, Any],
+    *,
+    plan_row: dict[str, Any] | None = None,
+    merge_result: dict[str, Any] | None = None,
+    graph_commit: dict[str, Any] | None = None,
+    graph_view: dict[str, Any] | None = None,
+    review_candidates: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    row_plan = (plan_row or {}).get("plan") if isinstance((plan_row or {}).get("plan"), dict) else {}
+    effective_plan = plan or row_plan
+    if not effective_plan and not plan_row:
         return {"available": False}
-    atoms = plan.get("new_atoms") if isinstance(plan.get("new_atoms"), list) else []
-    versions = plan.get("new_versions") if isinstance(plan.get("new_versions"), list) else []
-    review_candidates = plan.get("review_candidates") if isinstance(plan.get("review_candidates"), list) else []
+    result = merge_result or {}
+    commit = graph_commit or {}
+    view = graph_view or {}
+    status = str((plan_row or {}).get("status") or result.get("status") or effective_plan.get("status") or "")
+    mode = str((plan_row or {}).get("mode") or result.get("mode") or effective_plan.get("mode") or "")
+    diagnostics = (plan_row or {}).get("diagnostics") if isinstance((plan_row or {}).get("diagnostics"), dict) else {}
+    graph_commit_payload = result.get("graph_commit") if isinstance(result.get("graph_commit"), dict) else {}
+    graph_view_payload = result.get("graph_view") if isinstance(result.get("graph_view"), dict) else {}
+    graph_commit_id = str(
+        (commit or {}).get("graph_commit_id")
+        or graph_commit_payload.get("graph_commit_id")
+        or diagnostics.get("graph_commit_id")
+        or (effective_plan.get("graph_commit_preview") if isinstance(effective_plan.get("graph_commit_preview"), dict) else {}).get("graph_commit_id")
+        or ""
+    )
+    atoms = effective_plan.get("new_atoms") if isinstance(effective_plan.get("new_atoms"), list) else []
+    matched_atoms = effective_plan.get("matched_atoms") if isinstance(effective_plan.get("matched_atoms"), list) else []
+    versions = effective_plan.get("new_versions") if isinstance(effective_plan.get("new_versions"), list) else []
+    plan_review_candidates = effective_plan.get("review_candidates") if isinstance(effective_plan.get("review_candidates"), list) else []
+    persisted_review_candidates = review_candidates or []
     return {
         "available": True,
-        "plan_id": plan.get("plan_id", ""),
-        "plan_hash": plan.get("plan_hash", ""),
-        "mode": plan.get("mode", ""),
-        "status": plan.get("status", ""),
-        "repo_id": plan.get("repo_id", ""),
-        "graph_commit_preview": plan.get("graph_commit_preview", {}),
+        "plan_id": (plan_row or {}).get("plan_id", effective_plan.get("plan_id", "")),
+        "plan_hash": (plan_row or {}).get("plan_hash", effective_plan.get("plan_hash", "")),
+        "mode": mode,
+        "status": status,
+        "applied": status == "applied" or result.get("status") == "applied" or commit.get("status") == "applied",
+        "repo_id": (plan_row or {}).get("repo_id", effective_plan.get("repo_id", "")),
+        "graph_commit_id": graph_commit_id,
+        "active_graph_view_id": str((view or {}).get("view_id") or graph_view_payload.get("view_id") or ""),
+        "active_graph_view_head": str((view or {}).get("graph_commit_id") or graph_view_payload.get("graph_commit_id") or ""),
+        "graph_commit_status": str((commit or {}).get("status") or graph_commit_payload.get("status") or ""),
+        "graph_commit_preview": effective_plan.get("graph_commit_preview", {}),
+        "merge_result_available": bool(result),
+        "merge_result_artifact": str(result.get("result_artifact") or ""),
+        "added_node_count": int(result.get("added_node_count") or (commit.get("added_nodes") and len(commit.get("added_nodes"))) or 0),
+        "added_edge_count": int(result.get("added_edge_count") or (commit.get("added_edges") and len(commit.get("added_edges"))) or 0),
         "new_atom_count": len(atoms),
+        "matched_atom_count": len(matched_atoms),
         "new_version_count": len(versions),
-        "review_candidate_count": len(review_candidates),
+        "review_candidate_count": max(len(plan_review_candidates), len(persisted_review_candidates)),
         "atom_kinds": sorted({str(atom.get("atom_kind") or "") for atom in atoms if isinstance(atom, dict)}),
         "version_source_complete": all(bool(version.get("source_node_ids")) for version in versions if isinstance(version, dict)),
-        "raw_plan": plan,
+        "raw_plan": effective_plan,
+        "raw_result": result,
     }
 
 
 def _copy_artifacts(inventory: list[dict[str, Any]], target: Path) -> None:
     target.mkdir(parents=True, exist_ok=True)
     for item in inventory:
-        if item.get("role") != "output" or not item.get("exists"):
+        if item.get("role") not in {"output", "sidecar"} or not item.get("exists"):
             continue
         source = Path(str(item.get("path") or ""))
         dest = target / safe_name(str(item.get("stage") or "stage"))
