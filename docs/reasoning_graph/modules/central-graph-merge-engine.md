@@ -63,6 +63,12 @@ Decision/problem evolution edges (`DUPLICATE_OF`, `REFINES`, `SUPERSEDES`,
 prove safe matching. They should start as review candidates, not automatic
 truth.
 
+The current decision/problem phase is dry-run only. It extracts decision frames
+from accepted session `ReasoningNode` nodes and their typed `REASON_NODE_*`
+edges, then persists only review candidates. `RELATED_REVIEW` means "inspect
+this possible relation"; it is not canonical truth and does not change the
+active `GraphView`.
+
 ## Failure modes
 
 Missing `repo_id` blocks answer-grade central promotion because canonical keys
