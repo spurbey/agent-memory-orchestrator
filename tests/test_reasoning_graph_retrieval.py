@@ -11,6 +11,7 @@ from agent_memory_orchestrator.config import Settings
 from agent_memory_orchestrator.graph.service import GraphRagService
 from agent_memory_orchestrator.graph.service import _unique_nonempty
 from agent_memory_orchestrator.graph.answer_trace import build_answer_trace
+from agent_memory_orchestrator.graph.answer_trace import build_central_answer_trace
 from agent_memory_orchestrator.graph.answer_trace import format_answer_trace
 from agent_memory_orchestrator.graph.store import GraphEdge
 from agent_memory_orchestrator.graph.store import GraphNode
@@ -19,6 +20,7 @@ from agent_memory_orchestrator.llm.qwen import DeterministicPlanner
 from agent_memory_orchestrator.reasoning_graph.jobs.constants import GRAPH_SCHEMA_VERSION
 from agent_memory_orchestrator.reasoning_graph.jobs.constants import PIPELINE_VERSION
 from agent_memory_orchestrator.reasoning_graph import GraphEmbeddingStore
+from agent_memory_orchestrator.reasoning_graph import RetrievalDocument
 from agent_memory_orchestrator.reasoning_graph import RetrievalIndexStore
 from agent_memory_orchestrator.reasoning_graph import build_retrieval_documents_from_graph
 from agent_memory_orchestrator.reasoning_graph import classify_query
@@ -1074,6 +1076,52 @@ def test_answer_trace_walks_packet_commit_hunk_and_code_chain() -> None:
     assert "code:hook_response" in trace["support"]["code_node_ids"]
     assert "Problem: Codex hooks timed out" in trace_text
     assert "Fix: Hooks became capture-only" in trace_text
+
+
+def test_central_answer_trace_contract_collects_active_support() -> None:
+    trace = build_central_answer_trace(
+        repo_id="repo:amo",
+        graph_view={"view_id": "v2view:repo:amo:main:active", "graph_commit_id": "v2gcommit:1", "repo_id": "repo:amo"},
+        graph_commit={"graph_commit_id": "v2gcommit:1"},
+        central_versions=[{"version_id": "kver:file:graph_service"}],
+        support_docs=[
+            RetrievalDocument(
+                doc_id="central-version",
+                doc_type="central_version",
+                graph_node_id="kver:file:graph_service",
+                node_kind="KnowledgeVersion",
+                packet_id="WP0018",
+                commit_sha="8351639",
+                title="graph_service.py version",
+                body="graph_service.py active file version",
+                repo_id="repo:amo",
+                metadata={"path": "src/agent_memory_orchestrator/graph_service.py", "evidence_refs": ["E01156"]},
+            ),
+            RetrievalDocument(
+                doc_id="code-impact",
+                doc_type="code_impact",
+                graph_node_id="impact:WP0018",
+                node_kind="CodeImpactSummary",
+                packet_id="WP0018",
+                commit_sha="8351639",
+                title="WP0018 impact",
+                body="Graph service retrieval impact.",
+                repo_id="repo:amo",
+                metadata={"selected_files": ["src/agent_memory_orchestrator/graph_service.py"]},
+            ),
+        ],
+    )
+
+    assert trace["status"] == "active"
+    assert trace["trace"]["repo_id"] == "repo:amo"
+    assert trace["trace"]["graph_view_id"] == "v2view:repo:amo:main:active"
+    assert trace["trace"]["graph_commit_id"] == "v2gcommit:1"
+    assert trace["trace"]["central_versions"] == ["kver:file:graph_service"]
+    assert trace["trace"]["packets"] == ["WP0018"]
+    assert trace["trace"]["commits"] == ["8351639"]
+    assert trace["trace"]["evidence_refs"] == ["E01156"]
+    assert trace["trace"]["files"] == ["src/agent_memory_orchestrator/graph_service.py"]
+    assert trace["trace"]["code_impacts"] == ["impact:WP0018"]
 
 
 def test_answer_trace_prefers_visible_query_match_over_metadata_only_match() -> None:
