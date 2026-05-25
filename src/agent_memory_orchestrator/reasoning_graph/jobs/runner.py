@@ -713,7 +713,7 @@ class V2SessionJobRunner:
     def _stage_quality_eval(self, job: dict[str, Any], artifact_dir: Path, stage_dir: Path) -> StageResult:
         del job
         kuzu_result = _read_json(_stage_output(artifact_dir, "kuzu_write"))
-        central_result = _read_json(_stage_output(artifact_dir, "central_version_merge"))
+        central_result = _central_merge_quality_result(artifact_dir)
         retrieval_result = _read_json(_stage_output(artifact_dir, "retrieval_docs"))
         embedding_result = _read_json(_stage_output(artifact_dir, "embeddings"))
         faiss_result = _read_json(_stage_output(artifact_dir, "faiss"))
@@ -723,10 +723,17 @@ class V2SessionJobRunner:
             embedding_result=embedding_result if isinstance(embedding_result, dict) else {},
             faiss_result=faiss_result if isinstance(faiss_result, dict) else {},
         )
+        readiness = _quality_readiness(
+            issues=issues,
+            central_result=central_result if isinstance(central_result, dict) else {},
+            retrieval_result=retrieval_result if isinstance(retrieval_result, dict) else {},
+            embedding_result=embedding_result if isinstance(embedding_result, dict) else {},
+            faiss_result=faiss_result if isinstance(faiss_result, dict) else {},
+        )
         output = stage_dir / "quality_eval.json"
         payload = {
             "ok": not issues,
-            "product_ready": not issues,
+            **readiness,
             "blocking_issues": issues,
             "kuzu": kuzu_result,
             "central_version_merge": central_result,
@@ -924,6 +931,13 @@ def _stage_output(artifact_dir: Path, stage: str) -> Path:
         "quality_eval": "quality_eval.json",
     }
     return artifact_dir / stage / candidates[stage]
+
+
+def _central_merge_quality_result(artifact_dir: Path) -> Any:
+    merge_result = artifact_dir / "central_version_merge" / "merge_result.json"
+    if merge_result.exists():
+        return _read_json(merge_result)
+    return _read_json(_stage_output(artifact_dir, "central_version_merge"))
 
 
 def _read_json(path: Path) -> Any:
@@ -1545,6 +1559,16 @@ def _quality_issues(
                 "plan_id": central_result.get("plan_id") or "",
             }
         )
+    if central_status == "applied" and str(central_result.get("input_source") or "") != "curated_graph_manifest":
+        issues.append(
+            {
+                "code": "central_consumed_non_curated_input",
+                "message": "central_version_merge did not apply from curated_graph_manifest",
+                "input_source": central_result.get("input_source") or "",
+            }
+        )
+    if central_status == "applied" and not str(central_result.get("curated_input_hash") or ""):
+        issues.append({"code": "central_missing_curated_input_hash", "message": "central apply lacks curated input hash"})
     if central_result.get("existing_atom_scan_error"):
         issues.append(
             {
@@ -1557,6 +1581,17 @@ def _quality_issues(
     doc_count = int(retrieval_result.get("doc_count") or 0)
     if doc_count <= 0:
         issues.append({"code": "retrieval_docs_empty", "message": "retrieval_docs produced no documents"})
+    retrieval_source = str(retrieval_result.get("retrieval_source") or "")
+    if retrieval_source in {"compact_manifest_fallback", "curated_graph_manifest_missing"}:
+        issues.append(
+            {
+                "code": "retrieval_fallback_or_missing_curated",
+                "message": "retrieval_docs did not use curated product input",
+                "retrieval_source": retrieval_source,
+            }
+        )
+    if doc_count > 0 and not str(retrieval_result.get("active_projection_id") or ""):
+        issues.append({"code": "active_projection_missing", "message": "retrieval docs exist but no active projection was recorded"})
 
     total_docs = int(embedding_result.get("total_docs") or doc_count or 0)
     embedded = int(embedding_result.get("embedded") or 0)
@@ -1586,6 +1621,45 @@ def _quality_issues(
             }
         )
     return issues
+
+
+def _quality_readiness(
+    *,
+    issues: list[dict[str, Any]],
+    central_result: dict[str, Any],
+    retrieval_result: dict[str, Any],
+    embedding_result: dict[str, Any],
+    faiss_result: dict[str, Any],
+) -> dict[str, bool]:
+    issue_codes = {str(issue.get("code") or "") for issue in issues}
+    doc_count = int(retrieval_result.get("doc_count") or 0)
+    total_docs = int(embedding_result.get("total_docs") or doc_count or 0)
+    embedded = int(embedding_result.get("embedded") or 0)
+    already = int(embedding_result.get("already_embedded") or 0)
+    covered = embedded + already
+    faiss_items = int(faiss_result.get("item_count") or 0)
+    central_memory_ready = (
+        str(central_result.get("status") or "") == "applied"
+        and str(central_result.get("mode") or "") == "apply_exact_atoms"
+        and str(central_result.get("input_source") or "") == "curated_graph_manifest"
+        and bool(str(central_result.get("curated_input_hash") or ""))
+    )
+    lexical_retrieval_ready = (
+        doc_count > 0
+        and str(retrieval_result.get("retrieval_source") or "") in {"curated_graph_manifest", "central_active_graph_view"}
+        and bool(str(retrieval_result.get("active_projection_id") or ""))
+    )
+    vector_retrieval_ready = bool(total_docs) and covered >= total_docs and faiss_items >= total_docs
+    answer_trace_ready = central_memory_ready and lexical_retrieval_ready
+    product_ready = central_memory_ready and lexical_retrieval_ready and vector_retrieval_ready and answer_trace_ready and not issue_codes
+    return {
+        "mechanical_complete": True,
+        "lexical_retrieval_ready": lexical_retrieval_ready,
+        "vector_retrieval_ready": vector_retrieval_ready,
+        "central_memory_ready": central_memory_ready,
+        "answer_trace_ready": answer_trace_ready,
+        "product_ready": product_ready,
+    }
 
 
 def _evidence_ref_nodes(packets: list[dict[str, Any]]) -> list[dict[str, Any]]:

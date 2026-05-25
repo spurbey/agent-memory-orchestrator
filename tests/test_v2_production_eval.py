@@ -13,6 +13,8 @@ from agent_memory_orchestrator.reasoning_graph.jobs.reset import initialize_fres
 from agent_memory_orchestrator.reasoning_graph.jobs.runner import StageResult
 from agent_memory_orchestrator.reasoning_graph.jobs.runner import StageFailed
 from agent_memory_orchestrator.reasoning_graph.jobs.runner import V2SessionJobRunner
+from agent_memory_orchestrator.reasoning_graph.jobs.runner import _quality_issues
+from agent_memory_orchestrator.reasoning_graph.jobs.runner import _quality_readiness
 from agent_memory_orchestrator.reasoning_graph.jobs.runner import stage_config_hash
 from agent_memory_orchestrator.reasoning_graph.jobs.runner import stage_config_payload
 from agent_memory_orchestrator.reasoning_graph.retrieval import RetrievalDocument
@@ -308,3 +310,43 @@ def test_retrieval_docs_read_curated_manifest_directly(tmp_path: Path) -> None:
         assert ("session_codenode", "CodeNode") in [(row["doc_type"], row["node_kind"]) for row in rows]
     finally:
         store.close()
+
+
+def test_quality_readiness_reports_partial_vector_state() -> None:
+    central = {
+        "status": "applied",
+        "mode": "apply_exact_atoms",
+        "input_source": "curated_graph_manifest",
+        "curated_input_hash": "curated",
+    }
+    retrieval = {
+        "doc_count": 10,
+        "retrieval_source": "curated_graph_manifest",
+        "active_projection_id": "rproj:1",
+    }
+    embedding = {"total_docs": 10, "embedded": 3, "already_embedded": 2, "limit_hit": True}
+    faiss = {"item_count": 5, "status": "partial"}
+
+    issues = _quality_issues(
+        central_result=central,
+        retrieval_result=retrieval,
+        embedding_result=embedding,
+        faiss_result=faiss,
+    )
+    readiness = _quality_readiness(
+        issues=issues,
+        central_result=central,
+        retrieval_result=retrieval,
+        embedding_result=embedding,
+        faiss_result=faiss,
+    )
+
+    assert {issue["code"] for issue in issues} == {"embedding_coverage_partial", "faiss_coverage_partial"}
+    assert readiness == {
+        "mechanical_complete": True,
+        "lexical_retrieval_ready": True,
+        "vector_retrieval_ready": False,
+        "central_memory_ready": True,
+        "answer_trace_ready": True,
+        "product_ready": False,
+    }
