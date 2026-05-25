@@ -36,6 +36,33 @@ VALIDATION_WORKFLOW_WORDS = (
     "validation gate",
 )
 RAW_INTERNAL_REF_RE = re.compile(r"(?:transcript:|tool_use:call_|tool_result:call_|call_[A-Za-z0-9]{10,})")
+ALIGNMENT_STOPWORDS = {
+    "add",
+    "adds",
+    "change",
+    "changed",
+    "changes",
+    "code",
+    "commit",
+    "file",
+    "files",
+    "fix",
+    "feat",
+    "graph",
+    "ui",
+    "web",
+    "dashboard",
+    "make",
+    "new",
+    "path",
+    "src",
+    "test",
+    "tests",
+    "the",
+    "this",
+    "uses",
+    "with",
+}
 
 
 @dataclass(slots=True, frozen=True)
@@ -213,6 +240,26 @@ def review_reasoning_packet_result(
         )
         diagnostics.extend(node_diagnostics)
         action = node["post_validation"]["action"]
+        if action != "reject":
+            alignment = reasoning_commit_alignment(packet, node)
+            node["post_validation"]["semantic_alignment"] = alignment
+            if alignment["status"] == "low_overlap":
+                diagnostics.append(
+                    _diag(
+                        "warning",
+                        "semantic_alignment_low_overlap",
+                        packet_id,
+                        index=index,
+                        commit_message=alignment["commit_message"],
+                        changed_file_sample=alignment["changed_file_sample"],
+                        overlap_terms=alignment["overlap_terms"],
+                    )
+                )
+                reasons = list(node["post_validation"].get("reasons") or [])
+                reasons.append("Reasoning text has low semantic overlap with commit message and changed files")
+                node["post_validation"] = {**node["post_validation"], "action": "needs_review", "reasons": reasons}
+                node["status"] = "needs_review"
+                action = "needs_review"
         if action == "reject":
             rejected_nodes.append(node)
         elif action == "needs_review":
@@ -315,6 +362,53 @@ def validate_reasoning_node(
     if source_name:
         normalized["source_result_file"] = source_name
     return normalized, diagnostics
+
+
+def reasoning_commit_alignment(packet: dict[str, Any], node: dict[str, Any]) -> dict[str, Any]:
+    commit = packet.get("commit") if isinstance(packet.get("commit"), dict) else {}
+    commit_message = str(commit.get("message") or "")
+    changed_files = [
+        str(path)
+        for path in commit.get("changed_file_sample", [])
+        if str(path).strip()
+    ] if isinstance(commit.get("changed_file_sample"), list) else []
+    node_text = " ".join(
+        str(node.get(key) or "")
+        for key in ("node_type", "subject", "statement", "reason")
+    )
+    anchor_terms = _alignment_terms(commit_message)
+    file_terms = set().union(*(_path_alignment_terms(path) for path in changed_files)) if changed_files else set()
+    evidence_terms = (anchor_terms | file_terms) - {"py", "js", "css", "html", "md"}
+    node_terms = _alignment_terms(node_text)
+    if not evidence_terms or not node_terms:
+        return {
+            "status": "unknown",
+            "overlap_terms": [],
+            "commit_message": commit_message,
+            "changed_file_sample": changed_files,
+        }
+    overlap = sorted(node_terms.intersection(evidence_terms))
+    status = "aligned" if overlap else "low_overlap"
+    return {
+        "status": status,
+        "overlap_terms": overlap,
+        "commit_message": commit_message,
+        "changed_file_sample": changed_files,
+        "anchor_terms": sorted(anchor_terms),
+        "file_terms": sorted(file_terms)[:40],
+    }
+
+
+def _alignment_terms(text: str) -> set[str]:
+    return {
+        term
+        for term in re.findall(r"[A-Za-z][A-Za-z0-9_]{2,}", str(text).lower())
+        if term not in ALIGNMENT_STOPWORDS and not re.fullmatch(r"[0-9a-f]{6,40}", term)
+    }
+
+
+def _path_alignment_terms(path: str) -> set[str]:
+    return _alignment_terms(str(path).replace("/", " ").replace("\\", " ").replace("_", " ").replace("-", " ").replace(".", " "))
 
 
 def collect_packet_evidence_refs(packet: dict[str, Any]) -> tuple[set[str], set[str]]:
