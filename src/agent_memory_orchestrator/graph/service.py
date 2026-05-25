@@ -5,6 +5,7 @@ import json
 import os
 import re
 import shutil
+import sqlite3
 import time
 from pathlib import Path
 from typing import Any
@@ -36,6 +37,7 @@ from ..versioning import LocalGitBackend, VersionBackend, WorkLedger
 from .cache import GraphSearchCache
 from .consolidation import DeterministicGraphConsolidator
 from .answer_trace import build_answer_trace
+from .answer_trace import build_central_answer_trace
 from .answer_trace import format_answer_trace
 from .merge import CommitMergeEngine, QwenMergeClassifier
 from .session import QwenGraphExtractor, SessionGraphBuilder
@@ -991,6 +993,26 @@ class GraphRagService:
                 embedding_model=embedding_model,
             )
             index = RetrievalIndexStore(conn)
+            if repo_id and not index.active_projection_id(repo_id):
+                return {
+                    "ok": False,
+                    "error": "active_projection_missing",
+                    "db_path": str(target_db),
+                    "graph_path": str(self.settings.graph_path),
+                    "graph_scope": scope,
+                    "repo_id": repo_id,
+                    "retrieval": {
+                        "query": query,
+                        "hits": [],
+                        "vector_status": "not_requested" if not use_vector else "unavailable",
+                    },
+                    "central_answer_trace": _central_answer_trace_from_retrieval(
+                        self.settings,
+                        repo_id=repo_id,
+                        retrieval={"hits": []},
+                        warnings=["active_projection_missing"],
+                    ),
+                }
             embedding_store: GraphEmbeddingStore | None = None
             embedder = None
             if use_vector and self.settings.vector_backend != "disabled":
@@ -1023,6 +1045,12 @@ class GraphRagService:
                 "repo_id": repo_id,
                 "retrieval": result.as_dict(),
             }
+            if repo_id:
+                payload["central_answer_trace"] = _central_answer_trace_from_retrieval(
+                    self.settings,
+                    repo_id=repo_id,
+                    retrieval=result.as_dict(),
+                )
             if include_answer:
                 payload["answer"] = _answer_from_retrieval_result(
                     result.as_dict(),
@@ -1479,6 +1507,67 @@ def _repo_id_for_path(path: str | Path, cache: dict[str, str]) -> str:
     return cache[text]
 
 
+def _central_answer_trace_from_retrieval(
+    settings: Settings,
+    *,
+    repo_id: str,
+    retrieval: dict[str, Any],
+    warnings: Iterable[str] = (),
+) -> dict[str, Any]:
+    view = _active_graph_view_row(settings.db_path, repo_id=repo_id)
+    graph_commit_id = str(view.get("graph_commit_id") or "")
+    commit = _graph_commit_row(settings.db_path, graph_commit_id=graph_commit_id) if graph_commit_id else {}
+    hits = retrieval.get("hits") if isinstance(retrieval.get("hits"), list) else []
+    support_docs = [hit.get("document") for hit in hits if isinstance(hit, dict) and isinstance(hit.get("document"), dict)]
+    central_versions = [
+        doc
+        for doc in support_docs
+        if str(doc.get("node_kind") or "") == "KnowledgeVersion" or str(doc.get("doc_type") or "") == "central_version"
+    ]
+    warning_list = list(warnings)
+    if repo_id and not view:
+        warning_list.append("active_graph_view_missing")
+    elif not graph_commit_id:
+        warning_list.append("active_graph_view_head_missing")
+    if graph_commit_id and not commit:
+        warning_list.append("graph_commit_missing")
+    return build_central_answer_trace(
+        repo_id=repo_id,
+        graph_view=view,
+        graph_commit=commit,
+        central_versions=central_versions,
+        support_docs=support_docs,
+        warnings=warning_list,
+    )
+
+
+def _active_graph_view_row(db_path: Path, *, repo_id: str) -> dict[str, Any]:
+    try:
+        with connect(db_path) as conn:
+            row = conn.execute(
+                """
+                SELECT *
+                FROM v2_graph_views
+                WHERE repo_id = ? AND branch = 'main' AND mode = 'active' AND status = 'active'
+                ORDER BY updated_at DESC
+                LIMIT 1
+                """,
+                (repo_id,),
+            ).fetchone()
+            return dict(row) if row is not None else {}
+    except sqlite3.OperationalError:
+        return {}
+
+
+def _graph_commit_row(db_path: Path, *, graph_commit_id: str) -> dict[str, Any]:
+    try:
+        with connect(db_path) as conn:
+            row = conn.execute("SELECT * FROM v2_graph_commits WHERE graph_commit_id = ?", (graph_commit_id,)).fetchone()
+            return dict(row) if row is not None else {}
+    except sqlite3.OperationalError:
+        return {}
+
+
 def _node_repo_id(node: dict[str, Any]) -> str:
     metadata = node.get("metadata") if isinstance(node.get("metadata"), dict) else {}
     return str(node.get("repo_id") or metadata.get("repo_id") or "")
@@ -1486,7 +1575,7 @@ def _node_repo_id(node: dict[str, Any]) -> str:
 
 def _node_repo_path(node: dict[str, Any]) -> str:
     metadata = node.get("metadata") if isinstance(node.get("metadata"), dict) else {}
-    return str(node.get("repo_path") or metadata.get("repo_path") or "")
+    return str(node.get("repo_path") or metadata.get("repo_path") or metadata.get("repo_root") or "")
 
 
 def _matches_repo_scope(node: dict[str, Any], repo_id: str) -> bool:
