@@ -508,9 +508,6 @@ ON v2_session_jobs(status, updated_at);
 CREATE INDEX IF NOT EXISTS idx_v2_session_jobs_session
 ON v2_session_jobs(session_id, pipeline_version);
 
-CREATE INDEX IF NOT EXISTS idx_v2_session_jobs_repo
-ON v2_session_jobs(repo_id, updated_at DESC);
-
 CREATE INDEX IF NOT EXISTS idx_v2_session_job_events_job
 ON v2_session_job_events(job_id, created_at DESC);
 
@@ -522,12 +519,6 @@ ON v2_central_merge_plans(status, updated_at DESC);
 
 CREATE INDEX IF NOT EXISTS idx_v2_central_review_candidates_plan
 ON v2_central_review_candidates(plan_id, status);
-
-CREATE INDEX IF NOT EXISTS idx_v2_graph_commits_branch
-ON v2_graph_commits(repo_id, branch, created_at DESC);
-
-CREATE INDEX IF NOT EXISTS idx_v2_graph_views_lookup
-ON v2_graph_views(repo_id, branch, mode, status);
 
 CREATE INDEX IF NOT EXISTS idx_v2_semantic_eval_runs_status
 ON v2_semantic_eval_runs(status, updated_at DESC);
@@ -678,9 +669,31 @@ def _run_light_migrations(conn: sqlite3.Connection) -> None:
         _rebuild_v2_central_merge_locks_for_repo_scope(conn)
 
 
+def _create_post_migration_indexes(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_v2_session_jobs_repo
+        ON v2_session_jobs(repo_id, updated_at DESC)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_v2_graph_commits_branch
+        ON v2_graph_commits(repo_id, branch, created_at DESC)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_v2_graph_views_lookup
+        ON v2_graph_views(repo_id, branch, mode, status)
+        """
+    )
+
+
 def init_schema(conn: sqlite3.Connection) -> None:
     conn.executescript(SCHEMA_SQL)
     _run_light_migrations(conn)
+    _create_post_migration_indexes(conn)
     try:
         conn.executescript(FTS_SQL)
     except sqlite3.OperationalError:
