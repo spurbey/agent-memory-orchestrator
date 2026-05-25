@@ -486,6 +486,7 @@ class V2SessionJobRunner:
     def _stage_retrieval_docs(self, job: dict[str, Any], artifact_dir: Path, stage_dir: Path) -> StageResult:
         del artifact_dir
         require_complete_v2_reset_marker(self.job_store.marker(RESET_MARKER_KEY))
+        repo_id = _job_repo_id(job)
         graph = self.graph_store_factory(self.settings.graph_path)
         conn = connect(self.settings.retrieval_db_path)
         try:
@@ -497,17 +498,19 @@ class V2SessionJobRunner:
                 max_doc_chars=self.settings.auto_retrieval_max_doc_chars,
                 pipeline_version=PIPELINE_VERSION,
                 graph_schema_version=GRAPH_SCHEMA_VERSION,
+                repo_id=repo_id,
             )
             index.replace_documents(docs)
         finally:
             graph.close()
             conn.close()
         output = stage_dir / "retrieval_docs_result.json"
-        output.write_text(json.dumps({"doc_count": len(docs)}, indent=2), encoding="utf-8")
-        return StageResult(output_path=output, diagnostics={"doc_count": len(docs)})
+        output.write_text(json.dumps({"doc_count": len(docs), "repo_id": repo_id}, indent=2), encoding="utf-8")
+        return StageResult(output_path=output, diagnostics={"doc_count": len(docs), "repo_id": repo_id})
 
     def _stage_embeddings(self, job: dict[str, Any], artifact_dir: Path, stage_dir: Path) -> StageResult:
         del artifact_dir
+        repo_id = _job_repo_id(job)
         conn = connect(self.settings.retrieval_db_path)
         try:
             index = RetrievalIndexStore(conn)
@@ -523,6 +526,7 @@ class V2SessionJobRunner:
                 model=self.settings.embedding_model,
                 graph_scope="v2",
                 session_id=str(job["session_id"]),
+                repo_id=repo_id,
                 extraction_run_id=str(job["job_id"]),
                 limit=self.settings.auto_embedding_batch_size,
                 embedding_kind=RETRIEVAL_EMBEDDING_KIND,
@@ -530,8 +534,9 @@ class V2SessionJobRunner:
         finally:
             conn.close()
         output = stage_dir / "embeddings_result.json"
-        output.write_text(json.dumps(result.as_dict(), indent=2), encoding="utf-8")
-        return StageResult(output_path=output, diagnostics=result.as_dict())
+        payload = {**result.as_dict(), "repo_id": repo_id}
+        output.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        return StageResult(output_path=output, diagnostics=payload)
 
     def _stage_faiss(self, job: dict[str, Any], artifact_dir: Path, stage_dir: Path) -> StageResult:
         del job, artifact_dir
@@ -552,14 +557,30 @@ class V2SessionJobRunner:
     def _stage_quality_eval(self, job: dict[str, Any], artifact_dir: Path, stage_dir: Path) -> StageResult:
         del job
         kuzu_result = _read_json(_stage_output(artifact_dir, "kuzu_write"))
+        central_result = _read_json(_stage_output(artifact_dir, "central_version_merge"))
         retrieval_result = _read_json(_stage_output(artifact_dir, "retrieval_docs"))
+        embedding_result = _read_json(_stage_output(artifact_dir, "embeddings"))
+        faiss_result = _read_json(_stage_output(artifact_dir, "faiss"))
+        issues = _quality_issues(
+            central_result=central_result if isinstance(central_result, dict) else {},
+            retrieval_result=retrieval_result if isinstance(retrieval_result, dict) else {},
+            embedding_result=embedding_result if isinstance(embedding_result, dict) else {},
+            faiss_result=faiss_result if isinstance(faiss_result, dict) else {},
+        )
         output = stage_dir / "quality_eval.json"
         payload = {
-            "ok": True,
+            "ok": not issues,
+            "product_ready": not issues,
+            "blocking_issues": issues,
             "kuzu": kuzu_result,
+            "central_version_merge": central_result,
             "retrieval_docs": retrieval_result,
+            "embeddings": embedding_result,
+            "faiss": faiss_result,
         }
         output.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+        if issues:
+            raise StageFailed("quality_eval_product_readiness_failed", payload)
         return StageResult(output_path=output, diagnostics=payload)
 
 
@@ -899,6 +920,65 @@ def _versioned_items(value: Any, job: dict[str, Any]) -> list[dict[str, Any]]:
             }
         )
     return out
+
+
+def _job_repo_id(job: dict[str, Any]) -> str:
+    return str(job.get("repo_id") or "") or resolve_repo_identity(str(job.get("repo_path") or "")).repo_id
+
+
+def _quality_issues(
+    *,
+    central_result: dict[str, Any],
+    retrieval_result: dict[str, Any],
+    embedding_result: dict[str, Any],
+    faiss_result: dict[str, Any],
+) -> list[dict[str, Any]]:
+    issues: list[dict[str, Any]] = []
+    central_status = str(central_result.get("status") or "")
+    central_mode = str(central_result.get("mode") or "")
+    if central_status != "applied" and central_mode != "apply_exact_atoms":
+        issues.append(
+            {
+                "code": "central_merge_not_applied",
+                "message": "central_version_merge produced a dry-run plan, not applied central memory",
+                "status": central_status,
+                "mode": central_mode,
+                "plan_id": central_result.get("plan_id") or "",
+            }
+        )
+
+    doc_count = int(retrieval_result.get("doc_count") or 0)
+    if doc_count <= 0:
+        issues.append({"code": "retrieval_docs_empty", "message": "retrieval_docs produced no documents"})
+
+    total_docs = int(embedding_result.get("total_docs") or doc_count or 0)
+    embedded = int(embedding_result.get("embedded") or 0)
+    already = int(embedding_result.get("already_embedded") or 0)
+    covered = embedded + already
+    if total_docs and covered < total_docs:
+        issues.append(
+            {
+                "code": "embedding_coverage_partial",
+                "message": "not all retrieval documents have active embeddings",
+                "covered_docs": covered,
+                "total_docs": total_docs,
+                "limit_hit": bool(embedding_result.get("limit_hit")),
+            }
+        )
+
+    faiss_status = str(faiss_result.get("status") or "")
+    faiss_items = int(faiss_result.get("item_count") or 0)
+    if total_docs and faiss_items < total_docs:
+        issues.append(
+            {
+                "code": "faiss_coverage_partial",
+                "message": "FAISS cache does not cover all retrieval documents",
+                "item_count": faiss_items,
+                "total_docs": total_docs,
+                "status": faiss_status,
+            }
+        )
+    return issues
 
 
 def _evidence_ref_nodes(packets: list[dict[str, Any]]) -> list[dict[str, Any]]:
