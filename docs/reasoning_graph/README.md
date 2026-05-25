@@ -22,7 +22,7 @@ raw evidence and transcripts
 -> Git hunks and AST CodeNodes
 -> reasoning-to-code linking
 -> graph validation
--> session graph write
+-> session trace graph and curated session graph write
 -> central_version_merge
 -> retrieval docs, embeddings, graph expansion, reranking
 ```
@@ -61,11 +61,16 @@ session Commit/File/Symbol/CodeRegion
 -> KnowledgeAtom
 ```
 
-The first production implementation applies only exact deterministic atoms:
-`commit`, `file`, `symbol`, and `code_region`. Exact matching uses `repo_id` plus
-canonical keys, not local machine paths. If a canonical atom already exists, the
-planner emits it as `matched_atoms` and still creates a new `KnowledgeVersion`
-for the new session provenance.
+The first production implementation applies exact deterministic atoms for
+`commit` and `file` by default. `symbol` and `code_region` atoms are created only
+when the promotion policy marks a curated ref as a high-signal
+`primary_implementation` target. UI style, UI markup, docs, config, validation
+tests, and generic support refs stay searchable support by default. Most
+symbol/code-region refs therefore remain support metadata so central memory does
+not become a second AST dump. Exact matching uses `repo_id` plus canonical keys,
+not local machine paths. If a canonical atom already exists, the planner emits it
+as `matched_atoms` and still creates a new `KnowledgeVersion` for the new session
+provenance.
 
 Apply writes a `GraphCommit`, updates `GraphView(main, active)`, and writes a
 `central_version_merge/merge_result.json` sidecar. `merge_plan.json` remains the
@@ -75,6 +80,11 @@ dry-run plan; `merge_result.json`, SQLite `v2_graph_commits`, and SQLite
 Decision/problem duplicate, refine, supersede, conflict, and revert relations
 are not automatic yet. They remain dry-run/review territory until semantic evals
 prove the matching rules are safe.
+
+Reasoning review also has a deterministic semantic alignment signal. A
+structurally valid Qwen node can still be demoted to `needs_review` if its text
+does not line up with the commit message or changed files. This catches noisy
+packet evidence before it becomes answer-grade graph memory.
 
 ## Production Reset
 
@@ -101,6 +111,11 @@ writes to a disposable smoke graph. Production closed-session processing writes
 V2 node kinds such as `Packet`, `Commit`, `EvidenceRef`, `ReasoningNode`,
 `CodeHunk`, `CodeNode`, `CodeVersion`, and `Symbol`.
 
+Current production writes both an exhaustive trace graph manifest and a curated
+session graph manifest. Central merge and retrieval use the curated graph by
+default; the trace graph remains an audit/debug artifact. See
+[Curated session graph and central merge boundary](./architecture/curated_session_graph.md).
+
 ## Core Concepts
 
 | Concept | Meaning |
@@ -121,12 +136,13 @@ V2 node kinds such as `Packet`, `Commit`, `EvidenceRef`, `ReasoningNode`,
 1. [System purpose](./architecture/01-system-purpose.md)
 2. [Three-level storage](./architecture/02-three-level-storage.md)
 3. [Failure and safety model](./architecture/05-failure-and-safety-model.md)
-4. [Node types](./graph_model/node-types.md)
-5. [Edge types](./graph_model/edge-types.md)
-6. [Provenance and evidence](./graph_model/provenance-and-evidence.md)
-7. Algorithm docs under [algorithms](./algorithms/)
-8. Module contracts under [modules](./modules/)
-9. Examples under [examples](./examples/)
+4. [Curated session graph boundary](./architecture/curated_session_graph.md)
+5. [Node types](./graph_model/node-types.md)
+6. [Edge types](./graph_model/edge-types.md)
+7. [Provenance and evidence](./graph_model/provenance-and-evidence.md)
+8. Algorithm docs under [algorithms](./algorithms/)
+9. Module contracts under [modules](./modules/)
+10. Examples under [examples](./examples/)
 
 ## Acceptance Rule
 
