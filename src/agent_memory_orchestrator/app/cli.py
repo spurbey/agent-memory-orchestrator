@@ -18,6 +18,8 @@ from ..integrations.connectors.slack.socket_mode import SlackSocketModeRunner
 from ..integrations.connectors.slack.wizard import run_slack_setup_wizard
 from ..graph.diagnostics import debug_hooks, debug_qwen
 from ..graph.service import GraphRagService
+from ..graph.store import KuzuGraphStore
+from ..reasoning_graph.central_merge.applier import repo_central_graph_path
 from ..graph.store import GraphBackendUnavailable
 from ..install.service import InstallOptions
 from ..install.service import apply_install_plan
@@ -1560,7 +1562,13 @@ def main(argv: list[str] | None = None) -> int:
                 if args.command == "graph-retrieve" and args.no_answer and args.no_vector:
                     _print(_retrieve_index_only(settings, args))
                     return 0
-                graph = GraphRagService(settings)
+                graph_settings = settings
+                graph_store = None
+                if args.command == "graph-retrieve" and str(args.repo_id or "").strip():
+                    central_graph_path = repo_central_graph_path(settings, args.repo_id)
+                    graph_settings = replace(settings, graph_path=central_graph_path)
+                    graph_store = KuzuGraphStore(central_graph_path)
+                graph = GraphRagService(graph_settings, store=graph_store)
                 try:
                     if args.command == "graph-search":
                         result = graph.graph_search(
