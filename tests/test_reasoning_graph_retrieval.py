@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 from pathlib import Path
 from types import SimpleNamespace
@@ -9,6 +10,7 @@ import pytest
 from agent_memory_orchestrator.core.db import connect
 from agent_memory_orchestrator.config import Settings
 from agent_memory_orchestrator.graph.service import GraphRagService
+from agent_memory_orchestrator.graph.service import _active_central_versions_for_support
 from agent_memory_orchestrator.graph.service import _unique_nonempty
 from agent_memory_orchestrator.graph.answer_trace import build_answer_trace
 from agent_memory_orchestrator.graph.answer_trace import build_central_answer_trace
@@ -16,8 +18,10 @@ from agent_memory_orchestrator.graph.answer_trace import format_answer_trace
 from agent_memory_orchestrator.graph.store import GraphEdge
 from agent_memory_orchestrator.graph.store import GraphNode
 from agent_memory_orchestrator.graph.store import InMemoryGraphStore
+from agent_memory_orchestrator.app import cli as cli_module
 from agent_memory_orchestrator.app.cli import _retrieve_index_only
 from agent_memory_orchestrator.llm.qwen import DeterministicPlanner
+from agent_memory_orchestrator.reasoning_graph.central_merge.applier import repo_central_graph_path
 from agent_memory_orchestrator.reasoning_graph.jobs.constants import GRAPH_SCHEMA_VERSION
 from agent_memory_orchestrator.reasoning_graph.jobs.constants import PIPELINE_VERSION
 from agent_memory_orchestrator.reasoning_graph import GraphEmbeddingStore
@@ -400,6 +404,54 @@ def test_offline_index_only_requires_active_projection_for_repo_scope(tmp_path: 
         assert result["error"] == "active_projection_missing"
     finally:
         conn.close()
+
+
+def test_offline_graph_retrieve_with_repo_id_uses_repo_central_graph(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    settings = _settings(tmp_path)
+    opened_paths: list[Path] = []
+    service_paths: list[Path] = []
+    service_stores: list[object] = []
+
+    class CapturingStore:
+        def __init__(self, graph_path: Path) -> None:
+            opened_paths.append(graph_path)
+
+    class CapturingService:
+        def __init__(self, service_settings: Settings, *, store: object | None = None, **_: object) -> None:
+            service_paths.append(service_settings.graph_path)
+            service_stores.append(store)
+
+        def retrieve_indexed_graph(self, **kwargs: object) -> dict[str, object]:
+            return {"ok": True, "repo_id": kwargs.get("repo_id"), "graph_path": str(service_paths[-1])}
+
+        def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(cli_module.Settings, "load", staticmethod(lambda: settings))
+    monkeypatch.setattr(cli_module, "KuzuGraphStore", CapturingStore)
+    monkeypatch.setattr(cli_module, "GraphRagService", CapturingService)
+
+    exit_code = cli_module.main(
+        [
+            "graph-retrieve",
+            "--query",
+            "why did graph_service.py change?",
+            "--repo-id",
+            "repo:amo",
+            "--no-vector",
+            "--offline",
+        ]
+    )
+
+    expected_path = repo_central_graph_path(settings, "repo:amo")
+    assert exit_code == 0
+    assert opened_paths == [expected_path]
+    assert service_paths == [expected_path]
+    assert service_stores
+    assert service_stores[0] is not None
+    assert json.loads(capsys.readouterr().out)["graph_path"] == str(expected_path)
 
 
 def _central_graph() -> InMemoryGraphStore:
@@ -1223,6 +1275,68 @@ def test_central_answer_trace_contract_collects_active_support() -> None:
     assert trace["trace"]["evidence_refs"] == ["E01156"]
     assert trace["trace"]["files"] == ["src/agent_memory_orchestrator/graph_service.py"]
     assert trace["trace"]["code_impacts"] == ["impact:WP0018"]
+
+
+def test_central_trace_enrichment_matches_commit_and_file_versions() -> None:
+    graph = InMemoryGraphStore()
+    graph.upsert_node(
+        GraphNode(
+            id="kver:commit:8351639",
+            kind="KnowledgeVersion",
+            label="commit version",
+            status="active",
+            metadata={
+                "atom_kind": "commit",
+                "repo_id": "repo:amo",
+                "graph_commit_id": "v2gcommit:1",
+                "version_metadata": {"canonical_key": "commit|repo:amo|8351639abcdef"},
+            },
+        )
+    )
+    graph.upsert_node(
+        GraphNode(
+            id="kver:file:graph_service",
+            kind="KnowledgeVersion",
+            label="file version",
+            status="active",
+            metadata={
+                "atom_kind": "file",
+                "repo_id": "repo:amo",
+                "graph_commit_id": "v2gcommit:1",
+                "version_metadata": {"canonical_key": "file|repo:amo|src/agent_memory_orchestrator/graph_service.py"},
+            },
+        )
+    )
+    graph.upsert_node(
+        GraphNode(
+            id="kver:file:other",
+            kind="KnowledgeVersion",
+            label="other file version",
+            status="active",
+            metadata={
+                "atom_kind": "file",
+                "repo_id": "repo:amo",
+                "graph_commit_id": "v2gcommit:1",
+                "version_metadata": {"canonical_key": "file|repo:amo|src/other.py"},
+            },
+        )
+    )
+
+    versions = _active_central_versions_for_support(
+        graph,
+        repo_id="repo:amo",
+        graph_commit_id="v2gcommit:1",
+        support_docs=[
+            {
+                "doc_type": "file_impact",
+                "node_kind": "FileImpactSummary",
+                "commit_sha": "8351639",
+                "metadata": {"path": "src/agent_memory_orchestrator/graph_service.py"},
+            }
+        ],
+    )
+
+    assert {version["id"] for version in versions} == {"kver:commit:8351639", "kver:file:graph_service"}
 
 
 def test_answer_trace_prefers_visible_query_match_over_metadata_only_match() -> None:
