@@ -30,7 +30,6 @@ from ..promotion import build_curated_session_graph
 from ..retrieval import RETRIEVAL_EMBEDDING_KIND
 from ..retrieval import RetrievalDocument
 from ..retrieval import RetrievalIndexStore
-from ..retrieval import build_retrieval_documents_from_graph
 from ..retrieval import embed_missing_retrieval_documents
 from ..session_graph_writer import build_compact_session_graph
 from ..session_graph_writer import write_compact_session_graph
@@ -545,7 +544,8 @@ class V2SessionJobRunner:
     def _stage_central_version_merge(self, job: dict[str, Any], artifact_dir: Path, stage_dir: Path) -> StageResult:
         del artifact_dir
         kuzu_result = _read_json(_stage_output(Path(str(job["artifact_dir"])), "kuzu_write"))
-        manifest_path = _central_merge_manifest_path(Path(str(job["artifact_dir"])))
+        manifest_info = _product_manifest_info(Path(str(job["artifact_dir"])))
+        manifest_path = Path(str(manifest_info["curated_manifest_path"]))
         compact_graph = _read_json(manifest_path)
         repo_id = str(job.get("repo_id") or "") or resolve_repo_identity(str(job.get("repo_path") or "")).repo_id
         active_view = self.job_store.ensure_graph_view(repo_id=repo_id, branch="main", mode="active")
@@ -564,6 +564,10 @@ class V2SessionJobRunner:
         )
         plan_payload = plan.as_dict()
         plan_payload["session_graph_write"] = kuzu_result if isinstance(kuzu_result, dict) else {}
+        plan_payload["input_source"] = "curated_graph_manifest"
+        plan_payload["curated_input_hash"] = manifest_info["curated_input_hash"]
+        plan_payload["trace_input_hash"] = manifest_info["trace_input_hash"]
+        plan_payload["curated_manifest_path"] = str(manifest_path)
         if existing_atom_scan_error:
             plan_payload["existing_atom_scan_error"] = existing_atom_scan_error
         self.job_store.upsert_central_merge_plan(plan_payload)
@@ -580,6 +584,9 @@ class V2SessionJobRunner:
             "metrics": plan.metrics,
             "review_candidate_count": len(plan.review_candidates),
             "existing_atom_scan_error": existing_atom_scan_error,
+            "input_source": "curated_graph_manifest",
+            "curated_input_hash": manifest_info["curated_input_hash"],
+            "trace_input_hash": manifest_info["trace_input_hash"],
         }
         return StageResult(output_path=output, diagnostics=diagnostics)
 
@@ -596,41 +603,36 @@ class V2SessionJobRunner:
         del artifact_dir
         require_complete_v2_reset_marker(self.job_store.marker(RESET_MARKER_KEY))
         repo_id = _job_repo_id(job)
-        graph = self.graph_store_factory(self.settings.graph_path)
+        manifest_info = _optional_product_manifest_info(Path(str(job["artifact_dir"])))
         conn = connect(self.settings.retrieval_db_path)
         try:
             index = RetrievalIndexStore(conn)
-            retrieval_source = "graph"
             graph_error = ""
-            try:
-                docs = build_retrieval_documents_from_graph(
-                    graph,
-                    session_id="",
-                    node_limit=self.settings.auto_retrieval_node_limit,
-                    max_doc_chars=self.settings.auto_retrieval_max_doc_chars,
-                    pipeline_version=PIPELINE_VERSION,
-                    graph_schema_version=GRAPH_SCHEMA_VERSION,
-                    repo_id=repo_id,
-                )
-            except RuntimeError as exc:
-                graph_error = str(exc)
-                if "Buffer manager exception" not in graph_error:
-                    raise
-                manifest_path = _central_merge_manifest_path(Path(str(job["artifact_dir"])))
-                docs = _retrieval_documents_from_compact_manifest(
-                    manifest_path=manifest_path,
+            if manifest_info.get("curated_manifest_exists"):
+                docs = _retrieval_documents_from_manifest(
+                    manifest_path=Path(str(manifest_info["curated_manifest_path"])),
+                    source="curated_graph_manifest",
                     job=job,
                     repo_id=repo_id,
                     max_doc_chars=self.settings.auto_retrieval_max_doc_chars,
                     limit=self.settings.auto_retrieval_node_limit,
                 )
-                retrieval_source = "compact_manifest_fallback"
+                retrieval_source = "curated_graph_manifest"
+            else:
+                docs = []
+                retrieval_source = "curated_graph_manifest_missing"
+                graph_error = "curated_graph_manifest_missing"
             index.replace_documents(docs, repo_id=repo_id)
         finally:
-            graph.close()
             conn.close()
         output = stage_dir / "retrieval_docs_result.json"
-        payload = {"doc_count": len(docs), "repo_id": repo_id, "retrieval_source": retrieval_source, "graph_error": graph_error}
+        payload = {
+            "doc_count": len(docs),
+            "repo_id": repo_id,
+            "retrieval_source": retrieval_source,
+            "graph_error": graph_error,
+            **manifest_info,
+        }
         output.write_text(json.dumps(payload, indent=2), encoding="utf-8")
         return StageResult(output_path=output, diagnostics=payload)
 
@@ -964,10 +966,36 @@ def _should_write_artifact_kuzu(inventory: dict[str, Any]) -> bool:
     return int(inventory.get("manifest_edge_count") or 0) <= max_edges
 
 
-def _central_merge_manifest_path(artifact_dir: Path) -> Path:
+def _product_manifest_info(artifact_dir: Path) -> dict[str, Any]:
     curated = artifact_dir / "kuzu_write" / "curated_graph_manifest.json"
-    if curated.exists():
-        return curated
+    if not curated.exists():
+        raise StageFailed(
+            "curated_graph_manifest_missing",
+            {
+                "curated_manifest_path": str(curated),
+                "compact_manifest_path": str(_compact_manifest_path(artifact_dir)),
+                "input_source": "missing_curated_graph_manifest",
+            },
+        )
+    info = _optional_product_manifest_info(artifact_dir)
+    info["curated_input_hash"] = file_sha256(curated)
+    return info
+
+
+def _optional_product_manifest_info(artifact_dir: Path) -> dict[str, Any]:
+    curated = artifact_dir / "kuzu_write" / "curated_graph_manifest.json"
+    compact = _compact_manifest_path(artifact_dir)
+    return {
+        "curated_manifest_path": str(curated),
+        "curated_manifest_exists": curated.exists(),
+        "curated_input_hash": file_sha256(curated) if curated.exists() else "",
+        "compact_manifest_path": str(compact),
+        "compact_manifest_exists": compact.exists(),
+        "trace_input_hash": file_sha256(compact) if compact.exists() else "",
+    }
+
+
+def _compact_manifest_path(artifact_dir: Path) -> Path:
     return artifact_dir / "kuzu_write" / "compact_graph_manifest.json"
 
 
@@ -990,9 +1018,10 @@ def _central_session_edge_write_limit() -> int:
         return 25_000
 
 
-def _retrieval_documents_from_compact_manifest(
+def _retrieval_documents_from_manifest(
     *,
     manifest_path: Path,
+    source: str,
     job: dict[str, Any],
     repo_id: str,
     max_doc_chars: int,
@@ -1018,7 +1047,7 @@ def _retrieval_documents_from_compact_manifest(
                 "repo_id": repo_id,
                 "pipeline_version": PIPELINE_VERSION,
                 "graph_schema_version": GRAPH_SCHEMA_VERSION,
-                "source": "compact_manifest_fallback",
+                "source": source,
                 "job_id": job.get("job_id"),
                 "session_id": job.get("session_id"),
                 "original_node_id": node_id,

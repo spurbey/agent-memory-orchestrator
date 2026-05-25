@@ -9,7 +9,9 @@ from agent_memory_orchestrator.config import Settings
 from agent_memory_orchestrator.core.db import connect
 from agent_memory_orchestrator.reasoning_graph.central_merge.production_eval import run_production_semantic_eval
 from agent_memory_orchestrator.reasoning_graph.jobs import V2SessionJobStore
+from agent_memory_orchestrator.reasoning_graph.jobs.reset import initialize_fresh_v2_production_storage
 from agent_memory_orchestrator.reasoning_graph.jobs.runner import StageResult
+from agent_memory_orchestrator.reasoning_graph.jobs.runner import StageFailed
 from agent_memory_orchestrator.reasoning_graph.jobs.runner import V2SessionJobRunner
 from agent_memory_orchestrator.reasoning_graph.jobs.runner import stage_config_hash
 from agent_memory_orchestrator.reasoning_graph.jobs.runner import stage_config_payload
@@ -216,5 +218,72 @@ def test_superseded_stage_validity_is_audited_without_new_status(tmp_path: Path)
         assert stage["diagnostics"]["superseded_previous_stage"]["validity"] == "superseded"
         assert stage["diagnostics"]["superseded_previous_stage"]["reason"] == "input_hash_changed"
         assert any(event["event_type"] == "stage_superseded" for event in events)
+    finally:
+        store.close()
+
+
+def test_central_merge_requires_curated_manifest(tmp_path: Path) -> None:
+    settings = make_settings(tmp_path)
+    store = V2SessionJobStore(settings)
+    try:
+        job = store.enqueue_session(session_id="s-missing-curated", boundary_event_id="raw_boundary", repo_path=str(tmp_path)).job
+        kuzu_dir = Path(str(job["artifact_dir"])) / "kuzu_write"
+        kuzu_dir.mkdir(parents=True, exist_ok=True)
+        (kuzu_dir / "compact_graph_manifest.json").write_text(json.dumps({"nodes": [], "edges": []}), encoding="utf-8")
+        (kuzu_dir / "kuzu_write_result.json").write_text(json.dumps({"ok": True}), encoding="utf-8")
+        runner = V2SessionJobRunner(settings, job_store=store)
+
+        try:
+            runner._stage_central_version_merge(job, Path(str(job["artifact_dir"])), Path(str(job["artifact_dir"])) / "central_version_merge")
+            raise AssertionError("central merge should reject full-trace-only input")
+        except StageFailed as exc:
+            assert exc.reason == "curated_graph_manifest_missing"
+            assert exc.diagnostics["input_source"] == "missing_curated_graph_manifest"
+    finally:
+        store.close()
+
+
+def test_retrieval_docs_read_curated_manifest_directly(tmp_path: Path) -> None:
+    settings = make_settings(tmp_path)
+    initialize_fresh_v2_production_storage(settings)
+    store = V2SessionJobStore(settings)
+    try:
+        repo_id = "repo:remote:curated"
+        job = store.enqueue_session(session_id="s-curated-retrieval", boundary_event_id="raw_boundary", repo_path=str(tmp_path)).job
+        store.update_job_repo_identity(job_id=job["job_id"], repo_path=str(tmp_path), repo_id=repo_id, reason="test", metadata={})
+        job = store.get_job(job["job_id"]) or job
+        kuzu_dir = Path(str(job["artifact_dir"])) / "kuzu_write"
+        kuzu_dir.mkdir(parents=True, exist_ok=True)
+        compact_manifest = {
+            "nodes": [
+                {"id": "code:if", "kind": "CodeNode", "label": "If", "summary": "raw trace node", "properties": {}},
+            ],
+            "edges": [],
+        }
+        curated_manifest = {
+            "nodes": [
+                {
+                    "id": "file-impact:graph_service",
+                    "kind": "FileImpactSummary",
+                    "label": "graph_service.py impact",
+                    "summary": "Graph service retrieval behavior changed.",
+                    "properties": {"path": "src/agent_memory_orchestrator/graph_service.py", "packet_ids": ["WP0001"]},
+                }
+            ],
+            "edges": [],
+        }
+        (kuzu_dir / "compact_graph_manifest.json").write_text(json.dumps(compact_manifest), encoding="utf-8")
+        (kuzu_dir / "curated_graph_manifest.json").write_text(json.dumps(curated_manifest), encoding="utf-8")
+        runner = V2SessionJobRunner(settings, job_store=store)
+        retrieval_dir = Path(str(job["artifact_dir"])) / "retrieval_docs"
+        retrieval_dir.mkdir(parents=True, exist_ok=True)
+
+        result = runner._stage_retrieval_docs(job, Path(str(job["artifact_dir"])), retrieval_dir)
+
+        assert result.diagnostics["retrieval_source"] == "curated_graph_manifest"
+        assert result.diagnostics["doc_count"] == 1
+        with connect(settings.retrieval_db_path) as conn:
+            rows = conn.execute("SELECT doc_type, node_kind FROM retrieval_documents WHERE repo_id=?", (repo_id,)).fetchall()
+        assert [(row["doc_type"], row["node_kind"]) for row in rows] == [("file_impact", "FileImpactSummary")]
     finally:
         store.close()

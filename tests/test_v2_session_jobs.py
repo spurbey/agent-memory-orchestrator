@@ -301,6 +301,8 @@ def test_v2_central_merge_stage_writes_dry_run_plan_and_preserves_session_graph(
             "inventory": {"node_count": 5, "edge_count": 0, "unresolved_edge_count": 0},
         }
         (kuzu_dir / "compact_graph_manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+        (kuzu_dir / "curated_graph_manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+        (kuzu_dir / "curation_audit.json").write_text(json.dumps({"policy": "test"}), encoding="utf-8")
         result_path = kuzu_dir / "kuzu_write_result.json"
         result_path.write_text(json.dumps({"ok": True, "inventory": manifest["inventory"]}), encoding="utf-8")
         store.start_stage(
