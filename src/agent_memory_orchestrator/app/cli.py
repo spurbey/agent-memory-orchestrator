@@ -58,6 +58,10 @@ from ..reasoning_graph.central_merge.applier import apply_merge_plan
 from ..reasoning_graph.central_merge.backfill import backfill_central_merge_plan
 from ..reasoning_graph.central_merge.fixtures import export_job_fixture
 from ..reasoning_graph.central_merge.judge import run_semantic_eval_fixture
+from ..reasoning_graph.central_merge.production_eval import DEFAULT_TARGET_JOB_ID
+from ..reasoning_graph.central_merge.production_eval import DEFAULT_TARGET_REPO_ID
+from ..reasoning_graph.central_merge.production_eval import default_production_eval_path
+from ..reasoning_graph.central_merge.production_eval import run_production_semantic_eval
 from ..skill_checkpoint import DEFAULT_LOCAL_NUM_CTX
 from ..skill_checkpoint import DEFAULT_NUM_PREDICT
 from ..skill_checkpoint import list_skill_checkpoints
@@ -156,6 +160,11 @@ def _build_parser() -> argparse.ArgumentParser:
     v2_eval.add_argument("--fixture", type=Path, required=True)
     v2_eval.add_argument("--case-set", default="baseline")
     v2_eval.add_argument("--out", type=Path, help="Write semantic eval result JSON")
+    v2_prod_eval = sub.add_parser("v2-production-eval", help="Run read-only production semantic eval for curated central memory")
+    v2_prod_eval.add_argument("--job-id", default=DEFAULT_TARGET_JOB_ID)
+    v2_prod_eval.add_argument("--repo-id", default=DEFAULT_TARGET_REPO_ID)
+    v2_prod_eval.add_argument("--mode", default="baseline", choices=["baseline", "pre_apply", "post_apply"])
+    v2_prod_eval.add_argument("--out", type=Path, help="Write production semantic eval JSON")
     v2_plan = sub.add_parser("v2-merge-plan", help="Show the latest central_version_merge plan for a V2 job")
     v2_plan.add_argument("--job-id", required=True)
     v2_plan.add_argument("--backfill", action="store_true", help="Create a dry-run merge plan for an old completed job if missing")
@@ -174,6 +183,11 @@ def _build_parser() -> argparse.ArgumentParser:
     v2_eval_nested.add_argument("--fixture", type=Path, required=True)
     v2_eval_nested.add_argument("--case-set", default="baseline")
     v2_eval_nested.add_argument("--out", type=Path, help="Write semantic eval result JSON")
+    v2_prod_eval_nested = v2_sub.add_parser("production-eval", help="Run read-only production semantic eval for curated central memory")
+    v2_prod_eval_nested.add_argument("--job-id", default=DEFAULT_TARGET_JOB_ID)
+    v2_prod_eval_nested.add_argument("--repo-id", default=DEFAULT_TARGET_REPO_ID)
+    v2_prod_eval_nested.add_argument("--mode", default="baseline", choices=["baseline", "pre_apply", "post_apply"])
+    v2_prod_eval_nested.add_argument("--out", type=Path, help="Write production semantic eval JSON")
     v2_plan_nested = v2_sub.add_parser("merge-plan", help="Show the latest central_version_merge plan for a V2 job")
     v2_plan_nested.add_argument("--job-id", required=True)
     v2_plan_nested.add_argument("--backfill", action="store_true", help="Create a dry-run merge plan for an old completed job if missing")
@@ -883,6 +897,19 @@ def main(argv: list[str] | None = None) -> int:
                 store.close()
             _print(result)
             return 0 if result.get("status") == "passed" else 1
+
+        if args.command == "v2-production-eval" or (args.command == "v2" and args.v2_command == "production-eval"):
+            settings = Settings.load()
+            out_path = args.out or default_production_eval_path(Path.cwd())
+            result = run_production_semantic_eval(
+                settings,
+                job_id=args.job_id,
+                repo_id=args.repo_id,
+                mode=args.mode,
+                out_path=out_path,
+            )
+            _print(result)
+            return 0
 
         if args.command == "v2-merge-plan" or (args.command == "v2" and args.v2_command == "merge-plan"):
             settings = Settings.load()
