@@ -50,7 +50,14 @@ def run_production_semantic_eval(
         retrieval=retrieval,
         quality=quality if isinstance(quality, dict) else {},
     )
-    blockers = list(dict.fromkeys(failure for case in cases for failure in case["blocking_failures"]))
+    blockers = list(
+        dict.fromkeys(
+            [
+                *(failure for case in cases for failure in case["blocking_failures"]),
+                *_quality_issue_codes(quality if isinstance(quality, dict) else {}),
+            ]
+        )
+    )
     payload = {
         "report_version": "production-semantic-eval-v1",
         "mode": mode,
@@ -134,6 +141,14 @@ def _cases(*, kuzu_write: dict[str, Any], central: dict[str, Any], retrieval: di
             passed=bool(retrieval.get("vector_status_truthful")),
             failures=[] if retrieval.get("vector_status_truthful") else ["vector_status_unavailable"],
             reason="Partial embeddings/FAISS are acceptable only when reported honestly.",
+        ),
+        _case(
+            "vector_retrieval_ready",
+            expected={"embedding_status": "ready", "faiss_status": "ready"},
+            actual={"embedding": retrieval.get("embedding_coverage"), "faiss": retrieval.get("faiss")},
+            passed=not _vector_readiness_failures(retrieval),
+            failures=_vector_readiness_failures(retrieval),
+            reason="Product-ready retrieval requires complete embedding and FAISS coverage; partial vectors may be used only as a disclosed degraded mode.",
         ),
         _case(
             "quality_not_product_ready_when_blocked",
@@ -359,6 +374,34 @@ def _retrieval_query_gate_cases(retrieval: dict[str, Any]) -> list[dict[str, Any
             )
         )
     return cases
+
+
+def _quality_issue_codes(quality: dict[str, Any]) -> list[str]:
+    issues = quality.get("blocking_issues")
+    if not isinstance(issues, list):
+        return []
+    codes: list[str] = []
+    for issue in issues:
+        if isinstance(issue, dict):
+            code = str(issue.get("code") or issue.get("reason") or "").strip()
+        else:
+            code = str(issue or "").strip()
+        if code:
+            codes.append(code)
+    return codes
+
+
+def _vector_readiness_failures(retrieval: dict[str, Any]) -> list[str]:
+    failures: list[str] = []
+    embedding = retrieval.get("embedding_coverage") if isinstance(retrieval.get("embedding_coverage"), dict) else {}
+    faiss = retrieval.get("faiss") if isinstance(retrieval.get("faiss"), dict) else {}
+    embedding_status = str(embedding.get("status") or "missing")
+    faiss_status = str(faiss.get("status") or "missing")
+    if embedding_status != "ready":
+        failures.append("embedding_coverage_missing" if embedding_status == "missing" else "embedding_coverage_partial")
+    if faiss_status != "ready":
+        failures.append("faiss_coverage_missing" if faiss_status == "missing" else "faiss_coverage_partial")
+    return failures
 
 
 def _retrieval_query_gates(db_path: Path, *, repo_id: str) -> list[dict[str, Any]]:
