@@ -11,6 +11,7 @@ from agent_memory_orchestrator.core.db import connect
 from agent_memory_orchestrator.reasoning_graph.embedding_store import GraphEmbeddingRecord
 from agent_memory_orchestrator.reasoning_graph.embedding_store import GraphEmbeddingStore
 from agent_memory_orchestrator.reasoning_graph.jobs import V2SessionJobStore
+from agent_memory_orchestrator.reasoning_graph.jobs import runner as runner_module
 from agent_memory_orchestrator.reasoning_graph.jobs.store import graph_view_id
 from agent_memory_orchestrator.reasoning_graph.jobs.constants import GRAPH_SCHEMA_VERSION
 from agent_memory_orchestrator.reasoning_graph.jobs.constants import PIPELINE_VERSION
@@ -141,6 +142,90 @@ def test_v2_stage_rows_track_hashes_and_config_hash(tmp_path: Path) -> None:
         assert updated["status"] == "pending"
         assert updated["current_stage"] == "work_packets"
         assert updated["last_successful_stage"] == "evidence_view"
+    finally:
+        store.close()
+
+
+def test_v2_qwen_reasoning_reuses_existing_matching_checkpoint(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    settings = make_settings(tmp_path)
+    store = V2SessionJobStore(settings)
+    try:
+        job = store.enqueue_session(session_id="s-qwen", boundary_event_id="raw_boundary", repo_path=str(tmp_path)).job
+        artifact_dir = Path(job["artifact_dir"])
+        work_dir = artifact_dir / "work_packets"
+        work_dir.mkdir(parents=True, exist_ok=True)
+        packets = [
+            {
+                "packet_id": "WP0001",
+                "commit": {"short_sha": "abc123", "full_sha": "abc123"},
+                "summary": "Add graph retrieval.",
+                "problem_refs": [],
+                "rationale_refs": [],
+                "validation_refs": [],
+            }
+        ]
+        work_output = work_dir / "reasoning_work_packets.json"
+        work_output.write_text(json.dumps(packets), encoding="utf-8")
+        store.start_stage(
+            job_id=job["job_id"],
+            stage="work_packets",
+            input_artifact="view.json",
+            input_hash="input",
+            stage_config_hash="config",
+        )
+        store.complete_stage(
+            job_id=job["job_id"],
+            stage="work_packets",
+            output_artifact=str(work_output),
+            output_hash="output",
+            diagnostics={"packet_count": 1},
+        )
+
+        qwen_dir = artifact_dir / "qwen_reasoning"
+        qwen_dir.mkdir(parents=True, exist_ok=True)
+        contract = runner_module._qwen_contract(settings)
+        packet_key = runner_module._qwen_packet_key(packets[0], contract=contract)
+        qwen_output = qwen_dir / "stage4_packet_reasoning_results.json"
+        qwen_output.write_text(
+            json.dumps(
+                [
+                    {
+                        "packet_id": "WP0001",
+                        "commit_sha": "abc123",
+                        "model": "qwen3:1.7b",
+                        "runtime": "ollama",
+                        "contract_hash": contract["contract_hash"],
+                        "parsed_output": {"kind": "decision", "summary": "Use graph retrieval."},
+                    }
+                ]
+            ),
+            encoding="utf-8",
+        )
+        (qwen_dir / "stage4_packet_reasoning_manifest.json").write_text(
+            json.dumps({"complete": True, "result_count": 1, "packet_count": 1, "contract": contract, "packets": [packet_key]}),
+            encoding="utf-8",
+        )
+
+        class FailingQwenClient:
+            def __init__(self, **_: object) -> None:
+                pass
+
+            def generate_json(self, *_: object, **__: object) -> dict[str, object]:
+                raise AssertionError("existing matching checkpoint should be reused")
+
+        monkeypatch.setattr(runner_module, "OllamaQwenClient", FailingQwenClient)
+        runner = V2SessionJobRunner(settings, job_store=store)
+
+        run = runner.run_next()
+        stage = store.stage_row(job_id=job["job_id"], stage="qwen_reasoning")
+
+        assert run["stage"] == "qwen_reasoning"
+        assert run["status"] == "pending"
+        assert stage is not None
+        assert stage["status"] == "complete"
+        assert stage["diagnostics"]["reused_result_count"] == 1
+        assert stage["diagnostics"]["generated_result_count"] == 0
+        assert (qwen_dir / "stage4_packet_reasoning_manifest.json").exists()
     finally:
         store.close()
 
@@ -922,6 +1007,72 @@ def test_stage4_prompt_uses_reset_contract_module() -> None:
     assert len(stage4_contract_hash()) == 64
     assert "Support refs are provenance only" in prompt
     assert "Input packet:" in prompt
+
+
+def test_central_session_graph_write_preserves_repo_id_metadata() -> None:
+    store = InMemoryGraphStore()
+    result = runner_module._upsert_compact_graph(
+        store,
+        (
+            {
+                "id": "reason:1",
+                "kind": "ReasoningNode",
+                "label": "Decision: repo scoped retrieval",
+                "summary": "Repo scoped retrieval keeps memories separated.",
+                "properties_json": "{}",
+            },
+        ),
+        (),
+        job={
+            "job_id": "v2job:abcdefghijklmnop",
+            "session_id": "session:1",
+            "source_app": "codex",
+            "repo_id": "repo:test",
+        },
+    )
+
+    assert result["node_write_count"] == 1
+    node = store.nodes["abcdefghijkl:reason:1"]
+    assert node.metadata["repo_id"] == "repo:test"
+    assert node.metadata["original_node_id"] == "reason:1"
+
+
+def test_qwen_checkpoint_reuse_requires_same_runtime_contract(tmp_path: Path) -> None:
+    settings = make_settings(tmp_path)
+    packet = {"packet_id": "WP0001", "commit": {"short_sha": "abc123"}, "problem_refs": []}
+    contract = runner_module._qwen_contract(settings)
+    packet_key = runner_module._qwen_packet_key(packet, contract=contract)
+    reusable = runner_module._qwen_reusable_results(
+        [
+            {
+                "packet_id": "WP0001",
+                "commit_sha": "abc123",
+                "contract_hash": contract["contract_hash"],
+                "parsed_output": {"nodes": []},
+            }
+        ],
+        existing_manifest={"packets": [packet_key]},
+        packet_keys=[packet_key],
+    )
+
+    assert runner_module._qwen_packet_cache_key(packet_key) in reusable
+
+    next_contract = {**contract, "contract_hash": "different-model-or-schema"}
+    next_key = runner_module._qwen_packet_key(packet, contract=next_contract)
+    blocked = runner_module._qwen_reusable_results(
+        [
+            {
+                "packet_id": "WP0001",
+                "commit_sha": "abc123",
+                "contract_hash": contract["contract_hash"],
+                "parsed_output": {"nodes": []},
+            }
+        ],
+        existing_manifest={"packets": [packet_key]},
+        packet_keys=[next_key],
+    )
+
+    assert blocked == {}
 
 
 def test_auto_drain_closes_graph_before_v2_runner_opens(

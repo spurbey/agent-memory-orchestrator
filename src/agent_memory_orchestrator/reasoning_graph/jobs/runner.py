@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
@@ -25,7 +26,9 @@ from ..evidence_view import write_reasoning_evidence_view_artifacts
 from ..reasoning_extraction import review_reasoning_extraction_results
 from ..repo_resolution import resolve_session_repo_root
 from ..central_merge.repo_identity import resolve_repo_identity
+from ..promotion import build_curated_session_graph
 from ..retrieval import RETRIEVAL_EMBEDDING_KIND
+from ..retrieval import RetrievalDocument
 from ..retrieval import RetrievalIndexStore
 from ..retrieval import build_retrieval_documents_from_graph
 from ..retrieval import embed_missing_retrieval_documents
@@ -273,6 +276,17 @@ class V2SessionJobRunner:
         packets = _read_json(self._stage_input_artifact(job, "qwen_reasoning", artifact_dir))
         if not isinstance(packets, list):
             raise RuntimeError("work_packets_output_must_be_list")
+        output = stage_dir / "stage4_packet_reasoning_results.json"
+        manifest = stage_dir / "stage4_packet_reasoning_manifest.json"
+        qwen_contract = _qwen_contract(self.settings)
+        packet_keys = [_qwen_packet_key(packet, contract=qwen_contract) for packet in packets if isinstance(packet, dict)]
+        existing_results = _qwen_existing_results(output)
+        existing_manifest = _qwen_existing_manifest(manifest)
+        reusable = _qwen_reusable_results(
+            existing_results,
+            existing_manifest=existing_manifest,
+            packet_keys=packet_keys,
+        )
         client = OllamaQwenClient(
             endpoint=self.settings.qwen_endpoint,
             model=self.settings.qwen_model,
@@ -280,7 +294,16 @@ class V2SessionJobRunner:
             num_ctx=self.settings.qwen_num_ctx,
         )
         results: list[dict[str, Any]] = []
+        reused_count = 0
         for packet in packets:
+            if not isinstance(packet, dict):
+                continue
+            key = _qwen_packet_key(packet, contract=qwen_contract)
+            cached = reusable.get(_qwen_packet_cache_key(key))
+            if cached is not None:
+                results.append(cached)
+                reused_count += 1
+                continue
             prompt = build_stage4_packet_prompt(packet)
             try:
                 parsed = client.generate_json(
@@ -297,12 +320,22 @@ class V2SessionJobRunner:
                     "commit_sha": _packet_commit_sha(packet),
                     "model": self.settings.qwen_model,
                     "runtime": self.settings.qwen_runtime,
+                    "contract_hash": qwen_contract["contract_hash"],
                     "parsed_output": parsed,
                 }
             )
-        output = stage_dir / "stage4_packet_reasoning_results.json"
-        output.write_text(json.dumps(results, indent=2, ensure_ascii=False), encoding="utf-8")
-        return StageResult(output_path=output, diagnostics={"packet_count": len(packets), "result_count": len(results)})
+            _write_qwen_checkpoint(output, manifest, results, packet_keys, contract=qwen_contract, complete=False)
+        _write_qwen_checkpoint(output, manifest, results, packet_keys, contract=qwen_contract, complete=len(results) == len(packet_keys))
+        return StageResult(
+            output_path=output,
+            diagnostics={
+                "packet_count": len(packet_keys),
+                "result_count": len(results),
+                "reused_result_count": reused_count,
+                "generated_result_count": len(results) - reused_count,
+                "checkpoint_manifest": str(manifest),
+            },
+        )
 
     def _stage_reasoning_review(self, job: dict[str, Any], artifact_dir: Path, stage_dir: Path) -> StageResult:
         packets = _read_json(_stage_output(artifact_dir, "work_packets"))
@@ -315,6 +348,16 @@ class V2SessionJobRunner:
         (stage_dir / "stage4_reasoning_review.json").write_text(json.dumps(review.as_dict(), indent=2, ensure_ascii=False), encoding="utf-8")
         output = stage_dir / "accepted_reasoning_nodes.json"
         output.write_text(json.dumps(list(review.accepted_nodes), indent=2, ensure_ascii=False), encoding="utf-8")
+        if review.summary.get("stage_acceptance") == "FAIL" or not review.accepted_nodes:
+            raise StageFailed(
+                "reasoning_review_acceptance_failed",
+                {
+                    "summary": review.summary,
+                    "review_artifact": str(stage_dir / "stage4_reasoning_review.json"),
+                    "accepted_nodes_artifact": str(output),
+                    "note": "Curated graph promotion is blocked when Qwen reasoning has structural errors or produces no accepted answer-grade nodes.",
+                },
+            )
         return StageResult(output_path=output, diagnostics={"summary": review.summary})
 
     def _stage_git_hunks(self, job: dict[str, Any], artifact_dir: Path, stage_dir: Path) -> StageResult:
@@ -415,41 +458,76 @@ class V2SessionJobRunner:
             code_versions=versions,
             raw_edges=raw_edges if isinstance(raw_edges, list) else [],
         )
+        curated = build_curated_session_graph(
+            packets=packets,
+            reasoning_nodes=reasoning_nodes,
+            evidence_refs=evidence_refs,
+            commit_nodes=commits,
+            code_hunks=hunk_nodes,
+            code_nodes=code_nodes,
+        )
         manifest = stage_dir / "compact_graph_manifest.json"
         manifest.write_text(json.dumps(graph.as_dict(), indent=2, ensure_ascii=False), encoding="utf-8")
+        curated_manifest = stage_dir / "curated_graph_manifest.json"
+        curated_manifest.write_text(json.dumps(curated.graph.as_dict(), indent=2, ensure_ascii=False), encoding="utf-8")
+        (stage_dir / "curation_audit.json").write_text(json.dumps(curated.audit, indent=2, ensure_ascii=False), encoding="utf-8")
         artifact_graph_path = stage_dir / "session_graph.kuzu"
-        write_compact_session_graph(graph_path=artifact_graph_path, nodes=list(graph.nodes), edges=list(graph.edges), force=True)
+        artifact_graph_written = _should_write_artifact_kuzu(curated.graph.inventory)
+        if artifact_graph_written:
+            write_compact_session_graph(
+                graph_path=artifact_graph_path,
+                nodes=list(curated.graph.nodes),
+                edges=list(curated.graph.edges),
+                force=True,
+            )
         central = self.graph_store_factory(self.settings.graph_path)
         try:
             central.init_schema()
-            _upsert_compact_graph(central, graph.nodes, graph.edges, job=job)
+            central_write = _upsert_compact_graph(central, curated.graph.nodes, curated.graph.edges, job=job)
         finally:
             central.close()
+        diagnostics = {
+            **curated.graph.inventory,
+            "trace_inventory": graph.inventory,
+            "curated_inventory": curated.graph.inventory,
+            "promotion": _promotion_summary(curated.audit),
+            "central_write": central_write,
+        }
         output = stage_dir / "kuzu_write_result.json"
         output.write_text(
             json.dumps(
                 {
                     "ok": graph.inventory.get("unresolved_edge_count") == 0,
                     "graph_path": str(self.settings.graph_path),
-                    "artifact_graph_path": str(artifact_graph_path),
-                    "inventory": graph.inventory,
+                    "artifact_graph_path": str(artifact_graph_path) if artifact_graph_written else "",
+                    "artifact_graph_written": artifact_graph_written,
+                    "central_write": central_write,
+                    "inventory": curated.graph.inventory,
+                    "trace_inventory": graph.inventory,
+                    "curated_manifest_path": str(curated_manifest),
+                    "promotion": _promotion_summary(curated.audit),
                 },
                 indent=2,
                 ensure_ascii=False,
             ),
             encoding="utf-8",
         )
-        return StageResult(output_path=output, diagnostics=graph.inventory)
+        return StageResult(output_path=output, diagnostics=diagnostics)
 
     def _stage_central_version_merge(self, job: dict[str, Any], artifact_dir: Path, stage_dir: Path) -> StageResult:
         del artifact_dir
         kuzu_result = _read_json(_stage_output(Path(str(job["artifact_dir"])), "kuzu_write"))
-        manifest_path = Path(str(job["artifact_dir"])) / "kuzu_write" / "compact_graph_manifest.json"
+        manifest_path = _central_merge_manifest_path(Path(str(job["artifact_dir"])))
         compact_graph = _read_json(manifest_path)
         repo_id = str(job.get("repo_id") or "") or resolve_repo_identity(str(job.get("repo_path") or "")).repo_id
         active_view = self.job_store.ensure_graph_view(repo_id=repo_id, branch="main", mode="active")
         parent_graph_commit_id = str(active_view.get("graph_commit_id") or "")
-        existing_atoms = self._central_atoms_by_canonical_key()
+        existing_atom_scan_error = ""
+        try:
+            existing_atoms = self._central_atoms_by_canonical_key()
+        except Exception as exc:
+            existing_atoms = {}
+            existing_atom_scan_error = f"{type(exc).__name__}: {exc}"
         plan = build_dry_run_merge_plan(
             job={**job, "repo_id": repo_id},
             compact_graph=compact_graph if isinstance(compact_graph, dict) else {},
@@ -458,6 +536,8 @@ class V2SessionJobRunner:
         )
         plan_payload = plan.as_dict()
         plan_payload["session_graph_write"] = kuzu_result if isinstance(kuzu_result, dict) else {}
+        if existing_atom_scan_error:
+            plan_payload["existing_atom_scan_error"] = existing_atom_scan_error
         self.job_store.upsert_central_merge_plan(plan_payload)
         output = stage_dir / "merge_plan.json"
         output.write_text(json.dumps(plan_payload, indent=2, ensure_ascii=False), encoding="utf-8")
@@ -471,6 +551,7 @@ class V2SessionJobRunner:
             "graph_commit_preview": plan.graph_commit_preview,
             "metrics": plan.metrics,
             "review_candidate_count": len(plan.review_candidates),
+            "existing_atom_scan_error": existing_atom_scan_error,
         }
         return StageResult(output_path=output, diagnostics=diagnostics)
 
@@ -491,22 +572,39 @@ class V2SessionJobRunner:
         conn = connect(self.settings.retrieval_db_path)
         try:
             index = RetrievalIndexStore(conn)
-            docs = build_retrieval_documents_from_graph(
-                graph,
-                session_id="",
-                node_limit=self.settings.auto_retrieval_node_limit,
-                max_doc_chars=self.settings.auto_retrieval_max_doc_chars,
-                pipeline_version=PIPELINE_VERSION,
-                graph_schema_version=GRAPH_SCHEMA_VERSION,
-                repo_id=repo_id,
-            )
-            index.replace_documents(docs)
+            retrieval_source = "graph"
+            graph_error = ""
+            try:
+                docs = build_retrieval_documents_from_graph(
+                    graph,
+                    session_id="",
+                    node_limit=self.settings.auto_retrieval_node_limit,
+                    max_doc_chars=self.settings.auto_retrieval_max_doc_chars,
+                    pipeline_version=PIPELINE_VERSION,
+                    graph_schema_version=GRAPH_SCHEMA_VERSION,
+                    repo_id=repo_id,
+                )
+            except RuntimeError as exc:
+                graph_error = str(exc)
+                if "Buffer manager exception" not in graph_error:
+                    raise
+                manifest_path = _central_merge_manifest_path(Path(str(job["artifact_dir"])))
+                docs = _retrieval_documents_from_compact_manifest(
+                    manifest_path=manifest_path,
+                    job=job,
+                    repo_id=repo_id,
+                    max_doc_chars=self.settings.auto_retrieval_max_doc_chars,
+                    limit=self.settings.auto_retrieval_node_limit,
+                )
+                retrieval_source = "compact_manifest_fallback"
+            index.replace_documents(docs, repo_id=repo_id)
         finally:
             graph.close()
             conn.close()
         output = stage_dir / "retrieval_docs_result.json"
-        output.write_text(json.dumps({"doc_count": len(docs), "repo_id": repo_id}, indent=2), encoding="utf-8")
-        return StageResult(output_path=output, diagnostics={"doc_count": len(docs), "repo_id": repo_id})
+        payload = {"doc_count": len(docs), "repo_id": repo_id, "retrieval_source": retrieval_source, "graph_error": graph_error}
+        output.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        return StageResult(output_path=output, diagnostics=payload)
 
     def _stage_embeddings(self, job: dict[str, Any], artifact_dir: Path, stage_dir: Path) -> StageResult:
         del artifact_dir
@@ -735,6 +833,299 @@ def _path_changed(left: str, right: str) -> bool:
         return left.strip().lower() != right.strip().lower()
 
 
+def _should_write_artifact_kuzu(inventory: dict[str, Any]) -> bool:
+    raw = os.environ.get("AMO_KUZU_ARTIFACT_WRITE_MAX_EDGES", "").strip()
+    try:
+        max_edges = int(raw) if raw else 25_000
+    except ValueError:
+        max_edges = 25_000
+    if max_edges < 0:
+        return True
+    return int(inventory.get("manifest_edge_count") or 0) <= max_edges
+
+
+def _central_merge_manifest_path(artifact_dir: Path) -> Path:
+    curated = artifact_dir / "kuzu_write" / "curated_graph_manifest.json"
+    if curated.exists():
+        return curated
+    return artifact_dir / "kuzu_write" / "compact_graph_manifest.json"
+
+
+def _promotion_summary(audit: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "policy": audit.get("policy", ""),
+        "policy_counts": audit.get("policy_counts", {}),
+        "selected_file_count": audit.get("selected_file_count", 0),
+        "file_impact_count": audit.get("file_impact_count", 0),
+        "selected_symbol_count": audit.get("selected_symbol_count", 0),
+        "selected_code_region_count": audit.get("selected_code_region_count", 0),
+    }
+
+
+def _central_session_edge_write_limit() -> int:
+    raw = os.environ.get("AMO_KUZU_CENTRAL_EDGE_WRITE_MAX_EDGES", "").strip()
+    try:
+        return int(raw) if raw else 25_000
+    except ValueError:
+        return 25_000
+
+
+def _retrieval_documents_from_compact_manifest(
+    *,
+    manifest_path: Path,
+    job: dict[str, Any],
+    repo_id: str,
+    max_doc_chars: int,
+    limit: int,
+) -> list[RetrievalDocument]:
+    manifest = _read_json(manifest_path)
+    nodes = manifest.get("nodes") if isinstance(manifest, dict) else []
+    namespace = str(job["job_id"]).rsplit(":", 1)[-1][:12]
+    docs: list[RetrievalDocument] = []
+    for index, node in enumerate(nodes if isinstance(nodes, list) else []):
+        if limit and index >= limit:
+            break
+        if not isinstance(node, dict):
+            continue
+        node_id = str(node.get("id") or "")
+        kind = str(node.get("kind") or "")
+        if not node_id or not kind:
+            continue
+        metadata = _safe_json_object(str(node.get("properties_json") or "{}"))
+        doc_type, memory_class, importance = _fallback_doc_profile(kind)
+        metadata.update(
+            {
+                "repo_id": repo_id,
+                "pipeline_version": PIPELINE_VERSION,
+                "graph_schema_version": GRAPH_SCHEMA_VERSION,
+                "source": "compact_manifest_fallback",
+                "job_id": job.get("job_id"),
+                "session_id": job.get("session_id"),
+                "original_node_id": node_id,
+            }
+        )
+        title = str(node.get("label") or node_id)
+        summary = str(node.get("summary") or "")
+        body = "\n".join(
+            part
+            for part in (
+                f"{kind}: {title}",
+                summary,
+                json.dumps(_retrieval_fallback_metadata(metadata), ensure_ascii=False, sort_keys=True),
+            )
+            if part
+        )
+        docs.append(
+            RetrievalDocument(
+                doc_id=f"retrieval:{repo_id}:{namespace}:{node_id}:1",
+                doc_type=doc_type,
+                graph_node_id=f"{namespace}:{node_id}",
+                node_kind=kind,
+                packet_id=str(node.get("packet_id") or metadata.get("packet_id") or metadata.get("source_packet_id") or ""),
+                commit_sha=str(node.get("commit_sha") or metadata.get("commit_sha") or metadata.get("source_commit_sha") or ""),
+                title=title,
+                body=_clip_text(body, max_doc_chars),
+                repo_id=repo_id,
+                memory_class=memory_class,
+                importance=importance,
+                metadata=metadata,
+            )
+        )
+    return docs
+
+
+def _clip_text(text: str, limit: int) -> str:
+    safe_limit = max(256, int(limit or 0))
+    if len(text) <= safe_limit:
+        return text
+    return text[: max(0, safe_limit - 18)].rstrip() + "\n... <clipped>"
+
+
+def _safe_json_object(raw: str) -> dict[str, Any]:
+    try:
+        loaded = json.loads(raw or "{}")
+    except json.JSONDecodeError:
+        return {}
+    return loaded if isinstance(loaded, dict) else {}
+
+
+def _retrieval_fallback_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
+    keep = (
+        "packet_id",
+        "source_packet_id",
+        "commit_sha",
+        "source_commit_sha",
+        "path",
+        "qualified_name",
+        "symbol_kind",
+        "node_type",
+        "subject",
+        "statement",
+        "summary",
+        "selected_files",
+        "selected_file_roles",
+        "impact_roles",
+        "impact_role",
+        "primary_impact_role",
+        "impact_role_counts",
+        "selected_symbol_refs",
+        "selected_code_refs",
+        "reasoning_statements",
+        "impact_count",
+        "packet_ids",
+        "commit_shas",
+        "impact_ids",
+        "reasons",
+        "commit_messages",
+        "promotion_grade",
+        "policy",
+        "hunk_count",
+        "original_code_node_id",
+        "evidence_refs",
+        "repo_id",
+        "job_id",
+        "session_id",
+    )
+    return {key: metadata.get(key) for key in keep if metadata.get(key)}
+
+
+def _fallback_doc_profile(kind: str) -> tuple[str, str, float]:
+    if kind == "ReasoningNode":
+        return "reasoning", "answer_grade_reasoning", 0.9
+    if kind == "CodeImpactSummary":
+        return "code_impact", "code_impact_summary", 0.82
+    if kind == "FileImpactSummary":
+        return "file_impact", "file_impact_summary", 0.84
+    if kind == "Commit":
+        return "commit", "work_change", 0.72
+    if kind == "EvidenceRef":
+        return "evidence", "supporting_evidence", 0.35
+    if kind == "Packet":
+        return "packet", "work_packet", 0.5
+    if kind == "FileRef":
+        return "file_ref", "code_support", 0.62
+    if kind == "SymbolRef":
+        return "symbol_ref", "code_support", 0.6
+    if kind == "CodeRegionRef":
+        return "code_region_ref", "code_support", 0.58
+    return f"session_{kind.lower()}", "support", 0.5
+
+
+def _qwen_contract(settings: Settings) -> dict[str, str]:
+    payload = {
+        "model": settings.qwen_model,
+        "runtime": settings.qwen_runtime,
+        "num_ctx": settings.qwen_num_ctx,
+        "stage4_contract_hash": stage4_contract_hash(),
+        "stage4_schema_hash": hashlib.sha256(json.dumps(stage4_output_schema(), sort_keys=True).encode("utf-8")).hexdigest(),
+        "pipeline_version": PIPELINE_VERSION,
+        "graph_schema_version": GRAPH_SCHEMA_VERSION,
+    }
+    return {**payload, "contract_hash": hashlib.sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()}
+
+
+def _qwen_packet_key(packet: dict[str, Any], *, contract: dict[str, str]) -> dict[str, str]:
+    return {
+        "packet_id": str(packet.get("packet_id") or ""),
+        "commit_sha": _packet_commit_sha(packet),
+        "packet_hash": hashlib.sha256(json.dumps(packet, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest(),
+        "contract_hash": str(contract.get("contract_hash") or ""),
+    }
+
+
+def _qwen_packet_cache_key(packet_key: dict[str, str]) -> tuple[str, str, str, str]:
+    return (packet_key["packet_id"], packet_key["commit_sha"], packet_key["packet_hash"], packet_key["contract_hash"])
+
+
+def _qwen_existing_results(output: Path) -> list[dict[str, Any]]:
+    if not output.exists():
+        return []
+    try:
+        loaded = _read_json(output)
+    except (OSError, json.JSONDecodeError):
+        return []
+    if not isinstance(loaded, list):
+        return []
+    return [item for item in loaded if isinstance(item, dict)]
+
+
+def _qwen_existing_manifest(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return {}
+    try:
+        loaded = _read_json(path)
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return loaded if isinstance(loaded, dict) else {}
+
+
+def _qwen_reusable_results(
+    existing_results: list[dict[str, Any]],
+    *,
+    existing_manifest: dict[str, Any],
+    packet_keys: list[dict[str, str]],
+) -> dict[tuple[str, str, str, str], dict[str, Any]]:
+    if not existing_results:
+        return {}
+    manifest_packets = existing_manifest.get("packets")
+    manifest_by_result_key: dict[tuple[str, str], tuple[str, str]] = {}
+    if isinstance(manifest_packets, list):
+        for item in manifest_packets:
+            if not isinstance(item, dict):
+                continue
+            manifest_by_result_key[(str(item.get("packet_id") or ""), str(item.get("commit_sha") or ""))] = (
+                str(item.get("packet_hash") or ""),
+                str(item.get("contract_hash") or ""),
+            )
+
+    current_by_legacy_key = {(item["packet_id"], item["commit_sha"]): item for item in packet_keys}
+    reusable: dict[tuple[str, str, str, str], dict[str, Any]] = {}
+    for result in existing_results:
+        packet_id = str(result.get("packet_id") or "")
+        commit_sha = str(result.get("commit_sha") or "")
+        if not packet_id:
+            continue
+        current = current_by_legacy_key.get((packet_id, commit_sha))
+        if current is None:
+            continue
+        manifest_hash, manifest_contract = manifest_by_result_key.get((packet_id, commit_sha), ("", ""))
+        if not manifest_hash or not manifest_contract:
+            continue
+        if manifest_hash != current["packet_hash"] or manifest_contract != current["contract_hash"]:
+            continue
+        if str(result.get("contract_hash") or manifest_contract) != current["contract_hash"]:
+            continue
+        if not isinstance(result.get("parsed_output"), dict):
+            continue
+        reusable[_qwen_packet_cache_key(current)] = result
+    return reusable
+
+
+def _write_qwen_checkpoint(
+    output: Path,
+    manifest: Path,
+    results: list[dict[str, Any]],
+    packet_keys: list[dict[str, str]],
+    *,
+    contract: dict[str, str],
+    complete: bool,
+) -> None:
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output_tmp = output.with_suffix(output.suffix + ".tmp")
+    manifest_tmp = manifest.with_suffix(manifest.suffix + ".tmp")
+    output_tmp.write_text(json.dumps(results, indent=2, ensure_ascii=False), encoding="utf-8")
+    manifest_payload = {
+        "complete": complete,
+        "result_count": len(results),
+        "packet_count": len(packet_keys),
+        "contract": contract,
+        "packets": packet_keys[: len(results)],
+    }
+    manifest_tmp.write_text(json.dumps(manifest_payload, indent=2, ensure_ascii=False), encoding="utf-8")
+    output_tmp.replace(output)
+    manifest_tmp.replace(manifest)
+
+
 def _packet_commit_sha(packet: dict[str, Any]) -> str:
     commit = packet.get("commit") if isinstance(packet.get("commit"), dict) else {}
     return str(commit.get("short_sha") or "")
@@ -946,6 +1337,14 @@ def _quality_issues(
                 "plan_id": central_result.get("plan_id") or "",
             }
         )
+    if central_result.get("existing_atom_scan_error"):
+        issues.append(
+            {
+                "code": "central_atom_scan_failed",
+                "message": "central_version_merge could not scan existing canonical atoms",
+                "error": central_result.get("existing_atom_scan_error"),
+            }
+        )
 
     doc_count = int(retrieval_result.get("doc_count") or 0)
     if doc_count <= 0:
@@ -1016,9 +1415,10 @@ def _commit_nodes(packets: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return nodes
 
 
-def _upsert_compact_graph(store: GraphStore, nodes: tuple[dict[str, Any], ...], edges: tuple[dict[str, Any], ...], *, job: dict[str, Any]) -> None:
+def _upsert_compact_graph(store: GraphStore, nodes: tuple[dict[str, Any], ...], edges: tuple[dict[str, Any], ...], *, job: dict[str, Any]) -> dict[str, Any]:
     namespace = str(job["job_id"]).rsplit(":", 1)[-1][:12]
     id_map = {str(node["id"]): f"{namespace}:{node['id']}" for node in nodes}
+    node_write_count = 0
     for node in nodes:
         metadata = json.loads(str(node.get("properties_json") or "{}"))
         metadata.update(
@@ -1027,6 +1427,8 @@ def _upsert_compact_graph(store: GraphStore, nodes: tuple[dict[str, Any], ...], 
                 "pipeline_version": PIPELINE_VERSION,
                 "graph_schema_version": GRAPH_SCHEMA_VERSION,
                 "job_id": job.get("job_id"),
+                "repo_id": job.get("repo_id"),
+                "immutable_session_graph_node": True,
             }
         )
         store.upsert_node(
@@ -1043,12 +1445,24 @@ def _upsert_compact_graph(store: GraphStore, nodes: tuple[dict[str, Any], ...], 
                 metadata=metadata,
             )
         )
+        node_write_count += 1
+    max_edges = _central_session_edge_write_limit()
+    if max_edges >= 0 and len(edges) > max_edges:
+        return {
+            "node_write_count": node_write_count,
+            "edge_write_count": 0,
+            "edge_write_skipped": True,
+            "edge_write_limit": max_edges,
+            "edge_count": len(edges),
+        }
+    edge_write_count = 0
     for index, edge in enumerate(edges):
         source = id_map.get(str(edge.get("from_id") or ""))
         target = id_map.get(str(edge.get("to_id") or ""))
         if not source or not target:
             continue
         metadata = json.loads(str(edge.get("properties_json") or "{}"))
+        metadata["immutable_session_graph_edge"] = True
         store.upsert_edge(
             GraphEdge(
                 id=f"v2edge:{namespace}:{index:06d}",
@@ -1059,3 +1473,11 @@ def _upsert_compact_graph(store: GraphStore, nodes: tuple[dict[str, Any], ...], 
                 metadata=metadata,
             )
         )
+        edge_write_count += 1
+    return {
+        "node_write_count": node_write_count,
+        "edge_write_count": edge_write_count,
+        "edge_write_skipped": False,
+        "edge_write_limit": max_edges,
+        "edge_count": len(edges),
+    }
