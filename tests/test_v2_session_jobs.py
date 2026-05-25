@@ -21,6 +21,7 @@ from agent_memory_orchestrator.reasoning_graph.jobs.reset import reset_productio
 from agent_memory_orchestrator.reasoning_graph.jobs.runner import require_complete_v2_reset_marker
 from agent_memory_orchestrator.reasoning_graph.jobs.runner import V2SessionJobRunner
 from agent_memory_orchestrator.reasoning_graph.central_merge.applier import apply_merge_plan
+from agent_memory_orchestrator.reasoning_graph.central_merge.applier import CentralMergeApplyError
 from agent_memory_orchestrator.reasoning_graph.central_merge.backfill import backfill_central_merge_plan
 from agent_memory_orchestrator.reasoning_graph.central_merge.fixtures import export_job_fixture
 from agent_memory_orchestrator.reasoning_graph.central_merge.judge import judge_semantic_case
@@ -62,6 +63,16 @@ def make_settings(tmp_path: Path) -> Settings:
         graph_path=tmp_path / ".graph" / "amo.kuzu",
         evidence_dir=tmp_path / ".evidence",
     )
+
+
+def _product_plan(plan):
+    payload = plan.as_dict()
+    return {
+        **payload,
+        "input_source": "curated_graph_manifest",
+        "curated_input_hash": "curated-input",
+        "trace_input_hash": "trace-input",
+    }
 
 
 def test_v2_enqueue_is_idempotent_and_atomic_lock_skips_locked_failed_and_pending_model(tmp_path: Path) -> None:
@@ -362,7 +373,7 @@ def test_v2_central_merge_apply_writes_exact_atoms_graph_commit_and_view(tmp_pat
             "edges": [],
         }
         plan = build_dry_run_merge_plan(job=job, compact_graph=compact_graph, parent_graph_commit_id="")
-        stored = store.upsert_central_merge_plan(plan.as_dict())
+        stored = store.upsert_central_merge_plan(_product_plan(plan))
 
         applied = apply_merge_plan(settings=settings, plan_id=stored["plan_id"], store=store, graph_store=graph)
 
@@ -389,7 +400,10 @@ def test_v2_central_merge_apply_writes_exact_atoms_graph_commit_and_view(tmp_pat
             for node in graph.nodes.values()
             if node.kind in {"KnowledgeAtom", "KnowledgeVersion", "GraphCommit", "GraphView"}
         ]
-        assert {node.metadata["atom_kind"] for node in atom_nodes} == {"commit", "file", "symbol"}
+        assert {node.metadata["atom_kind"] for node in atom_nodes} == {"commit", "file"}
+        assert applied["deferred_atom_counts"]["symbol"] == 1
+        assert applied["applied_atom_counts"] == {"commit": 1, "file": 1}
+        assert applied["applied_version_counts"] == {"commit": 1, "file": 1}
         assert all(node.metadata["graph_commit_id"] == applied["graph_commit"]["graph_commit_id"] for node in atom_nodes + version_nodes)
         assert all(node.metadata["repo_id"].startswith("repo:") for node in atom_nodes)
         assert all(node.metadata.get("idempotency_key") for node in central_nodes)
@@ -428,8 +442,8 @@ def test_v2_central_merge_apply_requires_matching_graph_view_head(tmp_path: Path
         compact_graph = {"nodes": [{"id": "commit:abc123", "kind": "Commit", "properties": {"full_sha": "abc123"}}], "edges": []}
         first_plan = build_dry_run_merge_plan(job=first_job, compact_graph=compact_graph, parent_graph_commit_id="")
         second_plan = build_dry_run_merge_plan(job=second_job, compact_graph=compact_graph, parent_graph_commit_id="")
-        first = store.upsert_central_merge_plan(first_plan.as_dict())
-        second = store.upsert_central_merge_plan(second_plan.as_dict())
+        first = store.upsert_central_merge_plan(_product_plan(first_plan))
+        second = store.upsert_central_merge_plan(_product_plan(second_plan))
 
         applied = apply_merge_plan(settings=settings, plan_id=first["plan_id"], store=store, graph_store=graph)
         conflicted = apply_merge_plan(settings=settings, plan_id=second["plan_id"], store=store, graph_store=graph)
@@ -441,6 +455,26 @@ def test_v2_central_merge_apply_requires_matching_graph_view_head(tmp_path: Path
         failed_plan = store.get_central_merge_plan(second["plan_id"])
         assert failed_plan is not None
         assert failed_plan["status"] == "failed_recoverable"
+    finally:
+        store.close()
+
+
+def test_v2_central_merge_apply_rejects_non_curated_plan_input(tmp_path: Path) -> None:
+    settings = make_settings(tmp_path)
+    graph = InMemoryGraphStore()
+    store = V2SessionJobStore(settings)
+    try:
+        job = store.enqueue_session(session_id="s-apply-input", boundary_event_id="raw_boundary", repo_path=str(tmp_path)).job
+        compact_graph = {"nodes": [{"id": "commit:abc123", "kind": "Commit", "properties": {"full_sha": "abc123"}}], "edges": []}
+        plan = build_dry_run_merge_plan(job=job, compact_graph=compact_graph, parent_graph_commit_id="")
+        stored = store.upsert_central_merge_plan({**plan.as_dict(), "input_source": "compact_graph_manifest", "trace_input_hash": "trace"})
+
+        with pytest.raises(CentralMergeApplyError, match="central_merge_plan_input_is_not_curated"):
+            apply_merge_plan(settings=settings, plan_id=stored["plan_id"], store=store, graph_store=graph)
+
+        stored_missing_hash = store.upsert_central_merge_plan({**plan.as_dict(), "input_source": "curated_graph_manifest"})
+        with pytest.raises(CentralMergeApplyError, match="central_merge_plan_missing_curated_input_hash"):
+            apply_merge_plan(settings=settings, plan_id=stored_missing_hash["plan_id"], store=store, graph_store=graph)
     finally:
         store.close()
 
@@ -503,7 +537,7 @@ def test_v2_central_merge_apply_attaches_versions_to_matched_atoms(tmp_path: Pat
             parent_graph_commit_id="",
             existing_atoms_by_canonical_key={existing_atom["canonical_key"]: existing_atom},
         )
-        stored = store.upsert_central_merge_plan(second_plan.as_dict())
+        stored = store.upsert_central_merge_plan(_product_plan(second_plan))
 
         applied = apply_merge_plan(settings=settings, plan_id=stored["plan_id"], store=store, graph_store=graph)
 

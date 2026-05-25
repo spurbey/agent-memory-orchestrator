@@ -18,7 +18,7 @@ from .models import CENTRAL_MERGE_PLAN_VERSION
 from .models import utc_now
 
 
-EXACT_APPLY_ATOM_KINDS = frozenset({"commit", "file", "symbol", "code_region"})
+EXACT_APPLY_ATOM_KINDS = frozenset({"commit", "file"})
 APPLIER_VERSION = "central-exact-atom-applier-v1"
 
 
@@ -61,6 +61,8 @@ def apply_merge_plan(
             raise CentralMergeApplyError(f"missing_graph_commit_preview:{plan_id}")
 
         repo_id = str(plan.get("repo_id") or "")
+        _validate_product_plan_input(plan)
+        apply_summary = _apply_summary(plan)
         current_view = owned_store.ensure_graph_view(repo_id=repo_id, branch=branch, mode=mode)
         current_head = str(current_view.get("graph_commit_id") or "")
         expected_parent = str(plan.get("parent_graph_commit_id") or "")
@@ -111,14 +113,19 @@ def apply_merge_plan(
                 },
                 added_nodes=added_nodes,
                 added_edges=added_edges,
-                diagnostics={"apply_scope": "exact_atoms_only"},
+                diagnostics={
+                    "apply_scope": apply_summary["apply_scope"],
+                    "applied_atom_counts": apply_summary["applied_atom_counts"],
+                    "applied_version_counts": apply_summary["applied_version_counts"],
+                    "deferred_atom_counts": apply_summary["deferred_atom_counts"],
+                },
             )
             graph_view = owned_store.update_graph_view_head(
                 repo_id=repo_id,
                 branch=branch,
                 mode=mode,
                 graph_commit_id=graph_commit_id,
-                metadata={"merge_plan_id": plan_id, "apply_scope": "exact_atoms_only"},
+                metadata={"merge_plan_id": plan_id, "apply_scope": apply_summary["apply_scope"]},
             )
             updated_plan = owned_store.update_central_merge_plan_status(
                 plan_id=plan_id,
@@ -128,7 +135,7 @@ def apply_merge_plan(
                     "graph_commit_id": graph_commit_id,
                     "added_node_count": len(added_nodes),
                     "added_edge_count": len(added_edges),
-                    "apply_scope": "exact_atoms_only",
+                    **apply_summary,
                 },
             )
             result = {
@@ -147,6 +154,7 @@ def apply_merge_plan(
                 "added_edge_count": len(added_edges),
                 "added_nodes": added_nodes,
                 "added_edges": added_edges,
+                **apply_summary,
                 "idempotent": reapplies_applied_head,
                 "plan_status": updated_plan.get("status", "applied"),
                 "applied_at": utc_now(),
@@ -197,9 +205,12 @@ def _write_merge_result_artifact(*, store: V2SessionJobStore, plan: dict[str, An
             "added_edge_count": result.get("added_edge_count", 0),
             "added_nodes": result.get("added_nodes", []),
             "added_edges": result.get("added_edges", []),
+            "applied_atom_counts": result.get("applied_atom_counts", {}),
+            "applied_version_counts": result.get("applied_version_counts", {}),
+            "deferred_atom_counts": result.get("deferred_atom_counts", {}),
             "idempotent": result.get("idempotent", False),
             "applied_at": result.get("applied_at", utc_now()),
-            "apply_scope": "exact_atoms_only",
+            "apply_scope": result.get("apply_scope", ["commit", "file", "knowledge_version", "graph_commit", "graph_view"]),
             "result_artifact": str(target),
         }
         target.write_text(json.dumps(payload, indent=2, ensure_ascii=False, sort_keys=True), encoding="utf-8")
@@ -212,6 +223,49 @@ def _write_merge_result_artifact(*, store: V2SessionJobStore, plan: dict[str, An
             diagnostics={"merge_result_artifact_error": f"{type(exc).__name__}:{exc}"},
         )
         return ""
+
+
+def _validate_product_plan_input(plan: dict[str, Any]) -> None:
+    if str(plan.get("input_source") or "") not in {"curated_graph_manifest", ""}:
+        raise CentralMergeApplyError("central_merge_plan_input_is_not_curated")
+    if not str(plan.get("curated_input_hash") or ""):
+        raise CentralMergeApplyError("central_merge_plan_missing_curated_input_hash")
+
+
+def _apply_summary(plan: dict[str, Any]) -> dict[str, Any]:
+    atoms = [atom for atom in plan.get("new_atoms", []) if isinstance(atom, dict)]
+    versions = [version for version in plan.get("new_versions", []) if isinstance(version, dict)]
+    return {
+        "apply_scope": ["commit", "file", "knowledge_version", "graph_commit", "graph_view"],
+        "applied_atom_counts": _kind_counts(atoms, include=EXACT_APPLY_ATOM_KINDS),
+        "applied_version_counts": _kind_counts(versions, include=EXACT_APPLY_ATOM_KINDS),
+        "deferred_atom_counts": {
+            **_kind_counts(atoms, include={"symbol", "code_region", "decision", "problem"}),
+            "decision": _review_candidate_count(plan, {"decision"}),
+            "problem": _review_candidate_count(plan, {"problem"}),
+        },
+    }
+
+
+def _kind_counts(items: list[dict[str, Any]], *, include: set[str] | frozenset[str]) -> dict[str, int]:
+    counts = {kind: 0 for kind in sorted(include)}
+    for item in items:
+        kind = str(item.get("atom_kind") or "")
+        if kind in counts:
+            counts[kind] += 1
+    return counts
+
+
+def _review_candidate_count(plan: dict[str, Any], kinds: set[str]) -> int:
+    candidates = plan.get("review_candidates") if isinstance(plan.get("review_candidates"), list) else []
+    count = 0
+    for candidate in candidates:
+        if not isinstance(candidate, dict):
+            continue
+        candidate_kind = str(candidate.get("candidate_kind") or candidate.get("frame_kind") or candidate.get("atom_kind") or "").lower()
+        if candidate_kind in kinds:
+            count += 1
+    return count
 
 
 def _write_exact_atoms(

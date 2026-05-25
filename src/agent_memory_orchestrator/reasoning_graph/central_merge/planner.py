@@ -19,6 +19,7 @@ from .repo_identity import resolve_repo_identity
 
 
 EXACT_ATOM_KINDS = frozenset({"commit", "file", "symbol", "code_region"})
+SAFE_APPLY_ATOM_KINDS = frozenset({"commit", "file"})
 
 
 def build_dry_run_merge_plan(
@@ -68,6 +69,8 @@ def build_dry_run_merge_plan(
         "exact_atom_created_count": len(new_atoms),
         "exact_atom_matched_count": len(matched_atoms),
         "new_version_count": len(remapped_versions),
+        "apply_scope": ["commit", "file", "knowledge_version", "graph_commit", "graph_view"],
+        "deferred_atom_counts": _deferred_atom_counts(new_atoms + matched_atoms),
         "unresolved_identity_count": len(unresolved),
         "repo_id_resolution_status": repo.source,
         "review_candidate_count": len(review_candidates),
@@ -76,6 +79,9 @@ def build_dry_run_merge_plan(
     diagnostics = {
         "repo_identity": repo.as_dict(),
         "decision_frames": decision_frames,
+        "apply_scope": ["commit", "file", "knowledge_version", "graph_commit", "graph_view"],
+        "deferred_atom_kinds": ["symbol", "code_region", "decision", "problem"],
+        "deferred_atom_counts": _deferred_atom_counts(new_atoms + matched_atoms),
         "note": "Dry-run only. No central Kuzu mutation is performed by this stage.",
     }
     return MergePlan.build(
@@ -208,6 +214,15 @@ def _exact_atom_previews(
             )
         )
     return list(by_key.values()), versions, unresolved
+
+
+def _deferred_atom_counts(atoms: list[dict[str, Any]]) -> dict[str, int]:
+    counts = {"symbol": 0, "code_region": 0, "decision": 0, "problem": 0}
+    for atom in atoms:
+        kind = str(atom.get("atom_kind") or "")
+        if kind in counts and kind not in SAFE_APPLY_ATOM_KINDS:
+            counts[kind] += 1
+    return counts
 
 
 def _atom_kind(node: dict[str, Any]) -> str:
