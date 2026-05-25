@@ -16,6 +16,7 @@ from agent_memory_orchestrator.graph.answer_trace import format_answer_trace
 from agent_memory_orchestrator.graph.store import GraphEdge
 from agent_memory_orchestrator.graph.store import GraphNode
 from agent_memory_orchestrator.graph.store import InMemoryGraphStore
+from agent_memory_orchestrator.app.cli import _retrieve_index_only
 from agent_memory_orchestrator.llm.qwen import DeterministicPlanner
 from agent_memory_orchestrator.reasoning_graph.jobs.constants import GRAPH_SCHEMA_VERSION
 from agent_memory_orchestrator.reasoning_graph.jobs.constants import PIPELINE_VERSION
@@ -299,6 +300,106 @@ def test_retrieval_documents_and_search_are_repo_scoped(tmp_path: Path) -> None:
     assert result.hits
     assert {hit.document.repo_id for hit in result.hits} == {"repo:dora"}
     assert all("amo" not in hit.document.body.lower() for hit in result.hits)
+
+
+def test_offline_index_only_retrieval_respects_repo_scope(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    conn, index_store, _embedding_store = _sqlite_store(tmp_path)
+    try:
+        index_store.upsert_documents(
+            [
+                RetrievalDocument(
+                    doc_id="legacy-code",
+                    doc_type="code",
+                    graph_node_id="legacy:code",
+                    node_kind="CodeNode",
+                    repo_id="",
+                    packet_id="WP0001",
+                    commit_sha="abc123",
+                    title="graph_service.py legacy raw If",
+                    body="why graph_service.py changed legacy raw CodeNode",
+                ),
+            ]
+        )
+        repo_doc = RetrievalDocument(
+            doc_id="repo-file-impact",
+            doc_type="file_impact",
+            graph_node_id="file-impact:graph_service.py",
+            node_kind="FileImpactSummary",
+            repo_id="repo:amo",
+            packet_id="WP0002",
+            commit_sha="def456",
+            title="graph_service.py file impact",
+            body="why graph_service.py changed through curated file impact summary",
+        )
+        projection_id = "rproj:repo-amo"
+        index_store.upsert_projection(
+            projection_id=projection_id,
+            repo_id="repo:amo",
+            projection_version="test",
+            source_artifact_hash="source",
+            doc_content_hash="content",
+            status="building",
+        )
+        index_store.replace_projection_documents([repo_doc], repo_id="repo:amo", projection_id=projection_id)
+        index_store.activate_projection(repo_id="repo:amo", projection_id=projection_id)
+
+        result = _retrieve_index_only(
+            settings,
+            SimpleNamespace(
+                db_path=tmp_path / "retrieval.sqlite",
+                query="why did we change graph_service.py?",
+                repo_id="repo:amo",
+                session_id="",
+                limit=5,
+                graph_scope="",
+            ),
+        )
+
+        hits = result["retrieval"]["hits"]
+        assert hits
+        assert {hit["document"]["repo_id"] for hit in hits} == {"repo:amo"}
+        assert all(hit["document"]["node_kind"] != "CodeNode" for hit in hits)
+    finally:
+        conn.close()
+
+
+def test_offline_index_only_requires_active_projection_for_repo_scope(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    conn, index_store, _embedding_store = _sqlite_store(tmp_path)
+    try:
+        index_store.upsert_documents(
+            [
+                RetrievalDocument(
+                    doc_id="repo-stale-code",
+                    doc_type="session_codenode",
+                    graph_node_id="code:if",
+                    node_kind="CodeNode",
+                    repo_id="repo:amo",
+                    packet_id="WP0001",
+                    commit_sha="abc123",
+                    title="stale raw code",
+                    body="why graph_service.py changed stale raw CodeNode",
+                )
+            ]
+        )
+
+        result = _retrieve_index_only(
+            settings,
+            SimpleNamespace(
+                db_path=tmp_path / "retrieval.sqlite",
+                query="why did we change graph_service.py?",
+                repo_id="repo:amo",
+                session_id="",
+                limit=5,
+                graph_scope="",
+            ),
+        )
+
+        assert result["ok"] is False
+        assert result["error"] == "active_projection_missing"
+    finally:
+        conn.close()
 
 
 def _central_graph() -> InMemoryGraphStore:
