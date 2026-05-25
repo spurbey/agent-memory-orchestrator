@@ -507,12 +507,13 @@ class V2SessionJobRunner:
                 edges=list(curated.graph.edges),
                 force=True,
             )
-        central = self.graph_store_factory(self.settings.graph_path)
-        try:
-            central.init_schema()
-            central_write = _upsert_compact_graph(central, curated.graph.nodes, curated.graph.edges, job=job)
-        finally:
-            central.close()
+        central_write = _write_curated_session_graph_to_central(
+            self.graph_store_factory,
+            self.settings.graph_path,
+            nodes=curated.graph.nodes,
+            edges=curated.graph.edges,
+            job=job,
+        )
         diagnostics = {
             **curated.graph.inventory,
             "trace_inventory": graph.inventory,
@@ -1846,3 +1847,32 @@ def _upsert_compact_graph(store: GraphStore, nodes: tuple[dict[str, Any], ...], 
         "edge_write_limit": max_edges,
         "edge_count": len(edges),
     }
+
+
+def _write_curated_session_graph_to_central(
+    graph_store_factory: Callable[[Path], GraphStore],
+    graph_path: Path,
+    *,
+    nodes: tuple[dict[str, Any], ...],
+    edges: tuple[dict[str, Any], ...],
+    job: dict[str, Any],
+) -> dict[str, Any]:
+    central = graph_store_factory(graph_path)
+    try:
+        central.init_schema()
+        result = _upsert_compact_graph(central, nodes, edges, job=job)
+        return {"status": "applied", **result}
+    except Exception as exc:
+        return {
+            "status": "failed_recoverable",
+            "error_type": type(exc).__name__,
+            "error": str(exc),
+            "node_write_count": 0,
+            "edge_write_count": 0,
+            "edge_write_skipped": True,
+            "edge_write_limit": _central_session_edge_write_limit(),
+            "edge_count": len(edges),
+            "curated_manifest_still_available": True,
+        }
+    finally:
+        central.close()

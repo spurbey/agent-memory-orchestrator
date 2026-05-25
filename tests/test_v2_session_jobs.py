@@ -1077,6 +1077,24 @@ def test_central_session_graph_write_preserves_repo_id_metadata() -> None:
     assert node.metadata["original_node_id"] == "reason:1"
 
 
+def test_central_session_graph_write_degrades_kuzu_buffer_failure(tmp_path: Path) -> None:
+    class FailingGraphStore(InMemoryGraphStore):
+        def init_schema(self) -> None:
+            raise RuntimeError("buffer pool is full")
+
+    result = runner_module._write_curated_session_graph_to_central(
+        lambda _path: FailingGraphStore(),
+        tmp_path / "amo.kuzu",
+        nodes=(),
+        edges=(),
+        job={"job_id": "v2job:test", "session_id": "session:1", "repo_id": "repo:test"},
+    )
+
+    assert result["status"] == "failed_recoverable"
+    assert result["curated_manifest_still_available"] is True
+    assert result["error_type"] == "RuntimeError"
+
+
 def test_qwen_checkpoint_reuse_requires_same_runtime_contract(tmp_path: Path) -> None:
     settings = make_settings(tmp_path)
     packet = {"packet_id": "WP0001", "commit": {"short_sha": "abc123"}, "problem_refs": []}
