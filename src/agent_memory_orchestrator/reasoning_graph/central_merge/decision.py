@@ -5,6 +5,7 @@ import re
 from dataclasses import asdict
 from dataclasses import dataclass
 from itertools import combinations
+from itertools import product
 from typing import Any
 
 from .models import ReviewCandidate
@@ -76,6 +77,7 @@ class DecisionFrame:
     evidence_refs: list[str]
     tokens: list[str]
     graph_neighbor_signature: list[str]
+    source_scope: str = "session"
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -98,9 +100,9 @@ def build_decision_review_candidates(
     status mutation is allowed.
     """
 
-    del central_nodes
     frames = build_decision_frames(compact_graph=compact_graph or {}, session_nodes=session_nodes or [], repo_id=repo_id)
-    candidates = _review_candidates(frames=frames, job_id=job_id, plan_id=plan_id)
+    central_frames = build_decision_frames(session_nodes=_active_central_decision_nodes(central_nodes or [], repo_id=repo_id), repo_id=repo_id)
+    candidates = _review_candidates(frames=frames, comparison_frames=central_frames, job_id=job_id, plan_id=plan_id)
     high_risk = [candidate for candidate in candidates if candidate["score"].get("false_positive_risk")]
     relation_counts: dict[str, int] = {}
     for candidate in candidates:
@@ -111,6 +113,7 @@ def build_decision_review_candidates(
         "candidates": candidates,
         "metrics": {
             "decision_frame_count": len(frames),
+            "active_central_decision_frame_count": len(central_frames),
             "decision_candidate_count": len(candidates),
             "review_candidate_count": len(candidates),
             "candidate_relation_counts": relation_counts,
@@ -152,8 +155,8 @@ def build_decision_frames(
         linked_packets = _dedupe([_first(props, "source_packet_id", "packet_id"), *edge_context["packets"]])
         linked_commits = _dedupe([_first(props, "source_commit_sha", "commit_sha"), *edge_context["commits"]])
         evidence_refs = _dedupe([*_list(props.get("evidence_refs")), *edge_context["evidence_refs"]])
-        linked_files = _dedupe(edge_context["files"])
-        linked_symbols = _dedupe(edge_context["symbols"])
+        linked_files = _dedupe([*_list(props.get("selected_files")), _first(props, "path", "file_path", "normalized_file_path"), *edge_context["files"]])
+        linked_symbols = _dedupe([*_list(props.get("selected_symbol_refs")), *_list(props.get("linked_symbols")), *edge_context["symbols"]])
         text_for_tokens = " ".join([summary, subject, statement, rationale])
         tokens = _tokens(text_for_tokens)
         signature = _dedupe(edge_context["neighbor_signature"])
@@ -177,14 +180,24 @@ def build_decision_frames(
                 evidence_refs=evidence_refs,
                 tokens=tokens,
                 graph_neighbor_signature=signature,
+                source_scope=_frame_source_scope(node),
             )
         )
     return frames
 
 
-def _review_candidates(*, frames: list[DecisionFrame], job_id: str, plan_id: str) -> list[dict[str, Any]]:
+def _review_candidates(
+    *,
+    frames: list[DecisionFrame],
+    job_id: str,
+    plan_id: str,
+    comparison_frames: list[DecisionFrame] | None = None,
+) -> list[dict[str, Any]]:
     candidates: list[dict[str, Any]] = []
-    for left, right in combinations(frames, 2):
+    pairs = product(frames, comparison_frames) if comparison_frames else combinations(frames, 2)
+    for left, right in pairs:
+        if left.source_node_id == right.source_node_id:
+            continue
         score = _pair_score(left, right)
         if score["total"] < 0.52 and not _is_text_only_review(score):
             continue
@@ -213,6 +226,8 @@ def _review_candidates(*, frames: list[DecisionFrame], job_id: str, plan_id: str
                     "target_files": right.linked_files[:12],
                     "source_symbols": left.linked_symbols[:12],
                     "target_symbols": right.linked_symbols[:12],
+                    "source_scope": left.source_scope,
+                    "target_scope": right.source_scope,
                 },
                 reason=reason,
             ).as_dict()
@@ -388,9 +403,13 @@ def _is_decision_like(node: dict[str, Any]) -> bool:
     kind = str(node.get("kind") or node.get("node_kind") or "").lower()
     if kind in {"decision", "problem"}:
         return True
+    props = _properties(node)
+    if kind == "knowledgeversion":
+        atom_kind = str(props.get("atom_kind") or "").lower()
+        status = str(props.get("status") or node.get("status") or "").lower()
+        return atom_kind in {"decision", "problem"} and status in {"", "active"}
     if kind != "reasoningnode":
         return False
-    props = _properties(node)
     node_type = str(props.get("node_type") or "").lower()
     status = str(props.get("status") or "").lower()
     text = " ".join([_first(props, "label"), _first(props, "summary"), _first(props, "statement")]).lower()
@@ -411,8 +430,12 @@ def _properties(node: dict[str, Any]) -> dict[str, Any]:
     raw: dict[str, Any] = dict(node)
     props = node.get("properties") if isinstance(node.get("properties"), dict) else {}
     raw.update(props)
+    top_metadata = node.get("metadata") if isinstance(node.get("metadata"), dict) else {}
+    raw.update(top_metadata)
     metadata = props.get("metadata") if isinstance(props.get("metadata"), dict) else {}
     raw.update(metadata)
+    version_metadata = raw.get("version_metadata") if isinstance(raw.get("version_metadata"), dict) else {}
+    raw.update(version_metadata)
     encoded = raw.get("properties_json")
     if isinstance(encoded, str) and encoded.strip():
         try:
@@ -422,6 +445,25 @@ def _properties(node: dict[str, Any]) -> dict[str, Any]:
         if isinstance(decoded, dict):
             raw.update(decoded)
     return raw
+
+
+def _active_central_decision_nodes(nodes: list[dict[str, Any]], *, repo_id: str) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    for node in nodes:
+        props = _properties(node)
+        if repo_id and str(props.get("repo_id") or "") not in {"", repo_id}:
+            continue
+        if str(node.get("kind") or node.get("node_kind") or "").lower() != "knowledgeversion":
+            continue
+        if str(props.get("status") or node.get("status") or "").lower() not in {"", "active"}:
+            continue
+        if str(props.get("atom_kind") or "").lower() in {"decision", "problem"}:
+            out.append(node)
+    return out
+
+
+def _frame_source_scope(node: dict[str, Any]) -> str:
+    return "central" if str(node.get("kind") or node.get("node_kind") or "").lower() == "knowledgeversion" else "session"
 
 
 def _file_refs(node: dict[str, Any]) -> list[str]:

@@ -553,14 +553,17 @@ class V2SessionJobRunner:
         existing_atom_scan_error = ""
         try:
             existing_atoms = self._central_atoms_by_canonical_key()
+            active_central_versions = self._central_active_versions(repo_id=repo_id)
         except Exception as exc:
             existing_atoms = {}
+            active_central_versions = []
             existing_atom_scan_error = f"{type(exc).__name__}: {exc}"
         plan = build_dry_run_merge_plan(
             job={**job, "repo_id": repo_id},
             compact_graph=compact_graph if isinstance(compact_graph, dict) else {},
             parent_graph_commit_id=parent_graph_commit_id,
             existing_atoms_by_canonical_key=existing_atoms,
+            active_central_versions=active_central_versions,
         )
         plan_payload = plan.as_dict()
         plan_payload["session_graph_write"] = kuzu_result if isinstance(kuzu_result, dict) else {}
@@ -601,6 +604,20 @@ class V2SessionJobRunner:
         finally:
             graph.close()
         return atoms_by_canonical_key(nodes)
+
+    def _central_active_versions(self, *, repo_id: str) -> list[dict[str, Any]]:
+        graph = self.graph_store_factory(self.settings.graph_path)
+        try:
+            graph.init_schema()
+            nodes = graph.list_nodes(limit=1_000_000, kinds=["KnowledgeVersion"])
+        finally:
+            graph.close()
+        out: list[dict[str, Any]] = []
+        for node in nodes:
+            metadata = node.get("metadata") if isinstance(node.get("metadata"), dict) else {}
+            if str(metadata.get("repo_id") or "") == repo_id and str(node.get("status") or metadata.get("status") or "") in {"", "active"}:
+                out.append(node)
+        return out
 
     def _stage_retrieval_docs(self, job: dict[str, Any], artifact_dir: Path, stage_dir: Path) -> StageResult:
         del artifact_dir
