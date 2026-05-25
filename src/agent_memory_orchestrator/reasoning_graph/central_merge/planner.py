@@ -214,13 +214,24 @@ def _atom_kind(node: dict[str, Any]) -> str:
     kind = _node_kind(node).lower()
     if kind == "commit":
         return "commit"
-    if kind in {"symbol"}:
+    if kind in {"fileref"}:
+        return "file"
+    if kind == "symbolref" and not _central_atom_candidate(node):
+        return ""
+    if kind == "coderegionref" and not _central_atom_candidate(node):
+        return ""
+    if kind in {"symbol", "symbolref"}:
         return "symbol"
-    if kind in {"codenode", "codeversion"}:
+    if kind in {"codenode", "codeversion", "coderegionref"}:
         return "code_region"
     if kind == "codehunk":
         return "file"
     return ""
+
+
+def _central_atom_candidate(node: dict[str, Any]) -> bool:
+    props = _properties(node)
+    return props.get("central_atom_candidate") is True
 
 
 def _identity_payload(node: dict[str, Any], atom_kind: str) -> dict[str, Any]:
@@ -231,9 +242,17 @@ def _identity_payload(node: dict[str, Any], atom_kind: str) -> dict[str, Any]:
             return {"ok": True, "commit_sha": sha.lower()}
         return {"ok": False, "reason": "missing_commit_sha"}
     file_path = _normalize_path(_first(props, "path", "file_path", "normalized_file_path"))
+    if not file_path and atom_kind == "symbol":
+        symbol_key = _first(props, "symbol_key")
+        if "::" in symbol_key:
+            file_path = _normalize_path(symbol_key.rsplit("::", 1)[0])
     if atom_kind == "file":
         return {"ok": bool(file_path), "file_path": file_path, "reason": "missing_file_path" if not file_path else ""}
     qualified_name = _first(props, "qualified_name", "symbol_name", "name", "structural_id")
+    if not qualified_name and atom_kind == "symbol":
+        symbol_key = _first(props, "symbol_key")
+        if "::" in symbol_key:
+            qualified_name = symbol_key.rsplit("::", 1)[1]
     if atom_kind == "symbol":
         ok = bool(file_path and qualified_name)
         return {"ok": ok, "file_path": file_path, "qualified_name": qualified_name, "reason": "missing_symbol_identity" if not ok else ""}
