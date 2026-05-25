@@ -147,6 +147,7 @@ def build_decision_frames(
             node_id=node_id,
             edges=edges_by_node.get(node_id, []),
             node_by_id=node_by_id,
+            edges_by_node=edges_by_node,
         )
         linked_packets = _dedupe([_first(props, "source_packet_id", "packet_id"), *edge_context["packets"]])
         linked_commits = _dedupe([_first(props, "source_commit_sha", "commit_sha"), *edge_context["commits"]])
@@ -260,7 +261,13 @@ def _is_text_only_review(score: dict[str, Any]) -> bool:
     return float(score["lexical"]) >= 0.25 and float(score["code_entity_overlap"]) < 0.15
 
 
-def _edge_context(*, node_id: str, edges: list[dict[str, Any]], node_by_id: dict[str, dict[str, Any]]) -> dict[str, list[str]]:
+def _edge_context(
+    *,
+    node_id: str,
+    edges: list[dict[str, Any]],
+    node_by_id: dict[str, dict[str, Any]],
+    edges_by_node: dict[str, list[dict[str, Any]]],
+) -> dict[str, list[str]]:
     context: dict[str, list[str]] = {
         "packets": [],
         "commits": [],
@@ -295,7 +302,64 @@ def _edge_context(*, node_id: str, edges: list[dict[str, Any]], node_by_id: dict
             context["files"].extend(_file_refs(other))
         elif kind == "REASON_NODE_LINKED_TO_HUNK":
             context["files"].extend(_file_refs(other))
+        elif kind == "REASON_NODE_HAS_CODE_IMPACT":
+            _merge_context(context, _code_impact_context(other_id, other, node_by_id=node_by_id, edges_by_node=edges_by_node))
     return context
+
+
+def _code_impact_context(
+    impact_id: str,
+    impact_node: dict[str, Any],
+    *,
+    node_by_id: dict[str, dict[str, Any]],
+    edges_by_node: dict[str, list[dict[str, Any]]],
+) -> dict[str, list[str]]:
+    context: dict[str, list[str]] = {
+        "packets": [],
+        "commits": [],
+        "evidence_refs": [],
+        "files": [],
+        "symbols": [],
+        "code_nodes": [],
+        "code_versions": [],
+        "neighbor_signature": [],
+    }
+    props = _properties(impact_node)
+    context["packets"].extend(_list(props.get("packet_id")))
+    context["commits"].extend(_list(props.get("commit_sha")))
+    context["files"].extend(_normalize_path(path) for path in _list(props.get("selected_files")))
+    for symbol_id in _list(props.get("selected_symbol_refs")):
+        symbol = node_by_id.get(symbol_id, {})
+        context["symbols"].append(_symbol_ref(symbol, symbol_id))
+        context["files"].extend(_file_refs(symbol))
+        context["neighbor_signature"].append(f"CODE_IMPACT_TOUCHES_SYMBOL:{symbol_id}")
+    for code_id in _list(props.get("selected_code_refs")):
+        code = node_by_id.get(code_id, {})
+        context["code_nodes"].append(code_id)
+        context["files"].extend(_file_refs(code))
+        context["neighbor_signature"].append(f"CODE_IMPACT_TOUCHES_CODE_REGION:{code_id}")
+    for edge in edges_by_node.get(impact_id, []):
+        kind = _edge_kind(edge)
+        other_id = _other_node_id(edge, impact_id)
+        other = node_by_id.get(other_id, {})
+        if kind == "CODE_IMPACT_TOUCHES_FILE":
+            context["files"].extend(_file_refs(other))
+        elif kind == "CODE_IMPACT_TOUCHES_SYMBOL":
+            context["symbols"].append(_symbol_ref(other, other_id))
+            context["files"].extend(_file_refs(other))
+        elif kind == "CODE_IMPACT_TOUCHES_CODE_REGION":
+            context["code_nodes"].append(other_id)
+            context["files"].extend(_file_refs(other))
+        elif kind == "CODE_IMPACT_IMPLEMENTED_BY_COMMIT":
+            context["commits"].append(_strip_prefix(other_id, "commit:"))
+        if kind.startswith("CODE_IMPACT_"):
+            context["neighbor_signature"].append(f"{kind}:{other_id}")
+    return context
+
+
+def _merge_context(target: dict[str, list[str]], source: dict[str, list[str]]) -> None:
+    for key, values in source.items():
+        target.setdefault(key, []).extend(values)
 
 
 def _nodes(compact_graph: dict[str, Any] | None) -> list[dict[str, Any]]:
