@@ -1010,6 +1010,7 @@ class GraphRagService:
                         self.settings,
                         repo_id=repo_id,
                         retrieval={"hits": []},
+                        graph_store=self.store,
                         warnings=["active_projection_missing"],
                     ),
                 }
@@ -1050,6 +1051,7 @@ class GraphRagService:
                     self.settings,
                     repo_id=repo_id,
                     retrieval=result.as_dict(),
+                    graph_store=self.store,
                 )
             if include_answer:
                 payload["answer"] = _answer_from_retrieval_result(
@@ -1512,6 +1514,7 @@ def _central_answer_trace_from_retrieval(
     *,
     repo_id: str,
     retrieval: dict[str, Any],
+    graph_store: GraphStore | None = None,
     warnings: Iterable[str] = (),
 ) -> dict[str, Any]:
     view = _active_graph_view_row(settings.db_path, repo_id=repo_id)
@@ -1531,6 +1534,18 @@ def _central_answer_trace_from_retrieval(
         warning_list.append("active_graph_view_head_missing")
     if graph_commit_id and not commit:
         warning_list.append("graph_commit_missing")
+    if graph_store is not None and graph_commit_id:
+        try:
+            central_versions.extend(
+                _active_central_versions_for_support(
+                    graph_store,
+                    repo_id=repo_id,
+                    graph_commit_id=graph_commit_id,
+                    support_docs=support_docs,
+                )
+            )
+        except Exception as exc:  # pragma: no cover - defensive around optional trace enrichment
+            warning_list.append(f"central_version_scan_failed:{type(exc).__name__}")
     return build_central_answer_trace(
         repo_id=repo_id,
         graph_view=view,
@@ -1557,6 +1572,93 @@ def _active_graph_view_row(db_path: Path, *, repo_id: str) -> dict[str, Any]:
             return dict(row) if row is not None else {}
     except sqlite3.OperationalError:
         return {}
+
+
+def _active_central_versions_for_support(
+    graph_store: GraphStore,
+    *,
+    repo_id: str,
+    graph_commit_id: str,
+    support_docs: list[dict[str, Any]],
+    limit: int = 50,
+) -> list[dict[str, Any]]:
+    commit_shas = _support_commit_shas(support_docs)
+    file_paths = _support_file_paths(support_docs)
+    if not commit_shas and not file_paths:
+        return []
+    out: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for node in graph_store.list_nodes(limit=10000, kinds=["KnowledgeVersion"]):
+        metadata = node.get("metadata") if isinstance(node.get("metadata"), dict) else {}
+        if str(metadata.get("repo_id") or "") != repo_id:
+            continue
+        if str(metadata.get("graph_commit_id") or "") != graph_commit_id:
+            continue
+        if str(node.get("status") or metadata.get("status") or "active") != "active":
+            continue
+        if not _central_version_matches_support(metadata, commit_shas=commit_shas, file_paths=file_paths, repo_id=repo_id):
+            continue
+        node_id = str(node.get("id") or "")
+        if node_id and node_id not in seen:
+            seen.add(node_id)
+            out.append(node)
+        if len(out) >= limit:
+            break
+    return out
+
+
+def _support_commit_shas(docs: list[dict[str, Any]]) -> set[str]:
+    values: set[str] = set()
+    for doc in docs:
+        metadata = doc.get("metadata") if isinstance(doc.get("metadata"), dict) else {}
+        for value in (doc.get("commit_sha"), metadata.get("commit_sha")):
+            if value:
+                values.add(str(value).lower())
+        for value in metadata.get("commit_shas") or []:
+            if value:
+                values.add(str(value).lower())
+    return values
+
+
+def _support_file_paths(docs: list[dict[str, Any]]) -> set[str]:
+    values: set[str] = set()
+    for doc in docs:
+        metadata = doc.get("metadata") if isinstance(doc.get("metadata"), dict) else {}
+        for value in (metadata.get("path"), metadata.get("file_path"), metadata.get("normalized_file_path")):
+            if value:
+                values.add(str(value))
+        selected_files = metadata.get("selected_files")
+        if isinstance(selected_files, list):
+            values.update(str(value) for value in selected_files if value)
+        selected_file_roles = metadata.get("selected_file_roles")
+        if isinstance(selected_file_roles, dict):
+            values.update(str(value) for value in selected_file_roles if value)
+    return values
+
+
+def _central_version_matches_support(
+    metadata: dict[str, Any],
+    *,
+    commit_shas: set[str],
+    file_paths: set[str],
+    repo_id: str,
+) -> bool:
+    version_metadata = metadata.get("version_metadata") if isinstance(metadata.get("version_metadata"), dict) else {}
+    canonical_key = str(version_metadata.get("canonical_key") or "")
+    atom_kind = str(metadata.get("atom_kind") or "")
+    if atom_kind == "commit":
+        commit_sha = canonical_key.removeprefix(f"commit|{repo_id}|").lower()
+        return any(_same_commit_sha(commit_sha, candidate) for candidate in commit_shas)
+    if atom_kind == "file":
+        file_path = canonical_key.removeprefix(f"file|{repo_id}|")
+        return file_path in file_paths
+    return False
+
+
+def _same_commit_sha(left: str, right: str) -> bool:
+    a = str(left or "").strip().lower()
+    b = str(right or "").strip().lower()
+    return bool(a and b and (a.startswith(b) or b.startswith(a)))
 
 
 def _graph_commit_row(db_path: Path, *, graph_commit_id: str) -> dict[str, Any]:
