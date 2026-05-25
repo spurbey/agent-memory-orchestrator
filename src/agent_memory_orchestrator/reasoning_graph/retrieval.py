@@ -4,6 +4,8 @@ import json
 import re
 import sqlite3
 from dataclasses import dataclass, field
+from dataclasses import replace as dataclass_replace
+from datetime import datetime, timezone
 from typing import Any, Iterable, Protocol
 
 from ..core.db import init_schema
@@ -124,6 +126,7 @@ class RetrievalDocument:
     title: str
     body: str
     repo_id: str = ""
+    projection_id: str = ""
     chunk_index: int = 1
     chunk_count: int = 1
     memory_class: str = "graph_context"
@@ -144,6 +147,7 @@ class RetrievalDocument:
             "graph_node_id": self.graph_node_id,
             "node_kind": self.node_kind,
             "repo_id": self.repo_id,
+            "projection_id": self.projection_id,
             "packet_id": self.packet_id,
             "commit_sha": self.commit_sha,
             "title": self.title,
@@ -249,6 +253,7 @@ class RetrievalIndexStore:
               graph_node_id TEXT NOT NULL,
               node_kind TEXT NOT NULL,
               repo_id TEXT NOT NULL DEFAULT '',
+              projection_id TEXT NOT NULL DEFAULT '',
               packet_id TEXT NOT NULL DEFAULT '',
               commit_sha TEXT NOT NULL DEFAULT '',
               title TEXT NOT NULL,
@@ -278,7 +283,31 @@ class RetrievalIndexStore:
         self.conn.execute(
             """
             CREATE INDEX IF NOT EXISTS idx_retrieval_documents_repo
-            ON retrieval_documents(repo_id, doc_type, node_kind)
+            ON retrieval_documents(repo_id, projection_id, doc_type, node_kind)
+            """
+        )
+        self.conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS retrieval_projections (
+              projection_id TEXT PRIMARY KEY,
+              repo_id TEXT NOT NULL,
+              projection_version TEXT NOT NULL,
+              source_artifact_hash TEXT NOT NULL DEFAULT '',
+              doc_content_hash TEXT NOT NULL DEFAULT '',
+              status TEXT NOT NULL DEFAULT 'building',
+              metadata_json TEXT NOT NULL DEFAULT '{}',
+              created_at TEXT NOT NULL,
+              activated_at TEXT NOT NULL DEFAULT ''
+            )
+            """
+        )
+        self.conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS active_retrieval_projection (
+              repo_id TEXT PRIMARY KEY,
+              projection_id TEXT NOT NULL,
+              updated_at TEXT NOT NULL
+            )
             """
         )
         try:
@@ -291,6 +320,7 @@ class RetrievalIndexStore:
         columns = _table_columns(self.conn, "retrieval_documents")
         migrations = {
             "repo_id": "repo_id TEXT NOT NULL DEFAULT ''",
+            "projection_id": "projection_id TEXT NOT NULL DEFAULT ''",
             "packet_id": "packet_id TEXT NOT NULL DEFAULT ''",
             "commit_sha": "commit_sha TEXT NOT NULL DEFAULT ''",
             "body_char_count": "body_char_count INTEGER NOT NULL DEFAULT 0",
@@ -360,15 +390,16 @@ class RetrievalIndexStore:
                 """
                 INSERT INTO retrieval_documents(
                   doc_id, doc_type, graph_node_id, node_kind, packet_id, commit_sha,
-                  repo_id, title, body, body_char_count, chunk_index, chunk_count,
+                  repo_id, projection_id, title, body, body_char_count, chunk_index, chunk_count,
                   memory_class, importance, metadata_json
                 )
-                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(doc_id) DO UPDATE SET
                   doc_type=excluded.doc_type,
                   graph_node_id=excluded.graph_node_id,
                   node_kind=excluded.node_kind,
                   repo_id=excluded.repo_id,
+                  projection_id=excluded.projection_id,
                   packet_id=excluded.packet_id,
                   commit_sha=excluded.commit_sha,
                   title=excluded.title,
@@ -388,6 +419,7 @@ class RetrievalIndexStore:
                     doc.packet_id,
                     doc.commit_sha,
                     doc.repo_id,
+                    doc.projection_id,
                     doc.title,
                     doc.body,
                     doc.body_char_count,
@@ -437,18 +469,136 @@ class RetrievalIndexStore:
         self.conn.commit()
         return self.upsert_documents(docs)
 
+    def upsert_projection(
+        self,
+        *,
+        projection_id: str,
+        repo_id: str,
+        projection_version: str,
+        source_artifact_hash: str,
+        doc_content_hash: str,
+        status: str = "building",
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        now = _utc_now()
+        self.conn.execute(
+            """
+            INSERT INTO retrieval_projections(
+              projection_id, repo_id, projection_version, source_artifact_hash,
+              doc_content_hash, status, metadata_json, created_at
+            )
+            VALUES(?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(projection_id) DO UPDATE SET
+              repo_id=excluded.repo_id,
+              projection_version=excluded.projection_version,
+              source_artifact_hash=excluded.source_artifact_hash,
+              doc_content_hash=excluded.doc_content_hash,
+              status=excluded.status,
+              metadata_json=excluded.metadata_json
+            """,
+            (
+                projection_id,
+                str(repo_id or "").strip(),
+                projection_version,
+                source_artifact_hash,
+                doc_content_hash,
+                status,
+                json.dumps(metadata or {}, sort_keys=True),
+                now,
+            ),
+        )
+        self.conn.commit()
+        return self.projection(projection_id) or {}
+
+    def projection(self, projection_id: str) -> dict[str, Any] | None:
+        row = self.conn.execute("SELECT * FROM retrieval_projections WHERE projection_id = ?", (projection_id,)).fetchone()
+        return _projection_row(row) if row is not None else None
+
+    def active_projection(self, repo_id: str) -> dict[str, Any] | None:
+        safe_repo_id = str(repo_id or "").strip()
+        if not safe_repo_id:
+            return None
+        row = self.conn.execute(
+            """
+            SELECT retrieval_projections.*
+            FROM active_retrieval_projection
+            JOIN retrieval_projections ON retrieval_projections.projection_id = active_retrieval_projection.projection_id
+            WHERE active_retrieval_projection.repo_id = ?
+            """,
+            (safe_repo_id,),
+        ).fetchone()
+        return _projection_row(row) if row is not None else None
+
+    def active_projection_id(self, repo_id: str) -> str:
+        projection = self.active_projection(repo_id)
+        return str(projection.get("projection_id") or "") if projection else ""
+
+    def set_projection_status(self, projection_id: str, status: str) -> None:
+        self.conn.execute("UPDATE retrieval_projections SET status=? WHERE projection_id=?", (status, projection_id))
+        self.conn.commit()
+
+    def activate_projection(self, *, repo_id: str, projection_id: str) -> dict[str, Any]:
+        now = _utc_now()
+        safe_repo_id = str(repo_id or "").strip()
+        self.conn.execute("UPDATE retrieval_projections SET status='active', activated_at=? WHERE projection_id=?", (now, projection_id))
+        self.conn.execute(
+            """
+            INSERT INTO active_retrieval_projection(repo_id, projection_id, updated_at)
+            VALUES(?, ?, ?)
+            ON CONFLICT(repo_id) DO UPDATE SET
+              projection_id=excluded.projection_id,
+              updated_at=excluded.updated_at
+            """,
+            (safe_repo_id, projection_id, now),
+        )
+        self.conn.commit()
+        return self.active_projection(safe_repo_id) or {}
+
+    def replace_projection_documents(self, docs: Iterable[RetrievalDocument], *, repo_id: str, projection_id: str) -> int:
+        safe_repo_id = str(repo_id or "").strip()
+        safe_projection_id = str(projection_id or "").strip()
+        rows = self.conn.execute("SELECT doc_id FROM retrieval_documents WHERE projection_id = ?", (safe_projection_id,)).fetchall()
+        doc_ids = [str(row["doc_id"]) for row in rows]
+        self.conn.execute("DELETE FROM retrieval_documents WHERE projection_id = ?", (safe_projection_id,))
+        if self._fts_enabled and doc_ids:
+            placeholders = ",".join("?" for _ in doc_ids)
+            self.conn.execute(f"DELETE FROM retrieval_documents_fts WHERE doc_id IN ({placeholders})", doc_ids)
+        self.conn.commit()
+        projected_docs = [
+            dataclass_replace(
+                doc,
+                repo_id=safe_repo_id,
+                projection_id=safe_projection_id,
+                metadata={**doc.metadata, "projection_id": safe_projection_id},
+            )
+            for doc in docs
+        ]
+        return self.upsert_documents(projected_docs)
+
     def list_documents(self, *, limit: int = 10000, repo_id: str = "") -> list[RetrievalDocument]:
         safe_repo_id = str(repo_id or "").strip()
+        projection_id = self.active_projection_id(safe_repo_id) if safe_repo_id else ""
         if safe_repo_id:
-            rows = self.conn.execute(
-                """
-                SELECT * FROM retrieval_documents
-                WHERE repo_id = ?
-                ORDER BY doc_type, graph_node_id, chunk_index
-                LIMIT ?
-                """,
-                (safe_repo_id, int(limit)),
-            ).fetchall()
+            if projection_id:
+                rows = self.conn.execute(
+                    """
+                    SELECT * FROM retrieval_documents
+                    WHERE repo_id = ? AND projection_id = ?
+                    ORDER BY doc_type, graph_node_id, chunk_index
+                    LIMIT ?
+                    """,
+                    (safe_repo_id, projection_id, int(limit)),
+                ).fetchall()
+            else:
+                rows = self.conn.execute(
+                    """
+                    SELECT * FROM retrieval_documents
+                    WHERE repo_id = ?
+                    ORDER BY doc_type, graph_node_id, chunk_index
+                    LIMIT ?
+                    """,
+                    (safe_repo_id, int(limit)),
+                ).fetchall()
         else:
             rows = self.conn.execute(
                 """
@@ -466,11 +616,18 @@ class RetrievalIndexStore:
             return {}
         placeholders = ",".join("?" for _ in ids)
         safe_repo_id = str(repo_id or "").strip()
+        projection_id = self.active_projection_id(safe_repo_id) if safe_repo_id else ""
         if safe_repo_id:
-            rows = self.conn.execute(
-                f"SELECT * FROM retrieval_documents WHERE doc_id IN ({placeholders}) AND repo_id = ?",
-                [*ids, safe_repo_id],
-            ).fetchall()
+            if projection_id:
+                rows = self.conn.execute(
+                    f"SELECT * FROM retrieval_documents WHERE doc_id IN ({placeholders}) AND repo_id = ? AND projection_id = ?",
+                    [*ids, safe_repo_id, projection_id],
+                ).fetchall()
+            else:
+                rows = self.conn.execute(
+                    f"SELECT * FROM retrieval_documents WHERE doc_id IN ({placeholders}) AND repo_id = ?",
+                    [*ids, safe_repo_id],
+                ).fetchall()
         else:
             rows = self.conn.execute(
                 f"SELECT * FROM retrieval_documents WHERE doc_id IN ({placeholders})",
@@ -484,11 +641,18 @@ class RetrievalIndexStore:
             return {}
         placeholders = ",".join("?" for _ in ids)
         safe_repo_id = str(repo_id or "").strip()
+        projection_id = self.active_projection_id(safe_repo_id) if safe_repo_id else ""
         if safe_repo_id:
-            rows = self.conn.execute(
-                f"SELECT * FROM retrieval_documents WHERE graph_node_id IN ({placeholders}) AND repo_id = ?",
-                [*ids, safe_repo_id],
-            ).fetchall()
+            if projection_id:
+                rows = self.conn.execute(
+                    f"SELECT * FROM retrieval_documents WHERE graph_node_id IN ({placeholders}) AND repo_id = ? AND projection_id = ?",
+                    [*ids, safe_repo_id, projection_id],
+                ).fetchall()
+            else:
+                rows = self.conn.execute(
+                    f"SELECT * FROM retrieval_documents WHERE graph_node_id IN ({placeholders}) AND repo_id = ?",
+                    [*ids, safe_repo_id],
+                ).fetchall()
         else:
             rows = self.conn.execute(
                 f"SELECT * FROM retrieval_documents WHERE graph_node_id IN ({placeholders})",
@@ -508,18 +672,32 @@ class RetrievalIndexStore:
             return self.like_search(query, limit=limit, repo_id=repo_id)
         try:
             safe_repo_id = str(repo_id or "").strip()
+            projection_id = self.active_projection_id(safe_repo_id) if safe_repo_id else ""
             if safe_repo_id:
-                rows = self.conn.execute(
-                    """
-                    SELECT retrieval_documents_fts.doc_id, bm25(retrieval_documents_fts) AS score
-                    FROM retrieval_documents_fts
-                    JOIN retrieval_documents ON retrieval_documents.doc_id = retrieval_documents_fts.doc_id
-                    WHERE retrieval_documents_fts MATCH ? AND retrieval_documents.repo_id = ?
-                    ORDER BY score ASC
-                    LIMIT ?
-                    """,
-                    (fts_query, safe_repo_id, int(limit)),
-                ).fetchall()
+                if projection_id:
+                    rows = self.conn.execute(
+                        """
+                        SELECT retrieval_documents_fts.doc_id, bm25(retrieval_documents_fts) AS score
+                        FROM retrieval_documents_fts
+                        JOIN retrieval_documents ON retrieval_documents.doc_id = retrieval_documents_fts.doc_id
+                        WHERE retrieval_documents_fts MATCH ? AND retrieval_documents.repo_id = ? AND retrieval_documents.projection_id = ?
+                        ORDER BY score ASC
+                        LIMIT ?
+                        """,
+                        (fts_query, safe_repo_id, projection_id, int(limit)),
+                    ).fetchall()
+                else:
+                    rows = self.conn.execute(
+                        """
+                        SELECT retrieval_documents_fts.doc_id, bm25(retrieval_documents_fts) AS score
+                        FROM retrieval_documents_fts
+                        JOIN retrieval_documents ON retrieval_documents.doc_id = retrieval_documents_fts.doc_id
+                        WHERE retrieval_documents_fts MATCH ? AND retrieval_documents.repo_id = ?
+                        ORDER BY score ASC
+                        LIMIT ?
+                        """,
+                        (fts_query, safe_repo_id, int(limit)),
+                    ).fetchall()
             else:
                 rows = self.conn.execute(
                     """
@@ -1408,12 +1586,35 @@ def _doc_from_row(row: sqlite3.Row) -> RetrievalDocument:
         title=str(row["title"]),
         body=str(row["body"]),
         repo_id=str(row["repo_id"]),
+        projection_id=str(row["projection_id"]) if "projection_id" in row.keys() else "",
         chunk_index=int(row["chunk_index"]),
         chunk_count=int(row["chunk_count"]),
         memory_class=str(row["memory_class"]),
         importance=float(row["importance"]),
         metadata=metadata,
     )
+
+
+def _projection_row(row: sqlite3.Row) -> dict[str, Any]:
+    try:
+        metadata = json.loads(str(row["metadata_json"] or "{}"))
+    except json.JSONDecodeError:
+        metadata = {}
+    return {
+        "projection_id": str(row["projection_id"]),
+        "repo_id": str(row["repo_id"]),
+        "projection_version": str(row["projection_version"]),
+        "source_artifact_hash": str(row["source_artifact_hash"]),
+        "doc_content_hash": str(row["doc_content_hash"]),
+        "status": str(row["status"]),
+        "created_at": str(row["created_at"]),
+        "activated_at": str(row["activated_at"]),
+        "metadata": metadata,
+    }
+
+
+def _utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat()
 
 
 def _table_columns(conn: sqlite3.Connection, table: str) -> tuple[str, ...]:

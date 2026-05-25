@@ -262,17 +262,32 @@ def _kuzu_write_state(artifact_dir: Path) -> dict[str, Any]:
 def _retrieval_state(db_path: Path, *, repo_id: str) -> dict[str, Any]:
     if not db_path.exists():
         return {"exists": False, "repo_id": repo_id, "repo_doc_count": 0, "vector_status_truthful": True}
-    doc_type_rows = _query(
-        db_path,
-        """
-        SELECT doc_type, node_kind, COUNT(*) AS count
-        FROM retrieval_documents
-        WHERE repo_id = ?
-        GROUP BY doc_type, node_kind
-        ORDER BY count DESC
-        """,
-        (repo_id,),
-    )
+    active_projection = _active_projection_row(db_path, repo_id=repo_id)
+    active_projection_id = str(active_projection.get("projection_id") or "")
+    if active_projection_id:
+        doc_type_rows = _query(
+            db_path,
+            """
+            SELECT doc_type, node_kind, COUNT(*) AS count
+            FROM retrieval_documents
+            WHERE repo_id = ? AND projection_id = ?
+            GROUP BY doc_type, node_kind
+            ORDER BY count DESC
+            """,
+            (repo_id, active_projection_id),
+        )
+    else:
+        doc_type_rows = _query(
+            db_path,
+            """
+            SELECT doc_type, node_kind, COUNT(*) AS count
+            FROM retrieval_documents
+            WHERE repo_id = ?
+            GROUP BY doc_type, node_kind
+            ORDER BY count DESC
+            """,
+            (repo_id,),
+        )
     repo_doc_count = sum(int(row.get("count") or 0) for row in doc_type_rows)
     legacy_count = _scalar(db_path, "SELECT COUNT(*) FROM retrieval_documents WHERE COALESCE(repo_id, '') = ''")
     trace_doc_count = sum(
@@ -294,6 +309,8 @@ def _retrieval_state(db_path: Path, *, repo_id: str) -> dict[str, Any]:
     return {
         "exists": True,
         "repo_id": repo_id,
+        "active_projection": active_projection,
+        "active_projection_id": active_projection_id,
         "repo_doc_count": repo_doc_count,
         "legacy_doc_count": legacy_count,
         "doc_type_counts": doc_type_rows,
@@ -326,6 +343,20 @@ def _faiss_state(db_path: Path) -> dict[str, Any]:
                 item_count = len(records)
                 latest = str(path)
     return {"status": "ready" if item_count else "partial", "item_count": item_count, "path": latest or str(root)}
+
+
+def _active_projection_row(db_path: Path, *, repo_id: str) -> dict[str, Any]:
+    rows = _query(
+        db_path,
+        """
+        SELECT retrieval_projections.*
+        FROM active_retrieval_projection
+        JOIN retrieval_projections ON retrieval_projections.projection_id = active_retrieval_projection.projection_id
+        WHERE active_retrieval_projection.repo_id = ?
+        """,
+        (repo_id,),
+    )
+    return rows[0] if rows else {}
 
 
 def _query(db_path: Path, sql: str, params: tuple[Any, ...] = ()) -> list[dict[str, Any]]:

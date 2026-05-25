@@ -283,7 +283,28 @@ def test_retrieval_docs_read_curated_manifest_directly(tmp_path: Path) -> None:
         assert result.diagnostics["retrieval_source"] == "curated_graph_manifest"
         assert result.diagnostics["doc_count"] == 1
         with connect(settings.retrieval_db_path) as conn:
-            rows = conn.execute("SELECT doc_type, node_kind FROM retrieval_documents WHERE repo_id=?", (repo_id,)).fetchall()
-        assert [(row["doc_type"], row["node_kind"]) for row in rows] == [("file_impact", "FileImpactSummary")]
+            index = RetrievalIndexStore(conn)
+            index.upsert_documents(
+                [
+                    RetrievalDocument(
+                        doc_id="inactive-trace",
+                        doc_type="session_codenode",
+                        graph_node_id="code:if",
+                        node_kind="CodeNode",
+                        repo_id=repo_id,
+                        title="Inactive trace",
+                        body="This inactive trace should not be returned when an active projection exists.",
+                        packet_id="WP0002",
+                        commit_sha="abc123",
+                    )
+                ]
+            )
+            active_projection = index.active_projection(repo_id)
+            docs = index.list_documents(repo_id=repo_id)
+            rows = conn.execute("SELECT doc_type, node_kind FROM retrieval_documents WHERE repo_id=? ORDER BY doc_type", (repo_id,)).fetchall()
+        assert active_projection is not None
+        assert active_projection["projection_id"] == result.diagnostics["active_projection_id"]
+        assert [(doc.doc_type, doc.node_kind) for doc in docs] == [("file_impact", "FileImpactSummary")]
+        assert ("session_codenode", "CodeNode") in [(row["doc_type"], row["node_kind"]) for row in rows]
     finally:
         store.close()
