@@ -50,6 +50,38 @@ def test_reasoning_extraction_accepts_packet_local_refs() -> None:
     assert result.accepted_nodes[0]["source_result_file"] == "unit"
 
 
+def test_reasoning_extraction_accepts_full_sha_for_packet_short_sha() -> None:
+    result = review_reasoning_extraction_results(
+        packets=[_packet()],
+        results=[
+            {
+                "packet_id": "WP0001",
+                "commit_sha": "abc1234deadbeef",
+                "parsed_output": {
+                    "packet_id": "WP0001",
+                    "commit_sha": "abc1234deadbeef",
+                    "nodes": [
+                        {
+                            "node_type": "Decision",
+                            "subject": "Local graph",
+                            "statement": "Graph truth is stored locally.",
+                            "reason": "The packet rationale supports local graph storage.",
+                            "confidence": 0.9,
+                            "evidence_refs": ["E0002"],
+                            "status": "accepted",
+                        }
+                    ],
+                },
+            }
+        ],
+        source_name="unit",
+    )
+
+    assert "commit_sha_mismatch" not in result.summary["diagnostic_kind_counts"]
+    assert result.summary["accepted_node_count"] == 1
+    assert result.accepted_nodes[0]["source_commit_sha"] == "abc1234"
+
+
 def test_reasoning_review_demotes_commit_mismatched_node_to_review() -> None:
     packet = {
         "packet_id": "WP0001",

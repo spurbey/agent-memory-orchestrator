@@ -210,7 +210,7 @@ def review_reasoning_packet_result(
                 "actual": parsed.get("packet_id"),
             }
         )
-    if str(parsed.get("commit_sha") or "") != commit_sha:
+    if not _same_commit_sha(commit_sha, parsed.get("commit_sha")):
         diagnostics.append(
             {
                 "level": "error",
@@ -486,6 +486,18 @@ def _empty_review_result(
 def _packet_commit_sha(packet: dict[str, Any]) -> str:
     commit = packet.get("commit") if isinstance(packet.get("commit"), dict) else {}
     return str(commit.get("short_sha") or packet.get("commit_sha") or "")
+
+
+def _same_commit_sha(expected: Any, actual: Any) -> bool:
+    expected_sha = str(expected or "").strip().lower()
+    actual_sha = str(actual or "").strip().lower()
+    if expected_sha == actual_sha:
+        return True
+    if not expected_sha or not actual_sha:
+        return False
+    if min(len(expected_sha), len(actual_sha)) < 7:
+        return False
+    return expected_sha.startswith(actual_sha) or actual_sha.startswith(expected_sha)
 
 
 def _diag(level: str, kind: str, packet_id: str, **extra: Any) -> dict[str, Any]:
