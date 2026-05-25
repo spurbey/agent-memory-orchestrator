@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import gc
+import os
 import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -186,7 +187,7 @@ class KuzuGraphStore:
             ) from exc
         self.graph_path = graph_path
         self.graph_path.parent.mkdir(parents=True, exist_ok=True)
-        self._db = kuzu.Database(str(graph_path))
+        self._db = kuzu.Database(str(graph_path), buffer_pool_size=_kuzu_buffer_pool_size(), max_num_threads=_kuzu_max_threads())
         self._conn = kuzu.Connection(self._db)
 
     def init_schema(self) -> None:
@@ -476,7 +477,9 @@ class KuzuGraphStore:
                 f"properties_json: {_q(properties_json)}"
                 "})"
             )
-        except Exception:
+        except Exception as exc:
+            if metadata.get("immutable_session_graph_node") and "duplicated primary key" in str(exc).lower():
+                return
             self._conn.execute(
                 "MATCH (n:GraphNode) "
                 f"WHERE n.id = {_q(node.id)} "
@@ -787,6 +790,26 @@ def _compact_row_to_edge(row: list[Any]) -> dict[str, Any]:
 
 def _q(value: object) -> str:
     return json.dumps("" if value is None else str(value))
+
+
+def _kuzu_buffer_pool_size() -> int:
+    raw = os.environ.get("AMO_KUZU_GRAPH_BUFFER_POOL_SIZE", "").strip()
+    if raw:
+        try:
+            return max(256 * 1024 * 1024, int(raw))
+        except ValueError:
+            pass
+    return 0
+
+
+def _kuzu_max_threads() -> int:
+    raw = os.environ.get("AMO_KUZU_MAX_THREADS", "").strip()
+    if raw:
+        try:
+            return max(1, int(raw))
+        except ValueError:
+            pass
+    return 2
 
 
 def _terms(text: str) -> list[str]:
