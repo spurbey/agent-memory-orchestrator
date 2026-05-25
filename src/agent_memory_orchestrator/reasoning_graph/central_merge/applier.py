@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import uuid
 from collections.abc import Callable
 from pathlib import Path
@@ -43,9 +44,9 @@ def apply_merge_plan(
     """
 
     close_store = store is None
-    close_graph = graph_store is None
+    close_graph = False
     owned_store = store or V2SessionJobStore(settings)
-    owned_graph = graph_store or KuzuGraphStore(settings.graph_path)
+    owned_graph = graph_store
     owner = lock_owner or f"central-merge:{uuid.uuid4().hex}"
     try:
         plan_row = owned_store.get_central_merge_plan(plan_id)
@@ -62,6 +63,9 @@ def apply_merge_plan(
 
         repo_id = str(plan.get("repo_id") or "")
         _validate_product_plan_input(plan)
+        if owned_graph is None:
+            owned_graph = KuzuGraphStore(repo_central_graph_path(settings, repo_id))
+            close_graph = True
         apply_summary = _apply_summary(plan)
         current_view = owned_store.ensure_graph_view(repo_id=repo_id, branch=branch, mode=mode)
         current_head = str(current_view.get("graph_commit_id") or "")
@@ -166,6 +170,7 @@ def apply_merge_plan(
                 "input_source": str(plan.get("input_source") or ""),
                 "curated_input_hash": str(plan.get("curated_input_hash") or ""),
                 "trace_input_hash": str(plan.get("trace_input_hash") or ""),
+                "central_graph_path": str(repo_central_graph_path(settings, repo_id)),
                 **apply_summary,
                 "idempotent": reapplies_applied_head,
                 "plan_status": updated_plan.get("status", "applied"),
@@ -182,10 +187,22 @@ def apply_merge_plan(
         finally:
             owned_store.release_central_merge_lock(repo_id=repo_id, branch=branch, owner=owner)
     finally:
-        if close_graph:
+        if close_graph and owned_graph is not None:
             owned_graph.close()
         if close_store:
             owned_store.close()
+
+
+def repo_central_graph_path(settings: Settings, repo_id: str) -> Path:
+    """Return the repo-scoped canonical graph path.
+
+    Session/debug graphs can become large trace stores. Central merge writes
+    durable canonical atoms to a repo-scoped graph so legacy trace bloat cannot
+    prevent applying the active GraphView.
+    """
+
+    safe = re.sub(r"[^A-Za-z0-9_.-]+", "_", str(repo_id or "unknown")).strip("._-") or "unknown"
+    return settings.home / ".graph" / "central" / safe / "central.kuzu"
 
 
 def _write_merge_result_artifact(*, store: V2SessionJobStore, plan: dict[str, Any], result: dict[str, Any]) -> str:
