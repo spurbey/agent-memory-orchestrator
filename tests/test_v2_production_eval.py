@@ -109,7 +109,7 @@ def test_production_semantic_eval_reports_stale_full_trace_state(tmp_path: Path)
                         packet_id="WP0001",
                         commit_sha="abc123",
                         title="If block",
-                        body="raw low-level code node",
+                        body="why graph_service.py changed raw low-level code node",
                     ),
                     RetrievalDocument(
                         doc_id="trace-code-hunk",
@@ -148,6 +148,8 @@ def test_production_semantic_eval_reports_stale_full_trace_state(tmp_path: Path)
         assert report["product_ready"] is False
         assert "curated_graph_manifest_missing" in report["blocked_issues"]
         assert "retrieval_full_trace_dominated" in report["blocked_issues"]
+        assert "retrieval_query_raw_trace_top_result" in report["blocked_issues"]
+        assert "retrieval_query_missing_curated_support" in report["blocked_issues"]
         assert "central_merge_not_applied" in report["blocked_issues"]
         assert report["retrieval"]["legacy_doc_count"] == 1
         assert report["retrieval"]["trace_doc_count"] == 2
@@ -308,6 +310,49 @@ def test_retrieval_docs_read_curated_manifest_directly(tmp_path: Path) -> None:
         assert active_projection["projection_id"] == result.diagnostics["active_projection_id"]
         assert [(doc.doc_type, doc.node_kind) for doc in docs] == [("file_impact", "FileImpactSummary")]
         assert ("session_codenode", "CodeNode") in [(row["doc_type"], row["node_kind"]) for row in rows]
+    finally:
+        store.close()
+
+
+def test_retrieval_projection_is_not_active_until_activation_gate_passes(tmp_path: Path) -> None:
+    settings = make_settings(tmp_path)
+    initialize_fresh_v2_production_storage(settings)
+    store = V2SessionJobStore(settings)
+    try:
+        repo_id = "repo:remote:raw-curated"
+        job = store.enqueue_session(session_id="s-raw-projection", boundary_event_id="raw_boundary", repo_path=str(tmp_path)).job
+        store.update_job_repo_identity(job_id=job["job_id"], repo_path=str(tmp_path), repo_id=repo_id, reason="test", metadata={})
+        job = store.get_job(job["job_id"]) or job
+        kuzu_dir = Path(str(job["artifact_dir"])) / "kuzu_write"
+        kuzu_dir.mkdir(parents=True, exist_ok=True)
+        raw_manifest = {
+            "nodes": [
+                {
+                    "id": "code:if",
+                    "kind": "CodeNode",
+                    "label": "If",
+                    "summary": "raw trace node should not activate product retrieval",
+                    "properties": {},
+                }
+            ],
+            "edges": [],
+        }
+        (kuzu_dir / "compact_graph_manifest.json").write_text(json.dumps(raw_manifest), encoding="utf-8")
+        (kuzu_dir / "curated_graph_manifest.json").write_text(json.dumps(raw_manifest), encoding="utf-8")
+        runner = V2SessionJobRunner(settings, job_store=store)
+        retrieval_dir = Path(str(job["artifact_dir"])) / "retrieval_docs"
+        retrieval_dir.mkdir(parents=True, exist_ok=True)
+
+        result = runner._stage_retrieval_docs(job, Path(str(job["artifact_dir"])), retrieval_dir)
+
+        assert result.diagnostics["activation_gate"]["passed"] is False
+        assert "retrieval_projection_contains_raw_trace_docs" in result.diagnostics["activation_gate"]["blocking_failures"]
+        assert result.diagnostics["active_projection_id"] == ""
+        with connect(settings.retrieval_db_path) as conn:
+            index = RetrievalIndexStore(conn)
+            projection = index.projection(result.diagnostics["projection_id"])
+            assert projection["status"] == "review_required"
+            assert index.active_projection(repo_id) is None
     finally:
         store.close()
 

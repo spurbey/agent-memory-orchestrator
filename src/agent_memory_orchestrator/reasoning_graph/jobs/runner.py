@@ -650,7 +650,13 @@ class V2SessionJobRunner:
                 doc_content_hash=doc_content_hash,
             )
             projection: dict[str, Any] = {}
+            activation_gate: dict[str, Any] = {
+                "passed": False,
+                "blocking_failures": ["retrieval_projection_no_docs"],
+                "summary": {},
+            }
             if retrieval_source == "curated_graph_manifest" and docs:
+                activation_gate = _retrieval_projection_activation_gate(docs)
                 projection = index.upsert_projection(
                     projection_id=projection_id,
                     repo_id=repo_id,
@@ -658,11 +664,15 @@ class V2SessionJobRunner:
                     source_artifact_hash=str(manifest_info.get("curated_input_hash") or ""),
                     doc_content_hash=doc_content_hash,
                     status="building",
-                    metadata={"retrieval_source": retrieval_source, **manifest_info},
+                    metadata={"retrieval_source": retrieval_source, "activation_gate": activation_gate, **manifest_info},
                 )
                 index.replace_projection_documents(docs, repo_id=repo_id, projection_id=projection_id)
-                index.set_projection_status(projection_id, "validated")
-                projection = index.activate_projection(repo_id=repo_id, projection_id=projection_id)
+                if activation_gate["passed"]:
+                    index.set_projection_status(projection_id, "validated")
+                    projection = index.activate_projection(repo_id=repo_id, projection_id=projection_id)
+                else:
+                    index.set_projection_status(projection_id, "review_required")
+                    projection = index.projection(projection_id) or {}
         finally:
             conn.close()
         output = stage_dir / "retrieval_docs_result.json"
@@ -674,7 +684,8 @@ class V2SessionJobRunner:
             "projection_id": projection_id,
             "projection_version": RETRIEVAL_PROJECTION_VERSION,
             "projection_status": projection.get("status"),
-            "active_projection_id": projection.get("projection_id"),
+            "active_projection_id": projection.get("projection_id") if activation_gate["passed"] else "",
+            "activation_gate": activation_gate,
             "doc_content_hash": doc_content_hash,
             **manifest_info,
         }
@@ -1173,6 +1184,52 @@ def _retrieval_doc_content_hash(docs: list[RetrievalDocument]) -> str:
     return hashlib.sha256(json.dumps(payload, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
 
 
+def _retrieval_projection_activation_gate(docs: list[RetrievalDocument]) -> dict[str, Any]:
+    raw_trace_docs = [
+        doc
+        for doc in docs
+        if doc.node_kind in {"CodeNode", "CodeHunk", "Symbol", "CodeVersion"}
+        or doc.doc_type in {"session_codenode", "session_codehunk", "session_symbol", "code"}
+    ]
+    product_docs = [
+        doc
+        for doc in docs
+        if doc.doc_type
+        in {
+            "central_atom",
+            "central_version",
+            "code_impact",
+            "file_impact",
+            "reasoning",
+            "commit",
+            "packet",
+            "file_ref",
+            "symbol_ref",
+            "code_region_ref",
+        }
+    ]
+    failures: list[str] = []
+    if not docs:
+        failures.append("retrieval_projection_no_docs")
+    if raw_trace_docs:
+        failures.append("retrieval_projection_contains_raw_trace_docs")
+    if not product_docs:
+        failures.append("retrieval_projection_missing_product_docs")
+    return {
+        "passed": not failures,
+        "blocking_failures": failures,
+        "summary": {
+            "doc_count": len(docs),
+            "product_doc_count": len(product_docs),
+            "raw_trace_doc_count": len(raw_trace_docs),
+            "raw_trace_examples": [
+                {"doc_id": doc.doc_id, "doc_type": doc.doc_type, "node_kind": doc.node_kind, "title": doc.title}
+                for doc in raw_trace_docs[:5]
+            ],
+        },
+    }
+
+
 def _clip_text(text: str, limit: int) -> str:
     safe_limit = max(256, int(limit or 0))
     if len(text) <= safe_limit:
@@ -1609,6 +1666,15 @@ def _quality_issues(
         )
     if doc_count > 0 and not str(retrieval_result.get("active_projection_id") or ""):
         issues.append({"code": "active_projection_missing", "message": "retrieval docs exist but no active projection was recorded"})
+    activation_gate = retrieval_result.get("activation_gate") if isinstance(retrieval_result.get("activation_gate"), dict) else {}
+    if doc_count > 0 and activation_gate and activation_gate.get("passed") is not True:
+        issues.append(
+            {
+                "code": "retrieval_projection_activation_gate_failed",
+                "message": "retrieval projection failed semantic activation gates",
+                "blocking_failures": activation_gate.get("blocking_failures") or [],
+            }
+        )
 
     total_docs = int(embedding_result.get("total_docs") or doc_count or 0)
     embedded = int(embedding_result.get("embedded") or 0)
