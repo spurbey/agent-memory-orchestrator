@@ -39,9 +39,19 @@ from ..stage4_contract import build_stage4_packet_prompt
 from ..stage4_contract import stage4_contract_hash
 from ..stage4_contract import stage4_output_schema
 from ..work_packets import build_reasoning_work_packets_from_view
+from .constants import CENTRAL_MERGE_PLANNER_VERSION
+from .constants import CODE_PARSER_POLICY_VERSION
+from .constants import CURATED_GRAPH_SCHEMA_VERSION
 from .constants import GRAPH_SCHEMA_VERSION
 from .constants import PIPELINE_VERSION
+from .constants import PROMOTION_POLICY_VERSION
+from .constants import QUALITY_EVAL_POLICY_VERSION
+from .constants import REASONING_CODE_LINK_POLICY_VERSION
+from .constants import REASONING_REVIEW_POLICY_VERSION
+from .constants import RETRIEVAL_PROJECTION_VERSION
 from .constants import RESET_MARKER_KEY
+from .constants import SESSION_GRAPH_WRITER_VERSION
+from .constants import SYMBOL_VERSION_POLICY_VERSION
 from .constants import V2_STAGES
 from .store import V2SessionJobStore
 
@@ -130,6 +140,20 @@ class V2SessionJobRunner:
             and output.exists()
         ):
             return StageResult(output_path=output, diagnostics={"reused": True})
+        superseded = _superseded_stage_metadata(
+            existing=existing,
+            input_hash=input_hash,
+            config_hash=config_hash,
+            output=output,
+        )
+        if superseded:
+            self.job_store.log_event(
+                job_id=str(job["job_id"]),
+                event_type="stage_superseded",
+                stage=stage,
+                message=f"stage superseded before rerun: {stage}",
+                metadata=superseded,
+            )
         self.job_store.start_stage(
             job_id=str(job["job_id"]),
             stage=stage,
@@ -137,7 +161,11 @@ class V2SessionJobRunner:
             input_hash=input_hash,
             stage_config_hash=config_hash,
         )
-        return getattr(self, f"_stage_{stage}")(job, artifact_dir, stage_dir)
+        result = getattr(self, f"_stage_{stage}")(job, artifact_dir, stage_dir)
+        if superseded:
+            diagnostics = {**result.diagnostics, "superseded_previous_stage": superseded}
+            return StageResult(output_path=result.output_path, diagnostics=diagnostics)
+        return result
 
     def _stage_input_artifact(self, job: dict[str, Any], stage: str, artifact_dir: Path) -> Path:
         if stage == V2_STAGES[0]:
@@ -732,21 +760,113 @@ def path_hash(path: Path) -> str:
     return ""
 
 
-def stage_config_hash(settings: Settings, *, stage: str) -> str:
-    payload = {
+def stage_config_payload(settings: Settings, *, stage: str) -> dict[str, Any]:
+    payload: dict[str, Any] = {
         "stage": stage,
         "pipeline_version": PIPELINE_VERSION,
         "graph_schema_version": GRAPH_SCHEMA_VERSION,
-        "qwen_model": settings.qwen_model,
-        "qwen_endpoint": settings.qwen_endpoint,
-        "qwen_runtime": settings.qwen_runtime,
-        "qwen_num_ctx": settings.qwen_num_ctx,
-        "stage4_contract_hash": stage4_contract_hash(),
-        "embedding_model": settings.embedding_model,
-        "vector_backend": settings.vector_backend,
-        "retrieval_max_doc_chars": settings.auto_retrieval_max_doc_chars,
     }
+    if stage == "qwen_reasoning":
+        payload.update(
+            {
+                "qwen_model": settings.qwen_model,
+                "qwen_runtime": settings.qwen_runtime,
+                "qwen_num_ctx": settings.qwen_num_ctx,
+                "qwen_prompt_contract_hash": stage4_contract_hash(),
+                "stage4_contract_hash": stage4_contract_hash(),
+                "stage4_schema_hash": hashlib.sha256(json.dumps(stage4_output_schema(), sort_keys=True).encode("utf-8")).hexdigest(),
+            }
+        )
+    elif stage == "reasoning_review":
+        payload.update(
+            {
+                "reasoning_review_policy_version": REASONING_REVIEW_POLICY_VERSION,
+                "stage4_contract_hash": stage4_contract_hash(),
+            }
+        )
+    elif stage == "ast_code_nodes":
+        payload["code_parser_policy_version"] = CODE_PARSER_POLICY_VERSION
+    elif stage == "symbol_versions":
+        payload.update(
+            {
+                "symbol_version_policy_version": SYMBOL_VERSION_POLICY_VERSION,
+                "code_parser_policy_version": CODE_PARSER_POLICY_VERSION,
+            }
+        )
+    elif stage == "reasoning_code_links":
+        payload["reasoning_code_link_policy_version"] = REASONING_CODE_LINK_POLICY_VERSION
+    elif stage == "kuzu_write":
+        payload.update(
+            {
+                "promotion_policy_version": PROMOTION_POLICY_VERSION,
+                "curated_graph_schema_version": CURATED_GRAPH_SCHEMA_VERSION,
+                "session_graph_writer_version": SESSION_GRAPH_WRITER_VERSION,
+            }
+        )
+    elif stage == "central_version_merge":
+        payload.update(
+            {
+                "central_merge_planner_version": CENTRAL_MERGE_PLANNER_VERSION,
+                "curated_graph_schema_version": CURATED_GRAPH_SCHEMA_VERSION,
+            }
+        )
+    elif stage == "retrieval_docs":
+        payload.update(
+            {
+                "retrieval_projection_version": RETRIEVAL_PROJECTION_VERSION,
+                "curated_graph_schema_version": CURATED_GRAPH_SCHEMA_VERSION,
+                "retrieval_node_limit": settings.auto_retrieval_node_limit,
+                "retrieval_max_doc_chars": settings.auto_retrieval_max_doc_chars,
+            }
+        )
+    elif stage in {"embeddings", "faiss"}:
+        payload.update(
+            {
+                "embedding_model": settings.embedding_model,
+                "vector_backend": settings.vector_backend,
+            }
+        )
+    elif stage == "quality_eval":
+        payload["quality_eval_policy_version"] = QUALITY_EVAL_POLICY_VERSION
+    return payload
+
+
+def stage_config_hash(settings: Settings, *, stage: str) -> str:
+    payload = stage_config_payload(settings, stage=stage)
     return hashlib.sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()
+
+
+def _superseded_stage_metadata(
+    *,
+    existing: dict[str, Any] | None,
+    input_hash: str,
+    config_hash: str,
+    output: Path,
+) -> dict[str, Any]:
+    if not existing or existing.get("status") != "complete":
+        return {}
+    old_input_hash = str(existing.get("input_hash") or "")
+    old_config_hash = str(existing.get("stage_config_hash") or "")
+    old_output = str(existing.get("output_artifact") or "")
+    reasons: list[str] = []
+    if old_input_hash != input_hash:
+        reasons.append("input_hash_changed")
+    if old_config_hash != config_hash:
+        reasons.append("policy_version_changed")
+    if not old_output or not output.exists():
+        reasons.append("output_artifact_missing")
+    if not reasons:
+        return {}
+    return {
+        "validity": "superseded",
+        "reason": reasons[0],
+        "reasons": reasons,
+        "old_input_hash": old_input_hash,
+        "new_input_hash": input_hash,
+        "old_stage_config_hash": old_config_hash,
+        "new_stage_config_hash": config_hash,
+        "old_output_artifact": old_output,
+    }
 
 
 def _current_stage(job: dict[str, Any]) -> str:
