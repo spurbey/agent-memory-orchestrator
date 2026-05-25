@@ -98,6 +98,15 @@ def apply_merge_plan(
                 branch=branch,
                 mode=mode,
             )
+            view_nodes, view_edges = _write_graph_view_node(
+                graph_store=owned_graph,
+                plan=plan,
+                graph_commit_id=graph_commit_id,
+                branch=branch,
+                mode=mode,
+            )
+            added_nodes = _dedupe([*added_nodes, *view_nodes])
+            added_edges = _dedupe([*added_edges, *view_edges])
             graph_commit_row = owned_store.record_applied_graph_commit(
                 graph_commit_id=graph_commit_id,
                 plan_id=plan_id,
@@ -154,6 +163,9 @@ def apply_merge_plan(
                 "added_edge_count": len(added_edges),
                 "added_nodes": added_nodes,
                 "added_edges": added_edges,
+                "input_source": str(plan.get("input_source") or ""),
+                "curated_input_hash": str(plan.get("curated_input_hash") or ""),
+                "trace_input_hash": str(plan.get("trace_input_hash") or ""),
                 **apply_summary,
                 "idempotent": reapplies_applied_head,
                 "plan_status": updated_plan.get("status", "applied"),
@@ -211,6 +223,9 @@ def _write_merge_result_artifact(*, store: V2SessionJobStore, plan: dict[str, An
             "idempotent": result.get("idempotent", False),
             "applied_at": result.get("applied_at", utc_now()),
             "apply_scope": result.get("apply_scope", ["commit", "file", "knowledge_version", "graph_commit", "graph_view"]),
+            "input_source": result.get("input_source", ""),
+            "curated_input_hash": result.get("curated_input_hash", ""),
+            "trace_input_hash": result.get("trace_input_hash", ""),
             "result_artifact": str(target),
         }
         target.write_text(json.dumps(payload, indent=2, ensure_ascii=False, sort_keys=True), encoding="utf-8")
@@ -404,6 +419,19 @@ def _write_exact_atoms(
         )
     )
     added_nodes.append(graph_commit_id)
+    return _dedupe(added_nodes), _dedupe(added_edges)
+
+
+def _write_graph_view_node(
+    *,
+    graph_store: GraphStore,
+    plan: dict[str, Any],
+    graph_commit_id: str,
+    branch: str,
+    mode: str,
+) -> tuple[list[str], list[str]]:
+    now = utc_now()
+    base = _base_metadata(plan=plan, graph_commit_id=graph_commit_id)
     graph_view_id_value = graph_view_id(repo_id=str(plan.get("repo_id") or ""), branch=branch, mode=mode)
     graph_store.upsert_node(
         GraphNode(
@@ -425,7 +453,6 @@ def _write_exact_atoms(
             },
         )
     )
-    added_nodes.append(graph_view_id_value)
     view_edge_id = _edge_id("GRAPH_VIEW_AT", graph_view_id_value, graph_commit_id, graph_commit_id)
     graph_store.upsert_edge(
         GraphEdge(
@@ -438,8 +465,7 @@ def _write_exact_atoms(
             metadata={**base, "idempotency_key": _idempotency_key("edge", view_edge_id, graph_commit_id)},
         )
     )
-    added_edges.append(view_edge_id)
-    return _dedupe(added_nodes), _dedupe(added_edges)
+    return [graph_view_id_value], [view_edge_id]
 
 
 def _base_metadata(*, plan: dict[str, Any], graph_commit_id: str) -> dict[str, Any]:
