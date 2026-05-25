@@ -99,11 +99,20 @@ def _retrieve_index_only(settings: Settings, args: Any) -> dict[str, Any]:
     conn = connect(target_db)
     try:
         index = RetrievalIndexStore(conn)
+        if args.repo_id and not index.active_projection_id(args.repo_id):
+            return {
+                "ok": False,
+                "error": "active_projection_missing",
+                "repo_id": args.repo_id,
+                "db_path": str(target_db),
+                "mode": "index_only",
+            }
         result = retrieve_indexed_docs(
             query=args.query,
             index_store=index,
             graph_store=_NoGraphWalkStore(),
             session_id=args.session_id,
+            repo_id=args.repo_id,
             limit=max(1, min(50, int(args.limit))),
             expand_neighbors=0,
             include_graph_nodes=False,
