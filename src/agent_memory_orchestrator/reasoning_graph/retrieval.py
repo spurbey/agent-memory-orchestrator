@@ -25,7 +25,12 @@ SESSION_RETRIEVAL_NODE_KINDS = (
     "GitCommit",
     "Commit",
     "CodeNode",
+    "CodeImpactSummary",
+    "CodeRegionRef",
+    "FileImpactSummary",
+    "FileRef",
     "Symbol",
+    "SymbolRef",
     "SymbolVersion",
     "EvidenceRef",
     "Evidence",
@@ -416,10 +421,19 @@ class RetrievalIndexStore:
         self.conn.commit()
         return count
 
-    def replace_documents(self, docs: Iterable[RetrievalDocument]) -> int:
-        self.conn.execute("DELETE FROM retrieval_documents")
-        if self._fts_enabled:
-            self.conn.execute("DELETE FROM retrieval_documents_fts")
+    def replace_documents(self, docs: Iterable[RetrievalDocument], *, repo_id: str = "") -> int:
+        safe_repo_id = str(repo_id or "").strip()
+        if safe_repo_id:
+            rows = self.conn.execute("SELECT doc_id FROM retrieval_documents WHERE repo_id = ?", (safe_repo_id,)).fetchall()
+            doc_ids = [str(row["doc_id"]) for row in rows]
+            self.conn.execute("DELETE FROM retrieval_documents WHERE repo_id = ?", (safe_repo_id,))
+            if self._fts_enabled and doc_ids:
+                placeholders = ",".join("?" for _ in doc_ids)
+                self.conn.execute(f"DELETE FROM retrieval_documents_fts WHERE doc_id IN ({placeholders})", doc_ids)
+        else:
+            self.conn.execute("DELETE FROM retrieval_documents")
+            if self._fts_enabled:
+                self.conn.execute("DELETE FROM retrieval_documents_fts")
         self.conn.commit()
         return self.upsert_documents(docs)
 
@@ -1028,6 +1042,22 @@ def _retrieval_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
         "symbol_id",
         "changed_files",
         "paths",
+        "path",
+        "qualified_name",
+        "symbol_kind",
+        "selected_files",
+        "selected_file_roles",
+        "impact_roles",
+        "impact_role",
+        "primary_impact_role",
+        "impact_role_counts",
+        "selected_symbol_refs",
+        "selected_code_refs",
+        "reasoning_statements",
+        "promotion_grade",
+        "policy",
+        "original_code_node_id",
+        "hunk_count",
         "evidence_refs",
         "version_count",
         "graph_commit_id",
@@ -1102,6 +1132,10 @@ def _node_body(node: dict[str, Any]) -> str:
         "repo_id",
         "source_node_ids",
         "version_metadata",
+        "selected_file_roles",
+        "impact_roles",
+        "impact_role",
+        "primary_impact_role",
     ):
         if key in metadata:
             value = metadata[key]
@@ -1282,6 +1316,26 @@ def _rerank_document(
     if intent in {"code_why", "decision_history"} and doc.doc_type == "reasoning":
         score += 0.25
         reasons.append("reasoning_boost")
+    if intent == "code_why" and doc.doc_type == "code_impact":
+        score += 0.24
+        reasons.append("code_impact_boost")
+        if _query_has_code_locator(query):
+            score += 0.12
+            reasons.append("code_locator_impact_boost")
+    if intent == "code_why" and doc.doc_type == "file_impact":
+        score += 0.32
+        reasons.append("file_impact_boost")
+        if _query_has_code_locator(query):
+            score += 0.18
+            reasons.append("code_locator_file_rollup_boost")
+    code_locator_query = _query_has_code_locator(query)
+    if intent in {"code_why", "version_flow"} and doc.doc_type in {"file_ref", "symbol_ref", "code_region_ref"}:
+        if code_locator_query:
+            score += 0.08
+            reasons.append("curated_code_support_boost")
+        else:
+            score -= 0.14
+            reasons.append("broad_query_code_support_penalty")
     node_type = _doc_node_type(doc)
     if intent == "decision_history" and doc.doc_type == "reasoning":
         if node_type == "Decision":
@@ -1309,18 +1363,34 @@ def _rerank_document(
     if doc.memory_class == "supporting_evidence":
         score -= 0.18
         reasons.append("supporting_evidence_penalty")
+        if intent in {"code_why", "decision_history"}:
+            score -= 0.10
+            reasons.append("answer_query_evidence_penalty")
     if doc.doc_type == "commit":
         score -= 0.12
         reasons.append("commit_hub_penalty")
     if _looks_like_test_artifact(doc) and "test" not in terms:
         score -= 0.08
         reasons.append("test_artifact_penalty")
+    role = _doc_impact_role(doc)
+    if role == "validation_test" and "test" not in terms:
+        score -= 0.10
+        reasons.append("validation_support_penalty")
+    elif role in {"docs", "config"} and not code_locator_query:
+        score -= 0.04
+        reasons.append(f"{role}_support_penalty")
     neighbor_text = _normalize(" ".join(f"{n.get('label') or ''} {n.get('summary') or ''}" for n in neighbors))
     if neighbor_text and any(term in neighbor_text for term in terms):
         score += 0.08
         reasons.append("neighbor_overlap")
     score += min(max(doc.importance, 0.0), 1.0) * 0.05
     return score, reasons
+
+
+def _doc_impact_role(doc: RetrievalDocument) -> str:
+    metadata = doc.metadata if isinstance(doc.metadata, dict) else {}
+    node_metadata = metadata.get("node_metadata") if isinstance(metadata.get("node_metadata"), dict) else {}
+    return str(metadata.get("impact_role") or metadata.get("primary_impact_role") or node_metadata.get("impact_role") or node_metadata.get("primary_impact_role") or "")
 
 
 def _doc_from_row(row: sqlite3.Row) -> RetrievalDocument:
@@ -1367,6 +1437,16 @@ def _doc_type(node_kind: str) -> str:
         return "commit"
     if node_kind in {"CodeNode", "CodeHunk"}:
         return "code"
+    if node_kind == "CodeImpactSummary":
+        return "code_impact"
+    if node_kind == "FileImpactSummary":
+        return "file_impact"
+    if node_kind == "FileRef":
+        return "file_ref"
+    if node_kind == "CodeRegionRef":
+        return "code_region_ref"
+    if node_kind == "SymbolRef":
+        return "symbol_ref"
     if node_kind in {"Symbol", "SymbolVersion"}:
         return "symbol"
     if node_kind in {"EvidenceRef", "Evidence", "ToolFact"}:
@@ -1383,6 +1463,12 @@ def _memory_class(doc_type: str, node_kind: str) -> str:
         return "graph_lineage"
     if doc_type == "reasoning":
         return "answer_grade_reasoning"
+    if doc_type == "code_impact":
+        return "code_impact_summary"
+    if doc_type == "file_impact":
+        return "file_impact_summary"
+    if doc_type in {"file_ref", "symbol_ref", "code_region_ref"}:
+        return "code_support"
     if doc_type == "code":
         return "code_change"
     if doc_type == "symbol":
@@ -1397,6 +1483,7 @@ def _memory_class(doc_type: str, node_kind: str) -> str:
 def _importance(doc_type: str, node_kind: str, metadata: dict[str, Any]) -> float:
     if isinstance(metadata.get("importance"), (int, float)):
         return float(metadata["importance"])
+    role = str(metadata.get("impact_role") or metadata.get("primary_impact_role") or "")
     if doc_type == "central_version":
         return 0.95
     if doc_type == "central_atom":
@@ -1405,8 +1492,24 @@ def _importance(doc_type: str, node_kind: str, metadata: dict[str, Any]) -> floa
         return 0.25
     if doc_type == "reasoning":
         return 0.9
+    if doc_type == "code_impact":
+        return 0.82
+    if doc_type == "file_impact":
+        if role == "validation_test":
+            return 0.55
+        if role in {"docs", "config"}:
+            return 0.62
+        return 0.84
     if node_kind == "WorkChange" or doc_type == "commit":
         return 0.8
+    if doc_type in {"file_ref", "symbol_ref", "code_region_ref"}:
+        if role == "validation_test":
+            return 0.42
+        if role in {"docs", "config"}:
+            return 0.50
+        if role in {"ui_style", "ui_markup"}:
+            return 0.56
+        return 0.62
     if doc_type == "code":
         return 0.7
     if doc_type == "symbol":
