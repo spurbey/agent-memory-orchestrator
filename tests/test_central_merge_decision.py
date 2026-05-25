@@ -70,6 +70,41 @@ def test_central_merge_plan_uses_job_repo_id_for_decision_frames() -> None:
     assert plan.review_candidates[0]["plan_id"] == plan.plan_id
 
 
+def test_decision_dry_run_compares_session_frames_to_active_central_versions() -> None:
+    result = build_decision_review_candidates(
+        compact_graph=_curated_compact_graph(),
+        central_nodes=[
+            {
+                "id": "kver:decision:spatial-controls",
+                "kind": "KnowledgeVersion",
+                "status": "active",
+                "metadata": {
+                    "repo_id": "repo:test",
+                    "atom_kind": "decision",
+                    "status": "active",
+                    "version_metadata": {
+                        "node_type": "Decision",
+                        "summary": "The graph UI adds spatial graph controls.",
+                        "subject": "Add spatial graph controls",
+                        "statement": "The graph UI adds spatial graph controls.",
+                        "selected_files": ["src/agent_memory_orchestrator/web/amo.js"],
+                        "commit_sha": "abc123",
+                    },
+                },
+            }
+        ],
+        repo_id="repo:test",
+        job_id="v2job:test",
+        plan_id="v2plan:test",
+    )
+
+    assert result["metrics"]["active_central_decision_frame_count"] == 1
+    assert any(candidate["target_node_id"] == "kver:decision:spatial-controls" for candidate in result["candidates"])
+    central_candidate = next(candidate for candidate in result["candidates"] if candidate["target_node_id"] == "kver:decision:spatial-controls")
+    assert central_candidate["score"]["target_scope"] == "central"
+    assert central_candidate["proposed_relation"] in {"RELATED_REVIEW", "REFINES", "DUPLICATE_OF"}
+
+
 def _curated_compact_graph() -> dict[str, object]:
     return {
         "nodes": [
