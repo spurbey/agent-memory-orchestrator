@@ -622,7 +622,27 @@ class V2SessionJobRunner:
                 docs = []
                 retrieval_source = "curated_graph_manifest_missing"
                 graph_error = "curated_graph_manifest_missing"
-            index.replace_documents(docs, repo_id=repo_id)
+            doc_content_hash = _retrieval_doc_content_hash(docs)
+            projection_id = _retrieval_projection_id(
+                repo_id=repo_id,
+                projection_version=RETRIEVAL_PROJECTION_VERSION,
+                source_artifact_hash=str(manifest_info.get("curated_input_hash") or ""),
+                doc_content_hash=doc_content_hash,
+            )
+            projection: dict[str, Any] = {}
+            if retrieval_source == "curated_graph_manifest" and docs:
+                projection = index.upsert_projection(
+                    projection_id=projection_id,
+                    repo_id=repo_id,
+                    projection_version=RETRIEVAL_PROJECTION_VERSION,
+                    source_artifact_hash=str(manifest_info.get("curated_input_hash") or ""),
+                    doc_content_hash=doc_content_hash,
+                    status="building",
+                    metadata={"retrieval_source": retrieval_source, **manifest_info},
+                )
+                index.replace_projection_documents(docs, repo_id=repo_id, projection_id=projection_id)
+                index.set_projection_status(projection_id, "validated")
+                projection = index.activate_projection(repo_id=repo_id, projection_id=projection_id)
         finally:
             conn.close()
         output = stage_dir / "retrieval_docs_result.json"
@@ -631,6 +651,11 @@ class V2SessionJobRunner:
             "repo_id": repo_id,
             "retrieval_source": retrieval_source,
             "graph_error": graph_error,
+            "projection_id": projection_id,
+            "projection_version": RETRIEVAL_PROJECTION_VERSION,
+            "projection_status": projection.get("status"),
+            "active_projection_id": projection.get("projection_id"),
+            "doc_content_hash": doc_content_hash,
             **manifest_info,
         }
         output.write_text(json.dumps(payload, indent=2), encoding="utf-8")
@@ -1081,6 +1106,37 @@ def _retrieval_documents_from_manifest(
             )
         )
     return docs
+
+
+def _retrieval_projection_id(*, repo_id: str, projection_version: str, source_artifact_hash: str, doc_content_hash: str) -> str:
+    payload = {
+        "repo_id": repo_id,
+        "projection_version": projection_version,
+        "source_artifact_hash": source_artifact_hash,
+        "doc_content_hash": doc_content_hash,
+    }
+    digest = hashlib.sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()[:32]
+    return f"rproj:{digest}"
+
+
+def _retrieval_doc_content_hash(docs: list[RetrievalDocument]) -> str:
+    payload = [
+        {
+            "doc_id": doc.doc_id,
+            "doc_type": doc.doc_type,
+            "graph_node_id": doc.graph_node_id,
+            "node_kind": doc.node_kind,
+            "packet_id": doc.packet_id,
+            "commit_sha": doc.commit_sha,
+            "title": doc.title,
+            "body": doc.body,
+            "memory_class": doc.memory_class,
+            "importance": doc.importance,
+            "metadata": {key: value for key, value in doc.metadata.items() if key != "projection_id"},
+        }
+        for doc in docs
+    ]
+    return hashlib.sha256(json.dumps(payload, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
 
 
 def _clip_text(text: str, limit: int) -> str:
