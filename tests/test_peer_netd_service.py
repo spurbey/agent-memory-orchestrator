@@ -145,6 +145,7 @@ def test_peer_netd_service_macos_apply_refreshes_loaded_agents(tmp_path: Path, m
     monkeypatch.setattr(netd_service_module, "_is_windows", lambda: False)
     monkeypatch.setattr(netd_service_module, "_is_macos", lambda: True)
     monkeypatch.setattr(netd_service_module, "_launchd_domain", lambda: "gui/501")
+    monkeypatch.setattr(netd_service_module.Path, "home", staticmethod(lambda: tmp_path))
     commands: list[list[str]] = []
 
     def fake_run_commands(payload: list[list[str]], *, ignore_failures: bool = False) -> dict:
