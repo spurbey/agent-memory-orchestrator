@@ -385,6 +385,8 @@ def test_v2_central_merge_apply_writes_exact_atoms_graph_commit_and_view(tmp_pat
         merge_result = json.loads(result_artifact.read_text(encoding="utf-8"))
         assert merge_result["status"] == "applied"
         assert merge_result["graph_commit"]["graph_commit_id"] == applied["graph_commit"]["graph_commit_id"]
+        assert merge_result["input_source"] == "curated_graph_manifest"
+        assert merge_result["curated_input_hash"] == "curated-input"
         updated_plan = store.get_central_merge_plan(stored["plan_id"])
         assert updated_plan is not None
         assert updated_plan["status"] == "applied"
@@ -392,7 +394,9 @@ def test_v2_central_merge_apply_writes_exact_atoms_graph_commit_and_view(tmp_pat
         assert view is not None
         assert view["graph_commit_id"] == applied["graph_commit"]["graph_commit_id"]
         assert graph.nodes[applied["graph_commit"]["graph_commit_id"]].kind == "GraphCommit"
-        assert graph.nodes[graph_view_id(repo_id=applied["repo_id"], branch="main", mode="active")].kind == "GraphView"
+        graph_view_node_id = graph_view_id(repo_id=applied["repo_id"], branch="main", mode="active")
+        assert graph.nodes[graph_view_node_id].kind == "GraphView"
+        assert graph_view_node_id in applied["graph_commit"]["added_nodes"]
         atom_nodes = [node for node in graph.nodes.values() if node.kind == "KnowledgeAtom"]
         version_nodes = [node for node in graph.nodes.values() if node.kind == "KnowledgeVersion"]
         central_nodes = [
