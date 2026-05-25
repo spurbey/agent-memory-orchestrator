@@ -12,6 +12,7 @@ def test_quality_issues_block_dry_run_central_merge_and_partial_vectors() -> Non
     )
 
     assert {issue["code"] for issue in issues} == {
+        "active_projection_missing",
         "central_merge_not_applied",
         "embedding_coverage_partial",
         "faiss_coverage_partial",
