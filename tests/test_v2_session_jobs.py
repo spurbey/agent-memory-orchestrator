@@ -20,8 +20,10 @@ from agent_memory_orchestrator.reasoning_graph.jobs.reset import initialize_fres
 from agent_memory_orchestrator.reasoning_graph.jobs.reset import reset_production_v2_storage
 from agent_memory_orchestrator.reasoning_graph.jobs.runner import require_complete_v2_reset_marker
 from agent_memory_orchestrator.reasoning_graph.jobs.runner import V2SessionJobRunner
+from agent_memory_orchestrator.reasoning_graph.central_merge import applier as applier_module
 from agent_memory_orchestrator.reasoning_graph.central_merge.applier import apply_merge_plan
 from agent_memory_orchestrator.reasoning_graph.central_merge.applier import CentralMergeApplyError
+from agent_memory_orchestrator.reasoning_graph.central_merge.applier import repo_central_graph_path
 from agent_memory_orchestrator.reasoning_graph.central_merge.backfill import backfill_central_merge_plan
 from agent_memory_orchestrator.reasoning_graph.central_merge.fixtures import export_job_fixture
 from agent_memory_orchestrator.reasoning_graph.central_merge.judge import judge_semantic_case
@@ -432,6 +434,40 @@ def test_v2_central_merge_apply_writes_exact_atoms_graph_commit_and_view(tmp_pat
         assert second["idempotent"] is True
         assert len(graph.nodes) == node_count
         assert len(graph.edges) == edge_count
+    finally:
+        store.close()
+
+
+def test_v2_central_merge_apply_defaults_to_repo_scoped_central_graph(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    settings = make_settings(tmp_path)
+    opened_paths: list[Path] = []
+
+    class CapturingGraphStore(InMemoryGraphStore):
+        def __init__(self, graph_path: Path) -> None:
+            super().__init__()
+            opened_paths.append(graph_path)
+
+    monkeypatch.setattr(applier_module, "KuzuGraphStore", CapturingGraphStore)
+    store = V2SessionJobStore(settings)
+    try:
+        job = store.enqueue_session(session_id="s-repo-central-graph", boundary_event_id="raw_boundary", repo_path=str(tmp_path)).job
+        compact_graph = {
+            "nodes": [
+                {"id": "commit:abc123", "kind": "Commit", "properties": {"full_sha": "abc123"}},
+                {"id": "hunk:1", "kind": "CodeHunk", "properties": {"path": "src/graph_service.py"}},
+            ],
+            "edges": [],
+        }
+        plan = build_dry_run_merge_plan(job=job, compact_graph=compact_graph, parent_graph_commit_id="")
+        stored = store.upsert_central_merge_plan(_product_plan(plan))
+
+        applied = apply_merge_plan(settings=settings, plan_id=stored["plan_id"], store=store)
+
+        expected_path = repo_central_graph_path(settings, applied["repo_id"])
+        assert opened_paths == [expected_path]
+        assert expected_path != settings.graph_path
+        assert applied["central_graph_path"] == str(expected_path)
+        assert applied["ok"] is True
     finally:
         store.close()
 
