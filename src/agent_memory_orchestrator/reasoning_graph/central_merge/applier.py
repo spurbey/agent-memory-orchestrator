@@ -241,7 +241,7 @@ def _write_merge_result_artifact(*, store: V2SessionJobStore, plan: dict[str, An
 
 
 def _validate_product_plan_input(plan: dict[str, Any]) -> None:
-    if str(plan.get("input_source") or "") not in {"curated_graph_manifest", ""}:
+    if str(plan.get("input_source") or "") != "curated_graph_manifest":
         raise CentralMergeApplyError("central_merge_plan_input_is_not_curated")
     if not str(plan.get("curated_input_hash") or ""):
         raise CentralMergeApplyError("central_merge_plan_missing_curated_input_hash")
