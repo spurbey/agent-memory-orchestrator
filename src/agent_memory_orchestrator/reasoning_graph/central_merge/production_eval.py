@@ -2,12 +2,16 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from ...core.config import Settings
+from ..retrieval import RetrievalCandidate
+from ..retrieval import RetrievalDocument
+from ..retrieval import retrieve_session_graph
 
 
 DEFAULT_TARGET_JOB_ID = "v2job:0b68249f48c244c68fb12977eb93d9ba"
@@ -46,7 +50,7 @@ def run_production_semantic_eval(
         retrieval=retrieval,
         quality=quality if isinstance(quality, dict) else {},
     )
-    blockers = [failure for case in cases for failure in case["blocking_failures"]]
+    blockers = list(dict.fromkeys(failure for case in cases for failure in case["blocking_failures"]))
     payload = {
         "report_version": "production-semantic-eval-v1",
         "mode": mode,
@@ -139,6 +143,7 @@ def _cases(*, kuzu_write: dict[str, Any], central: dict[str, Any], retrieval: di
             failures=[] if quality.get("product_ready") is not True else ["quality_eval_overstated_product_ready"],
             reason="Quality eval must not mark stale/full-trace state as product-ready.",
         ),
+        *_retrieval_query_gate_cases(retrieval),
     ]
 
 
@@ -306,6 +311,7 @@ def _retrieval_state(db_path: Path, *, repo_id: str) -> dict[str, Any]:
         default=0,
     )
     faiss = _faiss_state(db_path)
+    query_gates = _retrieval_query_gates(db_path, repo_id=repo_id)
     return {
         "exists": True,
         "repo_id": repo_id,
@@ -324,8 +330,262 @@ def _retrieval_state(db_path: Path, *, repo_id: str) -> dict[str, Any]:
             "total_docs": repo_doc_count,
         },
         "faiss": faiss,
+        "query_gates": query_gates,
         "vector_status_truthful": True,
     }
+
+
+def _retrieval_query_gate_cases(retrieval: dict[str, Any]) -> list[dict[str, Any]]:
+    cases: list[dict[str, Any]] = []
+    for gate in retrieval.get("query_gates", []):
+        if not isinstance(gate, dict):
+            continue
+        cases.append(
+            _case(
+                str(gate.get("case_id") or "retrieval_query_gate"),
+                expected={
+                    "query": gate.get("query"),
+                    "top_docs": "curated_or_central_support",
+                    "forbidden": ["CodeNode", "CodeHunk", "session_codenode", "session_codehunk", "code"],
+                },
+                actual={
+                    "hits": gate.get("hits"),
+                    "forbidden_hits": gate.get("forbidden_hits"),
+                    "expected_support_present": gate.get("expected_support_present"),
+                },
+                passed=bool(gate.get("passed")),
+                failures=list(gate.get("blocking_failures") or []),
+                reason=str(gate.get("semantic_reason") or "Production query gate must return curated or central support, not raw trace nodes."),
+            )
+        )
+    return cases
+
+
+def _retrieval_query_gates(db_path: Path, *, repo_id: str) -> list[dict[str, Any]]:
+    if not db_path.exists():
+        return []
+    gates = [
+        {
+            "case_id": "query_graph_service_uses_curated_support",
+            "query": "why did we change graph_service.py?",
+            "expected_doc_types": {"file_impact", "code_impact", "central_version", "central_atom", "reasoning", "commit", "packet"},
+        },
+        {
+            "case_id": "query_spatial_controls_uses_curated_support",
+            "query": "what changed for spatial graph controls?",
+            "expected_doc_types": {"file_impact", "code_impact", "commit", "packet", "reasoning"},
+        },
+    ]
+    index = _ReadOnlyRetrievalIndex(db_path)
+    try:
+        results: list[dict[str, Any]] = []
+        for gate in gates:
+            query = str(gate["query"])
+            result = retrieve_session_graph(
+                query=query,
+                index_store=index,  # type: ignore[arg-type]
+                graph_store=_ReadOnlyNoGraphStore(),  # type: ignore[arg-type]
+                repo_id=repo_id,
+                limit=5,
+                candidate_limit=80,
+                expand_neighbors=0,
+                include_graph_nodes=False,
+            )
+            hits = [_compact_gate_hit(hit.as_dict()) for hit in result.hits]
+            forbidden_hits = [
+                hit
+                for hit in hits
+                if str(hit.get("node_kind") or "") in {"CodeNode", "CodeHunk"}
+                or str(hit.get("doc_type") or "") in {"session_codenode", "session_codehunk", "code"}
+            ]
+            expected_support_present = any(str(hit.get("doc_type") or "") in gate["expected_doc_types"] for hit in hits)
+            failures: list[str] = []
+            if not hits:
+                failures.append("retrieval_query_no_hits")
+            if forbidden_hits:
+                failures.append("retrieval_query_raw_trace_top_result")
+            if not expected_support_present:
+                failures.append("retrieval_query_missing_curated_support")
+            results.append(
+                {
+                    "case_id": gate["case_id"],
+                    "query": query,
+                    "passed": not failures,
+                    "hits": hits,
+                    "forbidden_hits": forbidden_hits,
+                    "expected_support_present": expected_support_present,
+                    "blocking_failures": failures,
+                    "semantic_reason": "Top production retrieval hits should be curated impact or central memory support for this query.",
+                }
+            )
+        return results
+    finally:
+        index.close()
+
+
+def _compact_gate_hit(hit: dict[str, Any]) -> dict[str, Any]:
+    document = hit.get("document") if isinstance(hit.get("document"), dict) else {}
+    return {
+        "doc_id": document.get("doc_id"),
+        "doc_type": document.get("doc_type"),
+        "node_kind": document.get("node_kind"),
+        "repo_id": document.get("repo_id"),
+        "projection_id": document.get("projection_id"),
+        "packet_id": document.get("packet_id"),
+        "commit_sha": document.get("commit_sha"),
+        "title": document.get("title"),
+        "score": hit.get("score"),
+        "sources": hit.get("sources"),
+        "reasons": hit.get("reasons"),
+    }
+
+
+class _ReadOnlyNoGraphStore:
+    def neighbors(self, node_id: str, *, limit: int = 25) -> list[dict[str, Any]]:
+        del node_id, limit
+        return []
+
+    def list_nodes(
+        self,
+        *,
+        limit: int = 25,
+        kinds: list[str] | None = None,
+        session_id: str = "",
+        status: str = "",
+    ) -> list[dict[str, Any]]:
+        del limit, kinds, session_id, status
+        return []
+
+
+class _ReadOnlyRetrievalIndex:
+    def __init__(self, db_path: Path) -> None:
+        uri = db_path.resolve().as_posix().replace("'", "''")
+        self.conn = sqlite3.connect(f"file:{uri}?mode=ro", uri=True)
+        self.conn.row_factory = sqlite3.Row
+
+    def close(self) -> None:
+        self.conn.close()
+
+    def active_projection_id(self, repo_id: str) -> str:
+        try:
+            rows = self.conn.execute(
+                """
+                SELECT projection_id
+                FROM active_retrieval_projection
+                WHERE repo_id = ?
+                """,
+                (str(repo_id or "").strip(),),
+            ).fetchall()
+        except sqlite3.OperationalError:
+            return ""
+        return str(rows[0]["projection_id"]) if rows else ""
+
+    def list_documents(self, *, limit: int = 10000, repo_id: str = "") -> list[RetrievalDocument]:
+        safe_repo_id = str(repo_id or "").strip()
+        projection_id = self.active_projection_id(safe_repo_id) if safe_repo_id else ""
+        if safe_repo_id and projection_id:
+            rows = self.conn.execute(
+                "SELECT * FROM retrieval_documents WHERE repo_id = ? AND projection_id = ? LIMIT ?",
+                (safe_repo_id, projection_id, int(limit)),
+            ).fetchall()
+        elif safe_repo_id:
+            rows = self.conn.execute(
+                "SELECT * FROM retrieval_documents WHERE repo_id = ? LIMIT ?",
+                (safe_repo_id, int(limit)),
+            ).fetchall()
+        else:
+            rows = self.conn.execute("SELECT * FROM retrieval_documents LIMIT ?", (int(limit),)).fetchall()
+        return [_retrieval_doc_from_row(row) for row in rows]
+
+    def exact_search(self, query: str, *, limit: int = 50, repo_id: str = "") -> list[RetrievalCandidate]:
+        return self._lexical_search(query, source="exact", limit=limit, repo_id=repo_id)
+
+    def bm25_search(self, query: str, *, limit: int = 50, repo_id: str = "") -> list[RetrievalCandidate]:
+        return self._lexical_search(query, source="bm25", limit=limit, repo_id=repo_id)
+
+    def get_documents_by_ids(self, doc_ids: Any, *, repo_id: str = "") -> dict[str, RetrievalDocument]:
+        ids = list(dict.fromkeys(str(doc_id) for doc_id in doc_ids if str(doc_id or "")))
+        if not ids:
+            return {}
+        placeholders = ",".join("?" for _ in ids)
+        safe_repo_id = str(repo_id or "").strip()
+        projection_id = self.active_projection_id(safe_repo_id) if safe_repo_id else ""
+        if safe_repo_id and projection_id:
+            rows = self.conn.execute(
+                f"SELECT * FROM retrieval_documents WHERE doc_id IN ({placeholders}) AND repo_id = ? AND projection_id = ?",
+                [*ids, safe_repo_id, projection_id],
+            ).fetchall()
+        elif safe_repo_id:
+            rows = self.conn.execute(
+                f"SELECT * FROM retrieval_documents WHERE doc_id IN ({placeholders}) AND repo_id = ?",
+                [*ids, safe_repo_id],
+            ).fetchall()
+        else:
+            rows = self.conn.execute(f"SELECT * FROM retrieval_documents WHERE doc_id IN ({placeholders})", ids).fetchall()
+        return {str(row["doc_id"]): _retrieval_doc_from_row(row) for row in rows}
+
+    def documents_by_graph_node_ids(self, node_ids: Any, *, repo_id: str = "") -> dict[str, list[RetrievalDocument]]:
+        ids = list(dict.fromkeys(str(node_id) for node_id in node_ids if str(node_id or "")))
+        if not ids:
+            return {}
+        placeholders = ",".join("?" for _ in ids)
+        safe_repo_id = str(repo_id or "").strip()
+        if safe_repo_id:
+            rows = self.conn.execute(
+                f"SELECT * FROM retrieval_documents WHERE graph_node_id IN ({placeholders}) AND repo_id = ?",
+                [*ids, safe_repo_id],
+            ).fetchall()
+        else:
+            rows = self.conn.execute(f"SELECT * FROM retrieval_documents WHERE graph_node_id IN ({placeholders})", ids).fetchall()
+        out: dict[str, list[RetrievalDocument]] = {}
+        for row in rows:
+            doc = _retrieval_doc_from_row(row)
+            out.setdefault(doc.graph_node_id, []).append(doc)
+        return out
+
+    def _lexical_search(self, query: str, *, source: str, limit: int, repo_id: str) -> list[RetrievalCandidate]:
+        terms = _query_terms(query)
+        if not terms:
+            return []
+        scored: list[tuple[float, str]] = []
+        for doc in self.list_documents(limit=100000, repo_id=repo_id):
+            text = f"{doc.title}\n{doc.body}".lower()
+            score = sum(1.0 for term in terms if term in text)
+            if score:
+                scored.append((score + float(doc.importance or 0.0), doc.doc_id))
+        scored.sort(key=lambda item: item[0], reverse=True)
+        return [RetrievalCandidate(doc_id=doc_id, source=source, rank=rank, raw_score=score) for rank, (score, doc_id) in enumerate(scored[:limit], start=1)]
+
+
+def _query_terms(query: str) -> list[str]:
+    return [term for term in re.sub(r"[^a-zA-Z0-9_.-]+", " ", query).lower().split() if len(term) > 2]
+
+
+def _retrieval_doc_from_row(row: sqlite3.Row) -> RetrievalDocument:
+    keys = set(row.keys())
+    metadata = {}
+    if "metadata_json" in keys:
+        try:
+            metadata = json.loads(str(row["metadata_json"] or "{}"))
+        except json.JSONDecodeError:
+            metadata = {}
+    return RetrievalDocument(
+        doc_id=str(row["doc_id"]),
+        doc_type=str(row["doc_type"]),
+        graph_node_id=str(row["graph_node_id"]),
+        node_kind=str(row["node_kind"]),
+        repo_id=str(row["repo_id"] if "repo_id" in keys else ""),
+        projection_id=str(row["projection_id"] if "projection_id" in keys else ""),
+        packet_id=str(row["packet_id"] if "packet_id" in keys else ""),
+        commit_sha=str(row["commit_sha"] if "commit_sha" in keys else ""),
+        title=str(row["title"]),
+        body=str(row["body"]),
+        chunk_index=int(row["chunk_index"] if "chunk_index" in keys else 1),
+        chunk_count=int(row["chunk_count"] if "chunk_count" in keys else 1),
+        memory_class=str(row["memory_class"] if "memory_class" in keys else "graph_context"),
+        importance=float(row["importance"] if "importance" in keys else 0.5),
+        metadata=metadata,
+    )
 
 
 def _faiss_state(db_path: Path) -> dict[str, Any]:
