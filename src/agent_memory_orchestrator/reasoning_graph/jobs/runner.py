@@ -568,6 +568,9 @@ class V2SessionJobRunner:
         plan_payload["curated_input_hash"] = manifest_info["curated_input_hash"]
         plan_payload["trace_input_hash"] = manifest_info["trace_input_hash"]
         plan_payload["curated_manifest_path"] = str(manifest_path)
+        plan_payload["apply_scope"] = plan.metrics.get("apply_scope", [])
+        plan_payload["deferred_atom_kinds"] = ["symbol", "code_region", "decision", "problem"]
+        plan_payload["deferred_atom_counts"] = plan.metrics.get("deferred_atom_counts", {})
         if existing_atom_scan_error:
             plan_payload["existing_atom_scan_error"] = existing_atom_scan_error
         self.job_store.upsert_central_merge_plan(plan_payload)
