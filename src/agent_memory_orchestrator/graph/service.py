@@ -38,7 +38,6 @@ from .cache import GraphSearchCache
 from .consolidation import DeterministicGraphConsolidator
 from .answer_trace import build_answer_trace
 from .answer_trace import build_central_answer_trace
-from .answer_trace import format_answer_trace
 from .merge import CommitMergeEngine, QwenMergeClassifier
 from .session import QwenGraphExtractor, SessionGraphBuilder
 from .store import GraphEdge, GraphNode, GraphStore, KuzuGraphStore
@@ -1334,18 +1333,19 @@ def _answer_from_retrieval_result(
             "citations": [],
             "node_ids": [],
         }
-    lines = ["AMO indexed graph answer:"]
+    lines = ["Answer from repository memory:"]
     citations: list[dict[str, Any]] = []
     node_ids: list[str] = []
-    for index, hit in enumerate(hits[:5], start=1):
+    answer_rank = 0
+    for index, hit in enumerate(hits[:8], start=1):
         doc = hit.get("document") if isinstance(hit, dict) and isinstance(hit.get("document"), dict) else {}
         graph_node = hit.get("graph_node") if isinstance(hit, dict) and isinstance(hit.get("graph_node"), dict) else {}
         neighbors = hit.get("neighbors") if isinstance(hit, dict) and isinstance(hit.get("neighbors"), list) else []
         node_id = str(doc.get("graph_node_id") or graph_node.get("id") or "")
         node_ids.append(node_id)
-        title = str(doc.get("title") or graph_node.get("label") or node_id)
+        title = _public_answer_title(doc=doc, graph_node=graph_node, fallback=node_id)
         body = str(doc.get("body") or graph_node.get("summary") or "")
-        statement = _body_field(body, "statement") or _best_answer_line(body) or str(graph_node.get("summary") or "")
+        statement = _public_answer_statement(doc=doc, graph_node=graph_node, body=body)
         reason = _body_field(body, "reason")
         trace = (
             build_answer_trace(
@@ -1360,15 +1360,19 @@ def _answer_from_retrieval_result(
         support = _answer_support(doc=doc, graph_node=graph_node, neighbors=neighbors, trace=trace)
         if not trace.get("node_count"):
             trace = _fallback_trace_from_retrieval_doc(doc=doc, node_id=node_id, support=support)
-        line = f"{index}. {title}: {statement}".strip()
-        if reason and reason.lower() != statement.lower():
-            line += f" Reason: {reason}"
-        trace_summary = format_answer_trace(trace)
-        if trace_summary:
-            line += f" Trace: {trace_summary}"
-        if support["summary"]:
-            line += f" Support: {support['summary']}"
-        lines.append(line)
+        if str(doc.get("doc_type") or "") not in {"packet", "evidence", "graph_lineage"}:
+            answer_rank += 1
+            line = f"{answer_rank}. {title}: {statement}".strip()
+            public_reason = _public_answer_text(reason)
+            if public_reason and public_reason.lower() != statement.lower():
+                line += f" Reason: {public_reason}"
+            trace_summary = _public_trace_summary(trace)
+            if trace_summary:
+                line += f" Evidence: {trace_summary}"
+            public_support = _public_support_summary(support)
+            if public_support:
+                line += f" Support: {public_support}"
+            lines.append(line)
         citations.append(
             {
                 "rank": index,
@@ -1440,6 +1444,113 @@ def _fallback_trace_from_retrieval_doc(*, doc: dict[str, Any], node_id: str, sup
             "neighbor_node_ids": support.get("neighbor_node_ids", []),
         },
     }
+
+
+def _public_trace_summary(trace: dict[str, Any]) -> str:
+    if not trace or not trace.get("node_count"):
+        return ""
+    chain_parts: list[str] = []
+    for item in trace.get("chain") or []:
+        role = str(item.get("role") or "").strip()
+        kind = str(item.get("kind") or "").strip()
+        public_role = _public_trace_role(role or kind)
+        if public_role == "accepted reasoning":
+            summary = _public_answer_text(str(item.get("summary") or item.get("label") or ""))
+            value = f"{public_role}: {summary}" if summary else public_role
+        else:
+            value = public_role
+        if value and value not in chain_parts:
+            chain_parts.append(value)
+    support_parts: list[str] = []
+    support = trace.get("support") if isinstance(trace.get("support"), dict) else {}
+    if support.get("commit_shas"):
+        support_parts.append("commit-backed")
+    if support.get("evidence_ids"):
+        support_parts.append("evidence-backed")
+    if support.get("code_nodes"):
+        support_parts.append("code-backed")
+    return " -> ".join([*chain_parts[:4], *support_parts])
+
+
+def _public_trace_role(role: str) -> str:
+    normalized = str(role or "").strip().lower()
+    labels = {
+        "central_version": "active memory version",
+        "knowledgeversion": "active memory version",
+        "reasoning": "accepted reasoning",
+        "reasoningnode": "accepted reasoning",
+        "file_impact": "changed file",
+        "fileimpactsummary": "changed file",
+        "code_impact": "implementation change",
+        "codeimpactsummary": "implementation change",
+        "commit": "commit support",
+        "packet": "session support",
+        "evidence": "evidence support",
+        "evidenceref": "evidence support",
+    }
+    return labels.get(normalized, "")
+
+
+def _public_support_summary(support: dict[str, Any]) -> str:
+    parts: list[str] = []
+    if support.get("packet_ids"):
+        parts.append("session context")
+    if support.get("commit_shas"):
+        parts.append("commit-backed")
+    if support.get("evidence_ids"):
+        parts.append("evidence-backed")
+    if support.get("code_nodes") or support.get("code_node_ids"):
+        parts.append("code-linked")
+    return ", ".join(parts)
+
+
+def _public_answer_title(*, doc: dict[str, Any], graph_node: dict[str, Any], fallback: str) -> str:
+    metadata = doc.get("metadata") if isinstance(doc.get("metadata"), dict) else {}
+    doc_type = str(doc.get("doc_type") or "").strip().lower()
+    if doc_type == "file_impact":
+        path = str(metadata.get("path") or "").strip()
+        if path:
+            return f"Changes in {path}"
+    if doc_type == "code_impact":
+        commit_messages = metadata.get("commit_messages") if isinstance(metadata.get("commit_messages"), list) else []
+        if commit_messages:
+            return _public_answer_text(str(commit_messages[0]))
+    return _public_answer_text(str(doc.get("title") or graph_node.get("label") or fallback))
+
+
+def _public_answer_statement(*, doc: dict[str, Any], graph_node: dict[str, Any], body: str) -> str:
+    metadata = doc.get("metadata") if isinstance(doc.get("metadata"), dict) else {}
+    doc_type = str(doc.get("doc_type") or "").strip().lower()
+    if doc_type == "file_impact":
+        path = str(metadata.get("path") or "").strip()
+        reasons = metadata.get("reasons") if isinstance(metadata.get("reasons"), list) else []
+        reason = _public_answer_text(str(reasons[0])) if reasons else ""
+        if path and reason:
+            return f"{path} changed because {reason}"
+        if path:
+            return f"{path} changed in the retrieved work."
+    if doc_type == "code_impact":
+        reason = _public_answer_text(str(metadata.get("reason") or ""))
+        if reason:
+            return reason
+    if doc_type == "reasoning":
+        statement = _public_answer_text(str(metadata.get("statement") or ""))
+        if statement:
+            return statement
+    return _public_answer_text(_body_field(body, "statement") or _best_answer_line(body) or str(graph_node.get("summary") or ""))
+
+
+def _public_answer_text(text: str) -> str:
+    cleaned = re.sub(r"\{[^{}]{0,2000}\}", "", str(text or ""))
+    cleaned = re.sub(r"\{.*$", "", cleaned)
+    cleaned = re.sub(r"\b(?:FileImpactSummary|CodeImpactSummary|ReasoningNode):\s*", "", cleaned)
+    cleaned = re.sub(r"\bImpact summary for\s+", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\bWP\d{3,}\b", "work item", cleaned)
+    cleaned = re.sub(r"\bE\d{3,}\b", "evidence record", cleaned)
+    cleaned = re.sub(r"\bpacket\s+work item\b", "work item", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\bwork packet\b", "work item", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\bevidence\s+evidence record\b", "evidence record", cleaned, flags=re.IGNORECASE)
+    return cleaned
 
 
 def _answer_support(

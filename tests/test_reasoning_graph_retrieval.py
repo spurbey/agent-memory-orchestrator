@@ -528,7 +528,7 @@ def _central_graph() -> InMemoryGraphStore:
             kind="KnowledgeVersion",
             label="Old retrieval projection version",
             summary="Old central memory that should not leak into the active graph view.",
-            status="active",
+            status="superseded",
             scope="central",
             session_id="s1",
             metadata={
@@ -657,6 +657,47 @@ def test_version_flow_query_prefers_active_central_version_for_locator(tmp_path:
     assert result.intent == "version_flow"
     assert result.hits[0].document.graph_node_id == "kver:active-retrieval"
     assert any(reason == "central_active_boost:0.55" for reason in result.hits[0].reasons)
+
+
+def test_central_retrieval_includes_active_versions_from_prior_graph_commits() -> None:
+    graph = InMemoryGraphStore()
+    repo_id = "repo:test"
+    graph.upsert_node(
+        GraphNode(
+            id="v2view:repo_test:main:active",
+            kind="GraphView",
+            label="main active",
+            status="active",
+            metadata={"repo_id": repo_id, "branch": "main", "mode": "active", "graph_commit_id": "gcommit:new"},
+        )
+    )
+    graph.upsert_node(
+        GraphNode(
+            id="kver:decision:old-active",
+            kind="KnowledgeVersion",
+            label="Graph retrieval design",
+            summary="Use central active GraphView retrieval for graph queries.",
+            status="active",
+            metadata={
+                "repo_id": repo_id,
+                "atom_kind": "decision",
+                "status": "superseded",
+                "graph_commit_id": "gcommit:older",
+                "version_metadata": {
+                    "subject": "Graph retrieval design",
+                    "statement": "Use central active GraphView retrieval for graph queries.",
+                },
+            },
+        )
+    )
+
+    docs = build_retrieval_documents_from_graph(graph, repo_id=repo_id)
+
+    central_versions = [doc for doc in docs if doc.doc_type == "central_version"]
+    assert [doc.graph_node_id for doc in central_versions] == ["kver:decision:old-active"]
+    assert central_versions[0].title == "Decision: Graph retrieval design"
+    assert "statement:" in central_versions[0].body
+    assert "source: active central memory" in central_versions[0].body
 
 
 def test_generic_query_does_not_overboost_low_overlap_exact_central_version(tmp_path: Path) -> None:
@@ -814,7 +855,7 @@ def test_retrieve_session_graph_fuses_candidates_and_expands_after_ranking(tmp_p
         expand_neighbors=5,
     )
 
-    assert result.intent == "code_why"
+    assert result.intent == "decision_history"
     assert result.vector_status == "sqlite:completed"
     assert result.reranker == "deterministic+bi_encoder"
     assert result.candidate_counts["bm25"] > 0
@@ -1069,6 +1110,9 @@ def test_version_flow_queries_boost_symbol_or_code_docs(tmp_path: Path) -> None:
     assert classify_query("show version flow for retrieval.py::retrieve_session_graph") == "version_flow"
     assert classify_query("show version flow for graph service rank nodes") == "version_flow"
     assert classify_query("why did we add retrieval.py for graph expansion") == "code_why"
+    assert classify_query("why did we add the daemon-owned Kuzu work ledger?") == "decision_history"
+    assert classify_query("what changed for spatial graph controls?") == "code_why"
+    assert classify_query("what changed over time for graph_service.py?") == "version_flow"
     assert result.hits
     assert result.hits[0].document.doc_type in {"symbol", "code"}
 
@@ -1109,8 +1153,9 @@ def test_graph_service_wires_retrieval_build_embed_and_answer(tmp_path: Path) ->
     assert embed["embedding"]["embedded"] == 3
     assert result["ok"] is True
     assert result["retrieval"]["hits"]
-    assert "AMO indexed graph answer" in result["answer"]["text"]
-    assert "Support: packet WP0001 | commit abc1234 | code retrieve_session_graph" in result["answer"]["text"]
+    assert "Answer from repository memory" in result["answer"]["text"]
+    assert "Support: session context, commit-backed, code-linked" in result["answer"]["text"]
+    assert "WP0001" not in result["answer"]["text"]
     first_citation = result["answer"]["citations"][0]
     assert first_citation["packet_ids"] == ["WP0001"]
     assert first_citation["commit_shas"] == ["abc1234"]
@@ -1541,9 +1586,9 @@ def test_graph_service_answer_includes_multihop_trace(tmp_path: Path) -> None:
         svc.close()
 
     assert result["ok"] is True
-    assert "Trace:" in result["answer"]["text"]
-    assert "Problem: Hook execution timed out" in result["answer"]["text"]
-    assert "Fix: Hooks became capture-only" in result["answer"]["text"]
+    assert "Evidence:" in result["answer"]["text"]
+    assert "commit-backed -> code-backed" in result["answer"]["text"]
+    assert "Hooks became capture-only" in result["answer"]["text"]
     citation = result["answer"]["citations"][0]
     assert citation["trace"]["support"]["packet_ids"] == ["WP0018"]
     assert "code:hook_response" in citation["trace"]["support"]["code_node_ids"]

@@ -154,7 +154,7 @@ def test_production_semantic_eval_reports_stale_full_trace_state(tmp_path: Path)
         assert report["product_ready"] is False
         assert "curated_graph_manifest_missing" in report["blocked_issues"]
         assert "retrieval_full_trace_dominated" in report["blocked_issues"]
-        assert "retrieval_query_raw_trace_top_result" in report["blocked_issues"]
+        assert "retrieval_query_no_hits" in report["blocked_issues"]
         assert "retrieval_query_missing_curated_support" in report["blocked_issues"]
         assert "central_merge_not_applied" in report["blocked_issues"]
         assert report["retrieval"]["legacy_doc_count"] == 1
