@@ -701,7 +701,7 @@ class V2SessionJobRunner:
             index = RetrievalIndexStore(conn)
             embedding_store = GraphEmbeddingStore(conn, db_path=self.settings.retrieval_db_path)
             try:
-                embedder = StrictTextEmbedder(self.settings.embedding_model)
+                embedder = StrictTextEmbedder(self.settings.embedding_model, dims=self.settings.embedding_dims)
             except RuntimeError as exc:
                 raise PendingModel("embedding_model_unavailable", {"error": str(exc), "model": self.settings.embedding_model}) from exc
             result = embed_missing_retrieval_documents(
