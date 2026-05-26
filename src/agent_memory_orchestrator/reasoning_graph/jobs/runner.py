@@ -5,6 +5,7 @@ import json
 import os
 import uuid
 from dataclasses import dataclass
+from dataclasses import replace as dataclass_replace
 from pathlib import Path
 from typing import Any, Callable
 
@@ -630,7 +631,7 @@ class V2SessionJobRunner:
             index = RetrievalIndexStore(conn)
             graph_error = ""
             if manifest_info.get("curated_manifest_exists"):
-                docs = _retrieval_documents_from_manifest(
+                current_docs = _retrieval_documents_from_manifest(
                     manifest_path=Path(str(manifest_info["curated_manifest_path"])),
                     source="curated_graph_manifest",
                     job=job,
@@ -640,9 +641,11 @@ class V2SessionJobRunner:
                 )
                 retrieval_source = "curated_graph_manifest"
             else:
-                docs = []
+                current_docs = []
                 retrieval_source = "curated_graph_manifest_missing"
                 graph_error = "curated_graph_manifest_missing"
+            existing_docs = index.list_repo_documents_all(repo_id=repo_id) if retrieval_source == "curated_graph_manifest" else []
+            docs = _merge_cumulative_retrieval_docs(existing_docs=existing_docs, current_docs=current_docs)
             doc_content_hash = _retrieval_doc_content_hash(docs)
             projection_id = _retrieval_projection_id(
                 repo_id=repo_id,
@@ -687,6 +690,8 @@ class V2SessionJobRunner:
             "projection_status": projection.get("status"),
             "active_projection_id": projection.get("projection_id") if activation_gate["passed"] else "",
             "activation_gate": activation_gate,
+            "current_doc_count": len(current_docs),
+            "carried_forward_doc_count": max(0, len(docs) - len(current_docs)),
             "doc_content_hash": doc_content_hash,
             **manifest_info,
         }
@@ -1152,6 +1157,34 @@ def _retrieval_documents_from_manifest(
             )
         )
     return docs
+
+
+def _merge_cumulative_retrieval_docs(
+    *,
+    existing_docs: list[RetrievalDocument],
+    current_docs: list[RetrievalDocument],
+) -> list[RetrievalDocument]:
+    """Build the active repo projection as a cumulative product-memory surface."""
+    merged: dict[str, RetrievalDocument] = {}
+    for doc in existing_docs:
+        source = str(doc.metadata.get("source") or "")
+        if source not in {"curated_graph_manifest", "central_active_graph_view"}:
+            continue
+        if doc.node_kind in {"CodeNode", "CodeHunk", "Symbol", "CodeVersion"}:
+            continue
+        merged[doc.doc_id] = dataclass_replace(
+            doc,
+            metadata={key: value for key, value in doc.metadata.items() if key != "projection_id"},
+        )
+    for doc in current_docs:
+        merged[doc.doc_id] = dataclass_replace(
+            doc,
+            metadata={key: value for key, value in doc.metadata.items() if key != "projection_id"},
+        )
+    return sorted(
+        merged.values(),
+        key=lambda doc: (doc.metadata.get("job_id", ""), doc.doc_type, doc.graph_node_id, doc.chunk_index, doc.doc_id),
+    )
 
 
 def _retrieval_projection_id(*, repo_id: str, projection_version: str, source_artifact_hash: str, doc_content_hash: str) -> str:

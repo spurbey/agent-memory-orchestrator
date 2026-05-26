@@ -575,6 +575,22 @@ class RetrievalIndexStore:
         ]
         return self.upsert_documents(projected_docs)
 
+    def list_repo_documents_all(self, *, repo_id: str, limit: int = 100000) -> list[RetrievalDocument]:
+        safe_repo_id = str(repo_id or "").strip()
+        if not safe_repo_id:
+            return []
+        rows = self.conn.execute(
+            """
+            SELECT *
+            FROM retrieval_documents
+            WHERE repo_id = ?
+            ORDER BY projection_id, doc_type, graph_node_id, chunk_index
+            LIMIT ?
+            """,
+            (safe_repo_id, int(limit)),
+        ).fetchall()
+        return [_doc_from_row(row) for row in rows]
+
     def list_documents(self, *, limit: int = 10000, repo_id: str = "") -> list[RetrievalDocument]:
         safe_repo_id = str(repo_id or "").strip()
         projection_id = self.active_projection_id(safe_repo_id) if safe_repo_id else ""

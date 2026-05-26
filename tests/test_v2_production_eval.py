@@ -314,6 +314,54 @@ def test_retrieval_docs_read_curated_manifest_directly(tmp_path: Path) -> None:
         store.close()
 
 
+def test_retrieval_projection_carries_forward_prior_curated_docs(tmp_path: Path) -> None:
+    settings = make_settings(tmp_path)
+    initialize_fresh_v2_production_storage(settings)
+    store = V2SessionJobStore(settings)
+    try:
+        repo_id = "repo:remote:cumulative"
+        runner = V2SessionJobRunner(settings, job_store=store)
+
+        def run_projection(session_id: str, node_id: str, title: str) -> dict[str, object]:
+            job = store.enqueue_session(session_id=session_id, boundary_event_id=f"raw-{session_id}", repo_path=str(tmp_path)).job
+            store.update_job_repo_identity(job_id=job["job_id"], repo_path=str(tmp_path), repo_id=repo_id, reason="test", metadata={})
+            job = store.get_job(job["job_id"]) or job
+            kuzu_dir = Path(str(job["artifact_dir"])) / "kuzu_write"
+            kuzu_dir.mkdir(parents=True, exist_ok=True)
+            curated_manifest = {
+                "nodes": [
+                    {
+                        "id": node_id,
+                        "kind": "FileImpactSummary",
+                        "label": title,
+                        "summary": title,
+                        "properties": {"path": f"src/{node_id}.py", "source": "curated_graph_manifest"},
+                    }
+                ],
+                "edges": [],
+            }
+            (kuzu_dir / "compact_graph_manifest.json").write_text(json.dumps(curated_manifest), encoding="utf-8")
+            (kuzu_dir / "curated_graph_manifest.json").write_text(json.dumps(curated_manifest), encoding="utf-8")
+            retrieval_dir = Path(str(job["artifact_dir"])) / "retrieval_docs"
+            retrieval_dir.mkdir(parents=True, exist_ok=True)
+            return runner._stage_retrieval_docs(job, Path(str(job["artifact_dir"])), retrieval_dir).diagnostics
+
+        first = run_projection("s-one", "file-impact-one", "Control room web UI impact")
+        second = run_projection("s-two", "file-impact-two", "Qwen JSON hardening impact")
+
+        assert first["doc_count"] == 1
+        assert second["current_doc_count"] == 1
+        assert second["carried_forward_doc_count"] == 1
+        assert second["doc_count"] == 2
+        with connect(settings.retrieval_db_path) as conn:
+            index = RetrievalIndexStore(conn)
+            docs = index.list_documents(repo_id=repo_id)
+        assert {doc.title for doc in docs} == {"Control room web UI impact", "Qwen JSON hardening impact"}
+        assert {doc.projection_id for doc in docs} == {second["active_projection_id"]}
+    finally:
+        store.close()
+
+
 def test_retrieval_projection_is_not_active_until_activation_gate_passes(tmp_path: Path) -> None:
     settings = make_settings(tmp_path)
     initialize_fresh_v2_production_storage(settings)

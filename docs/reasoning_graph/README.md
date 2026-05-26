@@ -124,6 +124,14 @@ session graph manifest. Central merge and retrieval use the curated graph by
 default; the trace graph remains an audit/debug artifact. See
 [Curated session graph and central merge boundary](./architecture/curated_session_graph.md).
 
+Repo-scoped retrieval projections are cumulative product-memory views. Each
+successful `retrieval_docs` stage carries forward previously validated
+curated/central docs for the same `repo_id`, adds the current job's curated docs,
+deduplicates by document id, and activates a new projection only after the
+semantic activation gate passes. This prevents the active repo view from
+shrinking to only the latest session while still excluding legacy `repo_id=""`
+or full-trace `CodeNode`/`CodeHunk` docs from product retrieval.
+
 ## Core Concepts
 
 | Concept | Meaning |
