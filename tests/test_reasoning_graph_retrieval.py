@@ -370,6 +370,29 @@ def test_offline_index_only_retrieval_respects_repo_scope(tmp_path: Path) -> Non
         conn.close()
 
 
+def test_activating_projection_retires_prior_repo_projection(tmp_path: Path) -> None:
+    conn, index_store, _embedding_store = _sqlite_store(tmp_path)
+    try:
+        for projection_id in ("rproj:old", "rproj:new"):
+            index_store.upsert_projection(
+                projection_id=projection_id,
+                repo_id="repo:amo",
+                projection_version="test",
+                source_artifact_hash=projection_id,
+                doc_content_hash=projection_id,
+                status="validated",
+            )
+
+        index_store.activate_projection(repo_id="repo:amo", projection_id="rproj:old")
+        index_store.activate_projection(repo_id="repo:amo", projection_id="rproj:new")
+
+        assert index_store.active_projection_id("repo:amo") == "rproj:new"
+        assert index_store.projection("rproj:new")["status"] == "active"
+        assert index_store.projection("rproj:old")["status"] == "historical"
+    finally:
+        conn.close()
+
+
 def test_offline_index_only_requires_active_projection_for_repo_scope(tmp_path: Path) -> None:
     settings = _settings(tmp_path)
     conn, index_store, _embedding_store = _sqlite_store(tmp_path)
