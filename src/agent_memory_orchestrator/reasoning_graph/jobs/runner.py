@@ -968,10 +968,26 @@ def _stage_output(artifact_dir: Path, stage: str) -> Path:
 
 
 def _central_merge_quality_result(artifact_dir: Path) -> Any:
+    plan_result = _read_json(_stage_output(artifact_dir, "central_version_merge"))
     merge_result = artifact_dir / "central_version_merge" / "merge_result.json"
     if merge_result.exists():
-        return _read_json(merge_result)
-    return _read_json(_stage_output(artifact_dir, "central_version_merge"))
+        applied = _read_json(merge_result)
+        if not isinstance(plan_result, dict) or not isinstance(applied, dict):
+            return applied
+        current_plan_id = str(plan_result.get("plan_id") or "")
+        applied_plan_id = str(applied.get("plan_id") or "")
+        if current_plan_id and applied_plan_id == current_plan_id:
+            return applied
+        return {
+            **plan_result,
+            "stale_merge_result": {
+                "plan_id": applied_plan_id,
+                "status": str(applied.get("status") or ""),
+                "mode": str(applied.get("mode") or ""),
+                "graph_commit_id": str((applied.get("graph_commit") if isinstance(applied.get("graph_commit"), dict) else {}).get("graph_commit_id") or ""),
+            },
+        }
+    return plan_result
 
 
 def _read_json(path: Path) -> Any:
@@ -1657,7 +1673,7 @@ def _quality_issues(
     issues: list[dict[str, Any]] = []
     central_status = str(central_result.get("status") or "")
     central_mode = str(central_result.get("mode") or "")
-    if central_status != "applied" and central_mode != "apply_exact_atoms":
+    if central_status != "applied" or central_mode != "apply_exact_atoms":
         issues.append(
             {
                 "code": "central_merge_not_applied",
