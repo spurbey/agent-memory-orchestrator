@@ -887,7 +887,11 @@ def _is_active_central_node(node: dict[str, Any], active_graph_commit_ids: set[s
     if node_kind == "GraphCommit":
         return str(node.get("id") or "") in active_graph_commit_ids or graph_commit_id in active_graph_commit_ids
     if node_kind in {"KnowledgeAtom", "KnowledgeVersion"}:
-        return graph_commit_id in active_graph_commit_ids and str(node.get("status") or metadata.get("status") or "active") == "active"
+        # GraphView HEAD identifies the active branch snapshot, not only the
+        # latest GraphCommit's newly-created versions. Older active versions
+        # remain part of the branch until a later STATUS_CHANGED edge refines,
+        # supersedes, contests, or reverts them.
+        return bool(graph_commit_id) and str(node.get("status") or metadata.get("status") or "active") == "active"
     return False
 
 
@@ -1036,6 +1040,8 @@ def retrieve_session_graph(
         max_chars=rerank_max_chars,
     )
 
+    ranked = [item for item in ranked if _meaningful_hit(item[1], item[3])]
+
     graph_nodes = (
         {str(node.get("id")): node for node in graph_store.list_nodes(limit=100000, session_id=session_id)}
         if include_graph_nodes
@@ -1064,6 +1070,16 @@ def retrieve_session_graph(
             "vector": len(vector),
             "fused": len(fused),
         },
+    )
+
+
+def _meaningful_hit(score: float, reasons: tuple[str, ...]) -> bool:
+    if score <= 0:
+        return False
+    return any(
+        str(reason).startswith(("term_overlap:", "topic_focus_overlap:", "central_active_boost:", "version_target_overlap:", "exact:"))
+        or str(reason).startswith("bi_encoder_score:")
+        for reason in reasons
     )
 
 
@@ -1163,10 +1179,16 @@ def _safe_reranker_prefix(value: str) -> str:
 
 def classify_query(query: str) -> str:
     lowered = query.lower()
-    if re.search(r"\b(version flow|version history|version chain|symbol version|symbol history|show versions?)\b", lowered):
+    if re.search(r"\b(version flow|version history|version chain|symbol version|symbol history|show versions?|over time|evolved?|evolution)\b", lowered):
         return "version_flow"
+    if re.search(r"\bwhat changed\b|\bchanges? for\b|\bhow .* changed\b", lowered):
+        return "code_why" if _query_has_code_locator(query) or re.search(r"\b(code|file|function|class|module|ui|graph|service|controls?)\b", lowered) else "semantic_search"
     if "why" in lowered or "reason" in lowered:
-        return "code_why"
+        return (
+            "code_why"
+            if _query_has_code_locator(query) or re.search(r"\b(code|file|function|class|module|ui|service|controls?)\b", lowered)
+            else "decision_history"
+        )
     if "decision" in lowered or "decide" in lowered:
         return "decision_history"
     if "::" in query or re.search(r"\b[\w./-]+\.(py|js|ts|tsx|jsx|md)\b", lowered):
@@ -1189,7 +1211,7 @@ def _documents_for_node(node: dict[str, Any], *, max_doc_chars: int) -> list[Ret
         or node.get("commit_id")
         or ""
     )
-    title = str(node.get("label") or node_id)
+    title = _node_title(node)
     body = _node_body(node)
     chunks = _chunk_text(body, max_doc_chars=max_doc_chars)
     out: list[RetrievalDocument] = []
@@ -1310,6 +1332,10 @@ def _clip(text: str, limit: int) -> str:
 
 def _node_body(node: dict[str, Any]) -> str:
     metadata = node.get("metadata") if isinstance(node.get("metadata"), dict) else {}
+    if str(node.get("kind") or "") == "KnowledgeVersion":
+        return _central_version_body(node, metadata)
+    if str(node.get("kind") or "") == "KnowledgeAtom":
+        return _central_atom_body(node, metadata)
     fields = [
         f"kind: {node.get('kind') or ''}",
         f"status: {node.get('status') or ''}",
@@ -1355,6 +1381,109 @@ def _node_body(node: dict[str, Any]) -> str:
             fields.append(f"{key}: {value}")
     fields.append("metadata: " + json.dumps(metadata, sort_keys=True))
     return "\n".join(str(field) for field in fields if str(field).strip())
+
+
+def _node_title(node: dict[str, Any]) -> str:
+    metadata = node.get("metadata") if isinstance(node.get("metadata"), dict) else {}
+    kind = str(node.get("kind") or "")
+    if kind == "KnowledgeVersion":
+        version_metadata = metadata.get("version_metadata") if isinstance(metadata.get("version_metadata"), dict) else {}
+        atom_kind = str(metadata.get("atom_kind") or "")
+        if atom_kind in {"decision", "problem"}:
+            subject = str(version_metadata.get("subject") or version_metadata.get("summary") or version_metadata.get("statement") or "").strip()
+            return f"{atom_kind.title()}: {subject}" if subject else f"{atom_kind.title()} version"
+        if atom_kind == "file":
+            path = _central_file_path(metadata, version_metadata)
+            return f"File version: {path}" if path else "File version"
+        if atom_kind == "commit":
+            sha = _central_commit_sha(metadata, version_metadata)
+            return f"Commit version: {sha[:12]}" if sha else "Commit version"
+        return f"{atom_kind.title() or 'Knowledge'} version"
+    if kind == "KnowledgeAtom":
+        atom_kind = str(metadata.get("atom_kind") or "")
+        canonical_key = str(metadata.get("canonical_key") or "")
+        return f"{atom_kind.title() or 'Knowledge'} atom: {canonical_key.rsplit('|', 1)[-1]}"
+    return str(node.get("label") or node.get("id") or "")
+
+
+def _central_version_body(node: dict[str, Any], metadata: dict[str, Any]) -> str:
+    version_metadata = metadata.get("version_metadata") if isinstance(metadata.get("version_metadata"), dict) else {}
+    atom_kind = str(metadata.get("atom_kind") or "")
+    fields = [
+        "kind: KnowledgeVersion",
+        f"atom_kind: {atom_kind}",
+        f"status: {node.get('status') or metadata.get('status') or ''}",
+    ]
+    if atom_kind in {"decision", "problem"}:
+        fields.extend(
+            [
+                f"subject: {version_metadata.get('subject') or ''}",
+                f"summary: {version_metadata.get('summary') or ''}",
+                f"statement: {version_metadata.get('statement') or ''}",
+                f"rationale: {version_metadata.get('rationale') or ''}",
+                "linked_files: " + ", ".join(_string_values(version_metadata.get("linked_files"))[:8]),
+                "linked_commits: " + ", ".join(_string_values(version_metadata.get("linked_commits"))[:6]),
+                "source: active central memory",
+            ]
+        )
+    elif atom_kind == "file":
+        fields.extend(
+            [
+                f"file_path: {_central_file_path(metadata, version_metadata)}",
+                f"producing_commit_sha: {version_metadata.get('producing_commit_sha') or ''}",
+                "source: active central file history",
+            ]
+        )
+    elif atom_kind == "commit":
+        fields.extend(
+            [
+                f"commit_sha: {_central_commit_sha(metadata, version_metadata)}",
+                "source: active central commit history",
+            ]
+        )
+    else:
+        fields.append(f"summary: {node.get('summary') or ''}")
+    return "\n".join(field for field in fields if field and not field.endswith(": "))
+
+
+def _central_atom_body(node: dict[str, Any], metadata: dict[str, Any]) -> str:
+    atom_kind = str(metadata.get("atom_kind") or "")
+    fields = [
+        "kind: KnowledgeAtom",
+        f"atom_kind: {atom_kind}",
+        f"status: {node.get('status') or metadata.get('status') or ''}",
+        f"canonical_key: {metadata.get('canonical_key') or ''}",
+        "source: central canonical identity",
+    ]
+    return "\n".join(field for field in fields if field and not field.endswith(": "))
+
+
+def _central_file_path(metadata: dict[str, Any], version_metadata: dict[str, Any]) -> str:
+    canonical_key = str(version_metadata.get("canonical_key") or metadata.get("canonical_key") or "")
+    if "|file|" in canonical_key:
+        return canonical_key.rsplit("|", 1)[-1]
+    if canonical_key.startswith("file|"):
+        parts = canonical_key.split("|", 2)
+        return parts[-1] if len(parts) == 3 else ""
+    return str(version_metadata.get("file_path") or "")
+
+
+def _central_commit_sha(metadata: dict[str, Any], version_metadata: dict[str, Any]) -> str:
+    canonical_key = str(version_metadata.get("canonical_key") or metadata.get("canonical_key") or "")
+    if "|commit|" in canonical_key:
+        return canonical_key.rsplit("|", 1)[-1]
+    if canonical_key.startswith("commit|"):
+        parts = canonical_key.split("|", 2)
+        return parts[-1] if len(parts) == 3 else ""
+    return str(version_metadata.get("commit_sha") or "")
+
+
+def _string_values(value: Any) -> list[str]:
+    if isinstance(value, (list, tuple, set)):
+        return [str(item) for item in value if str(item).strip()]
+    if value is None or not str(value).strip():
+        return []
+    return [str(value).strip()]
 
 
 def _chunk_text(text: str, *, max_doc_chars: int) -> list[str]:
@@ -1842,13 +1971,13 @@ def _central_version_boost(
     metadata = doc.metadata.get("node_metadata") if isinstance(doc.metadata, dict) else {}
     atom_kind = str(metadata.get("atom_kind") or "") if isinstance(metadata, dict) else ""
     if atom_kind in {"decision", "problem"}:
-        return 0.45
+        return 0.85
     if intent == "version_flow" or _query_has_code_locator(query):
         return 0.55
     if topic_overlap_ratio >= 0.6:
-        return 0.45
+        return 0.65
     if topic_overlap_ratio >= 0.4:
-        return 0.18
+        return 0.55
     return 0.0
 
 
