@@ -32,6 +32,7 @@ from ..promotion import build_curated_session_graph
 from ..retrieval import RETRIEVAL_EMBEDDING_KIND
 from ..retrieval import RetrievalDocument
 from ..retrieval import RetrievalIndexStore
+from ..retrieval import build_retrieval_documents_from_graph
 from ..retrieval import embed_missing_retrieval_documents
 from ..session_graph_writer import build_compact_session_graph
 from ..session_graph_writer import write_compact_session_graph
@@ -657,7 +658,11 @@ class V2SessionJobRunner:
                     max_doc_chars=self.settings.auto_retrieval_max_doc_chars,
                     limit=self.settings.auto_retrieval_node_limit,
                 )
+                central_docs, central_graph_error = self._central_active_retrieval_docs(repo_id=repo_id)
+                current_docs = [*current_docs, *central_docs]
                 retrieval_source = "curated_graph_manifest"
+                if central_graph_error:
+                    graph_error = central_graph_error
             else:
                 current_docs = []
                 retrieval_source = "curated_graph_manifest_missing"
@@ -709,12 +714,39 @@ class V2SessionJobRunner:
             "active_projection_id": projection.get("projection_id") if activation_gate["passed"] else "",
             "activation_gate": activation_gate,
             "current_doc_count": len(current_docs),
+            "central_active_doc_count": len([doc for doc in current_docs if doc.metadata.get("source") == "central_active_graph_view"]),
             "carried_forward_doc_count": max(0, len(docs) - len(current_docs)),
             "doc_content_hash": doc_content_hash,
             **manifest_info,
         }
         output.write_text(json.dumps(payload, indent=2), encoding="utf-8")
         return StageResult(output_path=output, diagnostics=payload)
+
+    def _central_active_retrieval_docs(self, *, repo_id: str) -> tuple[list[RetrievalDocument], str]:
+        graph = self.graph_store_factory(repo_central_graph_path(self.settings, repo_id))
+        try:
+            graph.init_schema()
+            docs = build_retrieval_documents_from_graph(
+                graph,
+                node_limit=self.settings.auto_retrieval_node_limit,
+                max_doc_chars=self.settings.auto_retrieval_max_doc_chars,
+                pipeline_version="",
+                graph_schema_version="",
+                repo_id=repo_id,
+            )
+        except Exception as exc:  # pragma: no cover - central graph may be locked by another process
+            return [], f"central_active_graph_view_scan_failed:{type(exc).__name__}:{exc}"
+        finally:
+            graph.close()
+        central_docs = [
+            dataclass_replace(
+                doc,
+                metadata={**doc.metadata, "source": "central_active_graph_view", "repo_id": repo_id},
+            )
+            for doc in docs
+            if doc.doc_type in {"central_version", "central_atom", "graph_lineage"}
+        ]
+        return central_docs, ""
 
     def _stage_embeddings(self, job: dict[str, Any], artifact_dir: Path, stage_dir: Path) -> StageResult:
         del artifact_dir
@@ -1200,9 +1232,12 @@ def _merge_cumulative_retrieval_docs(
 ) -> list[RetrievalDocument]:
     """Build the active repo projection as a cumulative product-memory surface."""
     merged: dict[str, RetrievalDocument] = {}
+    current_has_central_docs = any(str(doc.metadata.get("source") or "") == "central_active_graph_view" for doc in current_docs)
     for doc in existing_docs:
         source = str(doc.metadata.get("source") or "")
         if source not in {"curated_graph_manifest", "central_active_graph_view"}:
+            continue
+        if current_has_central_docs and source == "central_active_graph_view":
             continue
         if doc.node_kind in {"CodeNode", "CodeHunk", "Symbol", "CodeVersion"}:
             continue
