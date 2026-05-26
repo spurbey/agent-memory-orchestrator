@@ -1592,7 +1592,12 @@ def _active_central_versions_for_support(
         metadata = node.get("metadata") if isinstance(node.get("metadata"), dict) else {}
         if str(metadata.get("repo_id") or "") != repo_id:
             continue
-        if str(metadata.get("graph_commit_id") or "") != graph_commit_id:
+        # GraphView(main, active) points at the branch head GraphCommit, but
+        # active exact versions may have been introduced by earlier commits in
+        # the same branch. Treat the central graph as the active view and rely
+        # on status/repo/support matching instead of filtering to only the head
+        # commit's new versions.
+        if graph_commit_id and not str(metadata.get("graph_commit_id") or ""):
             continue
         if str(node.get("status") or metadata.get("status") or "active") != "active":
             continue
