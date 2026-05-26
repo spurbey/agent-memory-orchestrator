@@ -128,7 +128,7 @@ class V2SessionJobRunner:
         stage_dir = artifact_dir / stage
         stage_dir.mkdir(parents=True, exist_ok=True)
         input_artifact = self._stage_input_artifact(job, stage, artifact_dir)
-        input_hash = path_hash(input_artifact)
+        input_hash = self._stage_input_hash(job=job, stage=stage, input_artifact=input_artifact)
         config_hash = stage_config_hash(self.settings, stage=stage)
         existing = self.job_store.stage_row(job_id=str(job["job_id"]), stage=stage)
         output = Path(str(existing.get("output_artifact") or "")) if existing else Path()
@@ -166,6 +166,19 @@ class V2SessionJobRunner:
             diagnostics = {**result.diagnostics, "superseded_previous_stage": superseded}
             return StageResult(output_path=result.output_path, diagnostics=diagnostics)
         return result
+
+    def _stage_input_hash(self, *, job: dict[str, Any], stage: str, input_artifact: Path) -> str:
+        base_hash = path_hash(input_artifact)
+        if stage != "central_version_merge":
+            return base_hash
+        repo_id = str(job.get("repo_id") or "") or resolve_repo_identity(str(job.get("repo_path") or "")).repo_id
+        active_view = self.job_store.graph_view(repo_id=repo_id, branch="main", mode="active") or {}
+        payload = {
+            "base_input_hash": base_hash,
+            "repo_id": repo_id,
+            "active_graph_view_head": str(active_view.get("graph_commit_id") or ""),
+        }
+        return hashlib.sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()
 
     def _stage_input_artifact(self, job: dict[str, Any], stage: str, artifact_dir: Path) -> Path:
         if stage == V2_STAGES[0]:
