@@ -399,24 +399,35 @@ def reasoning_commit_alignment(packet: dict[str, Any], node: dict[str, Any]) -> 
     )
     anchor_terms = _alignment_terms(commit_message)
     file_terms = set().union(*(_path_alignment_terms(path) for path in changed_files)) if changed_files else set()
-    evidence_terms = (anchor_terms | file_terms) - {"py", "js", "css", "html", "md"}
     node_terms = _alignment_terms(node_text)
-    if not evidence_terms or not node_terms:
+    if not anchor_terms or not node_terms:
         return {
             "status": "unknown",
             "overlap_terms": [],
             "commit_message": commit_message,
             "changed_file_sample": changed_files,
+            "anchor_terms": sorted(anchor_terms),
+            "file_terms": sorted(file_terms)[:40],
+            "anchor_overlap_terms": [],
+            "file_overlap_terms": [],
+            "alignment_reason": "missing_anchor_or_node_terms",
         }
-    overlap = sorted(node_terms.intersection(evidence_terms))
-    status = "aligned" if overlap else "low_overlap"
+    anchor_overlap = sorted(node_terms.intersection(anchor_terms))
+    file_overlap = sorted(node_terms.intersection(file_terms - {"py", "js", "css", "html", "md"}))
+    # File/path terms are supporting evidence, not enough to make a Qwen node
+    # answer-grade. Requiring at least two commit-message anchors prevents stale
+    # but repo-adjacent text from becoming durable central memory.
+    status = "aligned" if len(anchor_overlap) >= 2 else "low_overlap"
     return {
         "status": status,
-        "overlap_terms": overlap,
+        "overlap_terms": anchor_overlap,
         "commit_message": commit_message,
         "changed_file_sample": changed_files,
         "anchor_terms": sorted(anchor_terms),
         "file_terms": sorted(file_terms)[:40],
+        "anchor_overlap_terms": anchor_overlap,
+        "file_overlap_terms": file_overlap[:40],
+        "alignment_reason": "commit_anchor_overlap" if status == "aligned" else "insufficient_commit_anchor_overlap",
     }
 
 
