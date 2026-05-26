@@ -9,9 +9,13 @@ from pathlib import Path
 from typing import Any
 
 from ...core.config import Settings
+from ..embedding_store import GraphEmbeddingHit
+from ..embedding_store import cosine_similarity
+from ..retrieval import RETRIEVAL_EMBEDDING_KIND
 from ..retrieval import RetrievalCandidate
 from ..retrieval import RetrievalDocument
 from ..retrieval import retrieve_session_graph
+from ..session_runtime import StrictTextEmbedder
 
 
 DEFAULT_TARGET_JOB_ID = "v2job:0b68249f48c244c68fb12977eb93d9ba"
@@ -42,7 +46,7 @@ def run_production_semantic_eval(
     artifact_dir = Path(str(job.get("artifact_dir") or ""))
     kuzu_write = _kuzu_write_state(artifact_dir)
     central = _central_state(settings.db_path, job_id=job_id, repo_id=safe_repo_id)
-    retrieval = _retrieval_state(settings.retrieval_db_path, repo_id=safe_repo_id)
+    retrieval = _retrieval_state(settings.retrieval_db_path, repo_id=safe_repo_id, settings=settings)
     quality = _compact_quality(_stage_json(by_stage.get("quality_eval", {})))
     cases = _cases(
         kuzu_write=kuzu_write,
@@ -88,7 +92,7 @@ def default_production_eval_path(root: Path | None = None) -> Path:
 
 
 def _cases(*, kuzu_write: dict[str, Any], central: dict[str, Any], retrieval: dict[str, Any], quality: dict[str, Any]) -> list[dict[str, Any]]:
-    return [
+    cases = [
         _case(
             "curated_manifest_present",
             expected={"curated_graph_manifest": "exists"},
@@ -150,16 +154,28 @@ def _cases(*, kuzu_write: dict[str, Any], central: dict[str, Any], retrieval: di
             failures=_vector_readiness_failures(retrieval),
             reason="Product-ready retrieval requires complete embedding and FAISS coverage; partial vectors may be used only as a disclosed degraded mode.",
         ),
-        _case(
-            "quality_not_product_ready_when_blocked",
-            expected={"product_ready": False},
-            actual={"product_ready": quality.get("product_ready"), "blocking_issues": quality.get("blocking_issues")},
-            passed=quality.get("product_ready") is not True,
-            failures=[] if quality.get("product_ready") is not True else ["quality_eval_overstated_product_ready"],
-            reason="Quality eval must not mark stale/full-trace state as product-ready.",
-        ),
         *_retrieval_query_gate_cases(retrieval),
     ]
+    independent_failures = [
+        failure
+        for case in cases
+        for failure in case.get("blocking_failures", [])
+        if str(failure or "")
+    ]
+    expected_quality_ready = not independent_failures
+    cases.append(
+        _case(
+            "quality_product_ready_matches_independent_gates",
+            expected={"product_ready": expected_quality_ready},
+            actual={"product_ready": quality.get("product_ready"), "blocking_issues": quality.get("blocking_issues")},
+            passed=quality.get("product_ready") is expected_quality_ready,
+            failures=[]
+            if quality.get("product_ready") is expected_quality_ready
+            else ["quality_eval_understated_product_ready" if expected_quality_ready else "quality_eval_overstated_product_ready"],
+            reason="Quality eval must agree with the independent curated/central/retrieval/vector gates.",
+        ),
+    )
+    return cases
 
 
 def _case(
@@ -279,7 +295,7 @@ def _kuzu_write_state(artifact_dir: Path) -> dict[str, Any]:
     }
 
 
-def _retrieval_state(db_path: Path, *, repo_id: str) -> dict[str, Any]:
+def _retrieval_state(db_path: Path, *, repo_id: str, settings: Settings) -> dict[str, Any]:
     if not db_path.exists():
         return {"exists": False, "repo_id": repo_id, "repo_doc_count": 0, "vector_status_truthful": True}
     active_projection = _active_projection_row(db_path, repo_id=repo_id)
@@ -326,7 +342,8 @@ def _retrieval_state(db_path: Path, *, repo_id: str) -> dict[str, Any]:
         default=0,
     )
     faiss = _faiss_state(db_path)
-    query_gates = _retrieval_query_gates(db_path, repo_id=repo_id)
+    vector_ready = embedded_count >= repo_doc_count and repo_doc_count > 0 and str(faiss.get("status") or "") == "ready"
+    query_gates = _retrieval_query_gates(db_path, repo_id=repo_id, settings=settings, require_vector=vector_ready)
     return {
         "exists": True,
         "repo_id": repo_id,
@@ -404,22 +421,41 @@ def _vector_readiness_failures(retrieval: dict[str, Any]) -> list[str]:
     return failures
 
 
-def _retrieval_query_gates(db_path: Path, *, repo_id: str) -> list[dict[str, Any]]:
+def _retrieval_query_gates(db_path: Path, *, repo_id: str, settings: Settings, require_vector: bool = False) -> list[dict[str, Any]]:
     if not db_path.exists():
         return []
     gates = [
         {
-            "case_id": "query_graph_service_uses_curated_support",
-            "query": "why did we change graph_service.py?",
+            "case_id": "query_control_room_uses_curated_support",
+            "query": "what changed for AMO control room web UI?",
             "expected_doc_types": {"file_impact", "code_impact", "central_version", "central_atom", "reasoning", "commit", "packet"},
+            "required_terms": {"amo", "control", "room", "web"},
         },
         {
-            "case_id": "query_spatial_controls_uses_curated_support",
-            "query": "what changed for spatial graph controls?",
+            "case_id": "query_qwen_json_uses_curated_support",
+            "query": "what qwen json hardening was done?",
             "expected_doc_types": {"file_impact", "code_impact", "commit", "packet", "reasoning"},
+            "required_terms": {"qwen", "json"},
         },
     ]
     index = _ReadOnlyRetrievalIndex(db_path)
+    embedding_store: _ReadOnlyEmbeddingSearch | None = None
+    embedder: StrictTextEmbedder | None = None
+    embedding_model = ""
+    graph_scope = ""
+    vector_setup_error = ""
+    if require_vector:
+        embedding_model = str(settings.embedding_model or "").strip()
+        graph_scope = _active_embedding_scope(
+            db_path,
+            model=embedding_model,
+            preferred_scope=str(settings.retrieval_graph_scope or "").strip() or "v2",
+        )
+        try:
+            embedder = StrictTextEmbedder(embedding_model, dims=int(settings.embedding_dims or 256))
+            embedding_store = _ReadOnlyEmbeddingSearch(db_path)
+        except Exception as exc:  # pragma: no cover - environment dependent
+            vector_setup_error = f"{type(exc).__name__}:{exc}"
     try:
         results: list[dict[str, Any]] = []
         for gate in gates:
@@ -428,6 +464,10 @@ def _retrieval_query_gates(db_path: Path, *, repo_id: str) -> list[dict[str, Any
                 query=query,
                 index_store=index,  # type: ignore[arg-type]
                 graph_store=_ReadOnlyNoGraphStore(),  # type: ignore[arg-type]
+                embedding_store=embedding_store,  # type: ignore[arg-type]
+                embedder=embedder,
+                embedding_model=embedding_model if embedder is not None else "",
+                graph_scope=graph_scope,
                 repo_id=repo_id,
                 limit=5,
                 candidate_limit=80,
@@ -442,6 +482,9 @@ def _retrieval_query_gates(db_path: Path, *, repo_id: str) -> list[dict[str, Any
                 or str(hit.get("doc_type") or "") in {"session_codenode", "session_codehunk", "code"}
             ]
             expected_support_present = any(str(hit.get("doc_type") or "") in gate["expected_doc_types"] for hit in hits)
+            visible_text = "\n".join(str(hit.get("title") or "") for hit in hits).lower()
+            required_terms = set(gate.get("required_terms") or set())
+            required_terms_present = all(term in visible_text for term in required_terms)
             failures: list[str] = []
             if not hits:
                 failures.append("retrieval_query_no_hits")
@@ -449,20 +492,35 @@ def _retrieval_query_gates(db_path: Path, *, repo_id: str) -> list[dict[str, Any
                 failures.append("retrieval_query_raw_trace_top_result")
             if not expected_support_present:
                 failures.append("retrieval_query_missing_curated_support")
+            if required_terms and not required_terms_present:
+                failures.append("retrieval_query_missing_required_terms")
+            if require_vector:
+                if vector_setup_error:
+                    failures.append("retrieval_query_vector_setup_failed")
+                elif result.candidate_counts.get("vector", 0) <= 0:
+                    failures.append("retrieval_query_no_vector_hits")
             results.append(
                 {
                     "case_id": gate["case_id"],
                     "query": query,
                     "passed": not failures,
                     "hits": hits,
+                    "vector_required": require_vector,
+                    "vector_status": result.vector_status,
+                    "vector_candidate_count": result.candidate_counts.get("vector", 0),
+                    "vector_setup_error": vector_setup_error,
                     "forbidden_hits": forbidden_hits,
                     "expected_support_present": expected_support_present,
+                    "required_terms": sorted(required_terms),
+                    "required_terms_present": required_terms_present,
                     "blocking_failures": failures,
                     "semantic_reason": "Top production retrieval hits should be curated impact or central memory support for this query.",
                 }
             )
         return results
     finally:
+        if embedding_store is not None:
+            embedding_store.close()
         index.close()
 
 
@@ -600,6 +658,88 @@ class _ReadOnlyRetrievalIndex:
         return [RetrievalCandidate(doc_id=doc_id, source=source, rank=rank, raw_score=score) for rank, (score, doc_id) in enumerate(scored[:limit], start=1)]
 
 
+class _ReadOnlyEmbeddingSearch:
+    def __init__(self, db_path: Path) -> None:
+        uri = db_path.resolve().as_posix().replace("'", "''")
+        self.conn = sqlite3.connect(f"file:{uri}?mode=ro", uri=True)
+        self.conn.row_factory = sqlite3.Row
+
+    def close(self) -> None:
+        self.conn.close()
+
+    def search(
+        self,
+        query_vector: list[float],
+        *,
+        embedding_kind: str,
+        model: str,
+        graph_scope: str = "",
+        limit: int = 10,
+        backend: str = "auto",
+    ) -> tuple[list[GraphEmbeddingHit], str]:
+        rows = self.conn.execute(
+            """
+            SELECT *
+            FROM graph_embeddings
+            WHERE embedding_kind = ? AND model = ? AND graph_scope = ? AND status = 'active'
+            """,
+            (embedding_kind, model, graph_scope),
+        ).fetchall()
+        scored: list[tuple[float, sqlite3.Row]] = []
+        for row in rows:
+            try:
+                vector = [float(value) for value in json.loads(str(row["vector_json"] or "[]"))]
+            except (TypeError, ValueError, json.JSONDecodeError):
+                continue
+            score = cosine_similarity(query_vector, vector)
+            scored.append((score, row))
+        scored.sort(key=lambda item: item[0], reverse=True)
+        hits = [
+            GraphEmbeddingHit(
+                embedding_id=str(row["embedding_id"]),
+                node_id=str(row["node_id"]),
+                node_kind=str(row["node_kind"]),
+                memory_class=str(row["memory_class"]),
+                graph_scope=str(row["graph_scope"]),
+                graph_path=str(row["graph_path"]),
+                embedding_kind=str(row["embedding_kind"]),
+                model=str(row["model"]),
+                score=float(score),
+            )
+            for score, row in scored[: max(0, int(limit))]
+        ]
+        return hits, "sqlite:completed" if rows else "no_embeddings"
+
+
+def _active_embedding_scope(db_path: Path, *, model: str, preferred_scope: str) -> str:
+    preferred = str(preferred_scope or "").strip()
+    if preferred:
+        count = _scalar(
+            db_path,
+            """
+            SELECT COUNT(*)
+            FROM graph_embeddings
+            WHERE embedding_kind = ? AND model = ? AND graph_scope = ? AND status = 'active'
+            """,
+            (RETRIEVAL_EMBEDDING_KIND, model, preferred),
+        )
+        if count > 0:
+            return preferred
+    rows = _query(
+        db_path,
+        """
+        SELECT graph_scope, COUNT(*) AS count
+        FROM graph_embeddings
+        WHERE embedding_kind = ? AND model = ? AND status = 'active'
+        GROUP BY graph_scope
+        ORDER BY count DESC, graph_scope ASC
+        LIMIT 1
+        """,
+        (RETRIEVAL_EMBEDDING_KIND, model),
+    )
+    return str(rows[0].get("graph_scope") or preferred) if rows else preferred
+
+
 def _query_terms(query: str) -> list[str]:
     return [term for term in re.sub(r"[^a-zA-Z0-9_.-]+", " ", query).lower().split() if len(term) > 2]
 
@@ -641,9 +781,14 @@ def _faiss_state(db_path: Path) -> dict[str, Any]:
     for path in metadata_files:
         payload = _read_json(path)
         if isinstance(payload, dict):
-            records = payload.get("records") if isinstance(payload.get("records"), list) else []
-            if len(records) >= item_count:
-                item_count = len(records)
+            if isinstance(payload.get("records"), list):
+                count = len(payload["records"])
+            elif isinstance(payload.get("embedding_ids"), list):
+                count = len(payload["embedding_ids"])
+            else:
+                count = 0
+            if count >= item_count:
+                item_count = count
                 latest = str(path)
     return {"status": "ready" if item_count else "partial", "item_count": item_count, "path": latest or str(root)}
 
