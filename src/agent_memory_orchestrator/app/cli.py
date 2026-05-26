@@ -1564,7 +1564,7 @@ def main(argv: list[str] | None = None) -> int:
                     return 0
                 graph_settings = settings
                 graph_store = None
-                if args.command == "graph-retrieve" and str(args.repo_id or "").strip():
+                if args.command in {"graph-retrieve", "graph-version-flow"} and str(args.repo_id or "").strip():
                     central_graph_path = repo_central_graph_path(settings, args.repo_id)
                     graph_settings = replace(settings, graph_path=central_graph_path)
                     graph_store = KuzuGraphStore(central_graph_path)

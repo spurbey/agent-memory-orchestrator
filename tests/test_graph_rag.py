@@ -761,3 +761,105 @@ def test_version_flow_returns_commit_promotions_files_and_evidence_refs(tmp_path
     assert [node["id"] for node in flow["work_nodes"]] == ["work:s1:1"]
     assert [node["id"] for node in flow["files"]] == ["file:src/agent_memory_orchestrator/session_graph.py"]
     assert flow["evidence_ids"] == ["raw2"]
+
+
+def test_version_flow_returns_central_commit_file_versions(tmp_path: Path) -> None:
+    repo_id = "repo:remote:test"
+    graph_commit_id = "v2gcommit:central-1"
+    commit_sha = "abcdef1234567890"
+    file_path = "src/app.py"
+    store = InMemoryGraphStore()
+    store.upsert_node(
+        GraphNode(
+            id=graph_commit_id,
+            kind="GraphCommit",
+            label="Central graph commit",
+            summary="Applied commit/file central versions.",
+            status="applied",
+            scope="central",
+            session_id="s1",
+            metadata={
+                "repo_id": repo_id,
+                "job_id": "v2job:1",
+                "merge_plan_id": "v2plan:1",
+                "parent_graph_commit_id": "",
+            },
+        )
+    )
+    store.upsert_node(
+        GraphNode(
+            id="katom:commit",
+            kind="KnowledgeAtom",
+            label=f"commit|{repo_id}|{commit_sha}",
+            status="active",
+            scope="central",
+            metadata={"repo_id": repo_id, "atom_kind": "commit"},
+        )
+    )
+    store.upsert_node(
+        GraphNode(
+            id="kver:commit",
+            kind="KnowledgeVersion",
+            label=f"Commit {commit_sha[:7]}",
+            status="active",
+            scope="central",
+            session_id="s1",
+            metadata={
+                "repo_id": repo_id,
+                "atom_kind": "commit",
+                "graph_commit_id": graph_commit_id,
+                "source_node_ids": [f"commit:{commit_sha[:7]}"],
+                "version_metadata": {"canonical_key": f"commit|{repo_id}|{commit_sha}"},
+            },
+        )
+    )
+    store.upsert_node(
+        GraphNode(
+            id="katom:file",
+            kind="KnowledgeAtom",
+            label=f"file|{repo_id}|{file_path}",
+            status="active",
+            scope="central",
+            metadata={"repo_id": repo_id, "atom_kind": "file"},
+        )
+    )
+    store.upsert_node(
+        GraphNode(
+            id="kver:file",
+            kind="KnowledgeVersion",
+            label=file_path,
+            status="active",
+            scope="central",
+            session_id="s1",
+            metadata={
+                "repo_id": repo_id,
+                "atom_kind": "file",
+                "graph_commit_id": graph_commit_id,
+                "source_node_ids": [f"file:{file_path}"],
+                "version_metadata": {"canonical_key": f"file|{repo_id}|{file_path}|{commit_sha}"},
+            },
+        )
+    )
+    store.upsert_edge(GraphEdge(id="edge:kver:commit:VERSION_OF:katom:commit", source_id="kver:commit", target_id="katom:commit", kind="VERSION_OF"))
+    store.upsert_edge(GraphEdge(id="edge:kver:file:VERSION_OF:katom:file", source_id="kver:file", target_id="katom:file", kind="VERSION_OF"))
+    svc = GraphRagService(
+        make_settings(tmp_path),
+        store=store,
+        planner=DeterministicPlanner(),
+        version_backend=_StaticGitBackend(),
+    )
+    try:
+        result = svc.version_flow(repo_id=repo_id, commit=commit_sha[:7])
+    finally:
+        svc.close()
+
+    assert result["ok"] is True
+    assert result["count"] == 1
+    assert result["warnings"] == []
+    flow = result["flows"][0]
+    assert flow["flow_type"] == "central_version"
+    assert flow["graph_commit_id"] == graph_commit_id
+    assert flow["commit_ids"] == [commit_sha]
+    assert flow["files"] == [file_path]
+    assert flow["counts"]["commit_versions"] == 1
+    assert flow["counts"]["file_versions"] == 1

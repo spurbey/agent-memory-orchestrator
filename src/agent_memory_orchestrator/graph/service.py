@@ -802,7 +802,20 @@ class GraphRagService:
             for node in self.store.list_nodes(limit=node_limit)
             if _matches_repo_scope(node, safe_repo_id)
         ]
+        central_nodes = [
+            _sanitize_output_node(node)
+            for node in self.store.list_nodes(
+                kinds=["GraphCommit", "KnowledgeAtom", "KnowledgeVersion"],
+                limit=max(node_limit, safe_limit * 300),
+            )
+            if _matches_repo_scope(node, safe_repo_id)
+        ]
+        nodes_by_id = {str(node.get("id") or ""): node for node in [*nodes, *central_nodes]}
+        nodes = list(nodes_by_id.values())
         edges = self.store.list_edges(limit=edge_limit)
+        central_edges = self.store.list_edges(kinds=["VERSION_OF"], limit=max(edge_limit, safe_limit * 500))
+        edge_by_id = {str(edge.get("id") or ""): edge for edge in [*edges, *central_edges]}
+        edges = list(edge_by_id.values())
         node_by_id = {str(node.get("id") or ""): node for node in nodes}
         commit_nodes = [
             node
@@ -821,6 +834,15 @@ class GraphRagService:
             _build_version_flow(commit_node=commit_node, nodes=nodes, edges=edges, node_by_id=node_by_id)
             for commit_node in commit_nodes
         ]
+        if not flows:
+            flows = _build_central_version_flows(
+                nodes=nodes,
+                edges=edges,
+                node_by_id=node_by_id,
+                commit=commit,
+                session_id=session_id,
+                limit=safe_limit,
+            )
         visible_node_ids: set[str] = set()
         visible_edge_ids: set[str] = set()
         for flow in flows:
@@ -2373,6 +2395,140 @@ def _build_version_flow(
         "edges": flow_edges,
         "nodes": flow_nodes,
     }
+
+
+def _build_central_version_flows(
+    *,
+    nodes: list[dict[str, Any]],
+    edges: list[dict[str, Any]],
+    node_by_id: dict[str, dict[str, Any]],
+    commit: str,
+    session_id: str,
+    limit: int,
+) -> list[dict[str, Any]]:
+    graph_commits = [
+        node
+        for node in nodes
+        if str(node.get("kind") or "") == "GraphCommit"
+        and str(node.get("status") or "") == "applied"
+        and (not session_id or str(node.get("session_id") or _node_metadata(node).get("session_id") or "") == session_id)
+    ]
+    graph_commits.sort(key=lambda node: str(node.get("created_at") or node.get("updated_at") or ""), reverse=True)
+    flows: list[dict[str, Any]] = []
+    for graph_commit in graph_commits:
+        graph_commit_id = str(graph_commit.get("id") or "")
+        versions = [
+            node
+            for node in nodes
+            if str(node.get("kind") or "") == "KnowledgeVersion"
+            and str(_node_metadata(node).get("graph_commit_id") or "") == graph_commit_id
+        ]
+        if commit and commit.upper() != "HEAD" and not any(_central_version_matches_commit(node, commit) for node in versions):
+            continue
+        if not versions:
+            continue
+        version_ids = {str(node.get("id") or "") for node in versions}
+        version_edges = [
+            edge
+            for edge in edges
+            if str(edge.get("kind") or "") == "VERSION_OF" and str(edge.get("source_id") or "") in version_ids
+        ]
+        atoms = [
+            node_by_id[str(edge.get("target_id") or "")]
+            for edge in version_edges
+            if str(edge.get("target_id") or "") in node_by_id
+        ]
+        commit_versions = [node for node in versions if _central_version_atom_kind(node) == "commit"]
+        file_versions = [node for node in versions if _central_version_atom_kind(node) == "file"]
+        commit_ids = sorted({_central_version_commit_id(node) for node in commit_versions if _central_version_commit_id(node)})
+        file_paths = sorted({_central_version_file_path(node) for node in file_versions if _central_version_file_path(node)})
+        flow = {
+            "flow_type": "central_version",
+            "graph_commit_id": graph_commit_id,
+            "parent_graph_commit_id": str(_node_metadata(graph_commit).get("parent_graph_commit_id") or ""),
+            "commit_id": commit_ids[0] if len(commit_ids) == 1 else "",
+            "commit_ids": commit_ids,
+            "session_id": str(graph_commit.get("session_id") or _node_metadata(graph_commit).get("session_id") or ""),
+            "job_id": str(_node_metadata(graph_commit).get("job_id") or ""),
+            "plan_id": str(_node_metadata(graph_commit).get("merge_plan_id") or ""),
+            "versions": versions,
+            "commit_versions": commit_versions,
+            "file_versions": file_versions,
+            "files": file_paths,
+            "nodes": [graph_commit, *versions, *atoms],
+            "edges": version_edges,
+            "evidence_ids": [],
+            "counts": {
+                "work_nodes": len(versions),
+                "commit_versions": len(commit_versions),
+                "file_versions": len(file_versions),
+                "version_edges": len(version_edges),
+            },
+            "summary": _central_version_flow_summary(graph_commit, commit_ids, file_paths),
+        }
+        flows.append(flow)
+        if len(flows) >= limit:
+            break
+    return flows
+
+
+def _node_metadata(node: dict[str, Any]) -> dict[str, Any]:
+    metadata = node.get("metadata")
+    return metadata if isinstance(metadata, dict) else {}
+
+
+def _central_version_atom_kind(node: dict[str, Any]) -> str:
+    return str(_node_metadata(node).get("atom_kind") or "")
+
+
+def _central_version_matches_commit(node: dict[str, Any], commit: str) -> bool:
+    needle = str(commit or "").strip().lower()
+    if not needle:
+        return True
+    metadata = _node_metadata(node)
+    version_metadata = metadata.get("version_metadata") if isinstance(metadata.get("version_metadata"), dict) else {}
+    source_node_ids = metadata.get("source_node_ids") if isinstance(metadata.get("source_node_ids"), list) else []
+    values = [
+        str(node.get("id") or ""),
+        str(node.get("label") or ""),
+        str(node.get("summary") or ""),
+        str(version_metadata.get("canonical_key") or ""),
+        " ".join(str(value) for value in source_node_ids if value),
+    ]
+    return any(needle in value.lower() for value in values if value)
+
+
+def _central_version_commit_id(node: dict[str, Any]) -> str:
+    metadata = _node_metadata(node)
+    version_metadata = metadata.get("version_metadata") if isinstance(metadata.get("version_metadata"), dict) else {}
+    canonical_key = str(version_metadata.get("canonical_key") or node.get("label") or "")
+    parts = canonical_key.split("|")
+    if len(parts) >= 3 and parts[0] == "commit":
+        return parts[-1]
+    source_node_ids = metadata.get("source_node_ids") if isinstance(metadata.get("source_node_ids"), list) else []
+    for source_id in source_node_ids:
+        if str(source_id).startswith("commit:"):
+            return str(source_id).split(":", 1)[1]
+    return ""
+
+
+def _central_version_file_path(node: dict[str, Any]) -> str:
+    metadata = _node_metadata(node)
+    version_metadata = metadata.get("version_metadata") if isinstance(metadata.get("version_metadata"), dict) else {}
+    canonical_key = str(version_metadata.get("canonical_key") or node.get("label") or "")
+    parts = canonical_key.split("|")
+    if len(parts) >= 4 and parts[0] == "file":
+        return "|".join(parts[2:-1])
+    if len(parts) >= 3 and parts[0] == "file":
+        return parts[-1]
+    return ""
+
+
+def _central_version_flow_summary(graph_commit: dict[str, Any], commit_ids: list[str], file_paths: list[str]) -> str:
+    commit_text = ", ".join(commit_id[:12] for commit_id in commit_ids[:4]) or "no commit versions"
+    file_text = ", ".join(file_paths[:5]) or "no file versions"
+    suffix = "" if len(file_paths) <= 5 else f", +{len(file_paths) - 5} more files"
+    return _clip(f"{graph_commit.get('id')} applied commit/file versions: commits {commit_text}; files {file_text}{suffix}", 520)
 
 
 def _edge_mentions_commit(edge: dict[str, Any], *, commit_node_id: str, commit_id: str) -> bool:
