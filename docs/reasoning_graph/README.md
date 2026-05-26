@@ -32,6 +32,14 @@ a previous session closed and enqueues a job; it does not run extraction or writ
 graph nodes. Completed stage artifacts are reused unless their input hash or
 stage configuration hash changes.
 
+`reasoning evidence view` is scoped by raw hook capture first. Codex rollout
+files can contain resumed or forked transcript history, so production does not
+scan the whole transcript just because a raw record references `transcript_path`.
+When raw evidence contains `turn_id` values, Stage 2 imports only transcript rows
+inside matching `task_started` / `task_complete` windows. Whole-transcript
+scanning remains a legacy/debug mode for old reset fixtures and raw captures
+without turn ids.
+
 ## Source of Truth
 
 V2 uses deterministic facts as the spine:
