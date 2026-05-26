@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import json
 from pathlib import Path
@@ -355,6 +355,30 @@ def test_v2_central_merge_stage_writes_dry_run_plan_and_preserves_session_graph(
         result = run_semantic_eval_fixture(fixture_path=Path(fixture["path"]), case_set="baseline")
         assert result["status"] == "passed"
         assert result["metrics"]["case_count"] >= 5
+    finally:
+        store.close()
+
+
+def test_v2_central_merge_input_hash_tracks_active_graph_view_head(tmp_path: Path) -> None:
+    settings = make_settings(tmp_path)
+    store = V2SessionJobStore(settings)
+    try:
+        job = store.enqueue_session(session_id="s-head-hash", boundary_event_id="raw_boundary", repo_path=str(tmp_path)).job
+        input_artifact = tmp_path / "kuzu_write_result.json"
+        input_artifact.write_text(json.dumps({"ok": True}), encoding="utf-8")
+        runner = V2SessionJobRunner(settings, job_store=store)
+
+        initial_hash = runner._stage_input_hash(job=job, stage="central_version_merge", input_artifact=input_artifact)
+        unchanged_stage_hash = runner._stage_input_hash(job=job, stage="retrieval_docs", input_artifact=input_artifact)
+        store.update_graph_view_head(
+            repo_id=str(job.get("repo_id") or ""),
+            graph_commit_id="v2gcommit:new-head",
+            metadata={"test": "head-input"},
+        )
+        updated_hash = runner._stage_input_hash(job=job, stage="central_version_merge", input_artifact=input_artifact)
+
+        assert updated_hash != initial_hash
+        assert runner._stage_input_hash(job=job, stage="retrieval_docs", input_artifact=input_artifact) == unchanged_stage_hash
     finally:
         store.close()
 
