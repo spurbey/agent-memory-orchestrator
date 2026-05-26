@@ -1358,6 +1358,8 @@ def _answer_from_retrieval_result(
             else {}
         )
         support = _answer_support(doc=doc, graph_node=graph_node, neighbors=neighbors, trace=trace)
+        if not trace.get("node_count"):
+            trace = _fallback_trace_from_retrieval_doc(doc=doc, node_id=node_id, support=support)
         line = f"{index}. {title}: {statement}".strip()
         if reason and reason.lower() != statement.lower():
             line += f" Reason: {reason}"
@@ -1389,6 +1391,54 @@ def _answer_from_retrieval_result(
         "text": "\n".join(lines),
         "citations": citations,
         "node_ids": [node_id for node_id in node_ids if node_id],
+    }
+
+
+def _fallback_trace_from_retrieval_doc(*, doc: dict[str, Any], node_id: str, support: dict[str, Any]) -> dict[str, Any]:
+    """Build a minimal trace when a curated retrieval doc is not in this graph.
+
+    Repo central retrieval often opens the central Kuzu graph while support docs
+    still point at curated session graph ids. In that case graph traversal cannot
+    start from the support doc, but the retrieval projection already carries the
+    packet/commit/evidence/file provenance that must not be hidden.
+    """
+
+    if not any(support.get(key) for key in ("packet_ids", "commit_shas", "evidence_ids", "code_node_ids", "code_nodes")):
+        return {}
+    metadata = doc.get("metadata") if isinstance(doc.get("metadata"), dict) else {}
+    seed = {
+        "id": node_id or doc.get("doc_id"),
+        "kind": doc.get("node_kind") or doc.get("doc_type") or "RetrievalDocument",
+        "role": doc.get("doc_type") or doc.get("node_kind") or "support",
+        "label": doc.get("title") or node_id or doc.get("doc_id"),
+        "summary": _clip(str(doc.get("body") or ""), 260),
+        "packet_id": doc.get("packet_id") or metadata.get("packet_id"),
+        "commit_sha": doc.get("commit_sha") or metadata.get("commit_sha"),
+        "evidence_id": "",
+        "distance": 0,
+        "score": 0.0,
+    }
+    return {
+        "seed_node_id": node_id,
+        "max_depth": 0,
+        "node_count": 1,
+        "source": "retrieval_document_metadata",
+        "chain": [seed],
+        "packets": [{"id": value, "kind": "Packet", "label": value} for value in support.get("packet_ids", [])[:3]],
+        "commits": [{"id": value, "kind": "Commit", "label": value} for value in support.get("commit_shas", [])[:4]],
+        "evidence": [{"id": value, "kind": "EvidenceRef", "label": value} for value in support.get("evidence_ids", [])[:5]],
+        "code_hunks": [],
+        "code_nodes": [{"id": value, "kind": "CodeRef", "label": value} for value in support.get("code_node_ids", [])[:8]],
+        "symbols": [],
+        "paths": [],
+        "support": {
+            "packet_ids": support.get("packet_ids", []),
+            "commit_shas": support.get("commit_shas", []),
+            "evidence_ids": support.get("evidence_ids", []),
+            "code_node_ids": support.get("code_node_ids", []),
+            "code_nodes": support.get("code_nodes", []),
+            "neighbor_node_ids": support.get("neighbor_node_ids", []),
+        },
     }
 
 
