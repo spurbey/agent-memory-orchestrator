@@ -432,8 +432,12 @@ def test_v2_central_merge_apply_writes_exact_atoms_graph_commit_and_view(tmp_pat
         ]
         assert {node.metadata["atom_kind"] for node in atom_nodes} == {"commit", "file"}
         assert applied["deferred_atom_counts"]["symbol"] == 1
-        assert applied["applied_atom_counts"] == {"commit": 1, "file": 1}
-        assert applied["applied_version_counts"] == {"commit": 1, "file": 1}
+        assert applied["applied_atom_counts"]["commit"] == 1
+        assert applied["applied_atom_counts"]["file"] == 1
+        assert applied["applied_atom_counts"]["decision"] == 0
+        assert applied["applied_version_counts"]["commit"] == 1
+        assert applied["applied_version_counts"]["file"] == 1
+        assert applied["applied_version_counts"]["decision"] == 0
         assert all(node.metadata["graph_commit_id"] == applied["graph_commit"]["graph_commit_id"] for node in atom_nodes + version_nodes)
         assert all(node.metadata["repo_id"].startswith("repo:") for node in atom_nodes)
         assert all(node.metadata.get("idempotency_key") for node in central_nodes)
@@ -642,6 +646,58 @@ def test_v2_central_merge_apply_attaches_versions_to_matched_atoms(tmp_path: Pat
         version_of_edges = [edge for edge in graph.edges.values() if edge.kind == "VERSION_OF"]
         assert len(version_of_edges) == 1
         assert version_of_edges[0].target_id == existing_atom["atom_id"]
+    finally:
+        store.close()
+
+
+def test_v2_central_merge_apply_writes_review_decision_versions_and_relation_edges(tmp_path: Path) -> None:
+    settings = make_settings(tmp_path)
+    graph = InMemoryGraphStore()
+    store = V2SessionJobStore(settings)
+    try:
+        job = store.enqueue_session(session_id="s-decision-apply", boundary_event_id="raw_boundary", repo_path=str(tmp_path)).job
+        compact_graph = {
+            "nodes": [
+                {
+                    "id": "reason:WP0001:abc:00",
+                    "kind": "ReasoningNode",
+                    "properties": {
+                        "node_type": "Decision",
+                        "status": "accepted",
+                        "subject": "Qwen JSON hardening",
+                        "statement": "Disable Ollama thinking for Qwen JSON calls.",
+                        "selected_files": ["src/agent_memory_orchestrator/llm/qwen.py"],
+                    },
+                },
+                {
+                    "id": "reason:WP0002:def:00",
+                    "kind": "ReasoningNode",
+                    "properties": {
+                        "node_type": "Decision",
+                        "status": "accepted",
+                        "subject": "Qwen JSON hardening",
+                        "statement": "Disable Ollama thinking for Qwen JSON calls.",
+                        "selected_files": ["src/agent_memory_orchestrator/llm/qwen.py"],
+                    },
+                },
+            ],
+            "edges": [],
+        }
+        plan = build_dry_run_merge_plan(job=job, compact_graph=compact_graph, parent_graph_commit_id="")
+        stored = store.upsert_central_merge_plan(_product_plan(plan))
+
+        applied = apply_merge_plan(settings=settings, plan_id=stored["plan_id"], store=store, graph_store=graph)
+
+        decision_atoms = [node for node in graph.nodes.values() if node.kind == "KnowledgeAtom" and node.metadata.get("atom_kind") == "decision"]
+        decision_versions = [node for node in graph.nodes.values() if node.kind == "KnowledgeVersion" and node.metadata.get("atom_kind") == "decision"]
+        relation_edges = [edge for edge in graph.edges.values() if edge.kind == "DUPLICATE_OF"]
+        assert applied["applied_atom_counts"]["decision"] == 1
+        assert applied["applied_version_counts"]["decision"] == 2
+        assert len(decision_atoms) == 1
+        assert len(decision_versions) == 2
+        assert {node.status for node in decision_versions} == {"review"}
+        assert relation_edges
+        assert relation_edges[0].metadata["status"] == "review"
     finally:
         store.close()
 
