@@ -22,7 +22,7 @@ from .models import utc_now
 EXACT_APPLY_ATOM_KINDS = frozenset({"commit", "file"})
 REVIEW_APPLY_ATOM_KINDS = frozenset({"decision", "problem"})
 APPLY_ATOM_KINDS = EXACT_APPLY_ATOM_KINDS | REVIEW_APPLY_ATOM_KINDS
-APPLIER_VERSION = "central-commit-file-decision-review-applier-v1"
+APPLIER_VERSION = "central-commit-file-decision-status-applier-v1"
 
 
 class CentralMergeApplyError(RuntimeError):
@@ -98,7 +98,7 @@ def apply_merge_plan(
         try:
             owned_store.update_central_merge_plan_status(plan_id=plan_id, status="applying", mode="apply_exact_atoms")
             owned_graph.init_schema()
-            added_nodes, added_edges = _write_exact_atoms(
+            added_nodes, added_edges, status_updates = _write_exact_atoms(
                 graph_store=owned_graph,
                 plan=plan,
                 graph_commit_id=graph_commit_id,
@@ -135,6 +135,8 @@ def apply_merge_plan(
                     "applied_version_counts": apply_summary["applied_version_counts"],
                     "deferred_atom_counts": apply_summary["deferred_atom_counts"],
                     "review_relation_edge_count": apply_summary["review_relation_edge_count"],
+                    "status_update_count": len(status_updates),
+                    "status_updates": status_updates,
                 },
             )
             graph_view = owned_store.update_graph_view_head(
@@ -153,6 +155,8 @@ def apply_merge_plan(
                     "added_node_count": len(added_nodes),
                     "added_edge_count": len(added_edges),
                     **apply_summary,
+                    "status_update_count": len(status_updates),
+                    "status_updates": status_updates,
                 },
             )
             result = {
@@ -165,12 +169,16 @@ def apply_merge_plan(
                 "repo_id": str(plan.get("repo_id") or ""),
                 "branch": branch,
                 "view_mode": mode,
+                "graph_commit_id": graph_commit_id,
+                "graph_view_id": str(graph_view.get("view_id") or ""),
                 "graph_commit": graph_commit_row,
                 "graph_view": graph_view,
                 "added_node_count": len(added_nodes),
                 "added_edge_count": len(added_edges),
                 "added_nodes": added_nodes,
                 "added_edges": added_edges,
+                "status_updates": status_updates,
+                "status_update_count": len(status_updates),
                 "input_source": str(plan.get("input_source") or ""),
                 "curated_input_hash": str(plan.get("curated_input_hash") or ""),
                 "trace_input_hash": str(plan.get("trace_input_hash") or ""),
@@ -232,6 +240,8 @@ def _write_merge_result_artifact(*, store: V2SessionJobStore, plan: dict[str, An
             "mode": result.get("mode", ""),
             "branch": result.get("branch", ""),
             "view_mode": result.get("view_mode", ""),
+            "graph_commit_id": result.get("graph_commit_id", ""),
+            "graph_view_id": result.get("graph_view_id", ""),
             "graph_commit": result.get("graph_commit", {}),
             "graph_view": result.get("graph_view", {}),
             "added_node_count": result.get("added_node_count", 0),
@@ -242,6 +252,8 @@ def _write_merge_result_artifact(*, store: V2SessionJobStore, plan: dict[str, An
             "applied_version_counts": result.get("applied_version_counts", {}),
             "deferred_atom_counts": result.get("deferred_atom_counts", {}),
             "review_relation_edge_count": result.get("review_relation_edge_count", 0),
+            "status_update_count": result.get("status_update_count", 0),
+            "status_updates": result.get("status_updates", []),
             "idempotent": result.get("idempotent", False),
             "applied_at": result.get("applied_at", utc_now()),
             "apply_scope": result.get("apply_scope", ["commit", "file", "knowledge_version", "graph_commit", "graph_view"]),
@@ -294,6 +306,195 @@ def _kind_counts(items: list[dict[str, Any]], *, include: set[str] | frozenset[s
     return counts
 
 
+def _write_decision_status_transitions(
+    *,
+    graph_store: GraphStore,
+    plan: dict[str, Any],
+    versions: list[dict[str, Any]],
+    relation_edges: list[dict[str, Any]],
+    graph_commit_id: str,
+    base: dict[str, Any],
+    now: str,
+) -> tuple[list[dict[str, str]], list[str]]:
+    """Apply conservative decision/problem status transitions.
+
+    Review relation edges are useful, but versioning needs a current-state
+    pointer. This policy only promotes accepted decisions that are not involved
+    in ambiguous review relations, and only mutates older statuses when the
+    relation itself carries clear duplicate/refine/supersede/conflict meaning.
+    """
+
+    decision_version_ids = {
+        str(version.get("version_id") or "")
+        for version in versions
+        if str(version.get("atom_kind") or "") in REVIEW_APPLY_ATOM_KINDS and str(version.get("version_id") or "")
+    }
+    if not decision_version_ids:
+        return [], []
+
+    nodes = _nodes_by_id(graph_store.list_nodes(kinds=["KnowledgeVersion"], limit=1_000_000))
+    desired: dict[str, tuple[str, str]] = {}
+    relation_version_ids: set[str] = set()
+    ambiguous_version_ids: set[str] = set()
+
+    for edge in relation_edges:
+        kind = str(edge.get("kind") or "")
+        source_id = str(edge.get("source_id") or "")
+        target_id = str(edge.get("target_id") or "")
+        confidence = float(edge.get("confidence") or 0.0)
+        evidence = _relation_evidence(edge)
+        if not source_id or not target_id or source_id == target_id:
+            continue
+        if source_id in decision_version_ids:
+            relation_version_ids.add(source_id)
+        if target_id in decision_version_ids:
+            relation_version_ids.add(target_id)
+        if kind == "RELATED_REVIEW":
+            ambiguous_version_ids.update(item for item in (source_id, target_id) if item in decision_version_ids)
+            continue
+        if not _relation_targets_central_version(edge):
+            ambiguous_version_ids.update(item for item in (source_id, target_id) if item in decision_version_ids)
+            continue
+        if kind == "DUPLICATE_OF" and confidence >= 0.82:
+            if _is_decision_version(nodes.get(target_id, {})):
+                _choose_status(desired, target_id, "active", "duplicate_canonical")
+            continue
+        if kind == "REFINES" and confidence >= 0.76:
+            if source_id in decision_version_ids:
+                _choose_status(desired, source_id, "active", "refines_newer_version")
+            if _is_decision_version(nodes.get(target_id, {})):
+                _choose_status(desired, target_id, "refined", "refined_by_newer_version")
+            continue
+        if kind == "SUPERSEDES" and _safe_supersedes(confidence=confidence, evidence=evidence):
+            if source_id in decision_version_ids:
+                _choose_status(desired, source_id, "active", "supersedes_prior_version")
+            if _is_decision_version(nodes.get(target_id, {})):
+                _choose_status(desired, target_id, "superseded", "superseded_by_newer_version")
+            continue
+        if kind == "CONFLICTS_WITH" and _safe_conflict(confidence=confidence, evidence=evidence):
+            if source_id in decision_version_ids:
+                _choose_status(desired, source_id, "contested", "conflicts_with_review")
+            if _is_decision_version(nodes.get(target_id, {})):
+                _choose_status(desired, target_id, "contested", "conflicts_with_review")
+
+    for version_id in sorted(decision_version_ids):
+        if version_id not in relation_version_ids and version_id not in ambiguous_version_ids:
+            _choose_status(desired, version_id, "active", "new_decision_no_conflict")
+
+    updates: list[dict[str, str]] = []
+    edge_ids: list[str] = []
+    for version_id, (new_status, reason) in sorted(desired.items()):
+        node = nodes.get(version_id)
+        if not node or not _is_decision_version(node):
+            continue
+        old_status = str(node.get("status") or (node.get("metadata") or {}).get("status") or "review")
+        if old_status == new_status:
+            continue
+        _upsert_node_status(graph_store, node=node, status=new_status)
+        edge_id = _edge_id("STATUS_CHANGED", version_id, version_id, graph_commit_id)
+        graph_store.upsert_edge(
+            GraphEdge(
+                id=edge_id,
+                source_id=version_id,
+                target_id=version_id,
+                kind="STATUS_CHANGED",
+                confidence=1.0,
+                created_at=now,
+                metadata={
+                    **base,
+                    "old_status": old_status,
+                    "new_status": new_status,
+                    "reason": reason,
+                    "idempotency_key": _idempotency_key("edge", edge_id, graph_commit_id),
+                },
+            )
+        )
+        updates.append({"version_id": version_id, "old_status": old_status, "new_status": new_status, "reason": reason})
+        edge_ids.append(edge_id)
+    return updates, edge_ids
+
+
+def _nodes_by_id(nodes: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    return {str(node.get("id") or ""): node for node in nodes if str(node.get("id") or "")}
+
+
+def _is_decision_version(node: dict[str, Any]) -> bool:
+    metadata = node.get("metadata") if isinstance(node.get("metadata"), dict) else {}
+    return str(node.get("kind") or node.get("node_kind") or "") == "KnowledgeVersion" and str(metadata.get("atom_kind") or "") in REVIEW_APPLY_ATOM_KINDS
+
+
+def _choose_status(desired: dict[str, tuple[str, str]], version_id: str, status: str, reason: str) -> None:
+    priorities = {"contested": 50, "superseded": 40, "refined": 30, "active": 20, "review": 10}
+    current = desired.get(version_id)
+    if current is None or priorities.get(status, 0) > priorities.get(current[0], 0):
+        desired[version_id] = (status, reason)
+
+
+def _relation_evidence(edge: dict[str, Any]) -> dict[str, Any]:
+    metadata = edge.get("metadata") if isinstance(edge.get("metadata"), dict) else {}
+    score = metadata.get("score") if isinstance(metadata.get("score"), dict) else {}
+    return {
+        "reason": str(metadata.get("reason") or edge.get("reason") or ""),
+        "lexical": float(score.get("lexical") or 0.0),
+        "file_overlap": float(score.get("file_overlap") or 0.0),
+        "code_entity_overlap": float(score.get("code_entity_overlap") or 0.0),
+        "false_positive_risk": bool(score.get("false_positive_risk")),
+        "source_scope": str(score.get("source_scope") or ""),
+        "target_scope": str(score.get("target_scope") or ""),
+    }
+
+
+def _relation_targets_central_version(edge: dict[str, Any]) -> bool:
+    metadata = edge.get("metadata") if isinstance(edge.get("metadata"), dict) else {}
+    score = metadata.get("score") if isinstance(metadata.get("score"), dict) else {}
+    return str(score.get("target_scope") or "").lower() == "central"
+
+
+def _safe_supersedes(*, confidence: float, evidence: dict[str, Any]) -> bool:
+    if confidence >= 0.68:
+        return True
+    return (
+        str(evidence.get("reason") or "") == "new_decision_uses_replacement_language"
+        and float(evidence.get("code_entity_overlap") or 0.0) >= 0.6
+        and float(evidence.get("lexical") or 0.0) >= 0.35
+        and not bool(evidence.get("false_positive_risk"))
+    )
+
+
+def _safe_conflict(*, confidence: float, evidence: dict[str, Any]) -> bool:
+    if confidence >= 0.68:
+        return True
+    return (
+        str(evidence.get("reason") or "") == "incompatible_decision_language"
+        and float(evidence.get("file_overlap") or 0.0) >= 0.6
+        and float(evidence.get("lexical") or 0.0) >= 0.35
+        and not bool(evidence.get("false_positive_risk"))
+    )
+
+
+def _upsert_node_status(graph_store: GraphStore, *, node: dict[str, Any], status: str) -> None:
+    metadata = dict(node.get("metadata") if isinstance(node.get("metadata"), dict) else {})
+    metadata["status"] = status
+    graph_store.upsert_node(
+        GraphNode(
+            id=str(node.get("id") or ""),
+            kind=str(node.get("kind") or node.get("node_kind") or "KnowledgeVersion"),
+            label=str(node.get("label") or ""),
+            summary=str(node.get("summary") or ""),
+            status=status,
+            scope=str(node.get("scope") or "central"),
+            session_id=str(node.get("session_id") or ""),
+            project_id=str(node.get("project_id") or "default"),
+            source_app=str(node.get("source_app") or "v2-central-merge"),
+            evidence_id=str(node.get("evidence_id") or ""),
+            commit_id=str(node.get("commit_id") or ""),
+            created_at=str(node.get("created_at") or ""),
+            updated_at=utc_now(),
+            metadata=metadata,
+        )
+    )
+
+
 def _review_candidate_count(plan: dict[str, Any], kinds: set[str]) -> int:
     candidates = plan.get("review_candidates") if isinstance(plan.get("review_candidates"), list) else []
     count = 0
@@ -313,7 +514,7 @@ def _write_exact_atoms(
     graph_commit_id: str,
     branch: str,
     mode: str,
-) -> tuple[list[str], list[str]]:
+) -> tuple[list[str], list[str], list[dict[str, str]]]:
     now = utc_now()
     base = _base_metadata(plan=plan, graph_commit_id=graph_commit_id)
     atoms = [atom for atom in plan.get("new_atoms", []) if isinstance(atom, dict) and atom.get("atom_kind") in APPLY_ATOM_KINDS]
@@ -422,6 +623,7 @@ def _write_exact_atoms(
             added_edges.append(derived_edge_id)
 
     version_ids = {str(version.get("version_id") or "") for version in versions}
+    relation_edges: list[dict[str, Any]] = []
     for relation in plan.get("version_edges", []) if isinstance(plan.get("version_edges"), list) else []:
         if not isinstance(relation, dict):
             continue
@@ -429,6 +631,8 @@ def _write_exact_atoms(
         target_id = str(relation.get("target_id") or "")
         kind = str(relation.get("kind") or "")
         if kind not in {"DUPLICATE_OF", "REFINES", "SUPERSEDES", "CONFLICTS_WITH", "RELATED_REVIEW"}:
+            continue
+        if source_id == target_id:
             continue
         if source_id not in version_ids or (target_id not in version_ids and not target_id.startswith("kver:")):
             continue
@@ -446,6 +650,18 @@ def _write_exact_atoms(
             )
         )
         added_edges.append(edge_id)
+        relation_edges.append({**relation, "edge_id": edge_id, "source_id": source_id, "target_id": target_id, "kind": kind})
+
+    status_updates, status_edges = _write_decision_status_transitions(
+        graph_store=graph_store,
+        plan=plan,
+        versions=versions,
+        relation_edges=relation_edges,
+        graph_commit_id=graph_commit_id,
+        base=base,
+        now=now,
+    )
+    added_edges.extend(status_edges)
 
     graph_store.upsert_node(
         GraphNode(
@@ -464,12 +680,14 @@ def _write_exact_atoms(
                 "parent_graph_commit_id": str(plan.get("parent_graph_commit_id") or ""),
                 "added_node_count": len(added_nodes),
                 "added_edge_count": len(added_edges),
+                "status_update_count": len(status_updates),
+                "status_updates": status_updates,
                 "idempotency_key": _idempotency_key("node", graph_commit_id, graph_commit_id),
             },
         )
     )
     added_nodes.append(graph_commit_id)
-    return _dedupe(added_nodes), _dedupe(added_edges)
+    return _dedupe(added_nodes), _dedupe(added_edges), status_updates
 
 
 def _write_graph_view_node(

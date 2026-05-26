@@ -410,6 +410,8 @@ def test_v2_central_merge_apply_writes_exact_atoms_graph_commit_and_view(tmp_pat
         assert result_artifact.exists()
         merge_result = json.loads(result_artifact.read_text(encoding="utf-8"))
         assert merge_result["status"] == "applied"
+        assert applied["graph_commit_id"] == applied["graph_commit"]["graph_commit_id"]
+        assert merge_result["graph_commit_id"] == applied["graph_commit"]["graph_commit_id"]
         assert merge_result["graph_commit"]["graph_commit_id"] == applied["graph_commit"]["graph_commit_id"]
         assert merge_result["input_source"] == "curated_graph_manifest"
         assert merge_result["curated_input_hash"] == "curated-input"
@@ -698,6 +700,120 @@ def test_v2_central_merge_apply_writes_review_decision_versions_and_relation_edg
         assert {node.status for node in decision_versions} == {"review"}
         assert relation_edges
         assert relation_edges[0].metadata["status"] == "review"
+    finally:
+        store.close()
+
+
+def test_v2_central_merge_apply_status_changes_for_safe_supersedes(tmp_path: Path) -> None:
+    settings = make_settings(tmp_path)
+    graph = InMemoryGraphStore()
+    store = V2SessionJobStore(settings)
+    try:
+        job = store.enqueue_session(session_id="s-decision-supersedes", boundary_event_id="raw_boundary", repo_path=str(tmp_path)).job
+        repo_id = str(job["repo_id"])
+        old_metadata = {
+            "repo_id": repo_id,
+            "atom_kind": "decision",
+            "status": "active",
+            "version_metadata": {
+                "node_type": "Decision",
+                "subject": "Graph retrieval design",
+                "statement": "Use session graph retrieval for graph queries.",
+                "linked_files": ["src/agent_memory_orchestrator/graph/service.py"],
+            },
+        }
+        old_central = {
+            "id": "kver:old-central-graph-retrieval",
+            "kind": "KnowledgeVersion",
+            "status": "active",
+            "metadata": old_metadata,
+        }
+        graph.upsert_node(
+            GraphNode(
+                id=old_central["id"],
+                kind="KnowledgeVersion",
+                label="Use session graph retrieval for graph queries.",
+                status="active",
+                scope="central",
+                metadata=old_metadata,
+            )
+        )
+        compact_graph = {
+            "nodes": [
+                {
+                    "id": "reason:new",
+                    "kind": "ReasoningNode",
+                    "properties": {
+                        "node_type": "Decision",
+                        "status": "accepted",
+                        "subject": "Graph retrieval design",
+                        "statement": "Replace session graph retrieval with central active GraphView retrieval.",
+                        "selected_files": ["src/agent_memory_orchestrator/graph/service.py"],
+                    },
+                },
+            ],
+            "edges": [],
+        }
+        plan = build_dry_run_merge_plan(job=job, compact_graph=compact_graph, parent_graph_commit_id="", active_central_versions=[old_central])
+        stored = store.upsert_central_merge_plan(_product_plan(plan))
+
+        applied = apply_merge_plan(settings=settings, plan_id=stored["plan_id"], store=store, graph_store=graph)
+
+        decision_versions = [node for node in graph.nodes.values() if node.kind == "KnowledgeVersion" and node.metadata.get("atom_kind") == "decision"]
+        by_statement = {node.metadata.get("version_metadata", {}).get("statement"): node for node in decision_versions}
+        status_edges = [edge for edge in graph.edges.values() if edge.kind == "STATUS_CHANGED"]
+        assert applied["status_update_count"] == 2
+        assert by_statement["Replace session graph retrieval with central active GraphView retrieval."].status == "active"
+        assert by_statement["Use session graph retrieval for graph queries."].status == "superseded"
+        assert {edge.metadata["new_status"] for edge in status_edges} == {"active", "superseded"}
+        assert applied["status_updates"]
+    finally:
+        store.close()
+
+
+def test_v2_central_merge_keeps_same_session_refinement_in_review(tmp_path: Path) -> None:
+    settings = make_settings(tmp_path)
+    graph = InMemoryGraphStore()
+    store = V2SessionJobStore(settings)
+    try:
+        job = store.enqueue_session(session_id="s-decision-same-session-refines", boundary_event_id="raw_boundary", repo_path=str(tmp_path)).job
+        compact_graph = {
+            "nodes": [
+                {
+                    "id": "reason:old",
+                    "kind": "ReasoningNode",
+                    "properties": {
+                        "node_type": "Decision",
+                        "status": "accepted",
+                        "subject": "Reasoning graph plan",
+                        "statement": "Implement a reasoning graph documentation system.",
+                        "selected_files": ["src/agent_memory_orchestrator/reasoning_graph/timeline.py"],
+                    },
+                },
+                {
+                    "id": "reason:new",
+                    "kind": "ReasoningNode",
+                    "properties": {
+                        "node_type": "Decision",
+                        "status": "accepted",
+                        "subject": "Reasoning graph plan",
+                        "statement": "Implement a tighter reasoning graph documentation system with validation gates.",
+                        "selected_files": ["src/agent_memory_orchestrator/reasoning_graph/timeline.py"],
+                    },
+                },
+            ],
+            "edges": [],
+        }
+        plan = build_dry_run_merge_plan(job=job, compact_graph=compact_graph, parent_graph_commit_id="")
+        stored = store.upsert_central_merge_plan(_product_plan(plan))
+
+        applied = apply_merge_plan(settings=settings, plan_id=stored["plan_id"], store=store, graph_store=graph)
+
+        decision_versions = [node for node in graph.nodes.values() if node.kind == "KnowledgeVersion" and node.metadata.get("atom_kind") == "decision"]
+        relation_edges = [edge for edge in graph.edges.values() if edge.kind in {"REFINES", "DUPLICATE_OF", "RELATED_REVIEW"}]
+        assert relation_edges
+        assert applied["status_update_count"] == 0
+        assert {node.status for node in decision_versions} == {"review"}
     finally:
         store.close()
 
