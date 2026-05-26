@@ -12,6 +12,7 @@ from agent_memory_orchestrator.core.db import connect
 from agent_memory_orchestrator.config import Settings
 from agent_memory_orchestrator.graph.service import GraphRagService
 from agent_memory_orchestrator.graph.service import _active_central_versions_for_support
+from agent_memory_orchestrator.graph.service import _answer_from_retrieval_result
 from agent_memory_orchestrator.graph.service import _unique_nonempty
 from agent_memory_orchestrator.graph.answer_trace import build_answer_trace
 from agent_memory_orchestrator.graph.answer_trace import build_central_answer_trace
@@ -1301,6 +1302,38 @@ def test_central_answer_trace_contract_collects_active_support() -> None:
     assert trace["trace"]["evidence_refs"] == ["E01156"]
     assert trace["trace"]["files"] == ["src/agent_memory_orchestrator/graph_service.py"]
     assert trace["trace"]["code_impacts"] == ["impact:WP0018"]
+
+
+def test_answer_trace_falls_back_to_retrieval_doc_metadata_when_graph_node_missing() -> None:
+    result = {
+        "query": "what qwen json hardening was done?",
+        "hits": [
+            {
+                "document": RetrievalDocument(
+                    doc_id="retrieval:packet",
+                    doc_type="reasoning",
+                    graph_node_id="sessionjob:reason:WP0003",
+                    node_kind="ReasoningNode",
+                    packet_id="WP0003",
+                    commit_sha="1a7b05d",
+                    title="Decision: Fix Ollama usage for Qwen reasoning",
+                    body="Disable Ollama thinking for JSON calls.",
+                    repo_id="repo:amo",
+                    metadata={"evidence_refs": ["E00156"], "selected_files": ["src/agent_memory_orchestrator/llm/qwen.py"]},
+                ).as_dict(),
+                "score": 0.9,
+            }
+        ],
+    }
+
+    answer = _answer_from_retrieval_result(result, graph_store=InMemoryGraphStore())
+
+    trace = answer["citations"][0]["trace"]
+    assert trace["source"] == "retrieval_document_metadata"
+    assert trace["node_count"] == 1
+    assert trace["support"]["packet_ids"] == ["WP0003"]
+    assert trace["support"]["commit_shas"] == ["1a7b05d"]
+    assert trace["support"]["evidence_ids"] == ["E00156"]
 
 
 def test_central_trace_enrichment_matches_commit_and_file_versions() -> None:
