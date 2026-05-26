@@ -19,6 +19,7 @@ from ...llm.qwen import OllamaQwenClient
 from ...llm.qwen import QwenUnavailable
 from ..code_analysis import extract_code_nodes_from_commit
 from ..central_merge import build_dry_run_merge_plan
+from ..central_merge.applier import repo_central_graph_path
 from ..central_merge.identity import atoms_by_canonical_key
 from ..embedding_store import GraphEmbeddingStore
 from ..evidence_view import build_reasoning_evidence_view
@@ -567,7 +568,7 @@ class V2SessionJobRunner:
         parent_graph_commit_id = str(active_view.get("graph_commit_id") or "")
         existing_atom_scan_error = ""
         try:
-            existing_atoms = self._central_atoms_by_canonical_key()
+            existing_atoms = self._central_atoms_by_canonical_key(repo_id=repo_id)
             active_central_versions = self._central_active_versions(repo_id=repo_id)
         except Exception as exc:
             existing_atoms = {}
@@ -613,8 +614,8 @@ class V2SessionJobRunner:
         }
         return StageResult(output_path=output, diagnostics=diagnostics)
 
-    def _central_atoms_by_canonical_key(self) -> dict[str, dict[str, Any]]:
-        graph = self.graph_store_factory(self.settings.graph_path)
+    def _central_atoms_by_canonical_key(self, *, repo_id: str) -> dict[str, dict[str, Any]]:
+        graph = self.graph_store_factory(repo_central_graph_path(self.settings, repo_id))
         try:
             graph.init_schema()
             nodes = graph.list_nodes(limit=1_000_000, kinds=["KnowledgeAtom"])
@@ -623,7 +624,7 @@ class V2SessionJobRunner:
         return atoms_by_canonical_key(nodes)
 
     def _central_active_versions(self, *, repo_id: str) -> list[dict[str, Any]]:
-        graph = self.graph_store_factory(self.settings.graph_path)
+        graph = self.graph_store_factory(repo_central_graph_path(self.settings, repo_id))
         try:
             graph.init_schema()
             nodes = graph.list_nodes(limit=1_000_000, kinds=["KnowledgeVersion"])
@@ -632,7 +633,9 @@ class V2SessionJobRunner:
         out: list[dict[str, Any]] = []
         for node in nodes:
             metadata = node.get("metadata") if isinstance(node.get("metadata"), dict) else {}
-            if str(metadata.get("repo_id") or "") == repo_id and str(node.get("status") or metadata.get("status") or "") in {"", "active"}:
+            atom_kind = str(metadata.get("atom_kind") or "").lower()
+            status = str(node.get("status") or metadata.get("status") or "")
+            if str(metadata.get("repo_id") or "") == repo_id and (status in {"", "active"} or (atom_kind in {"decision", "problem"} and status == "review")):
                 out.append(node)
         return out
 
