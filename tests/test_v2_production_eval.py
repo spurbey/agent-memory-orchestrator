@@ -7,7 +7,12 @@ from types import MethodType
 
 from agent_memory_orchestrator.config import Settings
 from agent_memory_orchestrator.core.db import connect
+from agent_memory_orchestrator.reasoning_graph.central_merge.production_eval import _cases
+from agent_memory_orchestrator.reasoning_graph.central_merge.production_eval import _faiss_state
+from agent_memory_orchestrator.reasoning_graph.central_merge.production_eval import _retrieval_query_gates
 from agent_memory_orchestrator.reasoning_graph.central_merge.production_eval import run_production_semantic_eval
+from agent_memory_orchestrator.reasoning_graph import GraphEmbeddingRecord
+from agent_memory_orchestrator.reasoning_graph import GraphEmbeddingStore
 from agent_memory_orchestrator.reasoning_graph.jobs import V2SessionJobStore
 from agent_memory_orchestrator.reasoning_graph.jobs.reset import initialize_fresh_v2_production_storage
 from agent_memory_orchestrator.reasoning_graph.jobs.runner import StageResult
@@ -19,6 +24,7 @@ from agent_memory_orchestrator.reasoning_graph.jobs.runner import stage_config_h
 from agent_memory_orchestrator.reasoning_graph.jobs.runner import stage_config_payload
 from agent_memory_orchestrator.reasoning_graph.retrieval import RetrievalDocument
 from agent_memory_orchestrator.reasoning_graph.retrieval import RetrievalIndexStore
+from agent_memory_orchestrator.reasoning_graph.session_runtime import StrictTextEmbedder
 
 
 def make_settings(tmp_path: Path) -> Settings:
@@ -155,6 +161,126 @@ def test_production_semantic_eval_reports_stale_full_trace_state(tmp_path: Path)
         assert report["retrieval"]["trace_doc_count"] == 2
     finally:
         store.close()
+
+
+def test_production_eval_counts_graph_faiss_embedding_ids(tmp_path: Path) -> None:
+    db_path = tmp_path / ".data" / "retrieval.sqlite"
+    metadata_dir = db_path.parent / "indexes" / db_path.stem
+    metadata_dir.mkdir(parents=True)
+    (metadata_dir / "graph_v2_retrieval_text_hash_fallback.json").write_text(
+        json.dumps({"embedding_ids": ["emb:1", "emb:2"], "dims": 16}),
+        encoding="utf-8",
+    )
+    (metadata_dir / "graph_v2_retrieval_text_hash_fallback.faiss").write_bytes(b"index")
+
+    assert _faiss_state(db_path) == {
+        "status": "ready",
+        "item_count": 2,
+        "path": str(metadata_dir / "graph_v2_retrieval_text_hash_fallback.json"),
+    }
+
+
+def test_production_eval_query_gates_require_live_vector_hits_when_ready(tmp_path: Path) -> None:
+    settings = replace(make_settings(tmp_path), vector_backend="faiss", embedding_dims=16, retrieval_graph_scope="stage6_session_graph")
+    repo_id = "repo:remote:test"
+    projection_id = "rproj:test"
+    docs = [
+        RetrievalDocument(
+            doc_id="doc:control",
+            doc_type="reasoning",
+            graph_node_id="reason:control",
+            node_kind="ReasoningNode",
+            repo_id=repo_id,
+            projection_id=projection_id,
+            packet_id="WP0001",
+            commit_sha="9ec46ff",
+            title="Decision: Build the new AMO web surface as a structured control room",
+            body="AMO control room web UI support from curated graph manifest.",
+            metadata={"source": "curated_graph_manifest"},
+        ),
+        RetrievalDocument(
+            doc_id="doc:qwen",
+            doc_type="packet",
+            graph_node_id="packet:qwen",
+            node_kind="Packet",
+            repo_id=repo_id,
+            projection_id=projection_id,
+            packet_id="WP0003",
+            commit_sha="1a7b05d",
+            title="WP0003 fix(qwen): disable ollama thinking for json calls",
+            body="Qwen JSON hardening support from curated graph manifest.",
+            metadata={"source": "curated_graph_manifest"},
+        ),
+    ]
+    embedder = StrictTextEmbedder("hash-fallback", dims=16)
+    settings.retrieval_db_path.parent.mkdir(parents=True, exist_ok=True)
+    with connect(settings.retrieval_db_path) as conn:
+        index = RetrievalIndexStore(conn)
+        index.upsert_projection(
+            projection_id=projection_id,
+            repo_id=repo_id,
+            projection_version="curated-retrieval-projection-v1",
+            source_artifact_hash="curated",
+            doc_content_hash="docs",
+            status="validated",
+        )
+        index.replace_projection_documents(docs, repo_id=repo_id, projection_id=projection_id)
+        index.activate_projection(repo_id=repo_id, projection_id=projection_id)
+        embeddings = GraphEmbeddingStore(conn, db_path=settings.retrieval_db_path)
+        for doc in docs:
+            text = f"{doc.title}\n{doc.body}"
+            embeddings.upsert(
+                GraphEmbeddingRecord.create(
+                    node_id=doc.graph_node_id,
+                    node_kind=doc.node_kind,
+                    memory_class=doc.memory_class,
+                    graph_scope="v2",
+                    graph_path=doc.doc_id,
+                    session_id="s1",
+                    extraction_run_id="test",
+                    embedding_kind="retrieval_text",
+                    model="hash-fallback",
+                    text=text,
+                    vector=embedder.embed(text),
+                    importance=doc.importance,
+                )
+            )
+
+    gates = _retrieval_query_gates(settings.retrieval_db_path, repo_id=repo_id, settings=settings, require_vector=True)
+
+    assert gates
+    assert all(gate["vector_required"] is True for gate in gates)
+    assert all(gate["vector_candidate_count"] > 0 for gate in gates)
+    assert all("retrieval_query_no_vector_hits" not in gate["blocking_failures"] for gate in gates)
+
+
+def test_quality_eval_can_be_product_ready_when_independent_gates_pass() -> None:
+    cases = _cases(
+        kuzu_write={"curated_manifest_exists": True},
+        central={
+            "applied": True,
+            "plan_status": "applied",
+            "plan_mode": "apply_exact_atoms",
+            "graph_commit_status": "applied",
+            "active_graph_view_head": "v2gcommit:1",
+        },
+        retrieval={
+            "repo_doc_count": 2,
+            "trace_doc_count": 0,
+            "curated_doc_count": 2,
+            "full_trace_dominated": False,
+            "strict_repo_legacy_leak": False,
+            "embedding_coverage": {"status": "ready"},
+            "faiss": {"status": "ready"},
+            "vector_status_truthful": True,
+            "query_gates": [],
+        },
+        quality={"product_ready": True, "blocking_issues": []},
+    )
+
+    quality_case = next(case for case in cases if case["case_id"] == "quality_product_ready_matches_independent_gates")
+    assert quality_case["passed"] is True
+    assert quality_case["blocking_failures"] == []
 
 
 def test_stage_config_hashes_are_stage_specific(tmp_path: Path) -> None:
