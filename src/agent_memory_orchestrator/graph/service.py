@@ -1250,8 +1250,20 @@ def _resolve_retrieval_graph_scope(
     embedding_model: str,
 ) -> str:
     requested = str(requested_scope or "").strip()
-    if requested or not embedding_model:
+    if not embedding_model:
         return requested or default_scope
+
+    if requested:
+        row = conn.execute(
+            """
+            SELECT COUNT(*) AS count
+            FROM graph_embeddings
+            WHERE embedding_kind = ? AND model = ? AND graph_scope = ? AND status = 'active'
+            """,
+            (RETRIEVAL_EMBEDDING_KIND, embedding_model, requested),
+        ).fetchone()
+        if int(row["count"] if row else 0) > 0:
+            return requested
 
     params = (RETRIEVAL_EMBEDDING_KIND, embedding_model, default_scope)
     row = conn.execute(
@@ -1276,7 +1288,7 @@ def _resolve_retrieval_graph_scope(
         """,
         (RETRIEVAL_EMBEDDING_KIND, embedding_model),
     ).fetchone()
-    return str(fallback["graph_scope"]) if fallback else default_scope
+    return str(fallback["graph_scope"]) if fallback else requested or default_scope
 
 
 def _count_by(items: list[Any], attr: str) -> dict[str, int]:

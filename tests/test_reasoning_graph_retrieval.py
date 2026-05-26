@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -1136,6 +1137,31 @@ def test_graph_service_retrieve_uses_active_embedding_scope_when_unspecified(tmp
 
     assert result["ok"] is True
     assert result["graph_scope"] == "stage6_session_graph"
+    assert result["retrieval"]["candidate_counts"]["vector"] > 0
+
+
+def test_graph_service_retrieve_falls_back_from_stale_configured_embedding_scope(tmp_path: Path) -> None:
+    settings = replace(_settings(tmp_path), retrieval_graph_scope="stage6_session_graph")
+    svc = GraphRagService(
+        settings,
+        store=_graph(),
+        planner=DeterministicPlanner(),
+    )
+    try:
+        svc.rebuild_retrieval_index(session_id="s1")
+        svc.embed_retrieval_index(session_id="s1", limit=0, graph_scope="v2", rebuild_faiss=False)
+        result = svc.retrieve_indexed_graph(
+            query="why use BM25 vector retrieval before graph expansion",
+            session_id="s1",
+            limit=3,
+            use_vector=True,
+            require_vector=True,
+        )
+    finally:
+        svc.close()
+
+    assert result["ok"] is True
+    assert result["graph_scope"] == "v2"
     assert result["retrieval"]["candidate_counts"]["vector"] > 0
 
 
