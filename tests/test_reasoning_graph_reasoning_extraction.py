@@ -173,6 +173,52 @@ def test_reasoning_review_demotes_generic_plan_overlap_to_review() -> None:
     assert result.summary["accepted_node_count"] == 0
     assert result.summary["needs_review_node_count"] == 1
     assert result.summary["diagnostic_kind_counts"]["semantic_alignment_low_overlap"] == 1
+    assert result.summary["stage_acceptance"] == "PASS_REVIEW_ONLY"
+    assert result.summary["review_only"] is True
+
+
+def test_reasoning_review_review_only_is_not_structural_failure() -> None:
+    packet = {
+        "packet_id": "WP0001",
+        "commit": {
+            "short_sha": "abc1234",
+            "message": "feat(reasoning-graph): import real session timelines",
+            "changed_file_sample": ["src/agent_memory_orchestrator/reasoning_graph/timeline.py"],
+        },
+        "problem_refs": [{"ref": "E0001"}],
+        "rationale_refs": [{"ref": "E0002"}],
+        "validation_refs": [{"ref": "E0003"}],
+    }
+    result = review_reasoning_extraction_results(
+        packets=[packet],
+        results=[
+            {
+                "packet_id": "WP0001",
+                "commit_sha": "abc1234",
+                "parsed_output": {
+                    "packet_id": "WP0001",
+                    "commit_sha": "abc1234",
+                    "nodes": [
+                        {
+                            "node_type": "Decision",
+                            "subject": "Generic implementation plan",
+                            "statement": "Implement the plan described in the prompt.",
+                            "reason": "The prompt asks for implementation.",
+                            "confidence": 0.4,
+                            "evidence_refs": ["E0002"],
+                            "status": "accepted",
+                        }
+                    ],
+                },
+            }
+        ],
+        source_name="unit",
+    )
+
+    assert result.summary["stage_acceptance"] == "PASS_REVIEW_ONLY"
+    assert result.summary["blocking_diagnostic_count"] == 0
+    assert result.summary["accepted_node_count"] == 0
+    assert result.summary["needs_review_node_count"] == 1
 
 
 def test_reasoning_review_demotes_file_term_only_overlap_to_review() -> None:
