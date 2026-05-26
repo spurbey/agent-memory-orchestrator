@@ -779,20 +779,25 @@ class V2SessionJobRunner:
         return StageResult(output_path=output, diagnostics=payload)
 
     def _stage_faiss(self, job: dict[str, Any], artifact_dir: Path, stage_dir: Path) -> StageResult:
-        del job, artifact_dir
+        del artifact_dir
+        repo_id = _job_repo_id(job)
         conn = connect(self.settings.retrieval_db_path)
         try:
+            index = RetrievalIndexStore(conn)
+            active_docs = index.list_documents(limit=100000, repo_id=repo_id)
             embedding_store = GraphEmbeddingStore(conn, db_path=self.settings.retrieval_db_path)
             result = embedding_store.build_faiss_cache(
                 embedding_kind=RETRIEVAL_EMBEDDING_KIND,
                 model=self.settings.embedding_model,
                 graph_scope="v2",
+                graph_paths={doc.doc_id for doc in active_docs},
             )
         finally:
             conn.close()
         output = stage_dir / "faiss_result.json"
-        output.write_text(json.dumps(result.as_dict(), indent=2), encoding="utf-8")
-        return StageResult(output_path=output, diagnostics=result.as_dict())
+        payload = {**result.as_dict(), "repo_id": repo_id, "active_projection_doc_count": len(active_docs)}
+        output.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        return StageResult(output_path=output, diagnostics=payload)
 
     def _stage_quality_eval(self, job: dict[str, Any], artifact_dir: Path, stage_dir: Path) -> StageResult:
         del job
@@ -1815,6 +1820,16 @@ def _quality_issues(
                 "status": faiss_status,
             }
         )
+    if total_docs and faiss_items > total_docs:
+        issues.append(
+            {
+                "code": "faiss_coverage_stale",
+                "message": "FAISS cache includes vectors outside active retrieval document coverage",
+                "item_count": faiss_items,
+                "total_docs": total_docs,
+                "status": faiss_status,
+            }
+        )
     return issues
 
 
@@ -1844,7 +1859,7 @@ def _quality_readiness(
         and str(retrieval_result.get("retrieval_source") or "") in {"curated_graph_manifest", "central_active_graph_view"}
         and bool(str(retrieval_result.get("active_projection_id") or ""))
     )
-    vector_retrieval_ready = bool(total_docs) and covered >= total_docs and faiss_items >= total_docs
+    vector_retrieval_ready = bool(total_docs) and covered >= total_docs and faiss_items == total_docs
     answer_trace_ready = central_memory_ready and lexical_retrieval_ready
     product_ready = central_memory_ready and lexical_retrieval_ready and vector_retrieval_ready and answer_trace_ready and not issue_codes
     return {

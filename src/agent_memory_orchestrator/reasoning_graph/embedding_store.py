@@ -220,6 +220,31 @@ class GraphEmbeddingStore:
             count += 1
         return count
 
+    def mark_stale_for_graph_path(
+        self,
+        *,
+        graph_path: str,
+        embedding_kind: str,
+        model: str,
+        graph_scope: str,
+        keep_content_hash: str,
+    ) -> int:
+        cursor = self.conn.execute(
+            """
+            UPDATE graph_embeddings
+            SET status='stale'
+            WHERE graph_path=?
+              AND embedding_kind=?
+              AND model=?
+              AND graph_scope=?
+              AND status='active'
+              AND content_hash != ?
+            """,
+            (graph_path, embedding_kind, model, graph_scope, keep_content_hash),
+        )
+        self.conn.commit()
+        return int(cursor.rowcount or 0)
+
     def list_records(
         self,
         *,
@@ -278,8 +303,13 @@ class GraphEmbeddingStore:
         embedding_kind: str,
         model: str,
         graph_scope: str = "",
+        graph_paths: set[str] | None = None,
     ) -> GraphFaissBuildResult:
         records = self.list_records(embedding_kind=embedding_kind, model=model, graph_scope=graph_scope, status="active")
+        if graph_paths is not None:
+            allowed = {str(path) for path in graph_paths if str(path)}
+            records = [record for record in records if record.graph_path in allowed]
+        records = list({record.graph_path: record for record in records}.values())
         if not records:
             return GraphFaissBuildResult("faiss", "skipped", 0, 0, model, embedding_kind, reason="no_vectors")
         dims = records[0].dims
