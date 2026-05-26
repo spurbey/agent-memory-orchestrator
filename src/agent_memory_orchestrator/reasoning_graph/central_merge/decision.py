@@ -122,7 +122,7 @@ def build_decision_review_candidates(
             "candidate_relation_counts": relation_counts,
             "false_positive_risk_count": len(high_risk),
             "deferred_central_decision_atom_count": len(frames),
-            "note": "Decision/problem matching is dry-run only; no central decision status is mutated.",
+            "note": "Decision/problem matching proposes review relations only; no active decision status is mutated.",
         },
     }
 
@@ -191,10 +191,12 @@ def build_decision_frames(
             node_by_id=node_by_id,
             edges_by_node=edges_by_node,
         )
-        linked_packets = _dedupe([_first(props, "source_packet_id", "packet_id"), *edge_context["packets"]])
-        linked_commits = _dedupe([_first(props, "source_commit_sha", "commit_sha"), *edge_context["commits"]])
+        linked_packets = _dedupe([_first(props, "source_packet_id", "packet_id"), *_list(props.get("linked_packets")), *edge_context["packets"]])
+        linked_commits = _dedupe([_first(props, "source_commit_sha", "commit_sha"), *_list(props.get("linked_commits")), *edge_context["commits"]])
         evidence_refs = _dedupe([*_list(props.get("evidence_refs")), *edge_context["evidence_refs"]])
-        linked_files = _dedupe([*_list(props.get("selected_files")), _first(props, "path", "file_path", "normalized_file_path"), *edge_context["files"]])
+        linked_files = _dedupe(
+            [*_list(props.get("selected_files")), *_list(props.get("linked_files")), _first(props, "path", "file_path", "normalized_file_path"), *edge_context["files"]]
+        )
         linked_symbols = _dedupe([*_list(props.get("selected_symbol_refs")), *_list(props.get("linked_symbols")), *edge_context["symbols"]])
         text_for_tokens = " ".join([summary, subject, statement, rationale])
         tokens = _tokens(text_for_tokens)
@@ -242,13 +244,14 @@ def _review_candidates(
         score = _pair_score(left, right)
         if score["total"] < 0.52 and not _is_text_only_review(score) and not _is_shared_code_review(score):
             continue
-        relation, reason = _relation_for_score(score)
+        relation, reason = _relation_for_score(score, left=left, right=right)
         if relation == "":
             continue
+        source_frame, target_frame = _orient_candidate(left, right, relation)
         candidate_seed = {
             "plan_id": plan_id,
-            "source": left.source_node_id,
-            "target": right.source_node_id,
+            "source": source_frame.source_node_id,
+            "target": target_frame.source_node_id,
             "relation": relation,
         }
         candidates.append(
@@ -256,19 +259,23 @@ def _review_candidates(
                 candidate_id=f"v2review:{stable_hash(candidate_seed)[:32]}",
                 plan_id=plan_id,
                 job_id=job_id,
-                source_node_id=left.source_node_id,
-                target_node_id=right.source_node_id,
+                source_node_id=source_frame.source_node_id,
+                target_node_id=target_frame.source_node_id,
                 proposed_relation=relation,
                 score={
                     **score,
-                    "source_summary": left.summary,
-                    "target_summary": right.summary,
-                    "source_files": left.linked_files[:12],
-                    "target_files": right.linked_files[:12],
-                    "source_symbols": left.linked_symbols[:12],
-                    "target_symbols": right.linked_symbols[:12],
-                    "source_scope": left.source_scope,
-                    "target_scope": right.source_scope,
+                    "source_summary": source_frame.summary,
+                    "target_summary": target_frame.summary,
+                    "source_files": source_frame.linked_files[:12],
+                    "target_files": target_frame.linked_files[:12],
+                    "source_symbols": source_frame.linked_symbols[:12],
+                    "target_symbols": target_frame.linked_symbols[:12],
+                    "source_scope": source_frame.source_scope,
+                    "target_scope": target_frame.source_scope,
+                    "source_frame_id": source_frame.frame_id,
+                    "target_frame_id": target_frame.frame_id,
+                    "source_kind": source_frame.frame_kind,
+                    "target_kind": target_frame.frame_kind,
                 },
                 reason=reason,
             ).as_dict()
@@ -298,10 +305,14 @@ def _pair_score(left: DecisionFrame, right: DecisionFrame) -> dict[str, Any]:
     }
 
 
-def _relation_for_score(score: dict[str, Any]) -> tuple[str, str]:
+def _relation_for_score(score: dict[str, Any], *, left: DecisionFrame, right: DecisionFrame) -> tuple[str, str]:
     total = float(score["total"])
     code_overlap = float(score["code_entity_overlap"])
     lexical = float(score["lexical"])
+    if (_supersedes(left) or _supersedes(right)) and total >= 0.48 and (code_overlap >= 0.2 or lexical >= 0.45):
+        return "SUPERSEDES", "new_decision_uses_replacement_language"
+    if _conflicts(left, right) and total >= 0.48 and (code_overlap >= 0.2 or lexical >= 0.5):
+        return "CONFLICTS_WITH", "incompatible_decision_language"
     if lexical >= 0.82 and code_overlap >= 0.5:
         return "DUPLICATE_OF", "same_decision_text_and_code_context"
     if total >= 0.88 and code_overlap >= 0.35:
@@ -315,6 +326,63 @@ def _relation_for_score(score: dict[str, Any]) -> tuple[str, str]:
     if _is_shared_code_review(score):
         return "RELATED_REVIEW", "shared_code_context_needs_human_review"
     return "", ""
+
+
+def _orient_candidate(left: DecisionFrame, right: DecisionFrame, relation: str) -> tuple[DecisionFrame, DecisionFrame]:
+    if relation == "SUPERSEDES":
+        if _supersedes(right) and not _supersedes(left):
+            return right, left
+        return left, right
+    if relation == "REFINES":
+        left_len = len(left.tokens) + len(left.linked_files) + len(left.linked_symbols)
+        right_len = len(right.tokens) + len(right.linked_files) + len(right.linked_symbols)
+        return (left, right) if left_len >= right_len else (right, left)
+    return left, right
+
+
+def _supersedes(frame: DecisionFrame) -> bool:
+    text = _frame_text(frame)
+    return any(
+        marker in text
+        for marker in (
+            "replace",
+            "replaces",
+            "replaced",
+            "supersede",
+            "supersedes",
+            "instead of",
+            "migrate from",
+            "migrates from",
+            "move from",
+            "moves from",
+            "switch from",
+            "switches from",
+            "no longer",
+            "stop using",
+            "remove old",
+        )
+    )
+
+
+def _conflicts(left: DecisionFrame, right: DecisionFrame) -> bool:
+    left_text = _frame_text(left)
+    right_text = _frame_text(right)
+    oppositions = (
+        ("enable", "disable"),
+        ("enabled", "disabled"),
+        ("allow", "block"),
+        ("remote", "local"),
+        ("sync", "async"),
+        ("strict", "permissive"),
+        ("required", "optional"),
+        ("central", "session"),
+        ("active", "inactive"),
+    )
+    return any((a in left_text and b in right_text) or (b in left_text and a in right_text) for a, b in oppositions)
+
+
+def _frame_text(frame: DecisionFrame) -> str:
+    return " ".join([frame.subject, frame.summary, frame.statement, frame.rationale]).lower()
 
 
 def _is_text_only_review(score: dict[str, Any]) -> bool:
@@ -456,7 +524,7 @@ def _is_decision_like(node: dict[str, Any]) -> bool:
     if kind == "knowledgeversion":
         atom_kind = str(props.get("atom_kind") or "").lower()
         status = str(props.get("status") or node.get("status") or "").lower()
-        return atom_kind in {"decision", "problem"} and status in {"", "active"}
+        return atom_kind in {"decision", "problem"} and status in {"", "active", "review"}
     if kind != "reasoningnode":
         return False
     node_type = str(props.get("node_type") or "").lower()
@@ -504,7 +572,7 @@ def _active_central_decision_nodes(nodes: list[dict[str, Any]], *, repo_id: str)
             continue
         if str(node.get("kind") or node.get("node_kind") or "").lower() != "knowledgeversion":
             continue
-        if str(props.get("status") or node.get("status") or "").lower() not in {"", "active"}:
+        if str(props.get("status") or node.get("status") or "").lower() not in {"", "active", "review"}:
             continue
         if str(props.get("atom_kind") or "").lower() in {"decision", "problem"}:
             out.append(node)

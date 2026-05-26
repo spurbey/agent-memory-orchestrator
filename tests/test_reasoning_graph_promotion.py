@@ -263,4 +263,8 @@ def test_central_merge_keeps_low_signal_symbol_refs_as_support_only() -> None:
         existing_atoms_by_canonical_key={},
     )
 
-    assert {atom["atom_kind"] for atom in plan.new_atoms} == {"commit", "file"}
+    atom_kinds = {atom["atom_kind"] for atom in plan.new_atoms}
+    assert {"commit", "file", "decision"}.issubset(atom_kinds)
+    assert "symbol" not in atom_kinds
+    assert "code_region" not in atom_kinds
+    assert all(version["status"] == "review" for version in plan.new_versions if version["atom_kind"] == "decision")

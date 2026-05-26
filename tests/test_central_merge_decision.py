@@ -87,8 +87,9 @@ def test_decision_dry_run_compares_session_frames_to_active_central_versions() -
                         "summary": "The graph UI adds spatial graph controls.",
                         "subject": "Add spatial graph controls",
                         "statement": "The graph UI adds spatial graph controls.",
-                        "selected_files": ["src/agent_memory_orchestrator/web/amo.js"],
-                        "commit_sha": "abc123",
+                        "linked_files": ["src/agent_memory_orchestrator/web/amo.js"],
+                        "linked_commits": ["abc123"],
+                        "linked_packets": ["WP0001"],
                     },
                 },
             }
@@ -102,7 +103,78 @@ def test_decision_dry_run_compares_session_frames_to_active_central_versions() -
     assert any(candidate["target_node_id"] == "kver:decision:spatial-controls" for candidate in result["candidates"])
     central_candidate = next(candidate for candidate in result["candidates"] if candidate["target_node_id"] == "kver:decision:spatial-controls")
     assert central_candidate["score"]["target_scope"] == "central"
+    assert central_candidate["score"]["target_files"] == ["src/agent_memory_orchestrator/web/amo.js"]
     assert central_candidate["proposed_relation"] in {"RELATED_REVIEW", "REFINES", "DUPLICATE_OF"}
+
+
+def test_decision_review_candidates_detect_supersede_and_conflict_markers() -> None:
+    supersede_result = build_decision_review_candidates(
+        compact_graph={
+            "nodes": [
+                {
+                    "id": "reason:old",
+                    "kind": "ReasoningNode",
+                    "properties": {
+                        "node_type": "Decision",
+                        "status": "accepted",
+                        "subject": "Graph retrieval design",
+                        "statement": "Use session graph retrieval for graph queries.",
+                        "selected_files": ["src/agent_memory_orchestrator/graph/service.py"],
+                    },
+                },
+                {
+                    "id": "reason:new",
+                    "kind": "ReasoningNode",
+                    "properties": {
+                        "node_type": "Decision",
+                        "status": "accepted",
+                        "subject": "Graph retrieval design",
+                        "statement": "Replace session graph retrieval with central active GraphView retrieval.",
+                        "selected_files": ["src/agent_memory_orchestrator/graph/service.py"],
+                    },
+                },
+            ],
+            "edges": [],
+        },
+        repo_id="repo:test",
+        job_id="v2job:test",
+        plan_id="v2plan:test",
+    )
+    conflict_result = build_decision_review_candidates(
+        compact_graph={
+            "nodes": [
+                {
+                    "id": "reason:local",
+                    "kind": "ReasoningNode",
+                    "properties": {
+                        "node_type": "Decision",
+                        "status": "accepted",
+                        "subject": "Peer inference",
+                        "statement": "Use local inference for peer answers.",
+                        "selected_files": ["src/agent_memory_orchestrator/peer/agent/service.py"],
+                    },
+                },
+                {
+                    "id": "reason:remote",
+                    "kind": "ReasoningNode",
+                    "properties": {
+                        "node_type": "Decision",
+                        "status": "accepted",
+                        "subject": "Peer inference",
+                        "statement": "Use remote inference for peer answers.",
+                        "selected_files": ["src/agent_memory_orchestrator/peer/agent/service.py"],
+                    },
+                },
+            ],
+            "edges": [],
+        },
+        repo_id="repo:test",
+        job_id="v2job:test",
+        plan_id="v2plan:test",
+    )
+
+    assert {candidate["proposed_relation"] for candidate in supersede_result["candidates"]} == {"SUPERSEDES"}
+    assert {candidate["proposed_relation"] for candidate in conflict_result["candidates"]} == {"CONFLICTS_WITH"}
 
 
 def _curated_compact_graph() -> dict[str, object]:
