@@ -204,7 +204,8 @@ def _exact_atom_previews(
                 metadata={k: v for k, v in identity.items() if k != "ok"},
             )
         atom = by_key[canonical_key]
-        version_seed = f"{atom.atom_id}|{job_id}|{_node_id(node)}"
+        version_metadata = _version_metadata(node=node, atom_kind=atom_kind, canonical_key=canonical_key)
+        version_seed = f"{atom.atom_id}|{job_id}|{_node_id(node)}|{version_metadata.get('version_key', canonical_key)}"
         versions.append(
             KnowledgeVersionPreview(
                 version_id=f"kver:{hashlib.sha256(version_seed.encode('utf-8')).hexdigest()[:32]}",
@@ -214,7 +215,7 @@ def _exact_atom_previews(
                 job_id=job_id,
                 session_id=session_id,
                 source_node_ids=[_node_id(node)],
-                metadata={"canonical_key": canonical_key, "node_kind": _node_kind(node)},
+                metadata=version_metadata,
             )
         )
     return list(by_key.values()), versions, unresolved
@@ -294,6 +295,16 @@ def _canonical_key(repo_id: str, atom_kind: str, identity: dict[str, Any]) -> st
     if atom_kind == "symbol":
         return f"symbol|{repo_id}|{identity['file_path']}|{identity['qualified_name']}"
     return f"code_region|{repo_id}|{identity['file_path']}|{identity.get('ast_kind', '')}|{identity.get('qualified_name', '')}"
+
+
+def _version_metadata(*, node: dict[str, Any], atom_kind: str, canonical_key: str) -> dict[str, Any]:
+    metadata = {"canonical_key": canonical_key, "node_kind": _node_kind(node), "version_key": canonical_key}
+    if atom_kind == "file":
+        commit_sha = _first(_properties(node), "full_sha", "commit_sha", "sha", "short_sha").lower()
+        if commit_sha:
+            metadata["producing_commit_sha"] = commit_sha
+            metadata["version_key"] = f"{canonical_key}|{commit_sha}"
+    return metadata
 
 
 def _node_kind(node: dict[str, Any]) -> str:

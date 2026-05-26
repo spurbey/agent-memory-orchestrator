@@ -570,6 +570,35 @@ def test_v2_central_merge_planner_reports_matched_exact_atoms(tmp_path: Path) ->
         store.close()
 
 
+def test_v2_central_merge_file_version_key_includes_producing_commit(tmp_path: Path) -> None:
+    settings = make_settings(tmp_path)
+    store = V2SessionJobStore(settings)
+    try:
+        job = store.enqueue_session(session_id="s-file-version-key", boundary_event_id="raw_boundary", repo_path=str(tmp_path)).job
+        compact_graph = {
+            "nodes": [
+                {
+                    "id": "file:hook",
+                    "kind": "FileRef",
+                    "properties": {
+                        "path": "src/agent_memory_orchestrator/hook.py",
+                        "commit_sha": "abc1234",
+                    },
+                }
+            ],
+            "edges": [],
+        }
+
+        plan = build_dry_run_merge_plan(job=job, compact_graph=compact_graph, parent_graph_commit_id="")
+
+        version_metadata = plan.new_versions[0]["metadata"]
+        assert version_metadata["canonical_key"].endswith("|src/agent_memory_orchestrator/hook.py")
+        assert version_metadata["producing_commit_sha"] == "abc1234"
+        assert version_metadata["version_key"].endswith("|src/agent_memory_orchestrator/hook.py|abc1234")
+    finally:
+        store.close()
+
+
 def test_v2_central_merge_apply_attaches_versions_to_matched_atoms(tmp_path: Path) -> None:
     settings = make_settings(tmp_path)
     graph = InMemoryGraphStore()
