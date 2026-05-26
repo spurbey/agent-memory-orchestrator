@@ -1302,7 +1302,7 @@ def test_central_trace_enrichment_matches_commit_and_file_versions() -> None:
             metadata={
                 "atom_kind": "file",
                 "repo_id": "repo:amo",
-                "graph_commit_id": "v2gcommit:1",
+                "graph_commit_id": "v2gcommit:previous",
                 "version_metadata": {"canonical_key": "file|repo:amo|src/agent_memory_orchestrator/graph_service.py"},
             },
         )
@@ -1325,7 +1325,7 @@ def test_central_trace_enrichment_matches_commit_and_file_versions() -> None:
     versions = _active_central_versions_for_support(
         graph,
         repo_id="repo:amo",
-        graph_commit_id="v2gcommit:1",
+        graph_commit_id="v2gcommit:head",
         support_docs=[
             {
                 "doc_type": "file_impact",

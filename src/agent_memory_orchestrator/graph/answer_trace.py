@@ -220,9 +220,14 @@ def build_central_answer_trace(
         "evidence_refs": _unique(_doc_metadata_values(docs, ("evidence_refs", "evidence_id", "evidence_ref_id"))),
         "files": _unique(_doc_metadata_values(docs, ("path", "file_path", "selected_files", "normalized_file_path"))),
         "code_impacts": _unique(
-            doc.get("graph_node_id") or doc.get("id")
-            for doc in docs
-            if str(doc.get("doc_type") or "").lower() == "code_impact" or str(doc.get("node_kind") or "") == "CodeImpactSummary"
+            [
+                *(
+                    doc.get("graph_node_id") or doc.get("id")
+                    for doc in docs
+                    if str(doc.get("doc_type") or "").lower() == "code_impact" or str(doc.get("node_kind") or "") == "CodeImpactSummary"
+                ),
+                *_doc_metadata_values(docs, ("impact_ids", "impact_id", "code_impact_ids", "code_impact_id")),
+            ]
         ),
     }
     warning_list = _unique(warnings)
