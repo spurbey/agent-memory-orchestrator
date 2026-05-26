@@ -86,16 +86,21 @@ dry-run plan; `merge_result.json`, SQLite `v2_graph_commits`, and SQLite
 `v2_graph_views` are the applied-state audit trail.
 
 Decision/problem duplicate, refine, supersede, conflict, and revert relations
-are not automatic yet. They remain dry-run/review territory until semantic evals
-prove the matching rules are safe.
+are review-state central memory. The planner creates review `KnowledgeAtom` and
+`KnowledgeVersion` rows for accepted decision/problem frames, and the applier
+may write review relation edges such as `DUPLICATE_OF`, `REFINES`,
+`SUPERSEDES`, `CONFLICTS_WITH`, or `RELATED_REVIEW`. These edges are audit and
+review signals only. They do not make a decision answer-grade, and they do not
+change active/refined/superseded/contested status.
 
 The bridge toward that semantic versioning layer is the decision-frame ledger.
 Every central merge plan persists accepted decision/problem frames into SQLite
 `v2_central_decision_frames`. A later session compares its new frames against
-those persisted frames and may emit review candidates such as `DUPLICATE_OF` or
-`REFINES`, but it still does not mutate active decision status. This gives AMO a
-Git-like history of agent work proposals before the system is trusted to mark
-old decisions superseded or contested.
+persisted frames and repo-scoped central review versions, then emits review
+candidates such as `DUPLICATE_OF` or `REFINES`. This gives AMO a Git-like
+history of agent work proposals before the system is trusted to mark old
+decisions superseded or contested. The remaining deferred step is automatic
+decision status transition, not the storage of decision versions themselves.
 
 Quality evaluation must use the current plan/result pair. If a new
 `merge_plan.json` exists beside an older `merge_result.json`, the older result is

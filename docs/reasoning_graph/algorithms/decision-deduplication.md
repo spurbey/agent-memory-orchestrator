@@ -13,8 +13,9 @@
 
 ## Candidate Query
 
-Current production implementation starts with a dry-run `DecisionFrame` pass.
-It does not create central decision atoms and does not mutate decision status.
+Current production implementation starts with a `DecisionFrame` pass and writes
+review-state central decision/problem versions. It does not mutate active
+decision status.
 
 For every accepted session `ReasoningNode` with decision/problem semantics,
 the merge planner builds:
@@ -34,7 +35,8 @@ This is deliberately edge-driven. In the V2 compact graph, the decision text is
 often short; the semantic scope comes from packet, commit, evidence, code-node,
 symbol, and code-version edges.
 
-For each session decision, fetch central decisions where at least one is true:
+For each session decision, fetch central decision/problem versions and persisted
+decision-frame ledger rows where at least one is true:
 
 - same resolved subject entity,
 - same file path or code node,
@@ -60,17 +62,19 @@ relatedness = 0.45 * cosine + 0.25 * lexical + 0.20 * entity_jaccard + 0.10 * sa
 
 ## Classification
 
-Current dry-run behavior is conservative:
+Current review behavior is conservative:
 
 - high content overlap plus shared code context may become `DUPLICATE_OF` or
-  `REFINES` review candidates,
+  `REFINES` review candidates and review relation edges,
+- explicit replacement language may become a `SUPERSEDES` review candidate,
+- incompatible local/remote, enabled/disabled, strict/permissive, or similar
+  language may become a `CONFLICTS_WITH` review candidate,
 - text-only overlap with no shared file/symbol context becomes
   `RELATED_REVIEW` and is flagged as false-positive risk,
-- no candidate mutates graph truth,
-- decisions/problems remain deferred central atoms until semantic evals prove
-  the candidate relation is safe.
+- no candidate mutates active graph truth,
+- decision/problem `KnowledgeVersion` nodes are stored with `status=review`.
 
-Future apply behavior should follow:
+Future status-transition behavior should follow:
 
 `>= 0.85` and same subject/predicate/object: `DUPLICATE_OF`.
 
@@ -108,3 +112,21 @@ false_positive_risk: true
 The candidate linked two "server debug runbook/current behavior baseline"
 decisions, but their file/symbol contexts were different. That is correct for
 the current phase: surface it for review, but do not merge or change status.
+
+The current production decision-evolution probe was checked against four AMO
+repo jobs after central commit/file memory was stable:
+
+```text
+v2job:8fd246b14d2a4470e48cdbac0787c710
+v2job:6beac5ad6d8829beb02f0e3995495924
+v2job:ee56af8045117801bf07b77de4371d38
+v2job:46fa762fa9e3736868f609dec560b845
+```
+
+The repo central graph contained ten review decision `KnowledgeVersion` nodes.
+Rerunning the planner against the same curated manifests matched those session
+frames back to central review versions and produced conservative review
+relations. Exact duplicates became `DUPLICATE_OF`; the installer simplification
+vs npm publishing pair remained `RELATED_REVIEW` because it shared file context
+but represented a different intent. That is the intended behavior: preserve the
+version/relation trace, but do not auto-promote a status change.
