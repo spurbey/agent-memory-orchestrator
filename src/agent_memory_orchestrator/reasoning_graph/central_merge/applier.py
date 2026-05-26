@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import uuid
 from collections.abc import Callable
 from pathlib import Path
@@ -18,8 +19,10 @@ from .models import CENTRAL_MERGE_PLAN_VERSION
 from .models import utc_now
 
 
-EXACT_APPLY_ATOM_KINDS = frozenset({"commit", "file", "symbol", "code_region"})
-APPLIER_VERSION = "central-exact-atom-applier-v1"
+EXACT_APPLY_ATOM_KINDS = frozenset({"commit", "file"})
+REVIEW_APPLY_ATOM_KINDS = frozenset({"decision", "problem"})
+APPLY_ATOM_KINDS = EXACT_APPLY_ATOM_KINDS | REVIEW_APPLY_ATOM_KINDS
+APPLIER_VERSION = "central-commit-file-decision-review-applier-v1"
 
 
 class CentralMergeApplyError(RuntimeError):
@@ -36,16 +39,17 @@ def apply_merge_plan(
     mode: str = "active",
     lock_owner: str | None = None,
 ) -> dict[str, Any]:
-    """Apply deterministic central atoms for a dry-run merge plan.
+    """Apply safe central versions for a dry-run merge plan.
 
-    This intentionally excludes decision/problem semantic merge. Phase 4 only
-    promotes exact repo-scoped identities that are safe to apply repeatedly.
+    Commit/file versions are answer-grade exact identities. Decision/problem
+    versions are review-state only, so relation edges can be inspected without
+    mutating active/refined/superseded truth.
     """
 
     close_store = store is None
-    close_graph = graph_store is None
+    close_graph = False
     owned_store = store or V2SessionJobStore(settings)
-    owned_graph = graph_store or KuzuGraphStore(settings.graph_path)
+    owned_graph = graph_store
     owner = lock_owner or f"central-merge:{uuid.uuid4().hex}"
     try:
         plan_row = owned_store.get_central_merge_plan(plan_id)
@@ -61,6 +65,11 @@ def apply_merge_plan(
             raise CentralMergeApplyError(f"missing_graph_commit_preview:{plan_id}")
 
         repo_id = str(plan.get("repo_id") or "")
+        _validate_product_plan_input(plan)
+        if owned_graph is None:
+            owned_graph = KuzuGraphStore(repo_central_graph_path(settings, repo_id))
+            close_graph = True
+        apply_summary = _apply_summary(plan)
         current_view = owned_store.ensure_graph_view(repo_id=repo_id, branch=branch, mode=mode)
         current_head = str(current_view.get("graph_commit_id") or "")
         expected_parent = str(plan.get("parent_graph_commit_id") or "")
@@ -96,6 +105,15 @@ def apply_merge_plan(
                 branch=branch,
                 mode=mode,
             )
+            view_nodes, view_edges = _write_graph_view_node(
+                graph_store=owned_graph,
+                plan=plan,
+                graph_commit_id=graph_commit_id,
+                branch=branch,
+                mode=mode,
+            )
+            added_nodes = _dedupe([*added_nodes, *view_nodes])
+            added_edges = _dedupe([*added_edges, *view_edges])
             graph_commit_row = owned_store.record_applied_graph_commit(
                 graph_commit_id=graph_commit_id,
                 plan_id=plan_id,
@@ -111,14 +129,20 @@ def apply_merge_plan(
                 },
                 added_nodes=added_nodes,
                 added_edges=added_edges,
-                diagnostics={"apply_scope": "exact_atoms_only"},
+                diagnostics={
+                    "apply_scope": apply_summary["apply_scope"],
+                    "applied_atom_counts": apply_summary["applied_atom_counts"],
+                    "applied_version_counts": apply_summary["applied_version_counts"],
+                    "deferred_atom_counts": apply_summary["deferred_atom_counts"],
+                    "review_relation_edge_count": apply_summary["review_relation_edge_count"],
+                },
             )
             graph_view = owned_store.update_graph_view_head(
                 repo_id=repo_id,
                 branch=branch,
                 mode=mode,
                 graph_commit_id=graph_commit_id,
-                metadata={"merge_plan_id": plan_id, "apply_scope": "exact_atoms_only"},
+                metadata={"merge_plan_id": plan_id, "apply_scope": apply_summary["apply_scope"]},
             )
             updated_plan = owned_store.update_central_merge_plan_status(
                 plan_id=plan_id,
@@ -128,7 +152,7 @@ def apply_merge_plan(
                     "graph_commit_id": graph_commit_id,
                     "added_node_count": len(added_nodes),
                     "added_edge_count": len(added_edges),
-                    "apply_scope": "exact_atoms_only",
+                    **apply_summary,
                 },
             )
             result = {
@@ -147,6 +171,11 @@ def apply_merge_plan(
                 "added_edge_count": len(added_edges),
                 "added_nodes": added_nodes,
                 "added_edges": added_edges,
+                "input_source": str(plan.get("input_source") or ""),
+                "curated_input_hash": str(plan.get("curated_input_hash") or ""),
+                "trace_input_hash": str(plan.get("trace_input_hash") or ""),
+                "central_graph_path": str(repo_central_graph_path(settings, repo_id)),
+                **apply_summary,
                 "idempotent": reapplies_applied_head,
                 "plan_status": updated_plan.get("status", "applied"),
                 "applied_at": utc_now(),
@@ -162,10 +191,22 @@ def apply_merge_plan(
         finally:
             owned_store.release_central_merge_lock(repo_id=repo_id, branch=branch, owner=owner)
     finally:
-        if close_graph:
+        if close_graph and owned_graph is not None:
             owned_graph.close()
         if close_store:
             owned_store.close()
+
+
+def repo_central_graph_path(settings: Settings, repo_id: str) -> Path:
+    """Return the repo-scoped canonical graph path.
+
+    Session/debug graphs can become large trace stores. Central merge writes
+    durable canonical atoms to a repo-scoped graph so legacy trace bloat cannot
+    prevent applying the active GraphView.
+    """
+
+    safe = re.sub(r"[^A-Za-z0-9_.-]+", "_", str(repo_id or "unknown")).strip("._-") or "unknown"
+    return settings.home / ".graph" / "central" / safe / "central.kuzu"
 
 
 def _write_merge_result_artifact(*, store: V2SessionJobStore, plan: dict[str, Any], result: dict[str, Any]) -> str:
@@ -197,9 +238,16 @@ def _write_merge_result_artifact(*, store: V2SessionJobStore, plan: dict[str, An
             "added_edge_count": result.get("added_edge_count", 0),
             "added_nodes": result.get("added_nodes", []),
             "added_edges": result.get("added_edges", []),
+            "applied_atom_counts": result.get("applied_atom_counts", {}),
+            "applied_version_counts": result.get("applied_version_counts", {}),
+            "deferred_atom_counts": result.get("deferred_atom_counts", {}),
+            "review_relation_edge_count": result.get("review_relation_edge_count", 0),
             "idempotent": result.get("idempotent", False),
             "applied_at": result.get("applied_at", utc_now()),
-            "apply_scope": "exact_atoms_only",
+            "apply_scope": result.get("apply_scope", ["commit", "file", "knowledge_version", "graph_commit", "graph_view"]),
+            "input_source": result.get("input_source", ""),
+            "curated_input_hash": result.get("curated_input_hash", ""),
+            "trace_input_hash": result.get("trace_input_hash", ""),
             "result_artifact": str(target),
         }
         target.write_text(json.dumps(payload, indent=2, ensure_ascii=False, sort_keys=True), encoding="utf-8")
@@ -214,6 +262,50 @@ def _write_merge_result_artifact(*, store: V2SessionJobStore, plan: dict[str, An
         return ""
 
 
+def _validate_product_plan_input(plan: dict[str, Any]) -> None:
+    if str(plan.get("input_source") or "") != "curated_graph_manifest":
+        raise CentralMergeApplyError("central_merge_plan_input_is_not_curated")
+    if not str(plan.get("curated_input_hash") or ""):
+        raise CentralMergeApplyError("central_merge_plan_missing_curated_input_hash")
+
+
+def _apply_summary(plan: dict[str, Any]) -> dict[str, Any]:
+    atoms = [atom for atom in plan.get("new_atoms", []) if isinstance(atom, dict)]
+    versions = [version for version in plan.get("new_versions", []) if isinstance(version, dict)]
+    return {
+        "apply_scope": ["commit", "file", "decision_review", "problem_review", "knowledge_version", "graph_commit", "graph_view"],
+        "applied_atom_counts": _kind_counts(atoms, include=APPLY_ATOM_KINDS),
+        "applied_version_counts": _kind_counts(versions, include=APPLY_ATOM_KINDS),
+        "deferred_atom_counts": {
+            **_kind_counts(atoms, include={"symbol", "code_region", "decision", "problem"}),
+            "decision": 0,
+            "problem": 0,
+        },
+        "review_relation_edge_count": len([edge for edge in plan.get("version_edges", []) if isinstance(edge, dict)]),
+    }
+
+
+def _kind_counts(items: list[dict[str, Any]], *, include: set[str] | frozenset[str]) -> dict[str, int]:
+    counts = {kind: 0 for kind in sorted(include)}
+    for item in items:
+        kind = str(item.get("atom_kind") or "")
+        if kind in counts:
+            counts[kind] += 1
+    return counts
+
+
+def _review_candidate_count(plan: dict[str, Any], kinds: set[str]) -> int:
+    candidates = plan.get("review_candidates") if isinstance(plan.get("review_candidates"), list) else []
+    count = 0
+    for candidate in candidates:
+        if not isinstance(candidate, dict):
+            continue
+        candidate_kind = str(candidate.get("candidate_kind") or candidate.get("frame_kind") or candidate.get("atom_kind") or "").lower()
+        if candidate_kind in kinds:
+            count += 1
+    return count
+
+
 def _write_exact_atoms(
     *,
     graph_store: GraphStore,
@@ -224,14 +316,14 @@ def _write_exact_atoms(
 ) -> tuple[list[str], list[str]]:
     now = utc_now()
     base = _base_metadata(plan=plan, graph_commit_id=graph_commit_id)
-    atoms = [atom for atom in plan.get("new_atoms", []) if isinstance(atom, dict) and atom.get("atom_kind") in EXACT_APPLY_ATOM_KINDS]
+    atoms = [atom for atom in plan.get("new_atoms", []) if isinstance(atom, dict) and atom.get("atom_kind") in APPLY_ATOM_KINDS]
     matched_atoms = [
-        atom for atom in plan.get("matched_atoms", []) if isinstance(atom, dict) and atom.get("atom_kind") in EXACT_APPLY_ATOM_KINDS
+        atom for atom in plan.get("matched_atoms", []) if isinstance(atom, dict) and atom.get("atom_kind") in APPLY_ATOM_KINDS
     ]
     versions = [
         version
         for version in plan.get("new_versions", [])
-        if isinstance(version, dict) and version.get("atom_kind") in EXACT_APPLY_ATOM_KINDS
+        if isinstance(version, dict) and version.get("atom_kind") in APPLY_ATOM_KINDS
     ]
     atom_ids = {str(atom.get("atom_id") or "") for atom in atoms}
     atom_ids.update(str(atom.get("matched_atom_id") or atom.get("atom_id") or "") for atom in matched_atoms)
@@ -243,20 +335,21 @@ def _write_exact_atoms(
         atom_id = str(atom.get("atom_id") or "")
         if not atom_id:
             continue
+        atom_kind = str(atom.get("atom_kind") or "")
         graph_store.upsert_node(
             GraphNode(
                 id=atom_id,
                 kind="KnowledgeAtom",
                 label=_label_for_atom(atom),
                 summary=str(atom.get("canonical_key") or ""),
-                status="active",
+                status="review" if atom_kind in REVIEW_APPLY_ATOM_KINDS else "active",
                 scope="central",
                 session_id=str(plan.get("session_id") or ""),
                 source_app="v2-central-merge",
                 created_at=now,
                 metadata={
                     **base,
-                    "atom_kind": str(atom.get("atom_kind") or ""),
+                    "atom_kind": atom_kind,
                     "repo_id": str(atom.get("repo_id") or plan.get("repo_id") or ""),
                     "repo_path": str(atom.get("repo_path") or plan.get("repo_path") or ""),
                     "canonical_key": str(atom.get("canonical_key") or ""),
@@ -328,6 +421,32 @@ def _write_exact_atoms(
             )
             added_edges.append(derived_edge_id)
 
+    version_ids = {str(version.get("version_id") or "") for version in versions}
+    for relation in plan.get("version_edges", []) if isinstance(plan.get("version_edges"), list) else []:
+        if not isinstance(relation, dict):
+            continue
+        source_id = str(relation.get("source_id") or "")
+        target_id = str(relation.get("target_id") or "")
+        kind = str(relation.get("kind") or "")
+        if kind not in {"DUPLICATE_OF", "REFINES", "SUPERSEDES", "CONFLICTS_WITH", "RELATED_REVIEW"}:
+            continue
+        if source_id not in version_ids or (target_id not in version_ids and not target_id.startswith("kver:")):
+            continue
+        edge_id = str(relation.get("edge_id") or _edge_id(kind, source_id, target_id, graph_commit_id))
+        metadata = relation.get("metadata") if isinstance(relation.get("metadata"), dict) else {}
+        graph_store.upsert_edge(
+            GraphEdge(
+                id=edge_id,
+                source_id=source_id,
+                target_id=target_id,
+                kind=kind,
+                confidence=float(relation.get("confidence") or 0.0),
+                created_at=now,
+                metadata={**base, **metadata, "idempotency_key": _idempotency_key("edge", edge_id, graph_commit_id), "status": str(relation.get("status") or "review")},
+            )
+        )
+        added_edges.append(edge_id)
+
     graph_store.upsert_node(
         GraphNode(
             id=graph_commit_id,
@@ -350,6 +469,19 @@ def _write_exact_atoms(
         )
     )
     added_nodes.append(graph_commit_id)
+    return _dedupe(added_nodes), _dedupe(added_edges)
+
+
+def _write_graph_view_node(
+    *,
+    graph_store: GraphStore,
+    plan: dict[str, Any],
+    graph_commit_id: str,
+    branch: str,
+    mode: str,
+) -> tuple[list[str], list[str]]:
+    now = utc_now()
+    base = _base_metadata(plan=plan, graph_commit_id=graph_commit_id)
     graph_view_id_value = graph_view_id(repo_id=str(plan.get("repo_id") or ""), branch=branch, mode=mode)
     graph_store.upsert_node(
         GraphNode(
@@ -371,7 +503,6 @@ def _write_exact_atoms(
             },
         )
     )
-    added_nodes.append(graph_view_id_value)
     view_edge_id = _edge_id("GRAPH_VIEW_AT", graph_view_id_value, graph_commit_id, graph_commit_id)
     graph_store.upsert_edge(
         GraphEdge(
@@ -384,8 +515,7 @@ def _write_exact_atoms(
             metadata={**base, "idempotency_key": _idempotency_key("edge", view_edge_id, graph_commit_id)},
         )
     )
-    added_edges.append(view_edge_id)
-    return _dedupe(added_nodes), _dedupe(added_edges)
+    return [graph_view_id_value], [view_edge_id]
 
 
 def _base_metadata(*, plan: dict[str, Any], graph_commit_id: str) -> dict[str, Any]:

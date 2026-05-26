@@ -74,10 +74,10 @@ amo-cli peer setup `
   --install-startup
 ```
 
-Create an invite. The invite includes the rendezvous hint so the accepting device can configure itself from the same file.
+Create an invite. Prefer sending the printed `amo-peer-invite:...` code. The invite includes the rendezvous hint so the accepting device can configure itself without a manually returned peer card.
 
 ```powershell
-amo-cli peer create-invite --auto-approve --relay amo-test --out host.invite.json
+amo-cli peer create-invite --auto-approve --relay amo-test
 ```
 
 Accepting device one-time setup:
@@ -86,11 +86,19 @@ Accepting device one-time setup:
 amo-cli peer setup `
   --node-id <friend-device-node-id> `
   --display-name "<Friend Device>" `
-  --invite .\host.invite.json `
+  --invite-code "<amo-peer-invite:...>" `
   --install-startup
 ```
 
-With the relay reachable, `peer setup --invite` starts the sidecar through the relay, accepts the invite, and sends the join request back to the initiator over libp2p instead of requiring a manually returned `.card.json`.
+With the relay reachable, `peer setup --invite-code` starts the sidecar through the relay, accepts the invite, and sends the join request back to the initiator over libp2p instead of requiring a manually returned `.card.json`.
+
+After both devices have `--install-startup`, normal use is only:
+
+```powershell
+amo-cli peer-agent ask --query "<question>"
+```
+
+The asking bot creates the room, sends context requests, waits for peer-agent responses, and synthesizes the answer. The other device only needs its OS session and AMO startup watcher running.
 
 Advanced/debug equivalent without a saved profile:
 

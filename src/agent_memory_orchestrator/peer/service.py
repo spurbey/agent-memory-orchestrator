@@ -504,8 +504,12 @@ class PeerService:
                 continue
             result = self.receive_netd_envelope(envelope)
             result["envelope_id"] = envelope_id
-            self.store.mark_processed_netd_id(envelope_id)
-            processed_ids.add(envelope_id)
+            if result.get("ok"):
+                self.store.mark_processed_netd_id(envelope_id)
+                processed_ids.add(envelope_id)
+                result["processed"] = True
+            else:
+                result["processed"] = False
             results.append(result)
         return {"ok": True, "count": len(results), "results": results}
 

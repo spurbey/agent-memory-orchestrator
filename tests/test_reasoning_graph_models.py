@@ -23,6 +23,7 @@ from agent_memory_orchestrator.reasoning_graph import build_decision_threads
 from agent_memory_orchestrator.reasoning_graph import load_codex_transcript_events
 from agent_memory_orchestrator.reasoning_graph import code_node_provenance_edges
 from agent_memory_orchestrator.reasoning_graph import code_nodes_from_hunks
+from agent_memory_orchestrator.reasoning_graph import default_ast_expander
 from agent_memory_orchestrator.reasoning_graph import extract_code_nodes_from_commit
 from agent_memory_orchestrator.reasoning_graph import parse_unified_zero_hunks
 from agent_memory_orchestrator.reasoning_graph import produced_change_edges
@@ -627,6 +628,94 @@ def test_python_ast_expander_creates_structural_code_node_with_previous_content(
     assert nodes[0].prev_content == 'return "old"'
     assert nodes[0].metadata["language"] == "python"
     assert nodes[0].metadata["structural_id"]
+
+
+def test_default_expander_extracts_javascript_css_and_html_regions() -> None:
+    diff = """diff --git a/src/app.js b/src/app.js
+--- a/src/app.js
++++ b/src/app.js
+@@ -2 +2 @@
+-  return oldState;
++  return nextState;
+diff --git a/src/app.css b/src/app.css
+--- a/src/app.css
++++ b/src/app.css
+@@ -2 +2 @@
+-  color: red;
++  color: green;
+diff --git a/src/index.html b/src/index.html
+--- a/src/index.html
++++ b/src/index.html
+@@ -1 +1 @@
+-<section id="graph">Old</section>
++<section id="graph">New</section>
+"""
+    hunks = parse_unified_zero_hunks(
+        diff,
+        session_id="s1",
+        extraction_run_id="run1",
+        commit_id="abc123",
+        evidence_ids=("raw1",),
+    )
+    nodes = code_nodes_from_hunks(
+        hunks,
+        file_contents={
+            "src/app.js": "function renderGraph() {\n  return nextState;\n}\n",
+            "src/app.css": ".graph-stage {\n  color: green;\n}\n",
+            "src/index.html": '<section id="graph">New</section>\n',
+        },
+        ast_expander=default_ast_expander,
+    )
+
+    by_path = {node.file_path: node for node in nodes}
+    assert by_path["src/app.js"].ast_status == "parsed"
+    assert by_path["src/app.js"].metadata["language"] == "javascript"
+    assert by_path["src/app.js"].metadata["symbol_kind"] == "function"
+    assert by_path["src/app.js"].metadata["symbol_name"] == "renderGraph"
+    assert by_path["src/app.css"].metadata["symbol_kind"] == "style_rule"
+    assert by_path["src/app.css"].metadata["symbol_name"] == ".graph-stage"
+    assert by_path["src/index.html"].metadata["symbol_kind"] == "markup_element"
+    assert by_path["src/index.html"].metadata["symbol_name"] == "section#graph"
+
+
+def test_default_expander_does_not_promote_js_control_blocks_as_functions() -> None:
+    source = "\n".join(
+        [
+            "function renderGraph() {",
+            "  if (enabled) {",
+            "    draw();",
+            "  }",
+            "  for (const node of nodes) {",
+            "    paint(node);",
+            "  }",
+            "}",
+        ]
+    )
+    diff = """diff --git a/src/app.js b/src/app.js
+--- a/src/app.js
++++ b/src/app.js
+@@ -2 +2 @@
+-  if (oldEnabled) {
++  if (enabled) {
+@@ -5 +5 @@
+-  for (const oldNode of nodes) {
++  for (const node of nodes) {
+"""
+    hunks = parse_unified_zero_hunks(
+        diff,
+        session_id="s1",
+        extraction_run_id="run1",
+        commit_id="abc123",
+        evidence_ids=("raw1",),
+    )
+    nodes = code_nodes_from_hunks(
+        hunks,
+        file_contents={"src/app.js": source},
+        ast_expander=default_ast_expander,
+    )
+
+    assert {node.metadata["symbol_name"] for node in nodes} == {"renderGraph"}
+    assert all(node.metadata["symbol_kind"] == "function" for node in nodes)
 
 
 def test_large_added_python_file_compacts_to_top_level_regions() -> None:

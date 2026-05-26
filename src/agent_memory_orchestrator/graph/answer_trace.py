@@ -186,6 +186,97 @@ def format_answer_trace(trace: dict[str, Any]) -> str:
     return " | ".join(part for part in (left, right) if part)
 
 
+def build_central_answer_trace(
+    *,
+    repo_id: str,
+    graph_view: dict[str, Any] | None = None,
+    graph_commit: dict[str, Any] | None = None,
+    central_versions: Iterable[dict[str, Any]] = (),
+    support_docs: Iterable[Any] = (),
+    warnings: Iterable[str] = (),
+    answer: str = "",
+    status: str = "",
+) -> dict[str, Any]:
+    """Build the deterministic central-memory answer trace contract.
+
+    This is intentionally structural only. Ranked retrieval can provide support
+    docs, but the trust boundary is the active GraphView/GraphCommit plus
+    packet/commit/file support extracted from those docs.
+    """
+
+    view = graph_view or {}
+    commit = graph_commit or {}
+    docs = [_doc_payload(doc) for doc in support_docs]
+    version_payloads = list(central_versions)
+    graph_view_id = str(view.get("view_id") or view.get("id") or "")
+    graph_commit_id = str(view.get("graph_commit_id") or commit.get("graph_commit_id") or commit.get("id") or "")
+    trace = {
+        "repo_id": str(repo_id or view.get("repo_id") or commit.get("repo_id") or ""),
+        "graph_view_id": graph_view_id,
+        "graph_commit_id": graph_commit_id,
+        "central_versions": _central_version_refs(version_payloads, docs),
+        "packets": _unique(_doc_value(doc, "packet_id") for doc in docs),
+        "commits": _unique(_doc_value(doc, "commit_sha") for doc in docs),
+        "evidence_refs": _unique(_doc_metadata_values(docs, ("evidence_refs", "evidence_id", "evidence_ref_id"))),
+        "files": _unique(_doc_metadata_values(docs, ("path", "file_path", "selected_files", "normalized_file_path"))),
+        "code_impacts": _unique(
+            [
+                *(
+                    doc.get("graph_node_id") or doc.get("id")
+                    for doc in docs
+                    if str(doc.get("doc_type") or "").lower() == "code_impact" or str(doc.get("node_kind") or "") == "CodeImpactSummary"
+                ),
+                *_doc_metadata_values(docs, ("impact_ids", "impact_id", "code_impact_ids", "code_impact_id")),
+            ]
+        ),
+    }
+    warning_list = _unique(warnings)
+    resolved_status = status or ("active" if graph_view_id and graph_commit_id else "partial")
+    if warning_list and resolved_status == "active":
+        resolved_status = "review_required"
+    return {
+        "answer": answer,
+        "status": resolved_status,
+        "trace": trace,
+        "support_docs": docs,
+        "warnings": warning_list,
+    }
+
+
+def _doc_payload(doc: Any) -> dict[str, Any]:
+    if isinstance(doc, dict):
+        return doc
+    as_dict = getattr(doc, "as_dict", None)
+    if callable(as_dict):
+        payload = as_dict()
+        return payload if isinstance(payload, dict) else {}
+    return {}
+
+
+def _doc_value(doc: dict[str, Any], key: str) -> Any:
+    if doc.get(key):
+        return doc.get(key)
+    metadata = doc.get("metadata") if isinstance(doc.get("metadata"), dict) else {}
+    return metadata.get(key)
+
+
+def _doc_metadata_values(docs: list[dict[str, Any]], keys: tuple[str, ...]) -> list[Any]:
+    values: list[Any] = []
+    for doc in docs:
+        metadata = doc.get("metadata") if isinstance(doc.get("metadata"), dict) else {}
+        for key in keys:
+            values.extend([doc.get(key), metadata.get(key)])
+    return values
+
+
+def _central_version_refs(version_payloads: list[dict[str, Any]], docs: list[dict[str, Any]]) -> list[str]:
+    values: list[Any] = [version.get("version_id") or version.get("id") for version in version_payloads]
+    for doc in docs:
+        if str(doc.get("node_kind") or "") == "KnowledgeVersion" or str(doc.get("doc_type") or "") == "central_version":
+            values.append(doc.get("graph_node_id") or doc.get("id"))
+    return _unique(values)
+
+
 def _empty_trace(seed_node_id: str) -> dict[str, Any]:
     return {
         "seed_node_id": seed_node_id,

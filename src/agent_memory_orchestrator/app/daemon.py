@@ -14,12 +14,13 @@ from urllib.parse import parse_qs, unquote, urlparse
 from ..core.config import Settings
 from ..graph.diagnostics import debug_drain, debug_graph, debug_hooks, debug_qwen
 from ..graph.service import GraphRagService
-from ..graph.store import GraphBackendUnavailable
+from ..graph.store import GraphBackendUnavailable, KuzuGraphStore
 from ..integrations.connectors.slack import SlackConnectorService
 from ..memory import MemoryService
 from ..llm.qwen import QwenUnavailable
 from ..reasoning_graph.jobs import V2SessionJobRunner
 from ..reasoning_graph.jobs import V2SessionJobStore
+from ..reasoning_graph.central_merge.applier import repo_central_graph_path
 
 _CLIENT_ABORT_ERRORS = (BrokenPipeError, ConnectionAbortedError, ConnectionResetError)
 _GRAPH_LOCK = threading.RLock()
@@ -618,13 +619,20 @@ class AmoHandler(BaseHTTPRequestHandler):
                 return
             if self.path == "/graph/version-flow":
                 with _GRAPH_LOCK:
-                    graph = GraphRagService(self.settings)
+                    repo_id = str(payload.get("repo_id") or "")
+                    graph_settings = self.settings
+                    graph_store = None
+                    if repo_id.strip():
+                        central_graph_path = repo_central_graph_path(self.settings, repo_id)
+                        graph_settings = replace(self.settings, graph_path=central_graph_path)
+                        graph_store = KuzuGraphStore(central_graph_path)
+                    graph = GraphRagService(graph_settings, store=graph_store)
                     try:
                         limit = _bounded_int(str(payload.get("limit") or ""), default=100, minimum=1, maximum=500)
                         result = graph.version_flow(
                             commit=str(payload.get("commit") or ""),
                             session_id=str(payload.get("session_id") or ""),
-                            repo_id=str(payload.get("repo_id") or ""),
+                            repo_id=repo_id,
                             limit=limit,
                         )
                         self._write_json(200, result)

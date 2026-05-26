@@ -2,6 +2,16 @@ from __future__ import annotations
 
 PIPELINE_VERSION = "v2-reset-2026-05"
 GRAPH_SCHEMA_VERSION = "v2"
+REASONING_REVIEW_POLICY_VERSION = "reasoning-review-v2-sha-equivalence"
+CODE_PARSER_POLICY_VERSION = "code-parser-v2-polyglot-guards"
+SYMBOL_VERSION_POLICY_VERSION = "symbol-version-v1"
+REASONING_CODE_LINK_POLICY_VERSION = "reasoning-code-link-v1"
+PROMOTION_POLICY_VERSION = "curated-promotion-v1"
+CURATED_GRAPH_SCHEMA_VERSION = "curated-session-graph-v1"
+SESSION_GRAPH_WRITER_VERSION = "session-graph-writer-curated-v1"
+CENTRAL_MERGE_PLANNER_VERSION = "central-version-merge-planner-v1"
+RETRIEVAL_PROJECTION_VERSION = "curated-retrieval-projection-v1"
+QUALITY_EVAL_POLICY_VERSION = "product-quality-eval-v1"
 
 V2_STAGES: tuple[str, ...] = (
     "evidence_view",

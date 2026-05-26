@@ -52,6 +52,87 @@ def test_assistant_reasoning_gate_keeps_plans_and_drops_noise() -> None:
     assert keep_assistant_reasoning("The root cause is that patch text was treated as validation.") is True
 
 
+def test_evidence_view_scopes_transcript_to_raw_turn_windows(tmp_path: Path) -> None:
+    transcript = tmp_path / "rollout.jsonl"
+    transcript.write_text(
+        "\n".join(
+            json.dumps(row)
+            for row in [
+                _task_event("task_started", "turn-old"),
+                _message("user", "Old unrelated bootstrap work should not be imported."),
+                _tool_call("call_old", "git commit -m old"),
+                _tool_output("call_old", "[main abc1234] chore: old unrelated commit"),
+                _task_event("task_complete", "turn-old"),
+                _task_event("task_started", "turn-keep"),
+                _message("user", "Fix the scoped transcript evidence boundary."),
+                _message("assistant", "I will fix this because resumed transcripts contain older session blocks."),
+                _tool_call("call_new", "git commit -m scoped"),
+                _tool_output("call_new", "[main def5678] fix: scope transcript evidence"),
+                _task_event("task_complete", "turn-keep"),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    raw_path = tmp_path / "raw.jsonl"
+    raw_path.write_text(
+        json.dumps(
+            {
+                "event_name": "user_prompt_submit",
+                "session_id": "s1",
+                "payload": {"turn_id": "turn-keep", "transcript_path": str(transcript)},
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    build = build_reasoning_evidence_view(raw_path, repo_root=tmp_path)
+
+    assert build.quality["transcript_scope"] == "raw_turn_window"
+    assert build.quality["raw_turn_id_count"] == 1
+    assert build.quality["matched_turn_start_count"] == 1
+    assert build.quality["matched_turn_complete_count"] == 1
+    assert build.quality["unscoped_transcript_line_count"] == 5
+    assert [item["commit_id"] for item in build.view["commit_facts"]] == ["def5678"]
+    assert [item["request"] for item in build.view["user_problems"]] == ["Fix the scoped transcript evidence boundary."]
+    assert "old unrelated" not in json.dumps(build.view, ensure_ascii=False).lower()
+
+
+def test_evidence_view_falls_back_to_full_transcript_without_raw_turn_ids(tmp_path: Path) -> None:
+    transcript = tmp_path / "rollout.jsonl"
+    transcript.write_text(
+        "\n".join(
+            json.dumps(row)
+            for row in [
+                _task_event("task_started", "turn-old"),
+                _message("user", "Old full transcript fallback work."),
+                _tool_call("call_old", "git commit -m old"),
+                _tool_output("call_old", "[main abc1234] chore: old fallback commit"),
+                _task_event("task_complete", "turn-old"),
+                _task_event("task_started", "turn-new"),
+                _message("user", "New full transcript fallback work."),
+                _tool_call("call_new", "git commit -m new"),
+                _tool_output("call_new", "[main def5678] fix: new fallback commit"),
+                _task_event("task_complete", "turn-new"),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    raw_path = tmp_path / "raw.jsonl"
+    raw_path.write_text(
+        json.dumps({"event_name": "session_start", "session_id": "s1", "payload": {"transcript_path": str(transcript)}}) + "\n",
+        encoding="utf-8",
+    )
+
+    build = build_reasoning_evidence_view(raw_path, repo_root=tmp_path)
+
+    assert build.quality["transcript_scope"] == "full_transcript"
+    assert build.quality["raw_turn_id_count"] == 0
+    assert [item["commit_id"] for item in build.view["commit_facts"]] == ["abc1234", "def5678"]
+
+
 def test_real_stage2b_evidence_view_matches_reset_artifact(tmp_path: Path) -> None:
     root = Path(__file__).resolve().parents[1]
     raw_path = root / ".tmp" / "reasoning-graph-v2-reset-2026-05-14" / "01_raw_jsonl_whole_file" / "input_raw_2026-05-11.full.jsonl"
@@ -64,7 +145,7 @@ def test_real_stage2b_evidence_view_matches_reset_artifact(tmp_path: Path) -> No
     golden = json.loads(golden_path.read_text(encoding="utf-8"))
     support = json.loads(support_path.read_text(encoding="utf-8"))
     max_line = max(int(item["line_no"]) for item in support)
-    build = build_reasoning_evidence_view(raw_path, repo_root=root, max_transcript_line=max_line)
+    build = build_reasoning_evidence_view(raw_path, repo_root=root, max_transcript_line=max_line, scope_to_raw_turns=False)
 
     assert build.quality["raw_record_count"] == golden["raw_record_count"] == 698
     assert build.quality["user_problem_count"] == len(golden["user_problems"]) == 368
@@ -91,3 +172,23 @@ def test_real_stage2b_evidence_view_matches_reset_artifact(tmp_path: Path) -> No
     assert (tmp_path / "reasoning_evidence_view.json").exists()
     assert (tmp_path / "support_ref_map.json").exists()
     assert (tmp_path / "stage2b_inventory.json").exists()
+
+
+def _task_event(event_type: str, turn_id: str) -> dict[str, object]:
+    return {"timestamp": "2026-05-26T00:00:00Z", "type": "event_msg", "payload": {"type": event_type, "turn_id": turn_id}}
+
+
+def _message(role: str, text: str) -> dict[str, object]:
+    return {"timestamp": "2026-05-26T00:00:01Z", "type": "response_item", "payload": {"type": "message", "role": role, "content": [{"text": text}]}}
+
+
+def _tool_call(call_id: str, command: str) -> dict[str, object]:
+    return {
+        "timestamp": "2026-05-26T00:00:02Z",
+        "type": "response_item",
+        "payload": {"type": "function_call", "call_id": call_id, "name": "shell_command", "arguments": json.dumps({"command": command})},
+    }
+
+
+def _tool_output(call_id: str, output: str) -> dict[str, object]:
+    return {"timestamp": "2026-05-26T00:00:03Z", "type": "response_item", "payload": {"type": "function_call_output", "call_id": call_id, "output": output}}

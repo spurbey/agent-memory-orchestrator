@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 import sqlite3
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -9,16 +11,23 @@ import pytest
 from agent_memory_orchestrator.core.db import connect
 from agent_memory_orchestrator.config import Settings
 from agent_memory_orchestrator.graph.service import GraphRagService
+from agent_memory_orchestrator.graph.service import _active_central_versions_for_support
+from agent_memory_orchestrator.graph.service import _answer_from_retrieval_result
 from agent_memory_orchestrator.graph.service import _unique_nonempty
 from agent_memory_orchestrator.graph.answer_trace import build_answer_trace
+from agent_memory_orchestrator.graph.answer_trace import build_central_answer_trace
 from agent_memory_orchestrator.graph.answer_trace import format_answer_trace
 from agent_memory_orchestrator.graph.store import GraphEdge
 from agent_memory_orchestrator.graph.store import GraphNode
 from agent_memory_orchestrator.graph.store import InMemoryGraphStore
+from agent_memory_orchestrator.app import cli as cli_module
+from agent_memory_orchestrator.app.cli import _retrieve_index_only
 from agent_memory_orchestrator.llm.qwen import DeterministicPlanner
+from agent_memory_orchestrator.reasoning_graph.central_merge.applier import repo_central_graph_path
 from agent_memory_orchestrator.reasoning_graph.jobs.constants import GRAPH_SCHEMA_VERSION
 from agent_memory_orchestrator.reasoning_graph.jobs.constants import PIPELINE_VERSION
 from agent_memory_orchestrator.reasoning_graph import GraphEmbeddingStore
+from agent_memory_orchestrator.reasoning_graph import RetrievalDocument
 from agent_memory_orchestrator.reasoning_graph import RetrievalIndexStore
 from agent_memory_orchestrator.reasoning_graph import build_retrieval_documents_from_graph
 from agent_memory_orchestrator.reasoning_graph import classify_query
@@ -297,6 +306,154 @@ def test_retrieval_documents_and_search_are_repo_scoped(tmp_path: Path) -> None:
     assert result.hits
     assert {hit.document.repo_id for hit in result.hits} == {"repo:dora"}
     assert all("amo" not in hit.document.body.lower() for hit in result.hits)
+
+
+def test_offline_index_only_retrieval_respects_repo_scope(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    conn, index_store, _embedding_store = _sqlite_store(tmp_path)
+    try:
+        index_store.upsert_documents(
+            [
+                RetrievalDocument(
+                    doc_id="legacy-code",
+                    doc_type="code",
+                    graph_node_id="legacy:code",
+                    node_kind="CodeNode",
+                    repo_id="",
+                    packet_id="WP0001",
+                    commit_sha="abc123",
+                    title="graph_service.py legacy raw If",
+                    body="why graph_service.py changed legacy raw CodeNode",
+                ),
+            ]
+        )
+        repo_doc = RetrievalDocument(
+            doc_id="repo-file-impact",
+            doc_type="file_impact",
+            graph_node_id="file-impact:graph_service.py",
+            node_kind="FileImpactSummary",
+            repo_id="repo:amo",
+            packet_id="WP0002",
+            commit_sha="def456",
+            title="graph_service.py file impact",
+            body="why graph_service.py changed through curated file impact summary",
+        )
+        projection_id = "rproj:repo-amo"
+        index_store.upsert_projection(
+            projection_id=projection_id,
+            repo_id="repo:amo",
+            projection_version="test",
+            source_artifact_hash="source",
+            doc_content_hash="content",
+            status="building",
+        )
+        index_store.replace_projection_documents([repo_doc], repo_id="repo:amo", projection_id=projection_id)
+        index_store.activate_projection(repo_id="repo:amo", projection_id=projection_id)
+
+        result = _retrieve_index_only(
+            settings,
+            SimpleNamespace(
+                db_path=tmp_path / "retrieval.sqlite",
+                query="why did we change graph_service.py?",
+                repo_id="repo:amo",
+                session_id="",
+                limit=5,
+                graph_scope="",
+            ),
+        )
+
+        hits = result["retrieval"]["hits"]
+        assert hits
+        assert {hit["document"]["repo_id"] for hit in hits} == {"repo:amo"}
+        assert all(hit["document"]["node_kind"] != "CodeNode" for hit in hits)
+    finally:
+        conn.close()
+
+
+def test_offline_index_only_requires_active_projection_for_repo_scope(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    conn, index_store, _embedding_store = _sqlite_store(tmp_path)
+    try:
+        index_store.upsert_documents(
+            [
+                RetrievalDocument(
+                    doc_id="repo-stale-code",
+                    doc_type="session_codenode",
+                    graph_node_id="code:if",
+                    node_kind="CodeNode",
+                    repo_id="repo:amo",
+                    packet_id="WP0001",
+                    commit_sha="abc123",
+                    title="stale raw code",
+                    body="why graph_service.py changed stale raw CodeNode",
+                )
+            ]
+        )
+
+        result = _retrieve_index_only(
+            settings,
+            SimpleNamespace(
+                db_path=tmp_path / "retrieval.sqlite",
+                query="why did we change graph_service.py?",
+                repo_id="repo:amo",
+                session_id="",
+                limit=5,
+                graph_scope="",
+            ),
+        )
+
+        assert result["ok"] is False
+        assert result["error"] == "active_projection_missing"
+    finally:
+        conn.close()
+
+
+def test_offline_graph_retrieve_with_repo_id_uses_repo_central_graph(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    settings = _settings(tmp_path)
+    opened_paths: list[Path] = []
+    service_paths: list[Path] = []
+    service_stores: list[object] = []
+
+    class CapturingStore:
+        def __init__(self, graph_path: Path) -> None:
+            opened_paths.append(graph_path)
+
+    class CapturingService:
+        def __init__(self, service_settings: Settings, *, store: object | None = None, **_: object) -> None:
+            service_paths.append(service_settings.graph_path)
+            service_stores.append(store)
+
+        def retrieve_indexed_graph(self, **kwargs: object) -> dict[str, object]:
+            return {"ok": True, "repo_id": kwargs.get("repo_id"), "graph_path": str(service_paths[-1])}
+
+        def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(cli_module.Settings, "load", staticmethod(lambda: settings))
+    monkeypatch.setattr(cli_module, "KuzuGraphStore", CapturingStore)
+    monkeypatch.setattr(cli_module, "GraphRagService", CapturingService)
+
+    exit_code = cli_module.main(
+        [
+            "graph-retrieve",
+            "--query",
+            "why did graph_service.py change?",
+            "--repo-id",
+            "repo:amo",
+            "--no-vector",
+            "--offline",
+        ]
+    )
+
+    expected_path = repo_central_graph_path(settings, "repo:amo")
+    assert exit_code == 0
+    assert opened_paths == [expected_path]
+    assert service_paths == [expected_path]
+    assert service_stores
+    assert service_stores[0] is not None
+    assert json.loads(capsys.readouterr().out)["graph_path"] == str(expected_path)
 
 
 def _central_graph() -> InMemoryGraphStore:
@@ -984,6 +1141,31 @@ def test_graph_service_retrieve_uses_active_embedding_scope_when_unspecified(tmp
     assert result["retrieval"]["candidate_counts"]["vector"] > 0
 
 
+def test_graph_service_retrieve_falls_back_from_stale_configured_embedding_scope(tmp_path: Path) -> None:
+    settings = replace(_settings(tmp_path), retrieval_graph_scope="stage6_session_graph")
+    svc = GraphRagService(
+        settings,
+        store=_graph(),
+        planner=DeterministicPlanner(),
+    )
+    try:
+        svc.rebuild_retrieval_index(session_id="s1")
+        svc.embed_retrieval_index(session_id="s1", limit=0, graph_scope="v2", rebuild_faiss=False)
+        result = svc.retrieve_indexed_graph(
+            query="why use BM25 vector retrieval before graph expansion",
+            session_id="s1",
+            limit=3,
+            use_vector=True,
+            require_vector=True,
+        )
+    finally:
+        svc.close()
+
+    assert result["ok"] is True
+    assert result["graph_scope"] == "v2"
+    assert result["retrieval"]["candidate_counts"]["vector"] > 0
+
+
 def test_answer_trace_walks_packet_commit_hunk_and_code_chain() -> None:
     graph = InMemoryGraphStore()
     graph.upsert_node(
@@ -1074,6 +1256,146 @@ def test_answer_trace_walks_packet_commit_hunk_and_code_chain() -> None:
     assert "code:hook_response" in trace["support"]["code_node_ids"]
     assert "Problem: Codex hooks timed out" in trace_text
     assert "Fix: Hooks became capture-only" in trace_text
+
+
+def test_central_answer_trace_contract_collects_active_support() -> None:
+    trace = build_central_answer_trace(
+        repo_id="repo:amo",
+        graph_view={"view_id": "v2view:repo:amo:main:active", "graph_commit_id": "v2gcommit:1", "repo_id": "repo:amo"},
+        graph_commit={"graph_commit_id": "v2gcommit:1"},
+        central_versions=[{"version_id": "kver:file:graph_service"}],
+        support_docs=[
+            RetrievalDocument(
+                doc_id="central-version",
+                doc_type="central_version",
+                graph_node_id="kver:file:graph_service",
+                node_kind="KnowledgeVersion",
+                packet_id="WP0018",
+                commit_sha="8351639",
+                title="graph_service.py version",
+                body="graph_service.py active file version",
+                repo_id="repo:amo",
+                metadata={"path": "src/agent_memory_orchestrator/graph_service.py", "evidence_refs": ["E01156"]},
+            ),
+            RetrievalDocument(
+                doc_id="code-impact",
+                doc_type="code_impact",
+                graph_node_id="impact:WP0018",
+                node_kind="CodeImpactSummary",
+                packet_id="WP0018",
+                commit_sha="8351639",
+                title="WP0018 impact",
+                body="Graph service retrieval impact.",
+                repo_id="repo:amo",
+                metadata={"selected_files": ["src/agent_memory_orchestrator/graph_service.py"]},
+            ),
+        ],
+    )
+
+    assert trace["status"] == "active"
+    assert trace["trace"]["repo_id"] == "repo:amo"
+    assert trace["trace"]["graph_view_id"] == "v2view:repo:amo:main:active"
+    assert trace["trace"]["graph_commit_id"] == "v2gcommit:1"
+    assert trace["trace"]["central_versions"] == ["kver:file:graph_service"]
+    assert trace["trace"]["packets"] == ["WP0018"]
+    assert trace["trace"]["commits"] == ["8351639"]
+    assert trace["trace"]["evidence_refs"] == ["E01156"]
+    assert trace["trace"]["files"] == ["src/agent_memory_orchestrator/graph_service.py"]
+    assert trace["trace"]["code_impacts"] == ["impact:WP0018"]
+
+
+def test_answer_trace_falls_back_to_retrieval_doc_metadata_when_graph_node_missing() -> None:
+    result = {
+        "query": "what qwen json hardening was done?",
+        "hits": [
+            {
+                "document": RetrievalDocument(
+                    doc_id="retrieval:packet",
+                    doc_type="reasoning",
+                    graph_node_id="sessionjob:reason:WP0003",
+                    node_kind="ReasoningNode",
+                    packet_id="WP0003",
+                    commit_sha="1a7b05d",
+                    title="Decision: Fix Ollama usage for Qwen reasoning",
+                    body="Disable Ollama thinking for JSON calls.",
+                    repo_id="repo:amo",
+                    metadata={"evidence_refs": ["E00156"], "selected_files": ["src/agent_memory_orchestrator/llm/qwen.py"]},
+                ).as_dict(),
+                "score": 0.9,
+            }
+        ],
+    }
+
+    answer = _answer_from_retrieval_result(result, graph_store=InMemoryGraphStore())
+
+    trace = answer["citations"][0]["trace"]
+    assert trace["source"] == "retrieval_document_metadata"
+    assert trace["node_count"] == 1
+    assert trace["support"]["packet_ids"] == ["WP0003"]
+    assert trace["support"]["commit_shas"] == ["1a7b05d"]
+    assert trace["support"]["evidence_ids"] == ["E00156"]
+
+
+def test_central_trace_enrichment_matches_commit_and_file_versions() -> None:
+    graph = InMemoryGraphStore()
+    graph.upsert_node(
+        GraphNode(
+            id="kver:commit:8351639",
+            kind="KnowledgeVersion",
+            label="commit version",
+            status="active",
+            metadata={
+                "atom_kind": "commit",
+                "repo_id": "repo:amo",
+                "graph_commit_id": "v2gcommit:1",
+                "version_metadata": {"canonical_key": "commit|repo:amo|8351639abcdef"},
+            },
+        )
+    )
+    graph.upsert_node(
+        GraphNode(
+            id="kver:file:graph_service",
+            kind="KnowledgeVersion",
+            label="file version",
+            status="active",
+            metadata={
+                "atom_kind": "file",
+                "repo_id": "repo:amo",
+                "graph_commit_id": "v2gcommit:previous",
+                "version_metadata": {"canonical_key": "file|repo:amo|src/agent_memory_orchestrator/graph_service.py"},
+            },
+        )
+    )
+    graph.upsert_node(
+        GraphNode(
+            id="kver:file:other",
+            kind="KnowledgeVersion",
+            label="other file version",
+            status="active",
+            metadata={
+                "atom_kind": "file",
+                "repo_id": "repo:amo",
+                "graph_commit_id": "v2gcommit:1",
+                "version_metadata": {"canonical_key": "file|repo:amo|src/other.py"},
+            },
+        )
+    )
+
+    versions = _active_central_versions_for_support(
+        graph,
+        repo_id="repo:amo",
+        graph_commit_id="v2gcommit:head",
+        support_docs=[
+            {
+                "doc_type": "file_impact",
+                "node_kind": "FileImpactSummary",
+                "commit_sha": "8351639",
+                "metadata": {"path": "src/agent_memory_orchestrator/graph_service.py"},
+            }
+        ],
+    )
+
+    assert {version["id"] for version in versions} == {"kver:commit:8351639", "kver:file:graph_service"}
 
 
 def test_answer_trace_prefers_visible_query_match_over_metadata_only_match() -> None:
