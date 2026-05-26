@@ -55,6 +55,10 @@ ALIGNMENT_STOPWORDS = {
     "make",
     "new",
     "path",
+    "plan",
+    "plans",
+    "implementation",
+    "reasoning",
     "src",
     "test",
     "tests",
@@ -63,6 +67,17 @@ ALIGNMENT_STOPWORDS = {
     "uses",
     "with",
 }
+
+BLOCKING_REVIEW_DIAGNOSTIC_KINDS = frozenset(
+    {
+        "missing_packet_result",
+        "json_parse_failed",
+        "parsed_output_missing",
+        "packet_id_mismatch",
+        "commit_sha_mismatch",
+        "nodes_not_list",
+    }
+)
 
 
 @dataclass(slots=True, frozen=True)
@@ -126,6 +141,12 @@ def review_reasoning_extraction_results(
         diagnostics_all.extend(reviewed["diagnostics"])
 
     packet_ids = {str(result.get("packet_id") or "") for result in reviewed_results}
+    blocking_diagnostics = [
+        diagnostic
+        for diagnostic in diagnostics_all
+        if str(diagnostic.get("kind") or "") in BLOCKING_REVIEW_DIAGNOSTIC_KINDS
+    ]
+    stage_acceptance = "PASS_WITH_REVIEW_BUCKET" if reviewed_results and accepted_all and not blocking_diagnostics else "FAIL"
     summary = {
         "packet_count": len(reviewed_results),
         "unique_packet_count": len(packet_ids),
@@ -152,9 +173,9 @@ def review_reasoning_extraction_results(
                 if diagnostic.get("level") == "warning" and diagnostic.get("packet_id")
             }
         ),
-        "stage_acceptance": "PASS_WITH_REVIEW_BUCKET"
-        if reviewed_results and not any(d.get("level") == "error" for d in diagnostics_all)
-        else "FAIL",
+        "blocking_diagnostic_count": len(blocking_diagnostics),
+        "blocking_diagnostic_kinds": _diagnostic_counts(blocking_diagnostics, "kind"),
+        "stage_acceptance": stage_acceptance,
     }
     return ReasoningExtractionReview(
         results=tuple(reviewed_results),
