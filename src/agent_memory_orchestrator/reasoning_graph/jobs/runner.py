@@ -560,12 +560,14 @@ class V2SessionJobRunner:
             existing_atoms = {}
             active_central_versions = []
             existing_atom_scan_error = f"{type(exc).__name__}: {exc}"
+        historical_decision_frames = self.job_store.list_decision_frames(repo_id=repo_id, exclude_job_id=str(job.get("job_id") or ""))
         plan = build_dry_run_merge_plan(
             job={**job, "repo_id": repo_id},
             compact_graph=compact_graph if isinstance(compact_graph, dict) else {},
             parent_graph_commit_id=parent_graph_commit_id,
             existing_atoms_by_canonical_key=existing_atoms,
             active_central_versions=active_central_versions,
+            historical_decision_frames=historical_decision_frames,
         )
         plan_payload = plan.as_dict()
         plan_payload["session_graph_write"] = kuzu_result if isinstance(kuzu_result, dict) else {}
@@ -1681,6 +1683,15 @@ def _quality_issues(
                 "status": central_status,
                 "mode": central_mode,
                 "plan_id": central_result.get("plan_id") or "",
+            }
+        )
+    if central_result.get("stale_merge_result"):
+        issues.append(
+            {
+                "code": "central_merge_result_stale",
+                "message": "central_version_merge has a stale merge_result.json for a different plan",
+                "plan_id": central_result.get("plan_id") or "",
+                "stale_merge_result": central_result.get("stale_merge_result"),
             }
         )
     if central_status == "applied" and str(central_result.get("input_source") or "") != "curated_graph_manifest":

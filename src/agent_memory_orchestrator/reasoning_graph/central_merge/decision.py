@@ -5,7 +5,6 @@ import re
 from dataclasses import asdict
 from dataclasses import dataclass
 from itertools import combinations
-from itertools import product
 from typing import Any
 
 from .models import ReviewCandidate
@@ -87,6 +86,7 @@ def build_decision_review_candidates(
     *,
     session_nodes: list[dict[str, Any]] | None = None,
     central_nodes: list[dict[str, Any]] | None = None,
+    historical_frames: list[dict[str, Any]] | None = None,
     compact_graph: dict[str, Any] | None = None,
     repo_id: str = "",
     job_id: str = "",
@@ -102,7 +102,9 @@ def build_decision_review_candidates(
 
     frames = build_decision_frames(compact_graph=compact_graph or {}, session_nodes=session_nodes or [], repo_id=repo_id)
     central_frames = build_decision_frames(session_nodes=_active_central_decision_nodes(central_nodes or [], repo_id=repo_id), repo_id=repo_id)
-    candidates = _review_candidates(frames=frames, comparison_frames=central_frames, job_id=job_id, plan_id=plan_id)
+    persisted_frames = _coerce_historical_frames(historical_frames or [], repo_id=repo_id)
+    comparison_frames = [*central_frames, *persisted_frames]
+    candidates = _review_candidates(frames=frames, comparison_frames=comparison_frames, job_id=job_id, plan_id=plan_id)
     high_risk = [candidate for candidate in candidates if candidate["score"].get("false_positive_risk")]
     relation_counts: dict[str, int] = {}
     for candidate in candidates:
@@ -114,6 +116,7 @@ def build_decision_review_candidates(
         "metrics": {
             "decision_frame_count": len(frames),
             "active_central_decision_frame_count": len(central_frames),
+            "historical_decision_frame_count": len(persisted_frames),
             "decision_candidate_count": len(candidates),
             "review_candidate_count": len(candidates),
             "candidate_relation_counts": relation_counts,
@@ -122,6 +125,42 @@ def build_decision_review_candidates(
             "note": "Decision/problem matching is dry-run only; no central decision status is mutated.",
         },
     }
+
+
+def _coerce_historical_frames(rows: list[dict[str, Any]], *, repo_id: str) -> list[DecisionFrame]:
+    frames: list[DecisionFrame] = []
+    for row in rows:
+        raw = row.get("frame") if isinstance(row.get("frame"), dict) else row
+        if not isinstance(raw, dict):
+            continue
+        if repo_id and str(raw.get("repo_id") or row.get("repo_id") or "") not in {"", repo_id}:
+            continue
+        try:
+            frames.append(
+                DecisionFrame(
+                    frame_id=str(raw.get("frame_id") or row.get("frame_id") or ""),
+                    source_node_id=str(raw.get("source_node_id") or row.get("source_node_id") or raw.get("frame_id") or ""),
+                    repo_id=str(raw.get("repo_id") or row.get("repo_id") or repo_id),
+                    frame_kind=str(raw.get("frame_kind") or row.get("frame_kind") or "decision"),
+                    summary=str(raw.get("summary") or row.get("summary") or ""),
+                    subject=str(raw.get("subject") or row.get("subject") or ""),
+                    statement=str(raw.get("statement") or row.get("statement") or ""),
+                    rationale=str(raw.get("rationale") or ""),
+                    linked_files=_list(raw.get("linked_files")),
+                    linked_symbols=_list(raw.get("linked_symbols")),
+                    linked_code_nodes=_list(raw.get("linked_code_nodes")),
+                    linked_code_versions=_list(raw.get("linked_code_versions")),
+                    linked_commits=_list(raw.get("linked_commits")),
+                    linked_packets=_list(raw.get("linked_packets")),
+                    evidence_refs=_list(raw.get("evidence_refs")),
+                    tokens=_list(raw.get("tokens")),
+                    graph_neighbor_signature=_list(raw.get("graph_neighbor_signature")),
+                    source_scope="decision_frame_ledger",
+                )
+            )
+        except TypeError:
+            continue
+    return [frame for frame in frames if frame.frame_id and frame.source_node_id]
 
 
 def build_decision_frames(
@@ -194,12 +233,14 @@ def _review_candidates(
     comparison_frames: list[DecisionFrame] | None = None,
 ) -> list[dict[str, Any]]:
     candidates: list[dict[str, Any]] = []
-    pairs = product(frames, comparison_frames) if comparison_frames else combinations(frames, 2)
+    pairs = list(combinations(frames, 2))
+    if comparison_frames:
+        pairs.extend((left, right) for left in frames for right in comparison_frames)
     for left, right in pairs:
         if left.source_node_id == right.source_node_id:
             continue
         score = _pair_score(left, right)
-        if score["total"] < 0.52 and not _is_text_only_review(score):
+        if score["total"] < 0.52 and not _is_text_only_review(score) and not _is_shared_code_review(score):
             continue
         relation, reason = _relation_for_score(score)
         if relation == "":
@@ -261,6 +302,8 @@ def _relation_for_score(score: dict[str, Any]) -> tuple[str, str]:
     total = float(score["total"])
     code_overlap = float(score["code_entity_overlap"])
     lexical = float(score["lexical"])
+    if lexical >= 0.82 and code_overlap >= 0.5:
+        return "DUPLICATE_OF", "same_decision_text_and_code_context"
     if total >= 0.88 and code_overlap >= 0.35:
         return "DUPLICATE_OF", "high_overlap_same_code_context"
     if total >= 0.76 and code_overlap >= 0.25:
@@ -269,11 +312,17 @@ def _relation_for_score(score: dict[str, Any]) -> tuple[str, str]:
         return "RELATED_REVIEW", "related_decision_needs_human_review"
     if _is_text_only_review(score):
         return "RELATED_REVIEW", "text_overlap_without_shared_code_context"
+    if _is_shared_code_review(score):
+        return "RELATED_REVIEW", "shared_code_context_needs_human_review"
     return "", ""
 
 
 def _is_text_only_review(score: dict[str, Any]) -> bool:
     return float(score["lexical"]) >= 0.25 and float(score["code_entity_overlap"]) < 0.15
+
+
+def _is_shared_code_review(score: dict[str, Any]) -> bool:
+    return float(score["code_entity_overlap"]) >= 0.6 and float(score["graph_neighbor_overlap"]) >= 0.25
 
 
 def _edge_context(
