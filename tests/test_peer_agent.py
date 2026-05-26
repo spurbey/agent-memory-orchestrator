@@ -56,6 +56,28 @@ def test_peer_agent_low_quality_creates_room_and_context_request(tmp_path: Path)
     assert metadata["raw_evidence_requested"] is False
 
 
+def test_peer_agent_ask_can_target_specific_peer(tmp_path: Path) -> None:
+    settings = make_settings(tmp_path)
+    store = PeerStore(settings)
+    store.init_config(node_id="zenbook-amo")
+    store.add_peer(PeerNode(node_id="poco-amo", peer_id="12D3KooWPeerA", capabilities=("graph_retrieval",)))
+    store.add_peer(PeerNode(node_id="stale-vm", peer_id="12D3KooWPeerB", capabilities=("graph_retrieval",)))
+    netd = FakeNetdClient()
+    svc = PeerAgentService(
+        settings,
+        peer_service=PeerService(settings, store=store, netd_client=netd),
+        graph=FakeGraph(low_retrieval()),
+    )
+
+    result = svc.ask(query="ask one peer only", peer_ids=["poco-amo"], timeout_seconds=0)
+
+    assert result["room_id"]
+    context_messages = [item["message"] for item in netd.sent if item["message"]["type"] == CONTEXT_REQUEST]
+    assert len(context_messages) == 1
+    assert context_messages[0]["to_node_id"] == "poco-amo"
+    assert context_messages[0]["payload"]["metadata"]["target_peer_id"] == "poco-amo"
+
+
 def test_peer_agent_watch_returns_llm_answer_when_peer_ollama_available(tmp_path: Path) -> None:
     settings = make_settings(tmp_path)
     store = peer_room_with_request(tmp_path, local_node="poco-amo")

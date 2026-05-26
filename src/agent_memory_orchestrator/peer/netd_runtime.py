@@ -22,6 +22,7 @@ class PeerNetdRuntimeError(RuntimeError):
 
 
 REQUIRED_NETD_FLAGS = ("identity-key", "advertise-addr")
+REQUIRED_NETD_PROTOCOL_CAPABILITIES = ("remote_peer_id",)
 
 
 @dataclass(slots=True, frozen=True)
@@ -105,18 +106,24 @@ class PeerNetdRuntime:
             current_state = self.read_state()
             current_launch = current_state.get("launch_config") if isinstance(current_state.get("launch_config"), dict) else None
             if current_launch == desired_launch:
-                api_url = str(current.get("api_url") or self.api_url(options.api_addr))
-                post_start = self.post_start(options, api_url)
-                if post_start:
-                    current["health"] = PeerNetdClient(base_url=api_url, timeout_seconds=1.0).health()
-                return {
-                    "ok": True,
-                    "already_running": True,
-                    "launch_config_match": True,
-                    "status": current,
-                    "post_start": post_start,
-                }
-            restart_result = self.stop()
+                current_binary = Path(str(current_state.get("binary") or self.resolve_binary()))
+                current_capabilities = self.binary_capabilities(current_binary)
+                if _missing_binary_requirements(current_capabilities):
+                    restart_result = self.stop()
+                else:
+                    api_url = str(current.get("api_url") or self.api_url(options.api_addr))
+                    post_start = self.post_start(options, api_url)
+                    if post_start:
+                        current["health"] = PeerNetdClient(base_url=api_url, timeout_seconds=1.0).health()
+                    return {
+                        "ok": True,
+                        "already_running": True,
+                        "launch_config_match": True,
+                        "status": current,
+                        "post_start": post_start,
+                    }
+            else:
+                restart_result = self.stop()
 
         binary = self.prepare_binary(build_if_missing=build_if_missing)
 
@@ -193,25 +200,25 @@ class PeerNetdRuntime:
             raise PeerNetdRuntimeError(f"peer-netd binary path is not a file: {binary}")
 
         capabilities = self.binary_capabilities(binary)
-        if not capabilities.get("missing_required_flags"):
+        if not _missing_binary_requirements(capabilities):
             return binary
 
         packaged_is_different = packaged is not None and packaged.exists() and packaged.resolve() != binary.resolve()
         if packaged_is_different:
             packaged_capabilities = self.binary_capabilities(packaged)
-            if not packaged_capabilities.get("missing_required_flags"):
+            if not _missing_binary_requirements(packaged_capabilities):
                 return self.install_packaged_binary(packaged, binary)
 
-        missing = ", ".join(str(item) for item in capabilities.get("missing_required_flags", []))
+        missing = ", ".join(_missing_binary_requirements(capabilities))
         if not build_if_missing:
             raise PeerNetdRuntimeError(
                 "peer-netd binary is stale or incompatible"
                 f" (missing flags: {missing}); run amo-cli peer netd build or reinstall/update AMO"
-            )
+        )
         self.build(binary)
         rebuilt = self.binary_capabilities(binary)
-        if rebuilt.get("missing_required_flags"):
-            missing_after = ", ".join(str(item) for item in rebuilt.get("missing_required_flags", []))
+        if _missing_binary_requirements(rebuilt):
+            missing_after = ", ".join(_missing_binary_requirements(rebuilt))
             raise PeerNetdRuntimeError(f"rebuilt peer-netd is still missing required flags: {missing_after}")
         return binary
 
@@ -223,6 +230,7 @@ class PeerNetdRuntime:
                 "binary": str(candidate),
                 "exists": False,
                 "missing_required_flags": list(REQUIRED_NETD_FLAGS),
+                "missing_protocol_capabilities": list(REQUIRED_NETD_PROTOCOL_CAPABILITIES),
             }
         try:
             result = subprocess.run(
@@ -240,6 +248,7 @@ class PeerNetdRuntime:
                 "executable": False,
                 "error": str(exc),
                 "missing_required_flags": list(REQUIRED_NETD_FLAGS),
+                "missing_protocol_capabilities": list(REQUIRED_NETD_PROTOCOL_CAPABILITIES),
             }
         help_text = f"{result.stdout}\n{result.stderr}"
         missing = [
@@ -247,14 +256,49 @@ class PeerNetdRuntime:
             for flag in REQUIRED_NETD_FLAGS
             if f"-{flag}" not in help_text and f"--{flag}" not in help_text
         ]
+        protocol_capabilities = self.protocol_capabilities(candidate)
+        missing_protocol = [
+            capability
+            for capability in REQUIRED_NETD_PROTOCOL_CAPABILITIES
+            if capability not in protocol_capabilities.get("protocol_capabilities", [])
+        ]
         return {
-            "ok": not missing,
+            "ok": not missing and not missing_protocol,
             "binary": str(candidate),
             "exists": True,
             "executable": True,
             "returncode": result.returncode,
             "missing_required_flags": missing,
+            "protocol_capabilities": protocol_capabilities.get("protocol_capabilities", []),
+            "missing_protocol_capabilities": missing_protocol,
+            "capabilities_error": protocol_capabilities.get("error", ""),
         }
+
+    def protocol_capabilities(self, binary: Path) -> dict[str, Any]:
+        try:
+            result = subprocess.run(
+                [str(binary), "--capabilities"],
+                text=True,
+                capture_output=True,
+                check=False,
+                timeout=5,
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            return {"ok": False, "protocol_capabilities": [], "error": str(exc)}
+        if result.returncode != 0:
+            return {
+                "ok": False,
+                "protocol_capabilities": [],
+                "error": (result.stderr.strip() or result.stdout.strip()),
+            }
+        try:
+            payload = json.loads(result.stdout.strip())
+        except json.JSONDecodeError as exc:
+            return {"ok": False, "protocol_capabilities": [], "error": str(exc)}
+        capabilities = payload.get("protocol_capabilities") if isinstance(payload, dict) else []
+        if not isinstance(capabilities, list):
+            capabilities = []
+        return {"ok": True, "protocol_capabilities": [str(item) for item in capabilities]}
 
     def stop(self) -> dict[str, Any]:
         state = self.read_state()
@@ -598,6 +642,12 @@ def platform_binary_dir_name() -> str:
     else:
         goarch = machine or "unknown"
     return f"{goos}-{goarch}"
+
+
+def _missing_binary_requirements(capabilities: dict[str, Any]) -> list[str]:
+    missing = [str(item) for item in capabilities.get("missing_required_flags", [])]
+    missing.extend(f"protocol:{item}" for item in capabilities.get("missing_protocol_capabilities", []))
+    return missing
 
 
 def _creation_flags() -> int:

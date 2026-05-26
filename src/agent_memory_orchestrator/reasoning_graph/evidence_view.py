@@ -54,6 +54,7 @@ def build_reasoning_evidence_view(
     support_ref_map_path: str = "support_ref_map.json",
     code_write_sample_limit: int = DEFAULT_CODE_WRITE_SAMPLE_LIMIT,
     max_transcript_line: int | None = None,
+    scope_to_raw_turns: bool = True,
 ) -> ReasoningEvidenceViewBuild:
     """Build a compact reasoning evidence view from full raw evidence and transcript.
 
@@ -66,6 +67,8 @@ def build_reasoning_evidence_view(
     repo_root = (repo_root or Path.cwd()).resolve()
     raw_records = tuple(load_jsonl(raw_jsonl_path))
     resolved_transcript = _resolve_transcript_path(raw_records, transcript_path=transcript_path)
+    raw_turn_ids = _raw_turn_ids(raw_records)
+    scope_by_raw_turn = scope_to_raw_turns and bool(raw_turn_ids)
 
     support: list[dict[str, Any]] = []
     problems: list[dict[str, Any]] = []
@@ -94,6 +97,12 @@ def build_reasoning_evidence_view(
     pending: dict[str, dict[str, Any]] = {}
     event_counts: Counter[str] = Counter()
     role_counts: Counter[str] = Counter()
+    active_turn_id = ""
+    active_turn_allowed = not scope_by_raw_turn
+    scoped_transcript_line_count = 0
+    unscoped_transcript_line_count = 0
+    matched_turn_start_count = 0
+    matched_turn_complete_count = 0
     for line_no, item in load_jsonl(resolved_transcript):
         if max_transcript_line is not None and line_no > max_transcript_line:
             break
@@ -101,6 +110,23 @@ def build_reasoning_evidence_view(
         pl = payload(item)
         payload_type = str(pl.get("type") or "")
         timestamp = str(item.get("timestamp") or "")
+        if scope_by_raw_turn:
+            turn_id = _transcript_turn_id(item)
+            is_task_started = raw_type == "event_msg" and payload_type == "task_started"
+            is_task_complete = raw_type == "event_msg" and payload_type == "task_complete"
+            if is_task_started:
+                active_turn_id = turn_id
+                active_turn_allowed = bool(turn_id and turn_id in raw_turn_ids)
+                if active_turn_allowed:
+                    matched_turn_start_count += 1
+            if not active_turn_allowed:
+                unscoped_transcript_line_count += 1
+                if is_task_complete and turn_id and turn_id == active_turn_id:
+                    active_turn_id = ""
+                continue
+            scoped_transcript_line_count += 1
+        else:
+            scoped_transcript_line_count += 1
         event_counts[f"{raw_type}:{payload_type}"] += 1
 
         if raw_type == "response_item" and payload_type == "message":
@@ -168,6 +194,12 @@ def build_reasoning_evidence_view(
                             "git_truth": git_commit_truth(commit_id, repo_root=repo_root),
                         }
                     )
+        if scope_by_raw_turn and raw_type == "event_msg" and payload_type == "task_complete":
+            turn_id = _transcript_turn_id(item)
+            if turn_id and turn_id == active_turn_id:
+                matched_turn_complete_count += 1
+                active_turn_id = ""
+                active_turn_allowed = False
 
     deduped_commits = _dedupe_commits(commits)
     view = {
@@ -176,6 +208,10 @@ def build_reasoning_evidence_view(
         "input_raw": str(raw_jsonl_path),
         "transcript_path": str(resolved_transcript),
         "raw_record_count": len(raw_records),
+        "transcript_scope": "raw_turn_window" if scope_by_raw_turn else "full_transcript",
+        "raw_turn_id_count": len(raw_turn_ids),
+        "scoped_transcript_line_count": scoped_transcript_line_count,
+        "unscoped_transcript_line_count": unscoped_transcript_line_count,
         "transcript_event_counts": dict(event_counts.most_common()),
         "role_counts": dict(role_counts),
         "user_problems": problems,
@@ -189,6 +225,12 @@ def build_reasoning_evidence_view(
     quality = {
         "raw_record_count": len(raw_records),
         "max_transcript_line": max_transcript_line,
+        "transcript_scope": "raw_turn_window" if scope_by_raw_turn else "full_transcript",
+        "raw_turn_id_count": len(raw_turn_ids),
+        "scoped_transcript_line_count": scoped_transcript_line_count,
+        "unscoped_transcript_line_count": unscoped_transcript_line_count,
+        "matched_turn_start_count": matched_turn_start_count,
+        "matched_turn_complete_count": matched_turn_complete_count,
         "user_problem_count": len(problems),
         "assistant_reasoning_count": len(reasoning),
         "commit_fact_count": len(deduped_commits),
@@ -236,6 +278,25 @@ def load_jsonl(path: Path) -> tuple[tuple[int, dict[str, Any]], ...]:
 
 def payload(item: dict[str, Any]) -> dict[str, Any]:
     return item.get("payload") if isinstance(item.get("payload"), dict) else {}
+
+
+def _raw_turn_ids(raw_records: Iterable[tuple[int, dict[str, Any]]]) -> set[str]:
+    out: set[str] = set()
+    for _, item in raw_records:
+        pl = payload(item)
+        turn_id = str(pl.get("turn_id") or item.get("turn_id") or "").strip()
+        if turn_id:
+            out.add(turn_id)
+    return out
+
+
+def _transcript_turn_id(item: dict[str, Any]) -> str:
+    pl = payload(item)
+    for key in ("turn_id", "id"):
+        value = str(pl.get(key) or "").strip()
+        if value:
+            return value
+    return str(item.get("turn_id") or item.get("id") or "").strip()
 
 
 def text_from_content(value: Any) -> str:

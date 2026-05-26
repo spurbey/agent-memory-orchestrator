@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from ..graph.store import GraphEdge, GraphNode, KuzuGraphStore
+from ..llm.embeddings import embed_text
 from .code_analysis import CodeNode, default_ast_expander, extract_code_nodes_from_commit
 from .decision_extraction import extract_decisions
 from .models import ExtractionRun, TimelineEvent
@@ -87,8 +88,15 @@ class SessionGraphQueryResult:
 class StrictTextEmbedder:
     """Production text embedder. It fails loudly instead of producing fake vectors."""
 
-    def __init__(self, model_name: str) -> None:
+    def __init__(self, model_name: str, *, dims: int = 256) -> None:
         self.model_name = model_name
+        self._hash_dims = 0
+        if model_name.strip().lower() in {"hash", "hash-fallback", "deterministic", "local-hash"}:
+            self._model = None
+            self._cache: dict[str, list[float]] = {}
+            self.dims = max(1, int(dims))
+            self._hash_dims = self.dims
+            return
         try:
             from sentence_transformers import SentenceTransformer
         except Exception as exc:  # pragma: no cover - environment dependent
@@ -106,6 +114,10 @@ class StrictTextEmbedder:
         text = text or ""
         if text in self._cache:
             return self._cache[text]
+        if self._hash_dims:
+            result = embed_text(text, self._hash_dims)
+            self._cache[text] = result
+            return result
         vector = self._model.encode(text, normalize_embeddings=True)
         result = [float(x) for x in vector.tolist()]
         self._cache[text] = result
@@ -116,6 +128,10 @@ class StrictTextEmbedder:
         if not missing:
             return
         unique = list(dict.fromkeys(missing))
+        if self._hash_dims:
+            for text in unique:
+                self._cache[text] = embed_text(text, self._hash_dims)
+            return
         vectors = self._model.encode(unique, batch_size=batch_size, normalize_embeddings=True)
         for text, vector in zip(unique, vectors, strict=True):
             self._cache[text] = [float(x) for x in vector.tolist()]

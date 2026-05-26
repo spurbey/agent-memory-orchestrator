@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import uuid
 from dataclasses import dataclass
+from dataclasses import replace as dataclass_replace
 from pathlib import Path
 from typing import Any, Callable
 
@@ -17,6 +19,7 @@ from ...llm.qwen import OllamaQwenClient
 from ...llm.qwen import QwenUnavailable
 from ..code_analysis import extract_code_nodes_from_commit
 from ..central_merge import build_dry_run_merge_plan
+from ..central_merge.applier import repo_central_graph_path
 from ..central_merge.identity import atoms_by_canonical_key
 from ..embedding_store import GraphEmbeddingStore
 from ..evidence_view import build_reasoning_evidence_view
@@ -25,9 +28,10 @@ from ..evidence_view import write_reasoning_evidence_view_artifacts
 from ..reasoning_extraction import review_reasoning_extraction_results
 from ..repo_resolution import resolve_session_repo_root
 from ..central_merge.repo_identity import resolve_repo_identity
+from ..promotion import build_curated_session_graph
 from ..retrieval import RETRIEVAL_EMBEDDING_KIND
+from ..retrieval import RetrievalDocument
 from ..retrieval import RetrievalIndexStore
-from ..retrieval import build_retrieval_documents_from_graph
 from ..retrieval import embed_missing_retrieval_documents
 from ..session_graph_writer import build_compact_session_graph
 from ..session_graph_writer import write_compact_session_graph
@@ -36,9 +40,19 @@ from ..stage4_contract import build_stage4_packet_prompt
 from ..stage4_contract import stage4_contract_hash
 from ..stage4_contract import stage4_output_schema
 from ..work_packets import build_reasoning_work_packets_from_view
+from .constants import CENTRAL_MERGE_PLANNER_VERSION
+from .constants import CODE_PARSER_POLICY_VERSION
+from .constants import CURATED_GRAPH_SCHEMA_VERSION
 from .constants import GRAPH_SCHEMA_VERSION
 from .constants import PIPELINE_VERSION
+from .constants import PROMOTION_POLICY_VERSION
+from .constants import QUALITY_EVAL_POLICY_VERSION
+from .constants import REASONING_CODE_LINK_POLICY_VERSION
+from .constants import REASONING_REVIEW_POLICY_VERSION
+from .constants import RETRIEVAL_PROJECTION_VERSION
 from .constants import RESET_MARKER_KEY
+from .constants import SESSION_GRAPH_WRITER_VERSION
+from .constants import SYMBOL_VERSION_POLICY_VERSION
 from .constants import V2_STAGES
 from .store import V2SessionJobStore
 
@@ -115,7 +129,7 @@ class V2SessionJobRunner:
         stage_dir = artifact_dir / stage
         stage_dir.mkdir(parents=True, exist_ok=True)
         input_artifact = self._stage_input_artifact(job, stage, artifact_dir)
-        input_hash = path_hash(input_artifact)
+        input_hash = self._stage_input_hash(job=job, stage=stage, input_artifact=input_artifact)
         config_hash = stage_config_hash(self.settings, stage=stage)
         existing = self.job_store.stage_row(job_id=str(job["job_id"]), stage=stage)
         output = Path(str(existing.get("output_artifact") or "")) if existing else Path()
@@ -127,6 +141,20 @@ class V2SessionJobRunner:
             and output.exists()
         ):
             return StageResult(output_path=output, diagnostics={"reused": True})
+        superseded = _superseded_stage_metadata(
+            existing=existing,
+            input_hash=input_hash,
+            config_hash=config_hash,
+            output=output,
+        )
+        if superseded:
+            self.job_store.log_event(
+                job_id=str(job["job_id"]),
+                event_type="stage_superseded",
+                stage=stage,
+                message=f"stage superseded before rerun: {stage}",
+                metadata=superseded,
+            )
         self.job_store.start_stage(
             job_id=str(job["job_id"]),
             stage=stage,
@@ -134,7 +162,24 @@ class V2SessionJobRunner:
             input_hash=input_hash,
             stage_config_hash=config_hash,
         )
-        return getattr(self, f"_stage_{stage}")(job, artifact_dir, stage_dir)
+        result = getattr(self, f"_stage_{stage}")(job, artifact_dir, stage_dir)
+        if superseded:
+            diagnostics = {**result.diagnostics, "superseded_previous_stage": superseded}
+            return StageResult(output_path=result.output_path, diagnostics=diagnostics)
+        return result
+
+    def _stage_input_hash(self, *, job: dict[str, Any], stage: str, input_artifact: Path) -> str:
+        base_hash = path_hash(input_artifact)
+        if stage != "central_version_merge":
+            return base_hash
+        repo_id = str(job.get("repo_id") or "") or resolve_repo_identity(str(job.get("repo_path") or "")).repo_id
+        active_view = self.job_store.graph_view(repo_id=repo_id, branch="main", mode="active") or {}
+        payload = {
+            "base_input_hash": base_hash,
+            "repo_id": repo_id,
+            "active_graph_view_head": str(active_view.get("graph_commit_id") or ""),
+        }
+        return hashlib.sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()
 
     def _stage_input_artifact(self, job: dict[str, Any], stage: str, artifact_dir: Path) -> Path:
         if stage == V2_STAGES[0]:
@@ -273,6 +318,17 @@ class V2SessionJobRunner:
         packets = _read_json(self._stage_input_artifact(job, "qwen_reasoning", artifact_dir))
         if not isinstance(packets, list):
             raise RuntimeError("work_packets_output_must_be_list")
+        output = stage_dir / "stage4_packet_reasoning_results.json"
+        manifest = stage_dir / "stage4_packet_reasoning_manifest.json"
+        qwen_contract = _qwen_contract(self.settings)
+        packet_keys = [_qwen_packet_key(packet, contract=qwen_contract) for packet in packets if isinstance(packet, dict)]
+        existing_results = _qwen_existing_results(output)
+        existing_manifest = _qwen_existing_manifest(manifest)
+        reusable = _qwen_reusable_results(
+            existing_results,
+            existing_manifest=existing_manifest,
+            packet_keys=packet_keys,
+        )
         client = OllamaQwenClient(
             endpoint=self.settings.qwen_endpoint,
             model=self.settings.qwen_model,
@@ -280,7 +336,16 @@ class V2SessionJobRunner:
             num_ctx=self.settings.qwen_num_ctx,
         )
         results: list[dict[str, Any]] = []
+        reused_count = 0
         for packet in packets:
+            if not isinstance(packet, dict):
+                continue
+            key = _qwen_packet_key(packet, contract=qwen_contract)
+            cached = reusable.get(_qwen_packet_cache_key(key))
+            if cached is not None:
+                results.append(cached)
+                reused_count += 1
+                continue
             prompt = build_stage4_packet_prompt(packet)
             try:
                 parsed = client.generate_json(
@@ -297,12 +362,22 @@ class V2SessionJobRunner:
                     "commit_sha": _packet_commit_sha(packet),
                     "model": self.settings.qwen_model,
                     "runtime": self.settings.qwen_runtime,
+                    "contract_hash": qwen_contract["contract_hash"],
                     "parsed_output": parsed,
                 }
             )
-        output = stage_dir / "stage4_packet_reasoning_results.json"
-        output.write_text(json.dumps(results, indent=2, ensure_ascii=False), encoding="utf-8")
-        return StageResult(output_path=output, diagnostics={"packet_count": len(packets), "result_count": len(results)})
+            _write_qwen_checkpoint(output, manifest, results, packet_keys, contract=qwen_contract, complete=False)
+        _write_qwen_checkpoint(output, manifest, results, packet_keys, contract=qwen_contract, complete=len(results) == len(packet_keys))
+        return StageResult(
+            output_path=output,
+            diagnostics={
+                "packet_count": len(packet_keys),
+                "result_count": len(results),
+                "reused_result_count": reused_count,
+                "generated_result_count": len(results) - reused_count,
+                "checkpoint_manifest": str(manifest),
+            },
+        )
 
     def _stage_reasoning_review(self, job: dict[str, Any], artifact_dir: Path, stage_dir: Path) -> StageResult:
         packets = _read_json(_stage_output(artifact_dir, "work_packets"))
@@ -315,6 +390,16 @@ class V2SessionJobRunner:
         (stage_dir / "stage4_reasoning_review.json").write_text(json.dumps(review.as_dict(), indent=2, ensure_ascii=False), encoding="utf-8")
         output = stage_dir / "accepted_reasoning_nodes.json"
         output.write_text(json.dumps(list(review.accepted_nodes), indent=2, ensure_ascii=False), encoding="utf-8")
+        if review.summary.get("stage_acceptance") == "FAIL" or not review.accepted_nodes:
+            raise StageFailed(
+                "reasoning_review_acceptance_failed",
+                {
+                    "summary": review.summary,
+                    "review_artifact": str(stage_dir / "stage4_reasoning_review.json"),
+                    "accepted_nodes_artifact": str(output),
+                    "note": "Curated graph promotion is blocked when Qwen reasoning has structural errors or produces no accepted answer-grade nodes.",
+                },
+            )
         return StageResult(output_path=output, diagnostics={"summary": review.summary})
 
     def _stage_git_hunks(self, job: dict[str, Any], artifact_dir: Path, stage_dir: Path) -> StageResult:
@@ -415,49 +500,100 @@ class V2SessionJobRunner:
             code_versions=versions,
             raw_edges=raw_edges if isinstance(raw_edges, list) else [],
         )
+        curated = build_curated_session_graph(
+            packets=packets,
+            reasoning_nodes=reasoning_nodes,
+            evidence_refs=evidence_refs,
+            commit_nodes=commits,
+            code_hunks=hunk_nodes,
+            code_nodes=code_nodes,
+        )
         manifest = stage_dir / "compact_graph_manifest.json"
         manifest.write_text(json.dumps(graph.as_dict(), indent=2, ensure_ascii=False), encoding="utf-8")
+        curated_manifest = stage_dir / "curated_graph_manifest.json"
+        curated_manifest.write_text(json.dumps(curated.graph.as_dict(), indent=2, ensure_ascii=False), encoding="utf-8")
+        (stage_dir / "curation_audit.json").write_text(json.dumps(curated.audit, indent=2, ensure_ascii=False), encoding="utf-8")
         artifact_graph_path = stage_dir / "session_graph.kuzu"
-        write_compact_session_graph(graph_path=artifact_graph_path, nodes=list(graph.nodes), edges=list(graph.edges), force=True)
-        central = self.graph_store_factory(self.settings.graph_path)
-        try:
-            central.init_schema()
-            _upsert_compact_graph(central, graph.nodes, graph.edges, job=job)
-        finally:
-            central.close()
+        artifact_graph_written = _should_write_artifact_kuzu(curated.graph.inventory)
+        if artifact_graph_written:
+            write_compact_session_graph(
+                graph_path=artifact_graph_path,
+                nodes=list(curated.graph.nodes),
+                edges=list(curated.graph.edges),
+                force=True,
+            )
+        central_write = _write_curated_session_graph_to_central(
+            self.graph_store_factory,
+            self.settings.graph_path,
+            nodes=curated.graph.nodes,
+            edges=curated.graph.edges,
+            job=job,
+        )
+        diagnostics = {
+            **curated.graph.inventory,
+            "trace_inventory": graph.inventory,
+            "curated_inventory": curated.graph.inventory,
+            "promotion": _promotion_summary(curated.audit),
+            "central_write": central_write,
+        }
         output = stage_dir / "kuzu_write_result.json"
         output.write_text(
             json.dumps(
                 {
                     "ok": graph.inventory.get("unresolved_edge_count") == 0,
                     "graph_path": str(self.settings.graph_path),
-                    "artifact_graph_path": str(artifact_graph_path),
-                    "inventory": graph.inventory,
+                    "artifact_graph_path": str(artifact_graph_path) if artifact_graph_written else "",
+                    "artifact_graph_written": artifact_graph_written,
+                    "central_write": central_write,
+                    "inventory": curated.graph.inventory,
+                    "trace_inventory": graph.inventory,
+                    "curated_manifest_path": str(curated_manifest),
+                    "promotion": _promotion_summary(curated.audit),
                 },
                 indent=2,
                 ensure_ascii=False,
             ),
             encoding="utf-8",
         )
-        return StageResult(output_path=output, diagnostics=graph.inventory)
+        return StageResult(output_path=output, diagnostics=diagnostics)
 
     def _stage_central_version_merge(self, job: dict[str, Any], artifact_dir: Path, stage_dir: Path) -> StageResult:
         del artifact_dir
         kuzu_result = _read_json(_stage_output(Path(str(job["artifact_dir"])), "kuzu_write"))
-        manifest_path = Path(str(job["artifact_dir"])) / "kuzu_write" / "compact_graph_manifest.json"
+        manifest_info = _product_manifest_info(Path(str(job["artifact_dir"])))
+        manifest_path = Path(str(manifest_info["curated_manifest_path"]))
         compact_graph = _read_json(manifest_path)
         repo_id = str(job.get("repo_id") or "") or resolve_repo_identity(str(job.get("repo_path") or "")).repo_id
         active_view = self.job_store.ensure_graph_view(repo_id=repo_id, branch="main", mode="active")
         parent_graph_commit_id = str(active_view.get("graph_commit_id") or "")
-        existing_atoms = self._central_atoms_by_canonical_key()
+        existing_atom_scan_error = ""
+        try:
+            existing_atoms = self._central_atoms_by_canonical_key(repo_id=repo_id)
+            active_central_versions = self._central_active_versions(repo_id=repo_id)
+        except Exception as exc:
+            existing_atoms = {}
+            active_central_versions = []
+            existing_atom_scan_error = f"{type(exc).__name__}: {exc}"
+        historical_decision_frames = self.job_store.list_decision_frames(repo_id=repo_id, exclude_job_id=str(job.get("job_id") or ""))
         plan = build_dry_run_merge_plan(
             job={**job, "repo_id": repo_id},
             compact_graph=compact_graph if isinstance(compact_graph, dict) else {},
             parent_graph_commit_id=parent_graph_commit_id,
             existing_atoms_by_canonical_key=existing_atoms,
+            active_central_versions=active_central_versions,
+            historical_decision_frames=historical_decision_frames,
         )
         plan_payload = plan.as_dict()
         plan_payload["session_graph_write"] = kuzu_result if isinstance(kuzu_result, dict) else {}
+        plan_payload["input_source"] = "curated_graph_manifest"
+        plan_payload["curated_input_hash"] = manifest_info["curated_input_hash"]
+        plan_payload["trace_input_hash"] = manifest_info["trace_input_hash"]
+        plan_payload["curated_manifest_path"] = str(manifest_path)
+        plan_payload["apply_scope"] = plan.metrics.get("apply_scope", [])
+        plan_payload["deferred_atom_kinds"] = ["symbol", "code_region", "decision", "problem"]
+        plan_payload["deferred_atom_counts"] = plan.metrics.get("deferred_atom_counts", {})
+        if existing_atom_scan_error:
+            plan_payload["existing_atom_scan_error"] = existing_atom_scan_error
         self.job_store.upsert_central_merge_plan(plan_payload)
         output = stage_dir / "merge_plan.json"
         output.write_text(json.dumps(plan_payload, indent=2, ensure_ascii=False), encoding="utf-8")
@@ -471,11 +607,15 @@ class V2SessionJobRunner:
             "graph_commit_preview": plan.graph_commit_preview,
             "metrics": plan.metrics,
             "review_candidate_count": len(plan.review_candidates),
+            "existing_atom_scan_error": existing_atom_scan_error,
+            "input_source": "curated_graph_manifest",
+            "curated_input_hash": manifest_info["curated_input_hash"],
+            "trace_input_hash": manifest_info["trace_input_hash"],
         }
         return StageResult(output_path=output, diagnostics=diagnostics)
 
-    def _central_atoms_by_canonical_key(self) -> dict[str, dict[str, Any]]:
-        graph = self.graph_store_factory(self.settings.graph_path)
+    def _central_atoms_by_canonical_key(self, *, repo_id: str) -> dict[str, dict[str, Any]]:
+        graph = self.graph_store_factory(repo_central_graph_path(self.settings, repo_id))
         try:
             graph.init_schema()
             nodes = graph.list_nodes(limit=1_000_000, kinds=["KnowledgeAtom"])
@@ -483,37 +623,108 @@ class V2SessionJobRunner:
             graph.close()
         return atoms_by_canonical_key(nodes)
 
+    def _central_active_versions(self, *, repo_id: str) -> list[dict[str, Any]]:
+        graph = self.graph_store_factory(repo_central_graph_path(self.settings, repo_id))
+        try:
+            graph.init_schema()
+            nodes = graph.list_nodes(limit=1_000_000, kinds=["KnowledgeVersion"])
+        finally:
+            graph.close()
+        out: list[dict[str, Any]] = []
+        for node in nodes:
+            metadata = node.get("metadata") if isinstance(node.get("metadata"), dict) else {}
+            atom_kind = str(metadata.get("atom_kind") or "").lower()
+            status = str(node.get("status") or metadata.get("status") or "")
+            if str(metadata.get("repo_id") or "") == repo_id and (status in {"", "active"} or (atom_kind in {"decision", "problem"} and status == "review")):
+                out.append(node)
+        return out
+
     def _stage_retrieval_docs(self, job: dict[str, Any], artifact_dir: Path, stage_dir: Path) -> StageResult:
         del artifact_dir
         require_complete_v2_reset_marker(self.job_store.marker(RESET_MARKER_KEY))
-        graph = self.graph_store_factory(self.settings.graph_path)
+        repo_id = _job_repo_id(job)
+        manifest_info = _optional_product_manifest_info(Path(str(job["artifact_dir"])))
         conn = connect(self.settings.retrieval_db_path)
         try:
             index = RetrievalIndexStore(conn)
-            docs = build_retrieval_documents_from_graph(
-                graph,
-                session_id="",
-                node_limit=self.settings.auto_retrieval_node_limit,
-                max_doc_chars=self.settings.auto_retrieval_max_doc_chars,
-                pipeline_version=PIPELINE_VERSION,
-                graph_schema_version=GRAPH_SCHEMA_VERSION,
+            graph_error = ""
+            if manifest_info.get("curated_manifest_exists"):
+                current_docs = _retrieval_documents_from_manifest(
+                    manifest_path=Path(str(manifest_info["curated_manifest_path"])),
+                    source="curated_graph_manifest",
+                    job=job,
+                    repo_id=repo_id,
+                    max_doc_chars=self.settings.auto_retrieval_max_doc_chars,
+                    limit=self.settings.auto_retrieval_node_limit,
+                )
+                retrieval_source = "curated_graph_manifest"
+            else:
+                current_docs = []
+                retrieval_source = "curated_graph_manifest_missing"
+                graph_error = "curated_graph_manifest_missing"
+            existing_docs = index.list_repo_documents_all(repo_id=repo_id) if retrieval_source == "curated_graph_manifest" else []
+            docs = _merge_cumulative_retrieval_docs(existing_docs=existing_docs, current_docs=current_docs)
+            doc_content_hash = _retrieval_doc_content_hash(docs)
+            projection_id = _retrieval_projection_id(
+                repo_id=repo_id,
+                projection_version=RETRIEVAL_PROJECTION_VERSION,
+                source_artifact_hash=str(manifest_info.get("curated_input_hash") or ""),
+                doc_content_hash=doc_content_hash,
             )
-            index.replace_documents(docs)
+            projection: dict[str, Any] = {}
+            activation_gate: dict[str, Any] = {
+                "passed": False,
+                "blocking_failures": ["retrieval_projection_no_docs"],
+                "summary": {},
+            }
+            if retrieval_source == "curated_graph_manifest" and docs:
+                activation_gate = _retrieval_projection_activation_gate(docs)
+                projection = index.upsert_projection(
+                    projection_id=projection_id,
+                    repo_id=repo_id,
+                    projection_version=RETRIEVAL_PROJECTION_VERSION,
+                    source_artifact_hash=str(manifest_info.get("curated_input_hash") or ""),
+                    doc_content_hash=doc_content_hash,
+                    status="building",
+                    metadata={"retrieval_source": retrieval_source, "activation_gate": activation_gate, **manifest_info},
+                )
+                index.replace_projection_documents(docs, repo_id=repo_id, projection_id=projection_id)
+                if activation_gate["passed"]:
+                    index.set_projection_status(projection_id, "validated")
+                    projection = index.activate_projection(repo_id=repo_id, projection_id=projection_id)
+                else:
+                    index.set_projection_status(projection_id, "review_required")
+                    projection = index.projection(projection_id) or {}
         finally:
-            graph.close()
             conn.close()
         output = stage_dir / "retrieval_docs_result.json"
-        output.write_text(json.dumps({"doc_count": len(docs)}, indent=2), encoding="utf-8")
-        return StageResult(output_path=output, diagnostics={"doc_count": len(docs)})
+        payload = {
+            "doc_count": len(docs),
+            "repo_id": repo_id,
+            "retrieval_source": retrieval_source,
+            "graph_error": graph_error,
+            "projection_id": projection_id,
+            "projection_version": RETRIEVAL_PROJECTION_VERSION,
+            "projection_status": projection.get("status"),
+            "active_projection_id": projection.get("projection_id") if activation_gate["passed"] else "",
+            "activation_gate": activation_gate,
+            "current_doc_count": len(current_docs),
+            "carried_forward_doc_count": max(0, len(docs) - len(current_docs)),
+            "doc_content_hash": doc_content_hash,
+            **manifest_info,
+        }
+        output.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        return StageResult(output_path=output, diagnostics=payload)
 
     def _stage_embeddings(self, job: dict[str, Any], artifact_dir: Path, stage_dir: Path) -> StageResult:
         del artifact_dir
+        repo_id = _job_repo_id(job)
         conn = connect(self.settings.retrieval_db_path)
         try:
             index = RetrievalIndexStore(conn)
             embedding_store = GraphEmbeddingStore(conn, db_path=self.settings.retrieval_db_path)
             try:
-                embedder = StrictTextEmbedder(self.settings.embedding_model)
+                embedder = StrictTextEmbedder(self.settings.embedding_model, dims=self.settings.embedding_dims)
             except RuntimeError as exc:
                 raise PendingModel("embedding_model_unavailable", {"error": str(exc), "model": self.settings.embedding_model}) from exc
             result = embed_missing_retrieval_documents(
@@ -523,6 +734,7 @@ class V2SessionJobRunner:
                 model=self.settings.embedding_model,
                 graph_scope="v2",
                 session_id=str(job["session_id"]),
+                repo_id=repo_id,
                 extraction_run_id=str(job["job_id"]),
                 limit=self.settings.auto_embedding_batch_size,
                 embedding_kind=RETRIEVAL_EMBEDDING_KIND,
@@ -530,8 +742,9 @@ class V2SessionJobRunner:
         finally:
             conn.close()
         output = stage_dir / "embeddings_result.json"
-        output.write_text(json.dumps(result.as_dict(), indent=2), encoding="utf-8")
-        return StageResult(output_path=output, diagnostics=result.as_dict())
+        payload = {**result.as_dict(), "repo_id": repo_id}
+        output.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        return StageResult(output_path=output, diagnostics=payload)
 
     def _stage_faiss(self, job: dict[str, Any], artifact_dir: Path, stage_dir: Path) -> StageResult:
         del job, artifact_dir
@@ -552,14 +765,37 @@ class V2SessionJobRunner:
     def _stage_quality_eval(self, job: dict[str, Any], artifact_dir: Path, stage_dir: Path) -> StageResult:
         del job
         kuzu_result = _read_json(_stage_output(artifact_dir, "kuzu_write"))
+        central_result = _central_merge_quality_result(artifact_dir)
         retrieval_result = _read_json(_stage_output(artifact_dir, "retrieval_docs"))
+        embedding_result = _read_json(_stage_output(artifact_dir, "embeddings"))
+        faiss_result = _read_json(_stage_output(artifact_dir, "faiss"))
+        issues = _quality_issues(
+            central_result=central_result if isinstance(central_result, dict) else {},
+            retrieval_result=retrieval_result if isinstance(retrieval_result, dict) else {},
+            embedding_result=embedding_result if isinstance(embedding_result, dict) else {},
+            faiss_result=faiss_result if isinstance(faiss_result, dict) else {},
+        )
+        readiness = _quality_readiness(
+            issues=issues,
+            central_result=central_result if isinstance(central_result, dict) else {},
+            retrieval_result=retrieval_result if isinstance(retrieval_result, dict) else {},
+            embedding_result=embedding_result if isinstance(embedding_result, dict) else {},
+            faiss_result=faiss_result if isinstance(faiss_result, dict) else {},
+        )
         output = stage_dir / "quality_eval.json"
         payload = {
-            "ok": True,
+            "ok": not issues,
+            **readiness,
+            "blocking_issues": issues,
             "kuzu": kuzu_result,
+            "central_version_merge": central_result,
             "retrieval_docs": retrieval_result,
+            "embeddings": embedding_result,
+            "faiss": faiss_result,
         }
         output.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+        if issues:
+            raise StageFailed("quality_eval_product_readiness_failed", payload)
         return StageResult(output_path=output, diagnostics=payload)
 
 
@@ -613,21 +849,113 @@ def path_hash(path: Path) -> str:
     return ""
 
 
-def stage_config_hash(settings: Settings, *, stage: str) -> str:
-    payload = {
+def stage_config_payload(settings: Settings, *, stage: str) -> dict[str, Any]:
+    payload: dict[str, Any] = {
         "stage": stage,
         "pipeline_version": PIPELINE_VERSION,
         "graph_schema_version": GRAPH_SCHEMA_VERSION,
-        "qwen_model": settings.qwen_model,
-        "qwen_endpoint": settings.qwen_endpoint,
-        "qwen_runtime": settings.qwen_runtime,
-        "qwen_num_ctx": settings.qwen_num_ctx,
-        "stage4_contract_hash": stage4_contract_hash(),
-        "embedding_model": settings.embedding_model,
-        "vector_backend": settings.vector_backend,
-        "retrieval_max_doc_chars": settings.auto_retrieval_max_doc_chars,
     }
+    if stage == "qwen_reasoning":
+        payload.update(
+            {
+                "qwen_model": settings.qwen_model,
+                "qwen_runtime": settings.qwen_runtime,
+                "qwen_num_ctx": settings.qwen_num_ctx,
+                "qwen_prompt_contract_hash": stage4_contract_hash(),
+                "stage4_contract_hash": stage4_contract_hash(),
+                "stage4_schema_hash": hashlib.sha256(json.dumps(stage4_output_schema(), sort_keys=True).encode("utf-8")).hexdigest(),
+            }
+        )
+    elif stage == "reasoning_review":
+        payload.update(
+            {
+                "reasoning_review_policy_version": REASONING_REVIEW_POLICY_VERSION,
+                "stage4_contract_hash": stage4_contract_hash(),
+            }
+        )
+    elif stage == "ast_code_nodes":
+        payload["code_parser_policy_version"] = CODE_PARSER_POLICY_VERSION
+    elif stage == "symbol_versions":
+        payload.update(
+            {
+                "symbol_version_policy_version": SYMBOL_VERSION_POLICY_VERSION,
+                "code_parser_policy_version": CODE_PARSER_POLICY_VERSION,
+            }
+        )
+    elif stage == "reasoning_code_links":
+        payload["reasoning_code_link_policy_version"] = REASONING_CODE_LINK_POLICY_VERSION
+    elif stage == "kuzu_write":
+        payload.update(
+            {
+                "promotion_policy_version": PROMOTION_POLICY_VERSION,
+                "curated_graph_schema_version": CURATED_GRAPH_SCHEMA_VERSION,
+                "session_graph_writer_version": SESSION_GRAPH_WRITER_VERSION,
+            }
+        )
+    elif stage == "central_version_merge":
+        payload.update(
+            {
+                "central_merge_planner_version": CENTRAL_MERGE_PLANNER_VERSION,
+                "curated_graph_schema_version": CURATED_GRAPH_SCHEMA_VERSION,
+            }
+        )
+    elif stage == "retrieval_docs":
+        payload.update(
+            {
+                "retrieval_projection_version": RETRIEVAL_PROJECTION_VERSION,
+                "curated_graph_schema_version": CURATED_GRAPH_SCHEMA_VERSION,
+                "retrieval_node_limit": settings.auto_retrieval_node_limit,
+                "retrieval_max_doc_chars": settings.auto_retrieval_max_doc_chars,
+            }
+        )
+    elif stage in {"embeddings", "faiss"}:
+        payload.update(
+            {
+                "embedding_model": settings.embedding_model,
+                "vector_backend": settings.vector_backend,
+            }
+        )
+    elif stage == "quality_eval":
+        payload["quality_eval_policy_version"] = QUALITY_EVAL_POLICY_VERSION
+    return payload
+
+
+def stage_config_hash(settings: Settings, *, stage: str) -> str:
+    payload = stage_config_payload(settings, stage=stage)
     return hashlib.sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()
+
+
+def _superseded_stage_metadata(
+    *,
+    existing: dict[str, Any] | None,
+    input_hash: str,
+    config_hash: str,
+    output: Path,
+) -> dict[str, Any]:
+    if not existing or existing.get("status") != "complete":
+        return {}
+    old_input_hash = str(existing.get("input_hash") or "")
+    old_config_hash = str(existing.get("stage_config_hash") or "")
+    old_output = str(existing.get("output_artifact") or "")
+    reasons: list[str] = []
+    if old_input_hash != input_hash:
+        reasons.append("input_hash_changed")
+    if old_config_hash != config_hash:
+        reasons.append("policy_version_changed")
+    if not old_output or not output.exists():
+        reasons.append("output_artifact_missing")
+    if not reasons:
+        return {}
+    return {
+        "validity": "superseded",
+        "reason": reasons[0],
+        "reasons": reasons,
+        "old_input_hash": old_input_hash,
+        "new_input_hash": input_hash,
+        "old_stage_config_hash": old_config_hash,
+        "new_stage_config_hash": config_hash,
+        "old_output_artifact": old_output,
+    }
 
 
 def _current_stage(job: dict[str, Any]) -> str:
@@ -655,6 +983,29 @@ def _stage_output(artifact_dir: Path, stage: str) -> Path:
         "quality_eval": "quality_eval.json",
     }
     return artifact_dir / stage / candidates[stage]
+
+
+def _central_merge_quality_result(artifact_dir: Path) -> Any:
+    plan_result = _read_json(_stage_output(artifact_dir, "central_version_merge"))
+    merge_result = artifact_dir / "central_version_merge" / "merge_result.json"
+    if merge_result.exists():
+        applied = _read_json(merge_result)
+        if not isinstance(plan_result, dict) or not isinstance(applied, dict):
+            return applied
+        current_plan_id = str(plan_result.get("plan_id") or "")
+        applied_plan_id = str(applied.get("plan_id") or "")
+        if current_plan_id and applied_plan_id == current_plan_id:
+            return applied
+        return {
+            **plan_result,
+            "stale_merge_result": {
+                "plan_id": applied_plan_id,
+                "status": str(applied.get("status") or ""),
+                "mode": str(applied.get("mode") or ""),
+                "graph_commit_id": str((applied.get("graph_commit") if isinstance(applied.get("graph_commit"), dict) else {}).get("graph_commit_id") or ""),
+            },
+        }
+    return plan_result
 
 
 def _read_json(path: Path) -> Any:
@@ -712,6 +1063,431 @@ def _path_changed(left: str, right: str) -> bool:
         return Path(left).resolve() != Path(right).resolve()
     except OSError:
         return left.strip().lower() != right.strip().lower()
+
+
+def _should_write_artifact_kuzu(inventory: dict[str, Any]) -> bool:
+    raw = os.environ.get("AMO_KUZU_ARTIFACT_WRITE_MAX_EDGES", "").strip()
+    try:
+        max_edges = int(raw) if raw else 25_000
+    except ValueError:
+        max_edges = 25_000
+    if max_edges < 0:
+        return True
+    return int(inventory.get("manifest_edge_count") or 0) <= max_edges
+
+
+def _product_manifest_info(artifact_dir: Path) -> dict[str, Any]:
+    curated = artifact_dir / "kuzu_write" / "curated_graph_manifest.json"
+    if not curated.exists():
+        raise StageFailed(
+            "curated_graph_manifest_missing",
+            {
+                "curated_manifest_path": str(curated),
+                "compact_manifest_path": str(_compact_manifest_path(artifact_dir)),
+                "input_source": "missing_curated_graph_manifest",
+            },
+        )
+    info = _optional_product_manifest_info(artifact_dir)
+    info["curated_input_hash"] = file_sha256(curated)
+    return info
+
+
+def _optional_product_manifest_info(artifact_dir: Path) -> dict[str, Any]:
+    curated = artifact_dir / "kuzu_write" / "curated_graph_manifest.json"
+    compact = _compact_manifest_path(artifact_dir)
+    return {
+        "curated_manifest_path": str(curated),
+        "curated_manifest_exists": curated.exists(),
+        "curated_input_hash": file_sha256(curated) if curated.exists() else "",
+        "compact_manifest_path": str(compact),
+        "compact_manifest_exists": compact.exists(),
+        "trace_input_hash": file_sha256(compact) if compact.exists() else "",
+    }
+
+
+def _compact_manifest_path(artifact_dir: Path) -> Path:
+    return artifact_dir / "kuzu_write" / "compact_graph_manifest.json"
+
+
+def _promotion_summary(audit: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "policy": audit.get("policy", ""),
+        "policy_counts": audit.get("policy_counts", {}),
+        "selected_file_count": audit.get("selected_file_count", 0),
+        "file_impact_count": audit.get("file_impact_count", 0),
+        "selected_symbol_count": audit.get("selected_symbol_count", 0),
+        "selected_code_region_count": audit.get("selected_code_region_count", 0),
+    }
+
+
+def _central_session_edge_write_limit() -> int:
+    raw = os.environ.get("AMO_KUZU_CENTRAL_EDGE_WRITE_MAX_EDGES", "").strip()
+    try:
+        return int(raw) if raw else 25_000
+    except ValueError:
+        return 25_000
+
+
+def _retrieval_documents_from_manifest(
+    *,
+    manifest_path: Path,
+    source: str,
+    job: dict[str, Any],
+    repo_id: str,
+    max_doc_chars: int,
+    limit: int,
+) -> list[RetrievalDocument]:
+    manifest = _read_json(manifest_path)
+    nodes = manifest.get("nodes") if isinstance(manifest, dict) else []
+    namespace = str(job["job_id"]).rsplit(":", 1)[-1][:12]
+    docs: list[RetrievalDocument] = []
+    for index, node in enumerate(nodes if isinstance(nodes, list) else []):
+        if limit and index >= limit:
+            break
+        if not isinstance(node, dict):
+            continue
+        node_id = str(node.get("id") or "")
+        kind = str(node.get("kind") or "")
+        if not node_id or not kind:
+            continue
+        metadata = _safe_json_object(str(node.get("properties_json") or "{}"))
+        doc_type, memory_class, importance = _fallback_doc_profile(kind)
+        metadata.update(
+            {
+                "repo_id": repo_id,
+                "pipeline_version": PIPELINE_VERSION,
+                "graph_schema_version": GRAPH_SCHEMA_VERSION,
+                "source": source,
+                "job_id": job.get("job_id"),
+                "session_id": job.get("session_id"),
+                "original_node_id": node_id,
+            }
+        )
+        title = str(node.get("label") or node_id)
+        summary = str(node.get("summary") or "")
+        body = "\n".join(
+            part
+            for part in (
+                f"{kind}: {title}",
+                summary,
+                json.dumps(_retrieval_fallback_metadata(metadata), ensure_ascii=False, sort_keys=True),
+            )
+            if part
+        )
+        docs.append(
+            RetrievalDocument(
+                doc_id=f"retrieval:{repo_id}:{namespace}:{node_id}:1",
+                doc_type=doc_type,
+                graph_node_id=f"{namespace}:{node_id}",
+                node_kind=kind,
+                packet_id=str(node.get("packet_id") or metadata.get("packet_id") or metadata.get("source_packet_id") or ""),
+                commit_sha=str(node.get("commit_sha") or metadata.get("commit_sha") or metadata.get("source_commit_sha") or ""),
+                title=title,
+                body=_clip_text(body, max_doc_chars),
+                repo_id=repo_id,
+                memory_class=memory_class,
+                importance=importance,
+                metadata=metadata,
+            )
+        )
+    return docs
+
+
+def _merge_cumulative_retrieval_docs(
+    *,
+    existing_docs: list[RetrievalDocument],
+    current_docs: list[RetrievalDocument],
+) -> list[RetrievalDocument]:
+    """Build the active repo projection as a cumulative product-memory surface."""
+    merged: dict[str, RetrievalDocument] = {}
+    for doc in existing_docs:
+        source = str(doc.metadata.get("source") or "")
+        if source not in {"curated_graph_manifest", "central_active_graph_view"}:
+            continue
+        if doc.node_kind in {"CodeNode", "CodeHunk", "Symbol", "CodeVersion"}:
+            continue
+        merged[doc.doc_id] = dataclass_replace(
+            doc,
+            metadata={key: value for key, value in doc.metadata.items() if key != "projection_id"},
+        )
+    for doc in current_docs:
+        merged[doc.doc_id] = dataclass_replace(
+            doc,
+            metadata={key: value for key, value in doc.metadata.items() if key != "projection_id"},
+        )
+    return sorted(
+        merged.values(),
+        key=lambda doc: (doc.metadata.get("job_id", ""), doc.doc_type, doc.graph_node_id, doc.chunk_index, doc.doc_id),
+    )
+
+
+def _retrieval_projection_id(*, repo_id: str, projection_version: str, source_artifact_hash: str, doc_content_hash: str) -> str:
+    payload = {
+        "repo_id": repo_id,
+        "projection_version": projection_version,
+        "source_artifact_hash": source_artifact_hash,
+        "doc_content_hash": doc_content_hash,
+    }
+    digest = hashlib.sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()[:32]
+    return f"rproj:{digest}"
+
+
+def _retrieval_doc_content_hash(docs: list[RetrievalDocument]) -> str:
+    payload = [
+        {
+            "doc_id": doc.doc_id,
+            "doc_type": doc.doc_type,
+            "graph_node_id": doc.graph_node_id,
+            "node_kind": doc.node_kind,
+            "packet_id": doc.packet_id,
+            "commit_sha": doc.commit_sha,
+            "title": doc.title,
+            "body": doc.body,
+            "memory_class": doc.memory_class,
+            "importance": doc.importance,
+            "metadata": {key: value for key, value in doc.metadata.items() if key != "projection_id"},
+        }
+        for doc in docs
+    ]
+    return hashlib.sha256(json.dumps(payload, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
+
+
+def _retrieval_projection_activation_gate(docs: list[RetrievalDocument]) -> dict[str, Any]:
+    raw_trace_docs = [
+        doc
+        for doc in docs
+        if doc.node_kind in {"CodeNode", "CodeHunk", "Symbol", "CodeVersion"}
+        or doc.doc_type in {"session_codenode", "session_codehunk", "session_symbol", "code"}
+    ]
+    product_docs = [
+        doc
+        for doc in docs
+        if doc.doc_type
+        in {
+            "central_atom",
+            "central_version",
+            "code_impact",
+            "file_impact",
+            "reasoning",
+            "commit",
+            "packet",
+            "file_ref",
+            "symbol_ref",
+            "code_region_ref",
+        }
+    ]
+    failures: list[str] = []
+    if not docs:
+        failures.append("retrieval_projection_no_docs")
+    if raw_trace_docs:
+        failures.append("retrieval_projection_contains_raw_trace_docs")
+    if not product_docs:
+        failures.append("retrieval_projection_missing_product_docs")
+    return {
+        "passed": not failures,
+        "blocking_failures": failures,
+        "summary": {
+            "doc_count": len(docs),
+            "product_doc_count": len(product_docs),
+            "raw_trace_doc_count": len(raw_trace_docs),
+            "raw_trace_examples": [
+                {"doc_id": doc.doc_id, "doc_type": doc.doc_type, "node_kind": doc.node_kind, "title": doc.title}
+                for doc in raw_trace_docs[:5]
+            ],
+        },
+    }
+
+
+def _clip_text(text: str, limit: int) -> str:
+    safe_limit = max(256, int(limit or 0))
+    if len(text) <= safe_limit:
+        return text
+    return text[: max(0, safe_limit - 18)].rstrip() + "\n... <clipped>"
+
+
+def _safe_json_object(raw: str) -> dict[str, Any]:
+    try:
+        loaded = json.loads(raw or "{}")
+    except json.JSONDecodeError:
+        return {}
+    return loaded if isinstance(loaded, dict) else {}
+
+
+def _retrieval_fallback_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
+    keep = (
+        "packet_id",
+        "source_packet_id",
+        "commit_sha",
+        "source_commit_sha",
+        "path",
+        "qualified_name",
+        "symbol_kind",
+        "node_type",
+        "subject",
+        "statement",
+        "summary",
+        "selected_files",
+        "selected_file_roles",
+        "impact_roles",
+        "impact_role",
+        "primary_impact_role",
+        "impact_role_counts",
+        "selected_symbol_refs",
+        "selected_code_refs",
+        "reasoning_statements",
+        "impact_count",
+        "packet_ids",
+        "commit_shas",
+        "impact_ids",
+        "reasons",
+        "commit_messages",
+        "promotion_grade",
+        "policy",
+        "hunk_count",
+        "original_code_node_id",
+        "evidence_refs",
+        "repo_id",
+        "job_id",
+        "session_id",
+    )
+    return {key: metadata.get(key) for key in keep if metadata.get(key)}
+
+
+def _fallback_doc_profile(kind: str) -> tuple[str, str, float]:
+    if kind == "ReasoningNode":
+        return "reasoning", "answer_grade_reasoning", 0.9
+    if kind == "CodeImpactSummary":
+        return "code_impact", "code_impact_summary", 0.82
+    if kind == "FileImpactSummary":
+        return "file_impact", "file_impact_summary", 0.84
+    if kind == "Commit":
+        return "commit", "work_change", 0.72
+    if kind == "EvidenceRef":
+        return "evidence", "supporting_evidence", 0.35
+    if kind == "Packet":
+        return "packet", "work_packet", 0.5
+    if kind == "FileRef":
+        return "file_ref", "code_support", 0.62
+    if kind == "SymbolRef":
+        return "symbol_ref", "code_support", 0.6
+    if kind == "CodeRegionRef":
+        return "code_region_ref", "code_support", 0.58
+    return f"session_{kind.lower()}", "support", 0.5
+
+
+def _qwen_contract(settings: Settings) -> dict[str, str]:
+    payload = {
+        "model": settings.qwen_model,
+        "runtime": settings.qwen_runtime,
+        "num_ctx": settings.qwen_num_ctx,
+        "stage4_contract_hash": stage4_contract_hash(),
+        "stage4_schema_hash": hashlib.sha256(json.dumps(stage4_output_schema(), sort_keys=True).encode("utf-8")).hexdigest(),
+        "pipeline_version": PIPELINE_VERSION,
+        "graph_schema_version": GRAPH_SCHEMA_VERSION,
+    }
+    return {**payload, "contract_hash": hashlib.sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()}
+
+
+def _qwen_packet_key(packet: dict[str, Any], *, contract: dict[str, str]) -> dict[str, str]:
+    return {
+        "packet_id": str(packet.get("packet_id") or ""),
+        "commit_sha": _packet_commit_sha(packet),
+        "packet_hash": hashlib.sha256(json.dumps(packet, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest(),
+        "contract_hash": str(contract.get("contract_hash") or ""),
+    }
+
+
+def _qwen_packet_cache_key(packet_key: dict[str, str]) -> tuple[str, str, str, str]:
+    return (packet_key["packet_id"], packet_key["commit_sha"], packet_key["packet_hash"], packet_key["contract_hash"])
+
+
+def _qwen_existing_results(output: Path) -> list[dict[str, Any]]:
+    if not output.exists():
+        return []
+    try:
+        loaded = _read_json(output)
+    except (OSError, json.JSONDecodeError):
+        return []
+    if not isinstance(loaded, list):
+        return []
+    return [item for item in loaded if isinstance(item, dict)]
+
+
+def _qwen_existing_manifest(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return {}
+    try:
+        loaded = _read_json(path)
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return loaded if isinstance(loaded, dict) else {}
+
+
+def _qwen_reusable_results(
+    existing_results: list[dict[str, Any]],
+    *,
+    existing_manifest: dict[str, Any],
+    packet_keys: list[dict[str, str]],
+) -> dict[tuple[str, str, str, str], dict[str, Any]]:
+    if not existing_results:
+        return {}
+    manifest_packets = existing_manifest.get("packets")
+    manifest_by_result_key: dict[tuple[str, str], tuple[str, str]] = {}
+    if isinstance(manifest_packets, list):
+        for item in manifest_packets:
+            if not isinstance(item, dict):
+                continue
+            manifest_by_result_key[(str(item.get("packet_id") or ""), str(item.get("commit_sha") or ""))] = (
+                str(item.get("packet_hash") or ""),
+                str(item.get("contract_hash") or ""),
+            )
+
+    current_by_legacy_key = {(item["packet_id"], item["commit_sha"]): item for item in packet_keys}
+    reusable: dict[tuple[str, str, str, str], dict[str, Any]] = {}
+    for result in existing_results:
+        packet_id = str(result.get("packet_id") or "")
+        commit_sha = str(result.get("commit_sha") or "")
+        if not packet_id:
+            continue
+        current = current_by_legacy_key.get((packet_id, commit_sha))
+        if current is None:
+            continue
+        manifest_hash, manifest_contract = manifest_by_result_key.get((packet_id, commit_sha), ("", ""))
+        if not manifest_hash or not manifest_contract:
+            continue
+        if manifest_hash != current["packet_hash"] or manifest_contract != current["contract_hash"]:
+            continue
+        if str(result.get("contract_hash") or manifest_contract) != current["contract_hash"]:
+            continue
+        if not isinstance(result.get("parsed_output"), dict):
+            continue
+        reusable[_qwen_packet_cache_key(current)] = result
+    return reusable
+
+
+def _write_qwen_checkpoint(
+    output: Path,
+    manifest: Path,
+    results: list[dict[str, Any]],
+    packet_keys: list[dict[str, str]],
+    *,
+    contract: dict[str, str],
+    complete: bool,
+) -> None:
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output_tmp = output.with_suffix(output.suffix + ".tmp")
+    manifest_tmp = manifest.with_suffix(manifest.suffix + ".tmp")
+    output_tmp.write_text(json.dumps(results, indent=2, ensure_ascii=False), encoding="utf-8")
+    manifest_payload = {
+        "complete": complete,
+        "result_count": len(results),
+        "packet_count": len(packet_keys),
+        "contract": contract,
+        "packets": packet_keys[: len(results)],
+    }
+    manifest_tmp.write_text(json.dumps(manifest_payload, indent=2, ensure_ascii=False), encoding="utf-8")
+    output_tmp.replace(output)
+    manifest_tmp.replace(manifest)
 
 
 def _packet_commit_sha(packet: dict[str, Any]) -> str:
@@ -901,6 +1677,151 @@ def _versioned_items(value: Any, job: dict[str, Any]) -> list[dict[str, Any]]:
     return out
 
 
+def _job_repo_id(job: dict[str, Any]) -> str:
+    return str(job.get("repo_id") or "") or resolve_repo_identity(str(job.get("repo_path") or "")).repo_id
+
+
+def _quality_issues(
+    *,
+    central_result: dict[str, Any],
+    retrieval_result: dict[str, Any],
+    embedding_result: dict[str, Any],
+    faiss_result: dict[str, Any],
+) -> list[dict[str, Any]]:
+    issues: list[dict[str, Any]] = []
+    central_status = str(central_result.get("status") or "")
+    central_mode = str(central_result.get("mode") or "")
+    if central_status != "applied" or central_mode != "apply_exact_atoms":
+        issues.append(
+            {
+                "code": "central_merge_not_applied",
+                "message": "central_version_merge produced a dry-run plan, not applied central memory",
+                "status": central_status,
+                "mode": central_mode,
+                "plan_id": central_result.get("plan_id") or "",
+            }
+        )
+    if central_result.get("stale_merge_result"):
+        issues.append(
+            {
+                "code": "central_merge_result_stale",
+                "message": "central_version_merge has a stale merge_result.json for a different plan",
+                "plan_id": central_result.get("plan_id") or "",
+                "stale_merge_result": central_result.get("stale_merge_result"),
+            }
+        )
+    if central_status == "applied" and str(central_result.get("input_source") or "") != "curated_graph_manifest":
+        issues.append(
+            {
+                "code": "central_consumed_non_curated_input",
+                "message": "central_version_merge did not apply from curated_graph_manifest",
+                "input_source": central_result.get("input_source") or "",
+            }
+        )
+    if central_status == "applied" and not str(central_result.get("curated_input_hash") or ""):
+        issues.append({"code": "central_missing_curated_input_hash", "message": "central apply lacks curated input hash"})
+    if central_result.get("existing_atom_scan_error"):
+        issues.append(
+            {
+                "code": "central_atom_scan_failed",
+                "message": "central_version_merge could not scan existing canonical atoms",
+                "error": central_result.get("existing_atom_scan_error"),
+            }
+        )
+
+    doc_count = int(retrieval_result.get("doc_count") or 0)
+    if doc_count <= 0:
+        issues.append({"code": "retrieval_docs_empty", "message": "retrieval_docs produced no documents"})
+    retrieval_source = str(retrieval_result.get("retrieval_source") or "")
+    if retrieval_source in {"compact_manifest_fallback", "curated_graph_manifest_missing"}:
+        issues.append(
+            {
+                "code": "retrieval_fallback_or_missing_curated",
+                "message": "retrieval_docs did not use curated product input",
+                "retrieval_source": retrieval_source,
+            }
+        )
+    if doc_count > 0 and not str(retrieval_result.get("active_projection_id") or ""):
+        issues.append({"code": "active_projection_missing", "message": "retrieval docs exist but no active projection was recorded"})
+    activation_gate = retrieval_result.get("activation_gate") if isinstance(retrieval_result.get("activation_gate"), dict) else {}
+    if doc_count > 0 and activation_gate and activation_gate.get("passed") is not True:
+        issues.append(
+            {
+                "code": "retrieval_projection_activation_gate_failed",
+                "message": "retrieval projection failed semantic activation gates",
+                "blocking_failures": activation_gate.get("blocking_failures") or [],
+            }
+        )
+
+    total_docs = int(embedding_result.get("total_docs") or doc_count or 0)
+    embedded = int(embedding_result.get("embedded") or 0)
+    already = int(embedding_result.get("already_embedded") or 0)
+    covered = embedded + already
+    if total_docs and covered < total_docs:
+        issues.append(
+            {
+                "code": "embedding_coverage_partial",
+                "message": "not all retrieval documents have active embeddings",
+                "covered_docs": covered,
+                "total_docs": total_docs,
+                "limit_hit": bool(embedding_result.get("limit_hit")),
+            }
+        )
+
+    faiss_status = str(faiss_result.get("status") or "")
+    faiss_items = int(faiss_result.get("item_count") or 0)
+    if total_docs and faiss_items < total_docs:
+        issues.append(
+            {
+                "code": "faiss_coverage_partial",
+                "message": "FAISS cache does not cover all retrieval documents",
+                "item_count": faiss_items,
+                "total_docs": total_docs,
+                "status": faiss_status,
+            }
+        )
+    return issues
+
+
+def _quality_readiness(
+    *,
+    issues: list[dict[str, Any]],
+    central_result: dict[str, Any],
+    retrieval_result: dict[str, Any],
+    embedding_result: dict[str, Any],
+    faiss_result: dict[str, Any],
+) -> dict[str, bool]:
+    issue_codes = {str(issue.get("code") or "") for issue in issues}
+    doc_count = int(retrieval_result.get("doc_count") or 0)
+    total_docs = int(embedding_result.get("total_docs") or doc_count or 0)
+    embedded = int(embedding_result.get("embedded") or 0)
+    already = int(embedding_result.get("already_embedded") or 0)
+    covered = embedded + already
+    faiss_items = int(faiss_result.get("item_count") or 0)
+    central_memory_ready = (
+        str(central_result.get("status") or "") == "applied"
+        and str(central_result.get("mode") or "") == "apply_exact_atoms"
+        and str(central_result.get("input_source") or "") == "curated_graph_manifest"
+        and bool(str(central_result.get("curated_input_hash") or ""))
+    )
+    lexical_retrieval_ready = (
+        doc_count > 0
+        and str(retrieval_result.get("retrieval_source") or "") in {"curated_graph_manifest", "central_active_graph_view"}
+        and bool(str(retrieval_result.get("active_projection_id") or ""))
+    )
+    vector_retrieval_ready = bool(total_docs) and covered >= total_docs and faiss_items >= total_docs
+    answer_trace_ready = central_memory_ready and lexical_retrieval_ready
+    product_ready = central_memory_ready and lexical_retrieval_ready and vector_retrieval_ready and answer_trace_ready and not issue_codes
+    return {
+        "mechanical_complete": True,
+        "lexical_retrieval_ready": lexical_retrieval_ready,
+        "vector_retrieval_ready": vector_retrieval_ready,
+        "central_memory_ready": central_memory_ready,
+        "answer_trace_ready": answer_trace_ready,
+        "product_ready": product_ready,
+    }
+
+
 def _evidence_ref_nodes(packets: list[dict[str, Any]]) -> list[dict[str, Any]]:
     refs: dict[str, dict[str, Any]] = {}
     for packet in packets:
@@ -936,9 +1857,10 @@ def _commit_nodes(packets: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return nodes
 
 
-def _upsert_compact_graph(store: GraphStore, nodes: tuple[dict[str, Any], ...], edges: tuple[dict[str, Any], ...], *, job: dict[str, Any]) -> None:
+def _upsert_compact_graph(store: GraphStore, nodes: tuple[dict[str, Any], ...], edges: tuple[dict[str, Any], ...], *, job: dict[str, Any]) -> dict[str, Any]:
     namespace = str(job["job_id"]).rsplit(":", 1)[-1][:12]
     id_map = {str(node["id"]): f"{namespace}:{node['id']}" for node in nodes}
+    node_write_count = 0
     for node in nodes:
         metadata = json.loads(str(node.get("properties_json") or "{}"))
         metadata.update(
@@ -947,6 +1869,8 @@ def _upsert_compact_graph(store: GraphStore, nodes: tuple[dict[str, Any], ...], 
                 "pipeline_version": PIPELINE_VERSION,
                 "graph_schema_version": GRAPH_SCHEMA_VERSION,
                 "job_id": job.get("job_id"),
+                "repo_id": job.get("repo_id"),
+                "immutable_session_graph_node": True,
             }
         )
         store.upsert_node(
@@ -963,12 +1887,24 @@ def _upsert_compact_graph(store: GraphStore, nodes: tuple[dict[str, Any], ...], 
                 metadata=metadata,
             )
         )
+        node_write_count += 1
+    max_edges = _central_session_edge_write_limit()
+    if max_edges >= 0 and len(edges) > max_edges:
+        return {
+            "node_write_count": node_write_count,
+            "edge_write_count": 0,
+            "edge_write_skipped": True,
+            "edge_write_limit": max_edges,
+            "edge_count": len(edges),
+        }
+    edge_write_count = 0
     for index, edge in enumerate(edges):
         source = id_map.get(str(edge.get("from_id") or ""))
         target = id_map.get(str(edge.get("to_id") or ""))
         if not source or not target:
             continue
         metadata = json.loads(str(edge.get("properties_json") or "{}"))
+        metadata["immutable_session_graph_edge"] = True
         store.upsert_edge(
             GraphEdge(
                 id=f"v2edge:{namespace}:{index:06d}",
@@ -979,3 +1915,40 @@ def _upsert_compact_graph(store: GraphStore, nodes: tuple[dict[str, Any], ...], 
                 metadata=metadata,
             )
         )
+        edge_write_count += 1
+    return {
+        "node_write_count": node_write_count,
+        "edge_write_count": edge_write_count,
+        "edge_write_skipped": False,
+        "edge_write_limit": max_edges,
+        "edge_count": len(edges),
+    }
+
+
+def _write_curated_session_graph_to_central(
+    graph_store_factory: Callable[[Path], GraphStore],
+    graph_path: Path,
+    *,
+    nodes: tuple[dict[str, Any], ...],
+    edges: tuple[dict[str, Any], ...],
+    job: dict[str, Any],
+) -> dict[str, Any]:
+    central = graph_store_factory(graph_path)
+    try:
+        central.init_schema()
+        result = _upsert_compact_graph(central, nodes, edges, job=job)
+        return {"status": "applied", **result}
+    except Exception as exc:
+        return {
+            "status": "failed_recoverable",
+            "error_type": type(exc).__name__,
+            "error": str(exc),
+            "node_write_count": 0,
+            "edge_write_count": 0,
+            "edge_write_skipped": True,
+            "edge_write_limit": _central_session_edge_write_limit(),
+            "edge_count": len(edges),
+            "curated_manifest_still_available": True,
+        }
+    finally:
+        central.close()

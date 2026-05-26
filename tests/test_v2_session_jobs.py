@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import json
 from pathlib import Path
@@ -11,6 +11,7 @@ from agent_memory_orchestrator.core.db import connect
 from agent_memory_orchestrator.reasoning_graph.embedding_store import GraphEmbeddingRecord
 from agent_memory_orchestrator.reasoning_graph.embedding_store import GraphEmbeddingStore
 from agent_memory_orchestrator.reasoning_graph.jobs import V2SessionJobStore
+from agent_memory_orchestrator.reasoning_graph.jobs import runner as runner_module
 from agent_memory_orchestrator.reasoning_graph.jobs.store import graph_view_id
 from agent_memory_orchestrator.reasoning_graph.jobs.constants import GRAPH_SCHEMA_VERSION
 from agent_memory_orchestrator.reasoning_graph.jobs.constants import PIPELINE_VERSION
@@ -19,7 +20,10 @@ from agent_memory_orchestrator.reasoning_graph.jobs.reset import initialize_fres
 from agent_memory_orchestrator.reasoning_graph.jobs.reset import reset_production_v2_storage
 from agent_memory_orchestrator.reasoning_graph.jobs.runner import require_complete_v2_reset_marker
 from agent_memory_orchestrator.reasoning_graph.jobs.runner import V2SessionJobRunner
+from agent_memory_orchestrator.reasoning_graph.central_merge import applier as applier_module
 from agent_memory_orchestrator.reasoning_graph.central_merge.applier import apply_merge_plan
+from agent_memory_orchestrator.reasoning_graph.central_merge.applier import CentralMergeApplyError
+from agent_memory_orchestrator.reasoning_graph.central_merge.applier import repo_central_graph_path
 from agent_memory_orchestrator.reasoning_graph.central_merge.backfill import backfill_central_merge_plan
 from agent_memory_orchestrator.reasoning_graph.central_merge.fixtures import export_job_fixture
 from agent_memory_orchestrator.reasoning_graph.central_merge.judge import judge_semantic_case
@@ -61,6 +65,16 @@ def make_settings(tmp_path: Path) -> Settings:
         graph_path=tmp_path / ".graph" / "amo.kuzu",
         evidence_dir=tmp_path / ".evidence",
     )
+
+
+def _product_plan(plan):
+    payload = plan.as_dict()
+    return {
+        **payload,
+        "input_source": "curated_graph_manifest",
+        "curated_input_hash": "curated-input",
+        "trace_input_hash": "trace-input",
+    }
 
 
 def test_v2_enqueue_is_idempotent_and_atomic_lock_skips_locked_failed_and_pending_model(tmp_path: Path) -> None:
@@ -145,6 +159,90 @@ def test_v2_stage_rows_track_hashes_and_config_hash(tmp_path: Path) -> None:
         store.close()
 
 
+def test_v2_qwen_reasoning_reuses_existing_matching_checkpoint(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    settings = make_settings(tmp_path)
+    store = V2SessionJobStore(settings)
+    try:
+        job = store.enqueue_session(session_id="s-qwen", boundary_event_id="raw_boundary", repo_path=str(tmp_path)).job
+        artifact_dir = Path(job["artifact_dir"])
+        work_dir = artifact_dir / "work_packets"
+        work_dir.mkdir(parents=True, exist_ok=True)
+        packets = [
+            {
+                "packet_id": "WP0001",
+                "commit": {"short_sha": "abc123", "full_sha": "abc123"},
+                "summary": "Add graph retrieval.",
+                "problem_refs": [],
+                "rationale_refs": [],
+                "validation_refs": [],
+            }
+        ]
+        work_output = work_dir / "reasoning_work_packets.json"
+        work_output.write_text(json.dumps(packets), encoding="utf-8")
+        store.start_stage(
+            job_id=job["job_id"],
+            stage="work_packets",
+            input_artifact="view.json",
+            input_hash="input",
+            stage_config_hash="config",
+        )
+        store.complete_stage(
+            job_id=job["job_id"],
+            stage="work_packets",
+            output_artifact=str(work_output),
+            output_hash="output",
+            diagnostics={"packet_count": 1},
+        )
+
+        qwen_dir = artifact_dir / "qwen_reasoning"
+        qwen_dir.mkdir(parents=True, exist_ok=True)
+        contract = runner_module._qwen_contract(settings)
+        packet_key = runner_module._qwen_packet_key(packets[0], contract=contract)
+        qwen_output = qwen_dir / "stage4_packet_reasoning_results.json"
+        qwen_output.write_text(
+            json.dumps(
+                [
+                    {
+                        "packet_id": "WP0001",
+                        "commit_sha": "abc123",
+                        "model": "qwen3:1.7b",
+                        "runtime": "ollama",
+                        "contract_hash": contract["contract_hash"],
+                        "parsed_output": {"kind": "decision", "summary": "Use graph retrieval."},
+                    }
+                ]
+            ),
+            encoding="utf-8",
+        )
+        (qwen_dir / "stage4_packet_reasoning_manifest.json").write_text(
+            json.dumps({"complete": True, "result_count": 1, "packet_count": 1, "contract": contract, "packets": [packet_key]}),
+            encoding="utf-8",
+        )
+
+        class FailingQwenClient:
+            def __init__(self, **_: object) -> None:
+                pass
+
+            def generate_json(self, *_: object, **__: object) -> dict[str, object]:
+                raise AssertionError("existing matching checkpoint should be reused")
+
+        monkeypatch.setattr(runner_module, "OllamaQwenClient", FailingQwenClient)
+        runner = V2SessionJobRunner(settings, job_store=store)
+
+        run = runner.run_next()
+        stage = store.stage_row(job_id=job["job_id"], stage="qwen_reasoning")
+
+        assert run["stage"] == "qwen_reasoning"
+        assert run["status"] == "pending"
+        assert stage is not None
+        assert stage["status"] == "complete"
+        assert stage["diagnostics"]["reused_result_count"] == 1
+        assert stage["diagnostics"]["generated_result_count"] == 0
+        assert (qwen_dir / "stage4_packet_reasoning_manifest.json").exists()
+    finally:
+        store.close()
+
+
 def test_v2_schema_adds_central_merge_control_tables(tmp_path: Path) -> None:
     settings = make_settings(tmp_path)
     store = V2SessionJobStore(settings)
@@ -216,6 +314,8 @@ def test_v2_central_merge_stage_writes_dry_run_plan_and_preserves_session_graph(
             "inventory": {"node_count": 5, "edge_count": 0, "unresolved_edge_count": 0},
         }
         (kuzu_dir / "compact_graph_manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+        (kuzu_dir / "curated_graph_manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+        (kuzu_dir / "curation_audit.json").write_text(json.dumps({"policy": "test"}), encoding="utf-8")
         result_path = kuzu_dir / "kuzu_write_result.json"
         result_path.write_text(json.dumps({"ok": True, "inventory": manifest["inventory"]}), encoding="utf-8")
         store.start_stage(
@@ -259,6 +359,30 @@ def test_v2_central_merge_stage_writes_dry_run_plan_and_preserves_session_graph(
         store.close()
 
 
+def test_v2_central_merge_input_hash_tracks_active_graph_view_head(tmp_path: Path) -> None:
+    settings = make_settings(tmp_path)
+    store = V2SessionJobStore(settings)
+    try:
+        job = store.enqueue_session(session_id="s-head-hash", boundary_event_id="raw_boundary", repo_path=str(tmp_path)).job
+        input_artifact = tmp_path / "kuzu_write_result.json"
+        input_artifact.write_text(json.dumps({"ok": True}), encoding="utf-8")
+        runner = V2SessionJobRunner(settings, job_store=store)
+
+        initial_hash = runner._stage_input_hash(job=job, stage="central_version_merge", input_artifact=input_artifact)
+        unchanged_stage_hash = runner._stage_input_hash(job=job, stage="retrieval_docs", input_artifact=input_artifact)
+        store.update_graph_view_head(
+            repo_id=str(job.get("repo_id") or ""),
+            graph_commit_id="v2gcommit:new-head",
+            metadata={"test": "head-input"},
+        )
+        updated_hash = runner._stage_input_hash(job=job, stage="central_version_merge", input_artifact=input_artifact)
+
+        assert updated_hash != initial_hash
+        assert runner._stage_input_hash(job=job, stage="retrieval_docs", input_artifact=input_artifact) == unchanged_stage_hash
+    finally:
+        store.close()
+
+
 def test_v2_central_merge_apply_writes_exact_atoms_graph_commit_and_view(tmp_path: Path) -> None:
     settings = make_settings(tmp_path)
     graph = InMemoryGraphStore()
@@ -275,7 +399,7 @@ def test_v2_central_merge_apply_writes_exact_atoms_graph_commit_and_view(tmp_pat
             "edges": [],
         }
         plan = build_dry_run_merge_plan(job=job, compact_graph=compact_graph, parent_graph_commit_id="")
-        stored = store.upsert_central_merge_plan(plan.as_dict())
+        stored = store.upsert_central_merge_plan(_product_plan(plan))
 
         applied = apply_merge_plan(settings=settings, plan_id=stored["plan_id"], store=store, graph_store=graph)
 
@@ -287,6 +411,8 @@ def test_v2_central_merge_apply_writes_exact_atoms_graph_commit_and_view(tmp_pat
         merge_result = json.loads(result_artifact.read_text(encoding="utf-8"))
         assert merge_result["status"] == "applied"
         assert merge_result["graph_commit"]["graph_commit_id"] == applied["graph_commit"]["graph_commit_id"]
+        assert merge_result["input_source"] == "curated_graph_manifest"
+        assert merge_result["curated_input_hash"] == "curated-input"
         updated_plan = store.get_central_merge_plan(stored["plan_id"])
         assert updated_plan is not None
         assert updated_plan["status"] == "applied"
@@ -294,7 +420,9 @@ def test_v2_central_merge_apply_writes_exact_atoms_graph_commit_and_view(tmp_pat
         assert view is not None
         assert view["graph_commit_id"] == applied["graph_commit"]["graph_commit_id"]
         assert graph.nodes[applied["graph_commit"]["graph_commit_id"]].kind == "GraphCommit"
-        assert graph.nodes[graph_view_id(repo_id=applied["repo_id"], branch="main", mode="active")].kind == "GraphView"
+        graph_view_node_id = graph_view_id(repo_id=applied["repo_id"], branch="main", mode="active")
+        assert graph.nodes[graph_view_node_id].kind == "GraphView"
+        assert graph_view_node_id in applied["graph_commit"]["added_nodes"]
         atom_nodes = [node for node in graph.nodes.values() if node.kind == "KnowledgeAtom"]
         version_nodes = [node for node in graph.nodes.values() if node.kind == "KnowledgeVersion"]
         central_nodes = [
@@ -302,7 +430,14 @@ def test_v2_central_merge_apply_writes_exact_atoms_graph_commit_and_view(tmp_pat
             for node in graph.nodes.values()
             if node.kind in {"KnowledgeAtom", "KnowledgeVersion", "GraphCommit", "GraphView"}
         ]
-        assert {node.metadata["atom_kind"] for node in atom_nodes} == {"commit", "file", "symbol"}
+        assert {node.metadata["atom_kind"] for node in atom_nodes} == {"commit", "file"}
+        assert applied["deferred_atom_counts"]["symbol"] == 1
+        assert applied["applied_atom_counts"]["commit"] == 1
+        assert applied["applied_atom_counts"]["file"] == 1
+        assert applied["applied_atom_counts"]["decision"] == 0
+        assert applied["applied_version_counts"]["commit"] == 1
+        assert applied["applied_version_counts"]["file"] == 1
+        assert applied["applied_version_counts"]["decision"] == 0
         assert all(node.metadata["graph_commit_id"] == applied["graph_commit"]["graph_commit_id"] for node in atom_nodes + version_nodes)
         assert all(node.metadata["repo_id"].startswith("repo:") for node in atom_nodes)
         assert all(node.metadata.get("idempotency_key") for node in central_nodes)
@@ -331,6 +466,40 @@ def test_v2_central_merge_apply_writes_exact_atoms_graph_commit_and_view(tmp_pat
         store.close()
 
 
+def test_v2_central_merge_apply_defaults_to_repo_scoped_central_graph(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    settings = make_settings(tmp_path)
+    opened_paths: list[Path] = []
+
+    class CapturingGraphStore(InMemoryGraphStore):
+        def __init__(self, graph_path: Path) -> None:
+            super().__init__()
+            opened_paths.append(graph_path)
+
+    monkeypatch.setattr(applier_module, "KuzuGraphStore", CapturingGraphStore)
+    store = V2SessionJobStore(settings)
+    try:
+        job = store.enqueue_session(session_id="s-repo-central-graph", boundary_event_id="raw_boundary", repo_path=str(tmp_path)).job
+        compact_graph = {
+            "nodes": [
+                {"id": "commit:abc123", "kind": "Commit", "properties": {"full_sha": "abc123"}},
+                {"id": "hunk:1", "kind": "CodeHunk", "properties": {"path": "src/graph_service.py"}},
+            ],
+            "edges": [],
+        }
+        plan = build_dry_run_merge_plan(job=job, compact_graph=compact_graph, parent_graph_commit_id="")
+        stored = store.upsert_central_merge_plan(_product_plan(plan))
+
+        applied = apply_merge_plan(settings=settings, plan_id=stored["plan_id"], store=store)
+
+        expected_path = repo_central_graph_path(settings, applied["repo_id"])
+        assert opened_paths == [expected_path]
+        assert expected_path != settings.graph_path
+        assert applied["central_graph_path"] == str(expected_path)
+        assert applied["ok"] is True
+    finally:
+        store.close()
+
+
 def test_v2_central_merge_apply_requires_matching_graph_view_head(tmp_path: Path) -> None:
     settings = make_settings(tmp_path)
     graph = InMemoryGraphStore()
@@ -341,8 +510,8 @@ def test_v2_central_merge_apply_requires_matching_graph_view_head(tmp_path: Path
         compact_graph = {"nodes": [{"id": "commit:abc123", "kind": "Commit", "properties": {"full_sha": "abc123"}}], "edges": []}
         first_plan = build_dry_run_merge_plan(job=first_job, compact_graph=compact_graph, parent_graph_commit_id="")
         second_plan = build_dry_run_merge_plan(job=second_job, compact_graph=compact_graph, parent_graph_commit_id="")
-        first = store.upsert_central_merge_plan(first_plan.as_dict())
-        second = store.upsert_central_merge_plan(second_plan.as_dict())
+        first = store.upsert_central_merge_plan(_product_plan(first_plan))
+        second = store.upsert_central_merge_plan(_product_plan(second_plan))
 
         applied = apply_merge_plan(settings=settings, plan_id=first["plan_id"], store=store, graph_store=graph)
         conflicted = apply_merge_plan(settings=settings, plan_id=second["plan_id"], store=store, graph_store=graph)
@@ -354,6 +523,26 @@ def test_v2_central_merge_apply_requires_matching_graph_view_head(tmp_path: Path
         failed_plan = store.get_central_merge_plan(second["plan_id"])
         assert failed_plan is not None
         assert failed_plan["status"] == "failed_recoverable"
+    finally:
+        store.close()
+
+
+def test_v2_central_merge_apply_rejects_non_curated_plan_input(tmp_path: Path) -> None:
+    settings = make_settings(tmp_path)
+    graph = InMemoryGraphStore()
+    store = V2SessionJobStore(settings)
+    try:
+        job = store.enqueue_session(session_id="s-apply-input", boundary_event_id="raw_boundary", repo_path=str(tmp_path)).job
+        compact_graph = {"nodes": [{"id": "commit:abc123", "kind": "Commit", "properties": {"full_sha": "abc123"}}], "edges": []}
+        plan = build_dry_run_merge_plan(job=job, compact_graph=compact_graph, parent_graph_commit_id="")
+        stored = store.upsert_central_merge_plan({**plan.as_dict(), "input_source": "compact_graph_manifest", "trace_input_hash": "trace"})
+
+        with pytest.raises(CentralMergeApplyError, match="central_merge_plan_input_is_not_curated"):
+            apply_merge_plan(settings=settings, plan_id=stored["plan_id"], store=store, graph_store=graph)
+
+        stored_missing_hash = store.upsert_central_merge_plan({**plan.as_dict(), "input_source": "curated_graph_manifest"})
+        with pytest.raises(CentralMergeApplyError, match="central_merge_plan_missing_curated_input_hash"):
+            apply_merge_plan(settings=settings, plan_id=stored_missing_hash["plan_id"], store=store, graph_store=graph)
     finally:
         store.close()
 
@@ -381,6 +570,35 @@ def test_v2_central_merge_planner_reports_matched_exact_atoms(tmp_path: Path) ->
         assert second_plan.metrics["exact_atom_created_count"] == 0
         assert second_plan.metrics["exact_atom_matched_count"] == 1
         assert second_plan.new_versions[0]["atom_id"] == first_plan.new_atoms[0]["atom_id"]
+    finally:
+        store.close()
+
+
+def test_v2_central_merge_file_version_key_includes_producing_commit(tmp_path: Path) -> None:
+    settings = make_settings(tmp_path)
+    store = V2SessionJobStore(settings)
+    try:
+        job = store.enqueue_session(session_id="s-file-version-key", boundary_event_id="raw_boundary", repo_path=str(tmp_path)).job
+        compact_graph = {
+            "nodes": [
+                {
+                    "id": "file:hook",
+                    "kind": "FileRef",
+                    "properties": {
+                        "path": "src/agent_memory_orchestrator/hook.py",
+                        "commit_sha": "abc1234",
+                    },
+                }
+            ],
+            "edges": [],
+        }
+
+        plan = build_dry_run_merge_plan(job=job, compact_graph=compact_graph, parent_graph_commit_id="")
+
+        version_metadata = plan.new_versions[0]["metadata"]
+        assert version_metadata["canonical_key"].endswith("|src/agent_memory_orchestrator/hook.py")
+        assert version_metadata["producing_commit_sha"] == "abc1234"
+        assert version_metadata["version_key"].endswith("|src/agent_memory_orchestrator/hook.py|abc1234")
     finally:
         store.close()
 
@@ -416,7 +634,7 @@ def test_v2_central_merge_apply_attaches_versions_to_matched_atoms(tmp_path: Pat
             parent_graph_commit_id="",
             existing_atoms_by_canonical_key={existing_atom["canonical_key"]: existing_atom},
         )
-        stored = store.upsert_central_merge_plan(second_plan.as_dict())
+        stored = store.upsert_central_merge_plan(_product_plan(second_plan))
 
         applied = apply_merge_plan(settings=settings, plan_id=stored["plan_id"], store=store, graph_store=graph)
 
@@ -428,6 +646,58 @@ def test_v2_central_merge_apply_attaches_versions_to_matched_atoms(tmp_path: Pat
         version_of_edges = [edge for edge in graph.edges.values() if edge.kind == "VERSION_OF"]
         assert len(version_of_edges) == 1
         assert version_of_edges[0].target_id == existing_atom["atom_id"]
+    finally:
+        store.close()
+
+
+def test_v2_central_merge_apply_writes_review_decision_versions_and_relation_edges(tmp_path: Path) -> None:
+    settings = make_settings(tmp_path)
+    graph = InMemoryGraphStore()
+    store = V2SessionJobStore(settings)
+    try:
+        job = store.enqueue_session(session_id="s-decision-apply", boundary_event_id="raw_boundary", repo_path=str(tmp_path)).job
+        compact_graph = {
+            "nodes": [
+                {
+                    "id": "reason:WP0001:abc:00",
+                    "kind": "ReasoningNode",
+                    "properties": {
+                        "node_type": "Decision",
+                        "status": "accepted",
+                        "subject": "Qwen JSON hardening",
+                        "statement": "Disable Ollama thinking for Qwen JSON calls.",
+                        "selected_files": ["src/agent_memory_orchestrator/llm/qwen.py"],
+                    },
+                },
+                {
+                    "id": "reason:WP0002:def:00",
+                    "kind": "ReasoningNode",
+                    "properties": {
+                        "node_type": "Decision",
+                        "status": "accepted",
+                        "subject": "Qwen JSON hardening",
+                        "statement": "Disable Ollama thinking for Qwen JSON calls.",
+                        "selected_files": ["src/agent_memory_orchestrator/llm/qwen.py"],
+                    },
+                },
+            ],
+            "edges": [],
+        }
+        plan = build_dry_run_merge_plan(job=job, compact_graph=compact_graph, parent_graph_commit_id="")
+        stored = store.upsert_central_merge_plan(_product_plan(plan))
+
+        applied = apply_merge_plan(settings=settings, plan_id=stored["plan_id"], store=store, graph_store=graph)
+
+        decision_atoms = [node for node in graph.nodes.values() if node.kind == "KnowledgeAtom" and node.metadata.get("atom_kind") == "decision"]
+        decision_versions = [node for node in graph.nodes.values() if node.kind == "KnowledgeVersion" and node.metadata.get("atom_kind") == "decision"]
+        relation_edges = [edge for edge in graph.edges.values() if edge.kind == "DUPLICATE_OF"]
+        assert applied["applied_atom_counts"]["decision"] == 1
+        assert applied["applied_version_counts"]["decision"] == 2
+        assert len(decision_atoms) == 1
+        assert len(decision_versions) == 2
+        assert {node.status for node in decision_versions} == {"review"}
+        assert relation_edges
+        assert relation_edges[0].metadata["status"] == "review"
     finally:
         store.close()
 
@@ -478,6 +748,111 @@ def test_v2_central_merge_backfill_does_not_reopen_completed_job(tmp_path: Path)
     assert stage["status"] == "complete"
     assert stage["diagnostics"]["backfilled"] is True
     assert any(event["event_type"] == "central_merge_backfilled" for event in events)
+
+
+def test_v2_central_merge_persists_decision_frames_for_cross_session_dry_run(tmp_path: Path) -> None:
+    settings = make_settings(tmp_path)
+    store = V2SessionJobStore(settings)
+    try:
+        first_job = store.enqueue_session(session_id="s-decision-a", boundary_event_id="raw_boundary_a", repo_path=str(tmp_path)).job
+        first_graph = {
+            "nodes": [
+                {
+                    "id": "reason:WP0001:abc:00",
+                    "kind": "ReasoningNode",
+                    "properties": {
+                        "node_type": "Decision",
+                        "status": "accepted",
+                        "subject": "Qwen JSON hardening",
+                        "statement": "Disable Ollama thinking for Qwen JSON calls.",
+                        "selected_files": ["src/agent_memory_orchestrator/llm/qwen.py"],
+                    },
+                }
+            ],
+            "edges": [],
+        }
+        first_plan = build_dry_run_merge_plan(job=first_job, compact_graph=first_graph, parent_graph_commit_id="")
+        first_stored = store.upsert_central_merge_plan(_product_plan(first_plan))
+
+        frames = store.list_decision_frames(repo_id=first_stored["repo_id"])
+
+        assert len(frames) == 1
+        assert frames[0]["frame"]["subject"] == "Qwen JSON hardening"
+        assert frames[0]["status"] == "review"
+
+        second_job = store.enqueue_session(session_id="s-decision-b", boundary_event_id="raw_boundary_b", repo_path=str(tmp_path)).job
+        second_graph = {
+            "nodes": [
+                {
+                    "id": "reason:WP0002:def:00",
+                    "kind": "ReasoningNode",
+                    "properties": {
+                        "node_type": "Decision",
+                        "status": "accepted",
+                        "subject": "Qwen JSON hardening",
+                        "statement": "Disable Ollama thinking for Qwen JSON calls.",
+                        "selected_files": ["src/agent_memory_orchestrator/llm/qwen.py"],
+                    },
+                }
+            ],
+            "edges": [],
+        }
+        second_plan = build_dry_run_merge_plan(
+            job=second_job,
+            compact_graph=second_graph,
+            parent_graph_commit_id="",
+            historical_decision_frames=store.list_decision_frames(repo_id=first_stored["repo_id"], exclude_job_id=second_job["job_id"]),
+        )
+
+        assert second_plan.metrics["historical_decision_frame_count"] == 1
+        assert second_plan.metrics["decision_candidate_count"] == 1
+        assert second_plan.review_candidates[0]["proposed_relation"] == "DUPLICATE_OF"
+        assert second_plan.review_candidates[0]["score"]["target_scope"] == "decision_frame_ledger"
+
+        third_job = store.enqueue_session(session_id="s-decision-c", boundary_event_id="raw_boundary_c", repo_path=str(tmp_path)).job
+        third_graph = {
+            "nodes": [
+                {
+                    "id": "reason:WP0003:ghi:00",
+                    "kind": "ReasoningNode",
+                    "properties": {
+                        "node_type": "Decision",
+                        "status": "accepted",
+                        "subject": "Installer output",
+                        "statement": "Simplify first-run installer output.",
+                        "selected_files": ["npm/agent-memory-orchestrator-cli/bin/cli.js"],
+                    },
+                },
+                {
+                    "id": "reason:WP0004:jkl:00",
+                    "kind": "ReasoningNode",
+                    "properties": {
+                        "node_type": "Decision",
+                        "status": "accepted",
+                        "subject": "Installer output",
+                        "statement": "Simplify first-run installer output.",
+                        "selected_files": ["npm/agent-memory-orchestrator-cli/bin/cli.js"],
+                    },
+                },
+            ],
+            "edges": [],
+        }
+        third_plan = build_dry_run_merge_plan(
+            job=third_job,
+            compact_graph=third_graph,
+            parent_graph_commit_id="",
+            historical_decision_frames=store.list_decision_frames(repo_id=first_stored["repo_id"], exclude_job_id=third_job["job_id"]),
+        )
+        intra_session_candidates = [
+            candidate
+            for candidate in third_plan.review_candidates
+            if candidate["source_node_id"].endswith("ghi:00") and candidate["target_node_id"].endswith("jkl:00")
+        ]
+
+        assert intra_session_candidates
+        assert intra_session_candidates[0]["proposed_relation"] == "DUPLICATE_OF"
+    finally:
+        store.close()
 
 
 def test_v2_fixture_embedding_coverage_counts_only_current_retrieval_docs(tmp_path: Path) -> None:
@@ -922,6 +1297,90 @@ def test_stage4_prompt_uses_reset_contract_module() -> None:
     assert len(stage4_contract_hash()) == 64
     assert "Support refs are provenance only" in prompt
     assert "Input packet:" in prompt
+
+
+def test_central_session_graph_write_preserves_repo_id_metadata() -> None:
+    store = InMemoryGraphStore()
+    result = runner_module._upsert_compact_graph(
+        store,
+        (
+            {
+                "id": "reason:1",
+                "kind": "ReasoningNode",
+                "label": "Decision: repo scoped retrieval",
+                "summary": "Repo scoped retrieval keeps memories separated.",
+                "properties_json": "{}",
+            },
+        ),
+        (),
+        job={
+            "job_id": "v2job:abcdefghijklmnop",
+            "session_id": "session:1",
+            "source_app": "codex",
+            "repo_id": "repo:test",
+        },
+    )
+
+    assert result["node_write_count"] == 1
+    node = store.nodes["abcdefghijkl:reason:1"]
+    assert node.metadata["repo_id"] == "repo:test"
+    assert node.metadata["original_node_id"] == "reason:1"
+
+
+def test_central_session_graph_write_degrades_kuzu_buffer_failure(tmp_path: Path) -> None:
+    class FailingGraphStore(InMemoryGraphStore):
+        def init_schema(self) -> None:
+            raise RuntimeError("buffer pool is full")
+
+    result = runner_module._write_curated_session_graph_to_central(
+        lambda _path: FailingGraphStore(),
+        tmp_path / "amo.kuzu",
+        nodes=(),
+        edges=(),
+        job={"job_id": "v2job:test", "session_id": "session:1", "repo_id": "repo:test"},
+    )
+
+    assert result["status"] == "failed_recoverable"
+    assert result["curated_manifest_still_available"] is True
+    assert result["error_type"] == "RuntimeError"
+
+
+def test_qwen_checkpoint_reuse_requires_same_runtime_contract(tmp_path: Path) -> None:
+    settings = make_settings(tmp_path)
+    packet = {"packet_id": "WP0001", "commit": {"short_sha": "abc123"}, "problem_refs": []}
+    contract = runner_module._qwen_contract(settings)
+    packet_key = runner_module._qwen_packet_key(packet, contract=contract)
+    reusable = runner_module._qwen_reusable_results(
+        [
+            {
+                "packet_id": "WP0001",
+                "commit_sha": "abc123",
+                "contract_hash": contract["contract_hash"],
+                "parsed_output": {"nodes": []},
+            }
+        ],
+        existing_manifest={"packets": [packet_key]},
+        packet_keys=[packet_key],
+    )
+
+    assert runner_module._qwen_packet_cache_key(packet_key) in reusable
+
+    next_contract = {**contract, "contract_hash": "different-model-or-schema"}
+    next_key = runner_module._qwen_packet_key(packet, contract=next_contract)
+    blocked = runner_module._qwen_reusable_results(
+        [
+            {
+                "packet_id": "WP0001",
+                "commit_sha": "abc123",
+                "contract_hash": contract["contract_hash"],
+                "parsed_output": {"nodes": []},
+            }
+        ],
+        existing_manifest={"packets": [packet_key]},
+        packet_keys=[next_key],
+    )
+
+    assert blocked == {}
 
 
 def test_auto_drain_closes_graph_before_v2_runner_opens(

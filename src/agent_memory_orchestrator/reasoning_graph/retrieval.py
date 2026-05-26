@@ -4,6 +4,8 @@ import json
 import re
 import sqlite3
 from dataclasses import dataclass, field
+from dataclasses import replace as dataclass_replace
+from datetime import datetime, timezone
 from typing import Any, Iterable, Protocol
 
 from ..core.db import init_schema
@@ -25,7 +27,12 @@ SESSION_RETRIEVAL_NODE_KINDS = (
     "GitCommit",
     "Commit",
     "CodeNode",
+    "CodeImpactSummary",
+    "CodeRegionRef",
+    "FileImpactSummary",
+    "FileRef",
     "Symbol",
+    "SymbolRef",
     "SymbolVersion",
     "EvidenceRef",
     "Evidence",
@@ -119,6 +126,7 @@ class RetrievalDocument:
     title: str
     body: str
     repo_id: str = ""
+    projection_id: str = ""
     chunk_index: int = 1
     chunk_count: int = 1
     memory_class: str = "graph_context"
@@ -139,6 +147,7 @@ class RetrievalDocument:
             "graph_node_id": self.graph_node_id,
             "node_kind": self.node_kind,
             "repo_id": self.repo_id,
+            "projection_id": self.projection_id,
             "packet_id": self.packet_id,
             "commit_sha": self.commit_sha,
             "title": self.title,
@@ -244,6 +253,7 @@ class RetrievalIndexStore:
               graph_node_id TEXT NOT NULL,
               node_kind TEXT NOT NULL,
               repo_id TEXT NOT NULL DEFAULT '',
+              projection_id TEXT NOT NULL DEFAULT '',
               packet_id TEXT NOT NULL DEFAULT '',
               commit_sha TEXT NOT NULL DEFAULT '',
               title TEXT NOT NULL,
@@ -273,7 +283,31 @@ class RetrievalIndexStore:
         self.conn.execute(
             """
             CREATE INDEX IF NOT EXISTS idx_retrieval_documents_repo
-            ON retrieval_documents(repo_id, doc_type, node_kind)
+            ON retrieval_documents(repo_id, projection_id, doc_type, node_kind)
+            """
+        )
+        self.conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS retrieval_projections (
+              projection_id TEXT PRIMARY KEY,
+              repo_id TEXT NOT NULL,
+              projection_version TEXT NOT NULL,
+              source_artifact_hash TEXT NOT NULL DEFAULT '',
+              doc_content_hash TEXT NOT NULL DEFAULT '',
+              status TEXT NOT NULL DEFAULT 'building',
+              metadata_json TEXT NOT NULL DEFAULT '{}',
+              created_at TEXT NOT NULL,
+              activated_at TEXT NOT NULL DEFAULT ''
+            )
+            """
+        )
+        self.conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS active_retrieval_projection (
+              repo_id TEXT PRIMARY KEY,
+              projection_id TEXT NOT NULL,
+              updated_at TEXT NOT NULL
+            )
             """
         )
         try:
@@ -286,6 +320,7 @@ class RetrievalIndexStore:
         columns = _table_columns(self.conn, "retrieval_documents")
         migrations = {
             "repo_id": "repo_id TEXT NOT NULL DEFAULT ''",
+            "projection_id": "projection_id TEXT NOT NULL DEFAULT ''",
             "packet_id": "packet_id TEXT NOT NULL DEFAULT ''",
             "commit_sha": "commit_sha TEXT NOT NULL DEFAULT ''",
             "body_char_count": "body_char_count INTEGER NOT NULL DEFAULT 0",
@@ -355,15 +390,16 @@ class RetrievalIndexStore:
                 """
                 INSERT INTO retrieval_documents(
                   doc_id, doc_type, graph_node_id, node_kind, packet_id, commit_sha,
-                  repo_id, title, body, body_char_count, chunk_index, chunk_count,
+                  repo_id, projection_id, title, body, body_char_count, chunk_index, chunk_count,
                   memory_class, importance, metadata_json
                 )
-                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(doc_id) DO UPDATE SET
                   doc_type=excluded.doc_type,
                   graph_node_id=excluded.graph_node_id,
                   node_kind=excluded.node_kind,
                   repo_id=excluded.repo_id,
+                  projection_id=excluded.projection_id,
                   packet_id=excluded.packet_id,
                   commit_sha=excluded.commit_sha,
                   title=excluded.title,
@@ -383,6 +419,7 @@ class RetrievalIndexStore:
                     doc.packet_id,
                     doc.commit_sha,
                     doc.repo_id,
+                    doc.projection_id,
                     doc.title,
                     doc.body,
                     doc.body_char_count,
@@ -416,25 +453,168 @@ class RetrievalIndexStore:
         self.conn.commit()
         return count
 
-    def replace_documents(self, docs: Iterable[RetrievalDocument]) -> int:
-        self.conn.execute("DELETE FROM retrieval_documents")
-        if self._fts_enabled:
-            self.conn.execute("DELETE FROM retrieval_documents_fts")
+    def replace_documents(self, docs: Iterable[RetrievalDocument], *, repo_id: str = "") -> int:
+        safe_repo_id = str(repo_id or "").strip()
+        if safe_repo_id:
+            rows = self.conn.execute("SELECT doc_id FROM retrieval_documents WHERE repo_id = ?", (safe_repo_id,)).fetchall()
+            doc_ids = [str(row["doc_id"]) for row in rows]
+            self.conn.execute("DELETE FROM retrieval_documents WHERE repo_id = ?", (safe_repo_id,))
+            if self._fts_enabled and doc_ids:
+                placeholders = ",".join("?" for _ in doc_ids)
+                self.conn.execute(f"DELETE FROM retrieval_documents_fts WHERE doc_id IN ({placeholders})", doc_ids)
+        else:
+            self.conn.execute("DELETE FROM retrieval_documents")
+            if self._fts_enabled:
+                self.conn.execute("DELETE FROM retrieval_documents_fts")
         self.conn.commit()
         return self.upsert_documents(docs)
 
+    def upsert_projection(
+        self,
+        *,
+        projection_id: str,
+        repo_id: str,
+        projection_version: str,
+        source_artifact_hash: str,
+        doc_content_hash: str,
+        status: str = "building",
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        now = _utc_now()
+        self.conn.execute(
+            """
+            INSERT INTO retrieval_projections(
+              projection_id, repo_id, projection_version, source_artifact_hash,
+              doc_content_hash, status, metadata_json, created_at
+            )
+            VALUES(?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(projection_id) DO UPDATE SET
+              repo_id=excluded.repo_id,
+              projection_version=excluded.projection_version,
+              source_artifact_hash=excluded.source_artifact_hash,
+              doc_content_hash=excluded.doc_content_hash,
+              status=excluded.status,
+              metadata_json=excluded.metadata_json
+            """,
+            (
+                projection_id,
+                str(repo_id or "").strip(),
+                projection_version,
+                source_artifact_hash,
+                doc_content_hash,
+                status,
+                json.dumps(metadata or {}, sort_keys=True),
+                now,
+            ),
+        )
+        self.conn.commit()
+        return self.projection(projection_id) or {}
+
+    def projection(self, projection_id: str) -> dict[str, Any] | None:
+        row = self.conn.execute("SELECT * FROM retrieval_projections WHERE projection_id = ?", (projection_id,)).fetchone()
+        return _projection_row(row) if row is not None else None
+
+    def active_projection(self, repo_id: str) -> dict[str, Any] | None:
+        safe_repo_id = str(repo_id or "").strip()
+        if not safe_repo_id:
+            return None
+        row = self.conn.execute(
+            """
+            SELECT retrieval_projections.*
+            FROM active_retrieval_projection
+            JOIN retrieval_projections ON retrieval_projections.projection_id = active_retrieval_projection.projection_id
+            WHERE active_retrieval_projection.repo_id = ?
+            """,
+            (safe_repo_id,),
+        ).fetchone()
+        return _projection_row(row) if row is not None else None
+
+    def active_projection_id(self, repo_id: str) -> str:
+        projection = self.active_projection(repo_id)
+        return str(projection.get("projection_id") or "") if projection else ""
+
+    def set_projection_status(self, projection_id: str, status: str) -> None:
+        self.conn.execute("UPDATE retrieval_projections SET status=? WHERE projection_id=?", (status, projection_id))
+        self.conn.commit()
+
+    def activate_projection(self, *, repo_id: str, projection_id: str) -> dict[str, Any]:
+        now = _utc_now()
+        safe_repo_id = str(repo_id or "").strip()
+        self.conn.execute("UPDATE retrieval_projections SET status='active', activated_at=? WHERE projection_id=?", (now, projection_id))
+        self.conn.execute(
+            """
+            INSERT INTO active_retrieval_projection(repo_id, projection_id, updated_at)
+            VALUES(?, ?, ?)
+            ON CONFLICT(repo_id) DO UPDATE SET
+              projection_id=excluded.projection_id,
+              updated_at=excluded.updated_at
+            """,
+            (safe_repo_id, projection_id, now),
+        )
+        self.conn.commit()
+        return self.active_projection(safe_repo_id) or {}
+
+    def replace_projection_documents(self, docs: Iterable[RetrievalDocument], *, repo_id: str, projection_id: str) -> int:
+        safe_repo_id = str(repo_id or "").strip()
+        safe_projection_id = str(projection_id or "").strip()
+        rows = self.conn.execute("SELECT doc_id FROM retrieval_documents WHERE projection_id = ?", (safe_projection_id,)).fetchall()
+        doc_ids = [str(row["doc_id"]) for row in rows]
+        self.conn.execute("DELETE FROM retrieval_documents WHERE projection_id = ?", (safe_projection_id,))
+        if self._fts_enabled and doc_ids:
+            placeholders = ",".join("?" for _ in doc_ids)
+            self.conn.execute(f"DELETE FROM retrieval_documents_fts WHERE doc_id IN ({placeholders})", doc_ids)
+        self.conn.commit()
+        projected_docs = [
+            dataclass_replace(
+                doc,
+                repo_id=safe_repo_id,
+                projection_id=safe_projection_id,
+                metadata={**doc.metadata, "projection_id": safe_projection_id},
+            )
+            for doc in docs
+        ]
+        return self.upsert_documents(projected_docs)
+
+    def list_repo_documents_all(self, *, repo_id: str, limit: int = 100000) -> list[RetrievalDocument]:
+        safe_repo_id = str(repo_id or "").strip()
+        if not safe_repo_id:
+            return []
+        rows = self.conn.execute(
+            """
+            SELECT *
+            FROM retrieval_documents
+            WHERE repo_id = ?
+            ORDER BY projection_id, doc_type, graph_node_id, chunk_index
+            LIMIT ?
+            """,
+            (safe_repo_id, int(limit)),
+        ).fetchall()
+        return [_doc_from_row(row) for row in rows]
+
     def list_documents(self, *, limit: int = 10000, repo_id: str = "") -> list[RetrievalDocument]:
         safe_repo_id = str(repo_id or "").strip()
+        projection_id = self.active_projection_id(safe_repo_id) if safe_repo_id else ""
         if safe_repo_id:
-            rows = self.conn.execute(
-                """
-                SELECT * FROM retrieval_documents
-                WHERE repo_id = ?
-                ORDER BY doc_type, graph_node_id, chunk_index
-                LIMIT ?
-                """,
-                (safe_repo_id, int(limit)),
-            ).fetchall()
+            if projection_id:
+                rows = self.conn.execute(
+                    """
+                    SELECT * FROM retrieval_documents
+                    WHERE repo_id = ? AND projection_id = ?
+                    ORDER BY doc_type, graph_node_id, chunk_index
+                    LIMIT ?
+                    """,
+                    (safe_repo_id, projection_id, int(limit)),
+                ).fetchall()
+            else:
+                rows = self.conn.execute(
+                    """
+                    SELECT * FROM retrieval_documents
+                    WHERE repo_id = ?
+                    ORDER BY doc_type, graph_node_id, chunk_index
+                    LIMIT ?
+                    """,
+                    (safe_repo_id, int(limit)),
+                ).fetchall()
         else:
             rows = self.conn.execute(
                 """
@@ -452,11 +632,18 @@ class RetrievalIndexStore:
             return {}
         placeholders = ",".join("?" for _ in ids)
         safe_repo_id = str(repo_id or "").strip()
+        projection_id = self.active_projection_id(safe_repo_id) if safe_repo_id else ""
         if safe_repo_id:
-            rows = self.conn.execute(
-                f"SELECT * FROM retrieval_documents WHERE doc_id IN ({placeholders}) AND repo_id = ?",
-                [*ids, safe_repo_id],
-            ).fetchall()
+            if projection_id:
+                rows = self.conn.execute(
+                    f"SELECT * FROM retrieval_documents WHERE doc_id IN ({placeholders}) AND repo_id = ? AND projection_id = ?",
+                    [*ids, safe_repo_id, projection_id],
+                ).fetchall()
+            else:
+                rows = self.conn.execute(
+                    f"SELECT * FROM retrieval_documents WHERE doc_id IN ({placeholders}) AND repo_id = ?",
+                    [*ids, safe_repo_id],
+                ).fetchall()
         else:
             rows = self.conn.execute(
                 f"SELECT * FROM retrieval_documents WHERE doc_id IN ({placeholders})",
@@ -470,11 +657,18 @@ class RetrievalIndexStore:
             return {}
         placeholders = ",".join("?" for _ in ids)
         safe_repo_id = str(repo_id or "").strip()
+        projection_id = self.active_projection_id(safe_repo_id) if safe_repo_id else ""
         if safe_repo_id:
-            rows = self.conn.execute(
-                f"SELECT * FROM retrieval_documents WHERE graph_node_id IN ({placeholders}) AND repo_id = ?",
-                [*ids, safe_repo_id],
-            ).fetchall()
+            if projection_id:
+                rows = self.conn.execute(
+                    f"SELECT * FROM retrieval_documents WHERE graph_node_id IN ({placeholders}) AND repo_id = ? AND projection_id = ?",
+                    [*ids, safe_repo_id, projection_id],
+                ).fetchall()
+            else:
+                rows = self.conn.execute(
+                    f"SELECT * FROM retrieval_documents WHERE graph_node_id IN ({placeholders}) AND repo_id = ?",
+                    [*ids, safe_repo_id],
+                ).fetchall()
         else:
             rows = self.conn.execute(
                 f"SELECT * FROM retrieval_documents WHERE graph_node_id IN ({placeholders})",
@@ -494,18 +688,32 @@ class RetrievalIndexStore:
             return self.like_search(query, limit=limit, repo_id=repo_id)
         try:
             safe_repo_id = str(repo_id or "").strip()
+            projection_id = self.active_projection_id(safe_repo_id) if safe_repo_id else ""
             if safe_repo_id:
-                rows = self.conn.execute(
-                    """
-                    SELECT retrieval_documents_fts.doc_id, bm25(retrieval_documents_fts) AS score
-                    FROM retrieval_documents_fts
-                    JOIN retrieval_documents ON retrieval_documents.doc_id = retrieval_documents_fts.doc_id
-                    WHERE retrieval_documents_fts MATCH ? AND retrieval_documents.repo_id = ?
-                    ORDER BY score ASC
-                    LIMIT ?
-                    """,
-                    (fts_query, safe_repo_id, int(limit)),
-                ).fetchall()
+                if projection_id:
+                    rows = self.conn.execute(
+                        """
+                        SELECT retrieval_documents_fts.doc_id, bm25(retrieval_documents_fts) AS score
+                        FROM retrieval_documents_fts
+                        JOIN retrieval_documents ON retrieval_documents.doc_id = retrieval_documents_fts.doc_id
+                        WHERE retrieval_documents_fts MATCH ? AND retrieval_documents.repo_id = ? AND retrieval_documents.projection_id = ?
+                        ORDER BY score ASC
+                        LIMIT ?
+                        """,
+                        (fts_query, safe_repo_id, projection_id, int(limit)),
+                    ).fetchall()
+                else:
+                    rows = self.conn.execute(
+                        """
+                        SELECT retrieval_documents_fts.doc_id, bm25(retrieval_documents_fts) AS score
+                        FROM retrieval_documents_fts
+                        JOIN retrieval_documents ON retrieval_documents.doc_id = retrieval_documents_fts.doc_id
+                        WHERE retrieval_documents_fts MATCH ? AND retrieval_documents.repo_id = ?
+                        ORDER BY score ASC
+                        LIMIT ?
+                        """,
+                        (fts_query, safe_repo_id, int(limit)),
+                    ).fetchall()
             else:
                 rows = self.conn.execute(
                     """
@@ -1028,6 +1236,22 @@ def _retrieval_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
         "symbol_id",
         "changed_files",
         "paths",
+        "path",
+        "qualified_name",
+        "symbol_kind",
+        "selected_files",
+        "selected_file_roles",
+        "impact_roles",
+        "impact_role",
+        "primary_impact_role",
+        "impact_role_counts",
+        "selected_symbol_refs",
+        "selected_code_refs",
+        "reasoning_statements",
+        "promotion_grade",
+        "policy",
+        "original_code_node_id",
+        "hunk_count",
         "evidence_refs",
         "version_count",
         "graph_commit_id",
@@ -1102,6 +1326,10 @@ def _node_body(node: dict[str, Any]) -> str:
         "repo_id",
         "source_node_ids",
         "version_metadata",
+        "selected_file_roles",
+        "impact_roles",
+        "impact_role",
+        "primary_impact_role",
     ):
         if key in metadata:
             value = metadata[key]
@@ -1282,6 +1510,26 @@ def _rerank_document(
     if intent in {"code_why", "decision_history"} and doc.doc_type == "reasoning":
         score += 0.25
         reasons.append("reasoning_boost")
+    if intent == "code_why" and doc.doc_type == "code_impact":
+        score += 0.24
+        reasons.append("code_impact_boost")
+        if _query_has_code_locator(query):
+            score += 0.12
+            reasons.append("code_locator_impact_boost")
+    if intent == "code_why" and doc.doc_type == "file_impact":
+        score += 0.32
+        reasons.append("file_impact_boost")
+        if _query_has_code_locator(query):
+            score += 0.18
+            reasons.append("code_locator_file_rollup_boost")
+    code_locator_query = _query_has_code_locator(query)
+    if intent in {"code_why", "version_flow"} and doc.doc_type in {"file_ref", "symbol_ref", "code_region_ref"}:
+        if code_locator_query:
+            score += 0.08
+            reasons.append("curated_code_support_boost")
+        else:
+            score -= 0.14
+            reasons.append("broad_query_code_support_penalty")
     node_type = _doc_node_type(doc)
     if intent == "decision_history" and doc.doc_type == "reasoning":
         if node_type == "Decision":
@@ -1309,18 +1557,34 @@ def _rerank_document(
     if doc.memory_class == "supporting_evidence":
         score -= 0.18
         reasons.append("supporting_evidence_penalty")
+        if intent in {"code_why", "decision_history"}:
+            score -= 0.10
+            reasons.append("answer_query_evidence_penalty")
     if doc.doc_type == "commit":
         score -= 0.12
         reasons.append("commit_hub_penalty")
     if _looks_like_test_artifact(doc) and "test" not in terms:
         score -= 0.08
         reasons.append("test_artifact_penalty")
+    role = _doc_impact_role(doc)
+    if role == "validation_test" and "test" not in terms:
+        score -= 0.10
+        reasons.append("validation_support_penalty")
+    elif role in {"docs", "config"} and not code_locator_query:
+        score -= 0.04
+        reasons.append(f"{role}_support_penalty")
     neighbor_text = _normalize(" ".join(f"{n.get('label') or ''} {n.get('summary') or ''}" for n in neighbors))
     if neighbor_text and any(term in neighbor_text for term in terms):
         score += 0.08
         reasons.append("neighbor_overlap")
     score += min(max(doc.importance, 0.0), 1.0) * 0.05
     return score, reasons
+
+
+def _doc_impact_role(doc: RetrievalDocument) -> str:
+    metadata = doc.metadata if isinstance(doc.metadata, dict) else {}
+    node_metadata = metadata.get("node_metadata") if isinstance(metadata.get("node_metadata"), dict) else {}
+    return str(metadata.get("impact_role") or metadata.get("primary_impact_role") or node_metadata.get("impact_role") or node_metadata.get("primary_impact_role") or "")
 
 
 def _doc_from_row(row: sqlite3.Row) -> RetrievalDocument:
@@ -1338,12 +1602,35 @@ def _doc_from_row(row: sqlite3.Row) -> RetrievalDocument:
         title=str(row["title"]),
         body=str(row["body"]),
         repo_id=str(row["repo_id"]),
+        projection_id=str(row["projection_id"]) if "projection_id" in row.keys() else "",
         chunk_index=int(row["chunk_index"]),
         chunk_count=int(row["chunk_count"]),
         memory_class=str(row["memory_class"]),
         importance=float(row["importance"]),
         metadata=metadata,
     )
+
+
+def _projection_row(row: sqlite3.Row) -> dict[str, Any]:
+    try:
+        metadata = json.loads(str(row["metadata_json"] or "{}"))
+    except json.JSONDecodeError:
+        metadata = {}
+    return {
+        "projection_id": str(row["projection_id"]),
+        "repo_id": str(row["repo_id"]),
+        "projection_version": str(row["projection_version"]),
+        "source_artifact_hash": str(row["source_artifact_hash"]),
+        "doc_content_hash": str(row["doc_content_hash"]),
+        "status": str(row["status"]),
+        "created_at": str(row["created_at"]),
+        "activated_at": str(row["activated_at"]),
+        "metadata": metadata,
+    }
+
+
+def _utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat()
 
 
 def _table_columns(conn: sqlite3.Connection, table: str) -> tuple[str, ...]:
@@ -1367,6 +1654,16 @@ def _doc_type(node_kind: str) -> str:
         return "commit"
     if node_kind in {"CodeNode", "CodeHunk"}:
         return "code"
+    if node_kind == "CodeImpactSummary":
+        return "code_impact"
+    if node_kind == "FileImpactSummary":
+        return "file_impact"
+    if node_kind == "FileRef":
+        return "file_ref"
+    if node_kind == "CodeRegionRef":
+        return "code_region_ref"
+    if node_kind == "SymbolRef":
+        return "symbol_ref"
     if node_kind in {"Symbol", "SymbolVersion"}:
         return "symbol"
     if node_kind in {"EvidenceRef", "Evidence", "ToolFact"}:
@@ -1383,6 +1680,12 @@ def _memory_class(doc_type: str, node_kind: str) -> str:
         return "graph_lineage"
     if doc_type == "reasoning":
         return "answer_grade_reasoning"
+    if doc_type == "code_impact":
+        return "code_impact_summary"
+    if doc_type == "file_impact":
+        return "file_impact_summary"
+    if doc_type in {"file_ref", "symbol_ref", "code_region_ref"}:
+        return "code_support"
     if doc_type == "code":
         return "code_change"
     if doc_type == "symbol":
@@ -1397,6 +1700,7 @@ def _memory_class(doc_type: str, node_kind: str) -> str:
 def _importance(doc_type: str, node_kind: str, metadata: dict[str, Any]) -> float:
     if isinstance(metadata.get("importance"), (int, float)):
         return float(metadata["importance"])
+    role = str(metadata.get("impact_role") or metadata.get("primary_impact_role") or "")
     if doc_type == "central_version":
         return 0.95
     if doc_type == "central_atom":
@@ -1405,8 +1709,24 @@ def _importance(doc_type: str, node_kind: str, metadata: dict[str, Any]) -> floa
         return 0.25
     if doc_type == "reasoning":
         return 0.9
+    if doc_type == "code_impact":
+        return 0.82
+    if doc_type == "file_impact":
+        if role == "validation_test":
+            return 0.55
+        if role in {"docs", "config"}:
+            return 0.62
+        return 0.84
     if node_kind == "WorkChange" or doc_type == "commit":
         return 0.8
+    if doc_type in {"file_ref", "symbol_ref", "code_region_ref"}:
+        if role == "validation_test":
+            return 0.42
+        if role in {"docs", "config"}:
+            return 0.50
+        if role in {"ui_style", "ui_markup"}:
+            return 0.56
+        return 0.62
     if doc_type == "code":
         return 0.7
     if doc_type == "symbol":

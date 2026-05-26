@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import gc
 import json
+import os
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
@@ -110,49 +112,56 @@ def write_compact_session_graph(
         _remove_path(graph_path)
     graph_path.parent.mkdir(parents=True, exist_ok=True)
 
-    db = kuzu.Database(str(graph_path))
+    db = kuzu.Database(str(graph_path), buffer_pool_size=_kuzu_buffer_pool_size(), max_num_threads=_kuzu_max_threads())
     conn = kuzu.Connection(db)
-    conn.execute(
-        """
-        CREATE NODE TABLE IF NOT EXISTS GraphNode(
-            id STRING,
-            kind STRING,
-            packet_id STRING,
-            commit_sha STRING,
-            label STRING,
-            summary STRING,
-            properties_json STRING,
-            PRIMARY KEY(id)
-        )
-        """
-    )
-    conn.execute(
-        """
-        CREATE REL TABLE IF NOT EXISTS GraphEdge(
-            FROM GraphNode TO GraphNode,
-            kind STRING,
-            properties_json STRING
-        )
-        """
-    )
-    for node in nodes:
+    try:
         conn.execute(
-            "CREATE (:GraphNode {"
-            f"id: {_q(node.get('id'))}, "
-            f"kind: {_q(node.get('kind'))}, "
-            f"packet_id: {_q(node.get('packet_id'))}, "
-            f"commit_sha: {_q(node.get('commit_sha'))}, "
-            f"label: {_q(node.get('label'))}, "
-            f"summary: {_q(node.get('summary'))}, "
-            f"properties_json: {_q(node.get('properties_json'))}"
-            "})"
+            """
+            CREATE NODE TABLE IF NOT EXISTS GraphNode(
+                id STRING,
+                kind STRING,
+                packet_id STRING,
+                commit_sha STRING,
+                label STRING,
+                summary STRING,
+                properties_json STRING,
+                PRIMARY KEY(id)
+            )
+            """
         )
-    for edge in edges:
         conn.execute(
-            "MATCH (a:GraphNode), (b:GraphNode) "
-            f"WHERE a.id = {_q(edge.get('from_id'))} AND b.id = {_q(edge.get('to_id'))} "
-            f"CREATE (a)-[:GraphEdge {{kind: {_q(edge.get('kind'))}, properties_json: {_q(edge.get('properties_json'))}}}]->(b)"
+            """
+            CREATE REL TABLE IF NOT EXISTS GraphEdge(
+                FROM GraphNode TO GraphNode,
+                kind STRING,
+                properties_json STRING
+            )
+            """
         )
+        for node in nodes:
+            conn.execute(
+                "CREATE (:GraphNode {"
+                f"id: {_q(node.get('id'))}, "
+                f"kind: {_q(node.get('kind'))}, "
+                f"packet_id: {_q(node.get('packet_id'))}, "
+                f"commit_sha: {_q(node.get('commit_sha'))}, "
+                f"label: {_q(node.get('label'))}, "
+                f"summary: {_q(node.get('summary'))}, "
+                f"properties_json: {_q(node.get('properties_json'))}"
+                "})"
+            )
+        for edge in edges:
+            conn.execute(
+                "MATCH (a:GraphNode), (b:GraphNode) "
+                f"WHERE a.id = {_q(edge.get('from_id'))} AND b.id = {_q(edge.get('to_id'))} "
+                f"CREATE (a)-[:GraphEdge {{kind: {_q(edge.get('kind'))}, properties_json: {_q(edge.get('properties_json'))}}}]->(b)"
+            )
+    finally:
+        for obj in (conn, db):
+            close = getattr(obj, "close", None)
+            if callable(close):
+                close()
+        gc.collect()
     return CompactKuzuWriteResult(
         ok=True,
         graph_path=str(graph_path),
@@ -367,6 +376,28 @@ def _clip(value: Any, limit: int) -> str:
 
 def _q(value: Any) -> str:
     return json.dumps(str(value or ""), ensure_ascii=False)
+
+
+def _kuzu_buffer_pool_size() -> int:
+    raw = os.environ.get("AMO_KUZU_COMPACT_WRITE_BUFFER_POOL_SIZE", "").strip() or os.environ.get(
+        "AMO_KUZU_BUFFER_POOL_SIZE", ""
+    ).strip()
+    if raw:
+        try:
+            return max(256 * 1024 * 1024, int(raw))
+        except ValueError:
+            pass
+    return 0
+
+
+def _kuzu_max_threads() -> int:
+    raw = os.environ.get("AMO_KUZU_MAX_THREADS", "").strip()
+    if raw:
+        try:
+            return max(1, int(raw))
+        except ValueError:
+            pass
+    return 2
 
 
 def _remove_path(path: Path) -> None:

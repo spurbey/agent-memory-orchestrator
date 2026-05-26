@@ -22,7 +22,7 @@ raw evidence and transcripts
 -> Git hunks and AST CodeNodes
 -> reasoning-to-code linking
 -> graph validation
--> session graph write
+-> session trace graph and curated session graph write
 -> central_version_merge
 -> retrieval docs, embeddings, graph expansion, reranking
 ```
@@ -31,6 +31,14 @@ Production runs this flow through `V2SessionJobRunner`. Drain only detects that
 a previous session closed and enqueues a job; it does not run extraction or write
 graph nodes. Completed stage artifacts are reused unless their input hash or
 stage configuration hash changes.
+
+`reasoning evidence view` is scoped by raw hook capture first. Codex rollout
+files can contain resumed or forked transcript history, so production does not
+scan the whole transcript just because a raw record references `transcript_path`.
+When raw evidence contains `turn_id` values, Stage 2 imports only transcript rows
+inside matching `task_started` / `task_complete` windows. Whole-transcript
+scanning remains a legacy/debug mode for old reset fixtures and raw captures
+without turn ids.
 
 ## Source of Truth
 
@@ -61,11 +69,16 @@ session Commit/File/Symbol/CodeRegion
 -> KnowledgeAtom
 ```
 
-The first production implementation applies only exact deterministic atoms:
-`commit`, `file`, `symbol`, and `code_region`. Exact matching uses `repo_id` plus
-canonical keys, not local machine paths. If a canonical atom already exists, the
-planner emits it as `matched_atoms` and still creates a new `KnowledgeVersion`
-for the new session provenance.
+The first production implementation applies exact deterministic atoms for
+`commit` and `file` by default. `symbol` and `code_region` atoms are created only
+when the promotion policy marks a curated ref as a high-signal
+`primary_implementation` target. UI style, UI markup, docs, config, validation
+tests, and generic support refs stay searchable support by default. Most
+symbol/code-region refs therefore remain support metadata so central memory does
+not become a second AST dump. Exact matching uses `repo_id` plus canonical keys,
+not local machine paths. If a canonical atom already exists, the planner emits it
+as `matched_atoms` and still creates a new `KnowledgeVersion` for the new session
+provenance.
 
 Apply writes a `GraphCommit`, updates `GraphView(main, active)`, and writes a
 `central_version_merge/merge_result.json` sidecar. `merge_plan.json` remains the
@@ -73,8 +86,30 @@ dry-run plan; `merge_result.json`, SQLite `v2_graph_commits`, and SQLite
 `v2_graph_views` are the applied-state audit trail.
 
 Decision/problem duplicate, refine, supersede, conflict, and revert relations
-are not automatic yet. They remain dry-run/review territory until semantic evals
-prove the matching rules are safe.
+are review-state central memory. The planner creates review `KnowledgeAtom` and
+`KnowledgeVersion` rows for accepted decision/problem frames, and the applier
+may write review relation edges such as `DUPLICATE_OF`, `REFINES`,
+`SUPERSEDES`, `CONFLICTS_WITH`, or `RELATED_REVIEW`. These edges are audit and
+review signals only. They do not make a decision answer-grade, and they do not
+change active/refined/superseded/contested status.
+
+The bridge toward that semantic versioning layer is the decision-frame ledger.
+Every central merge plan persists accepted decision/problem frames into SQLite
+`v2_central_decision_frames`. A later session compares its new frames against
+persisted frames and repo-scoped central review versions, then emits review
+candidates such as `DUPLICATE_OF` or `REFINES`. This gives AMO a Git-like
+history of agent work proposals before the system is trusted to mark old
+decisions superseded or contested. The remaining deferred step is automatic
+decision status transition, not the storage of decision versions themselves.
+
+Quality evaluation must use the current plan/result pair. If a new
+`merge_plan.json` exists beside an older `merge_result.json`, the older result is
+treated as stale and cannot make the job product-ready.
+
+Reasoning review also has a deterministic semantic alignment signal. A
+structurally valid Qwen node can still be demoted to `needs_review` if its text
+does not line up with the commit message or changed files. This catches noisy
+packet evidence before it becomes answer-grade graph memory.
 
 ## Production Reset
 
@@ -101,6 +136,19 @@ writes to a disposable smoke graph. Production closed-session processing writes
 V2 node kinds such as `Packet`, `Commit`, `EvidenceRef`, `ReasoningNode`,
 `CodeHunk`, `CodeNode`, `CodeVersion`, and `Symbol`.
 
+Current production writes both an exhaustive trace graph manifest and a curated
+session graph manifest. Central merge and retrieval use the curated graph by
+default; the trace graph remains an audit/debug artifact. See
+[Curated session graph and central merge boundary](./architecture/curated_session_graph.md).
+
+Repo-scoped retrieval projections are cumulative product-memory views. Each
+successful `retrieval_docs` stage carries forward previously validated
+curated/central docs for the same `repo_id`, adds the current job's curated docs,
+deduplicates by document id, and activates a new projection only after the
+semantic activation gate passes. This prevents the active repo view from
+shrinking to only the latest session while still excluding legacy `repo_id=""`
+or full-trace `CodeNode`/`CodeHunk` docs from product retrieval.
+
 ## Core Concepts
 
 | Concept | Meaning |
@@ -121,12 +169,13 @@ V2 node kinds such as `Packet`, `Commit`, `EvidenceRef`, `ReasoningNode`,
 1. [System purpose](./architecture/01-system-purpose.md)
 2. [Three-level storage](./architecture/02-three-level-storage.md)
 3. [Failure and safety model](./architecture/05-failure-and-safety-model.md)
-4. [Node types](./graph_model/node-types.md)
-5. [Edge types](./graph_model/edge-types.md)
-6. [Provenance and evidence](./graph_model/provenance-and-evidence.md)
-7. Algorithm docs under [algorithms](./algorithms/)
-8. Module contracts under [modules](./modules/)
-9. Examples under [examples](./examples/)
+4. [Curated session graph boundary](./architecture/curated_session_graph.md)
+5. [Node types](./graph_model/node-types.md)
+6. [Edge types](./graph_model/edge-types.md)
+7. [Provenance and evidence](./graph_model/provenance-and-evidence.md)
+8. Algorithm docs under [algorithms](./algorithms/)
+9. Module contracts under [modules](./modules/)
+10. Examples under [examples](./examples/)
 
 ## Acceptance Rule
 

@@ -76,6 +76,7 @@ class DecisionFrame:
     evidence_refs: list[str]
     tokens: list[str]
     graph_neighbor_signature: list[str]
+    source_scope: str = "session"
 
     def as_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -85,6 +86,7 @@ def build_decision_review_candidates(
     *,
     session_nodes: list[dict[str, Any]] | None = None,
     central_nodes: list[dict[str, Any]] | None = None,
+    historical_frames: list[dict[str, Any]] | None = None,
     compact_graph: dict[str, Any] | None = None,
     repo_id: str = "",
     job_id: str = "",
@@ -98,9 +100,11 @@ def build_decision_review_candidates(
     status mutation is allowed.
     """
 
-    del central_nodes
     frames = build_decision_frames(compact_graph=compact_graph or {}, session_nodes=session_nodes or [], repo_id=repo_id)
-    candidates = _review_candidates(frames=frames, job_id=job_id, plan_id=plan_id)
+    central_frames = build_decision_frames(session_nodes=_active_central_decision_nodes(central_nodes or [], repo_id=repo_id), repo_id=repo_id)
+    persisted_frames = _coerce_historical_frames(historical_frames or [], repo_id=repo_id)
+    comparison_frames = [*central_frames, *persisted_frames]
+    candidates = _review_candidates(frames=frames, comparison_frames=comparison_frames, job_id=job_id, plan_id=plan_id)
     high_risk = [candidate for candidate in candidates if candidate["score"].get("false_positive_risk")]
     relation_counts: dict[str, int] = {}
     for candidate in candidates:
@@ -111,14 +115,52 @@ def build_decision_review_candidates(
         "candidates": candidates,
         "metrics": {
             "decision_frame_count": len(frames),
+            "active_central_decision_frame_count": len(central_frames),
+            "historical_decision_frame_count": len(persisted_frames),
             "decision_candidate_count": len(candidates),
             "review_candidate_count": len(candidates),
             "candidate_relation_counts": relation_counts,
             "false_positive_risk_count": len(high_risk),
             "deferred_central_decision_atom_count": len(frames),
-            "note": "Decision/problem matching is dry-run only; no central decision status is mutated.",
+            "note": "Decision/problem matching proposes review relations only; no active decision status is mutated.",
         },
     }
+
+
+def _coerce_historical_frames(rows: list[dict[str, Any]], *, repo_id: str) -> list[DecisionFrame]:
+    frames: list[DecisionFrame] = []
+    for row in rows:
+        raw = row.get("frame") if isinstance(row.get("frame"), dict) else row
+        if not isinstance(raw, dict):
+            continue
+        if repo_id and str(raw.get("repo_id") or row.get("repo_id") or "") not in {"", repo_id}:
+            continue
+        try:
+            frames.append(
+                DecisionFrame(
+                    frame_id=str(raw.get("frame_id") or row.get("frame_id") or ""),
+                    source_node_id=str(raw.get("source_node_id") or row.get("source_node_id") or raw.get("frame_id") or ""),
+                    repo_id=str(raw.get("repo_id") or row.get("repo_id") or repo_id),
+                    frame_kind=str(raw.get("frame_kind") or row.get("frame_kind") or "decision"),
+                    summary=str(raw.get("summary") or row.get("summary") or ""),
+                    subject=str(raw.get("subject") or row.get("subject") or ""),
+                    statement=str(raw.get("statement") or row.get("statement") or ""),
+                    rationale=str(raw.get("rationale") or ""),
+                    linked_files=_list(raw.get("linked_files")),
+                    linked_symbols=_list(raw.get("linked_symbols")),
+                    linked_code_nodes=_list(raw.get("linked_code_nodes")),
+                    linked_code_versions=_list(raw.get("linked_code_versions")),
+                    linked_commits=_list(raw.get("linked_commits")),
+                    linked_packets=_list(raw.get("linked_packets")),
+                    evidence_refs=_list(raw.get("evidence_refs")),
+                    tokens=_list(raw.get("tokens")),
+                    graph_neighbor_signature=_list(raw.get("graph_neighbor_signature")),
+                    source_scope="decision_frame_ledger",
+                )
+            )
+        except TypeError:
+            continue
+    return [frame for frame in frames if frame.frame_id and frame.source_node_id]
 
 
 def build_decision_frames(
@@ -147,12 +189,15 @@ def build_decision_frames(
             node_id=node_id,
             edges=edges_by_node.get(node_id, []),
             node_by_id=node_by_id,
+            edges_by_node=edges_by_node,
         )
-        linked_packets = _dedupe([_first(props, "source_packet_id", "packet_id"), *edge_context["packets"]])
-        linked_commits = _dedupe([_first(props, "source_commit_sha", "commit_sha"), *edge_context["commits"]])
+        linked_packets = _dedupe([_first(props, "source_packet_id", "packet_id"), *_list(props.get("linked_packets")), *edge_context["packets"]])
+        linked_commits = _dedupe([_first(props, "source_commit_sha", "commit_sha"), *_list(props.get("linked_commits")), *edge_context["commits"]])
         evidence_refs = _dedupe([*_list(props.get("evidence_refs")), *edge_context["evidence_refs"]])
-        linked_files = _dedupe(edge_context["files"])
-        linked_symbols = _dedupe(edge_context["symbols"])
+        linked_files = _dedupe(
+            [*_list(props.get("selected_files")), *_list(props.get("linked_files")), _first(props, "path", "file_path", "normalized_file_path"), *edge_context["files"]]
+        )
+        linked_symbols = _dedupe([*_list(props.get("selected_symbol_refs")), *_list(props.get("linked_symbols")), *edge_context["symbols"]])
         text_for_tokens = " ".join([summary, subject, statement, rationale])
         tokens = _tokens(text_for_tokens)
         signature = _dedupe(edge_context["neighbor_signature"])
@@ -176,24 +221,37 @@ def build_decision_frames(
                 evidence_refs=evidence_refs,
                 tokens=tokens,
                 graph_neighbor_signature=signature,
+                source_scope=_frame_source_scope(node),
             )
         )
     return frames
 
 
-def _review_candidates(*, frames: list[DecisionFrame], job_id: str, plan_id: str) -> list[dict[str, Any]]:
+def _review_candidates(
+    *,
+    frames: list[DecisionFrame],
+    job_id: str,
+    plan_id: str,
+    comparison_frames: list[DecisionFrame] | None = None,
+) -> list[dict[str, Any]]:
     candidates: list[dict[str, Any]] = []
-    for left, right in combinations(frames, 2):
-        score = _pair_score(left, right)
-        if score["total"] < 0.52 and not _is_text_only_review(score):
+    pairs = list(combinations(frames, 2))
+    if comparison_frames:
+        pairs.extend((left, right) for left in frames for right in comparison_frames)
+    for left, right in pairs:
+        if left.source_node_id == right.source_node_id:
             continue
-        relation, reason = _relation_for_score(score)
+        score = _pair_score(left, right)
+        if score["total"] < 0.52 and not _is_text_only_review(score) and not _is_shared_code_review(score):
+            continue
+        relation, reason = _relation_for_score(score, left=left, right=right)
         if relation == "":
             continue
+        source_frame, target_frame = _orient_candidate(left, right, relation)
         candidate_seed = {
             "plan_id": plan_id,
-            "source": left.source_node_id,
-            "target": right.source_node_id,
+            "source": source_frame.source_node_id,
+            "target": target_frame.source_node_id,
             "relation": relation,
         }
         candidates.append(
@@ -201,17 +259,23 @@ def _review_candidates(*, frames: list[DecisionFrame], job_id: str, plan_id: str
                 candidate_id=f"v2review:{stable_hash(candidate_seed)[:32]}",
                 plan_id=plan_id,
                 job_id=job_id,
-                source_node_id=left.source_node_id,
-                target_node_id=right.source_node_id,
+                source_node_id=source_frame.source_node_id,
+                target_node_id=target_frame.source_node_id,
                 proposed_relation=relation,
                 score={
                     **score,
-                    "source_summary": left.summary,
-                    "target_summary": right.summary,
-                    "source_files": left.linked_files[:12],
-                    "target_files": right.linked_files[:12],
-                    "source_symbols": left.linked_symbols[:12],
-                    "target_symbols": right.linked_symbols[:12],
+                    "source_summary": source_frame.summary,
+                    "target_summary": target_frame.summary,
+                    "source_files": source_frame.linked_files[:12],
+                    "target_files": target_frame.linked_files[:12],
+                    "source_symbols": source_frame.linked_symbols[:12],
+                    "target_symbols": target_frame.linked_symbols[:12],
+                    "source_scope": source_frame.source_scope,
+                    "target_scope": target_frame.source_scope,
+                    "source_frame_id": source_frame.frame_id,
+                    "target_frame_id": target_frame.frame_id,
+                    "source_kind": source_frame.frame_kind,
+                    "target_kind": target_frame.frame_kind,
                 },
                 reason=reason,
             ).as_dict()
@@ -241,10 +305,16 @@ def _pair_score(left: DecisionFrame, right: DecisionFrame) -> dict[str, Any]:
     }
 
 
-def _relation_for_score(score: dict[str, Any]) -> tuple[str, str]:
+def _relation_for_score(score: dict[str, Any], *, left: DecisionFrame, right: DecisionFrame) -> tuple[str, str]:
     total = float(score["total"])
     code_overlap = float(score["code_entity_overlap"])
     lexical = float(score["lexical"])
+    if (_supersedes(left) or _supersedes(right)) and total >= 0.48 and (code_overlap >= 0.2 or lexical >= 0.45):
+        return "SUPERSEDES", "new_decision_uses_replacement_language"
+    if _conflicts(left, right) and total >= 0.48 and (code_overlap >= 0.2 or lexical >= 0.5):
+        return "CONFLICTS_WITH", "incompatible_decision_language"
+    if lexical >= 0.82 and code_overlap >= 0.5:
+        return "DUPLICATE_OF", "same_decision_text_and_code_context"
     if total >= 0.88 and code_overlap >= 0.35:
         return "DUPLICATE_OF", "high_overlap_same_code_context"
     if total >= 0.76 and code_overlap >= 0.25:
@@ -253,14 +323,83 @@ def _relation_for_score(score: dict[str, Any]) -> tuple[str, str]:
         return "RELATED_REVIEW", "related_decision_needs_human_review"
     if _is_text_only_review(score):
         return "RELATED_REVIEW", "text_overlap_without_shared_code_context"
+    if _is_shared_code_review(score):
+        return "RELATED_REVIEW", "shared_code_context_needs_human_review"
     return "", ""
+
+
+def _orient_candidate(left: DecisionFrame, right: DecisionFrame, relation: str) -> tuple[DecisionFrame, DecisionFrame]:
+    if relation == "SUPERSEDES":
+        if _supersedes(right) and not _supersedes(left):
+            return right, left
+        return left, right
+    if relation == "REFINES":
+        left_len = len(left.tokens) + len(left.linked_files) + len(left.linked_symbols)
+        right_len = len(right.tokens) + len(right.linked_files) + len(right.linked_symbols)
+        return (left, right) if left_len >= right_len else (right, left)
+    return left, right
+
+
+def _supersedes(frame: DecisionFrame) -> bool:
+    text = _frame_text(frame)
+    return any(
+        marker in text
+        for marker in (
+            "replace",
+            "replaces",
+            "replaced",
+            "supersede",
+            "supersedes",
+            "instead of",
+            "migrate from",
+            "migrates from",
+            "move from",
+            "moves from",
+            "switch from",
+            "switches from",
+            "no longer",
+            "stop using",
+            "remove old",
+        )
+    )
+
+
+def _conflicts(left: DecisionFrame, right: DecisionFrame) -> bool:
+    left_text = _frame_text(left)
+    right_text = _frame_text(right)
+    oppositions = (
+        ("enable", "disable"),
+        ("enabled", "disabled"),
+        ("allow", "block"),
+        ("remote", "local"),
+        ("sync", "async"),
+        ("strict", "permissive"),
+        ("required", "optional"),
+        ("central", "session"),
+        ("active", "inactive"),
+    )
+    return any((a in left_text and b in right_text) or (b in left_text and a in right_text) for a, b in oppositions)
+
+
+def _frame_text(frame: DecisionFrame) -> str:
+    return " ".join([frame.subject, frame.summary, frame.statement, frame.rationale]).lower()
 
 
 def _is_text_only_review(score: dict[str, Any]) -> bool:
     return float(score["lexical"]) >= 0.25 and float(score["code_entity_overlap"]) < 0.15
 
 
-def _edge_context(*, node_id: str, edges: list[dict[str, Any]], node_by_id: dict[str, dict[str, Any]]) -> dict[str, list[str]]:
+def _is_shared_code_review(score: dict[str, Any]) -> bool:
+    return float(score["code_entity_overlap"]) >= 0.6 and float(score["graph_neighbor_overlap"]) >= 0.25
+
+
+def _edge_context(
+    *,
+    node_id: str,
+    edges: list[dict[str, Any]],
+    node_by_id: dict[str, dict[str, Any]],
+    edges_by_node: dict[str, list[dict[str, Any]]],
+) -> dict[str, list[str]]:
     context: dict[str, list[str]] = {
         "packets": [],
         "commits": [],
@@ -295,7 +434,64 @@ def _edge_context(*, node_id: str, edges: list[dict[str, Any]], node_by_id: dict
             context["files"].extend(_file_refs(other))
         elif kind == "REASON_NODE_LINKED_TO_HUNK":
             context["files"].extend(_file_refs(other))
+        elif kind == "REASON_NODE_HAS_CODE_IMPACT":
+            _merge_context(context, _code_impact_context(other_id, other, node_by_id=node_by_id, edges_by_node=edges_by_node))
     return context
+
+
+def _code_impact_context(
+    impact_id: str,
+    impact_node: dict[str, Any],
+    *,
+    node_by_id: dict[str, dict[str, Any]],
+    edges_by_node: dict[str, list[dict[str, Any]]],
+) -> dict[str, list[str]]:
+    context: dict[str, list[str]] = {
+        "packets": [],
+        "commits": [],
+        "evidence_refs": [],
+        "files": [],
+        "symbols": [],
+        "code_nodes": [],
+        "code_versions": [],
+        "neighbor_signature": [],
+    }
+    props = _properties(impact_node)
+    context["packets"].extend(_list(props.get("packet_id")))
+    context["commits"].extend(_list(props.get("commit_sha")))
+    context["files"].extend(_normalize_path(path) for path in _list(props.get("selected_files")))
+    for symbol_id in _list(props.get("selected_symbol_refs")):
+        symbol = node_by_id.get(symbol_id, {})
+        context["symbols"].append(_symbol_ref(symbol, symbol_id))
+        context["files"].extend(_file_refs(symbol))
+        context["neighbor_signature"].append(f"CODE_IMPACT_TOUCHES_SYMBOL:{symbol_id}")
+    for code_id in _list(props.get("selected_code_refs")):
+        code = node_by_id.get(code_id, {})
+        context["code_nodes"].append(code_id)
+        context["files"].extend(_file_refs(code))
+        context["neighbor_signature"].append(f"CODE_IMPACT_TOUCHES_CODE_REGION:{code_id}")
+    for edge in edges_by_node.get(impact_id, []):
+        kind = _edge_kind(edge)
+        other_id = _other_node_id(edge, impact_id)
+        other = node_by_id.get(other_id, {})
+        if kind == "CODE_IMPACT_TOUCHES_FILE":
+            context["files"].extend(_file_refs(other))
+        elif kind == "CODE_IMPACT_TOUCHES_SYMBOL":
+            context["symbols"].append(_symbol_ref(other, other_id))
+            context["files"].extend(_file_refs(other))
+        elif kind == "CODE_IMPACT_TOUCHES_CODE_REGION":
+            context["code_nodes"].append(other_id)
+            context["files"].extend(_file_refs(other))
+        elif kind == "CODE_IMPACT_IMPLEMENTED_BY_COMMIT":
+            context["commits"].append(_strip_prefix(other_id, "commit:"))
+        if kind.startswith("CODE_IMPACT_"):
+            context["neighbor_signature"].append(f"{kind}:{other_id}")
+    return context
+
+
+def _merge_context(target: dict[str, list[str]], source: dict[str, list[str]]) -> None:
+    for key, values in source.items():
+        target.setdefault(key, []).extend(values)
 
 
 def _nodes(compact_graph: dict[str, Any] | None) -> list[dict[str, Any]]:
@@ -324,9 +520,13 @@ def _is_decision_like(node: dict[str, Any]) -> bool:
     kind = str(node.get("kind") or node.get("node_kind") or "").lower()
     if kind in {"decision", "problem"}:
         return True
+    props = _properties(node)
+    if kind == "knowledgeversion":
+        atom_kind = str(props.get("atom_kind") or "").lower()
+        status = str(props.get("status") or node.get("status") or "").lower()
+        return atom_kind in {"decision", "problem"} and status in {"", "active", "review"}
     if kind != "reasoningnode":
         return False
-    props = _properties(node)
     node_type = str(props.get("node_type") or "").lower()
     status = str(props.get("status") or "").lower()
     text = " ".join([_first(props, "label"), _first(props, "summary"), _first(props, "statement")]).lower()
@@ -347,8 +547,12 @@ def _properties(node: dict[str, Any]) -> dict[str, Any]:
     raw: dict[str, Any] = dict(node)
     props = node.get("properties") if isinstance(node.get("properties"), dict) else {}
     raw.update(props)
+    top_metadata = node.get("metadata") if isinstance(node.get("metadata"), dict) else {}
+    raw.update(top_metadata)
     metadata = props.get("metadata") if isinstance(props.get("metadata"), dict) else {}
     raw.update(metadata)
+    version_metadata = raw.get("version_metadata") if isinstance(raw.get("version_metadata"), dict) else {}
+    raw.update(version_metadata)
     encoded = raw.get("properties_json")
     if isinstance(encoded, str) and encoded.strip():
         try:
@@ -358,6 +562,25 @@ def _properties(node: dict[str, Any]) -> dict[str, Any]:
         if isinstance(decoded, dict):
             raw.update(decoded)
     return raw
+
+
+def _active_central_decision_nodes(nodes: list[dict[str, Any]], *, repo_id: str) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    for node in nodes:
+        props = _properties(node)
+        if repo_id and str(props.get("repo_id") or "") not in {"", repo_id}:
+            continue
+        if str(node.get("kind") or node.get("node_kind") or "").lower() != "knowledgeversion":
+            continue
+        if str(props.get("status") or node.get("status") or "").lower() not in {"", "active", "review"}:
+            continue
+        if str(props.get("atom_kind") or "").lower() in {"decision", "problem"}:
+            out.append(node)
+    return out
+
+
+def _frame_source_scope(node: dict[str, Any]) -> str:
+    return "central" if str(node.get("kind") or node.get("node_kind") or "").lower() == "knowledgeversion" else "session"
 
 
 def _file_refs(node: dict[str, Any]) -> list[str]:

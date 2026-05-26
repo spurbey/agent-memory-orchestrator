@@ -18,6 +18,8 @@ from ..integrations.connectors.slack.socket_mode import SlackSocketModeRunner
 from ..integrations.connectors.slack.wizard import run_slack_setup_wizard
 from ..graph.diagnostics import debug_hooks, debug_qwen
 from ..graph.service import GraphRagService
+from ..graph.store import KuzuGraphStore
+from ..reasoning_graph.central_merge.applier import repo_central_graph_path
 from ..graph.store import GraphBackendUnavailable
 from ..install.service import InstallOptions
 from ..install.service import apply_install_plan
@@ -58,6 +60,10 @@ from ..reasoning_graph.central_merge.applier import apply_merge_plan
 from ..reasoning_graph.central_merge.backfill import backfill_central_merge_plan
 from ..reasoning_graph.central_merge.fixtures import export_job_fixture
 from ..reasoning_graph.central_merge.judge import run_semantic_eval_fixture
+from ..reasoning_graph.central_merge.production_eval import DEFAULT_TARGET_JOB_ID
+from ..reasoning_graph.central_merge.production_eval import DEFAULT_TARGET_REPO_ID
+from ..reasoning_graph.central_merge.production_eval import default_production_eval_path
+from ..reasoning_graph.central_merge.production_eval import run_production_semantic_eval
 from ..skill_checkpoint import DEFAULT_LOCAL_NUM_CTX
 from ..skill_checkpoint import DEFAULT_NUM_PREDICT
 from ..skill_checkpoint import list_skill_checkpoints
@@ -95,11 +101,20 @@ def _retrieve_index_only(settings: Settings, args: Any) -> dict[str, Any]:
     conn = connect(target_db)
     try:
         index = RetrievalIndexStore(conn)
+        if args.repo_id and not index.active_projection_id(args.repo_id):
+            return {
+                "ok": False,
+                "error": "active_projection_missing",
+                "repo_id": args.repo_id,
+                "db_path": str(target_db),
+                "mode": "index_only",
+            }
         result = retrieve_indexed_docs(
             query=args.query,
             index_store=index,
             graph_store=_NoGraphWalkStore(),
             session_id=args.session_id,
+            repo_id=args.repo_id,
             limit=max(1, min(50, int(args.limit))),
             expand_neighbors=0,
             include_graph_nodes=False,
@@ -156,6 +171,11 @@ def _build_parser() -> argparse.ArgumentParser:
     v2_eval.add_argument("--fixture", type=Path, required=True)
     v2_eval.add_argument("--case-set", default="baseline")
     v2_eval.add_argument("--out", type=Path, help="Write semantic eval result JSON")
+    v2_prod_eval = sub.add_parser("v2-production-eval", help="Run read-only production semantic eval for curated central memory")
+    v2_prod_eval.add_argument("--job-id", default=DEFAULT_TARGET_JOB_ID)
+    v2_prod_eval.add_argument("--repo-id", default=DEFAULT_TARGET_REPO_ID)
+    v2_prod_eval.add_argument("--mode", default="baseline", choices=["baseline", "pre_apply", "post_apply"])
+    v2_prod_eval.add_argument("--out", type=Path, help="Write production semantic eval JSON")
     v2_plan = sub.add_parser("v2-merge-plan", help="Show the latest central_version_merge plan for a V2 job")
     v2_plan.add_argument("--job-id", required=True)
     v2_plan.add_argument("--backfill", action="store_true", help="Create a dry-run merge plan for an old completed job if missing")
@@ -174,6 +194,11 @@ def _build_parser() -> argparse.ArgumentParser:
     v2_eval_nested.add_argument("--fixture", type=Path, required=True)
     v2_eval_nested.add_argument("--case-set", default="baseline")
     v2_eval_nested.add_argument("--out", type=Path, help="Write semantic eval result JSON")
+    v2_prod_eval_nested = v2_sub.add_parser("production-eval", help="Run read-only production semantic eval for curated central memory")
+    v2_prod_eval_nested.add_argument("--job-id", default=DEFAULT_TARGET_JOB_ID)
+    v2_prod_eval_nested.add_argument("--repo-id", default=DEFAULT_TARGET_REPO_ID)
+    v2_prod_eval_nested.add_argument("--mode", default="baseline", choices=["baseline", "pre_apply", "post_apply"])
+    v2_prod_eval_nested.add_argument("--out", type=Path, help="Write production semantic eval JSON")
     v2_plan_nested = v2_sub.add_parser("merge-plan", help="Show the latest central_version_merge plan for a V2 job")
     v2_plan_nested.add_argument("--job-id", required=True)
     v2_plan_nested.add_argument("--backfill", action="store_true", help="Create a dry-run merge plan for an old completed job if missing")
@@ -439,6 +464,8 @@ def _build_parser() -> argparse.ArgumentParser:
         default="",
         help="Optional environment variable containing this peer's HMAC shared secret.",
     )
+    peer_remove = peer_sub.add_parser("remove", help="Remove a configured peer identity")
+    peer_remove.add_argument("--node-id", required=True)
     peer_sub.add_parser("status", help="Show peer node, policy, configured peers, and room count")
     peer_share = peer_sub.add_parser("share-card", help="Print or write this node's importable peer card")
     peer_share.add_argument("--out", type=Path, help="Optional JSON output path.")
@@ -577,6 +604,7 @@ def _build_parser() -> argparse.ArgumentParser:
     peer_agent_sub = peer_agent.add_subparsers(dest="peer_agent_command", required=True)
     peer_agent_ask = peer_agent_sub.add_parser("ask", help="Ask local memory first, then open a peer room if needed")
     peer_agent_ask.add_argument("--query", required=True)
+    peer_agent_ask.add_argument("--peer", action="append", default=[], help="Trusted peer node id to ask. Repeat for multiple peers.")
     peer_agent_ask.add_argument("--session-id", default="")
     peer_agent_ask.add_argument("--min-confidence", type=float, default=None)
     peer_agent_ask.add_argument("--timeout-seconds", type=float, default=None)
@@ -881,6 +909,19 @@ def main(argv: list[str] | None = None) -> int:
             _print(result)
             return 0 if result.get("status") == "passed" else 1
 
+        if args.command == "v2-production-eval" or (args.command == "v2" and args.v2_command == "production-eval"):
+            settings = Settings.load()
+            out_path = args.out or default_production_eval_path(Path.cwd())
+            result = run_production_semantic_eval(
+                settings,
+                job_id=args.job_id,
+                repo_id=args.repo_id,
+                mode=args.mode,
+                out_path=out_path,
+            )
+            _print(result)
+            return 0
+
         if args.command == "v2-merge-plan" or (args.command == "v2" and args.v2_command == "merge-plan"):
             settings = Settings.load()
             if args.backfill:
@@ -1098,12 +1139,7 @@ def main(argv: list[str] | None = None) -> int:
                         "netd": netd_result,
                         "accept_invite": accept_result,
                         "startup": startup_result,
-                        "next_commands": [
-                            "amo-cli peer create-invite --relay "
-                            + (args.relay_profile or "<relay-profile>")
-                            + " --auto-approve --out host.invite.json",
-                            'amo-cli peer open-room --topic "<topic>" --peer <peer-node-id>',
-                        ],
+                        "next_commands": _peer_setup_next_commands(args),
                     }
                 )
                 return 0 if setup_ok else 1
@@ -1219,6 +1255,9 @@ def main(argv: list[str] | None = None) -> int:
                         shared_secret_env=args.shared_secret_env,
                     )
                 )
+                return 0
+            if args.peer_command == "remove":
+                _print(svc.store.remove_peer(args.node_id))
                 return 0
             if args.peer_command == "status":
                 _print(svc.status())
@@ -1343,6 +1382,7 @@ def main(argv: list[str] | None = None) -> int:
             if args.peer_agent_command == "ask":
                 result = svc.ask(
                     query=args.query,
+                    peer_ids=args.peer or None,
                     session_id=args.session_id,
                     min_confidence=args.min_confidence,
                     timeout_seconds=args.timeout_seconds,
@@ -1522,7 +1562,13 @@ def main(argv: list[str] | None = None) -> int:
                 if args.command == "graph-retrieve" and args.no_answer and args.no_vector:
                     _print(_retrieve_index_only(settings, args))
                     return 0
-                graph = GraphRagService(settings)
+                graph_settings = settings
+                graph_store = None
+                if args.command in {"graph-retrieve", "graph-version-flow"} and str(args.repo_id or "").strip():
+                    central_graph_path = repo_central_graph_path(settings, args.repo_id)
+                    graph_settings = replace(settings, graph_path=central_graph_path)
+                    graph_store = KuzuGraphStore(central_graph_path)
+                graph = GraphRagService(graph_settings, store=graph_store)
                 try:
                     if args.command == "graph-search":
                         result = graph.graph_search(
@@ -2075,6 +2121,31 @@ def _relay_values_from_args(args: argparse.Namespace, settings: Settings | None)
         "auto_relay": auto_relay,
         "hole_punching": hole_punching,
     }
+
+
+def _peer_setup_next_commands(args: argparse.Namespace) -> list[str]:
+    commands: list[str] = []
+    if not getattr(args, "invite", "") and not getattr(args, "invite_code", ""):
+        commands.append(
+            "amo-cli peer create-invite --relay "
+            + (getattr(args, "relay_profile", "") or "<relay-profile>")
+            + " --auto-approve"
+        )
+    if getattr(args, "install_startup", False):
+        commands.extend(
+            [
+                "amo-cli peer netd service-status --with-watch",
+                'amo-cli peer-agent ask --query "<question>"',
+            ]
+        )
+    else:
+        commands.extend(
+            [
+                "amo-cli peer-agent watch",
+                'amo-cli peer-agent ask --query "<question>"',
+            ]
+        )
+    return commands
 
 
 def _peer_invite_from_setup_args(args: argparse.Namespace) -> dict[str, Any] | None:
