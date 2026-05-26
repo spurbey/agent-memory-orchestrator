@@ -377,6 +377,26 @@ CREATE TABLE IF NOT EXISTS v2_central_review_candidates (
   FOREIGN KEY (job_id) REFERENCES v2_session_jobs(job_id) ON DELETE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS v2_central_decision_frames (
+  frame_id TEXT PRIMARY KEY,
+  plan_id TEXT NOT NULL,
+  job_id TEXT NOT NULL,
+  session_id TEXT NOT NULL DEFAULT '',
+  repo_id TEXT NOT NULL DEFAULT '',
+  source_node_id TEXT NOT NULL DEFAULT '',
+  frame_kind TEXT NOT NULL DEFAULT '',
+  source_scope TEXT NOT NULL DEFAULT '',
+  subject TEXT NOT NULL DEFAULT '',
+  summary TEXT NOT NULL DEFAULT '',
+  statement TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'review',
+  frame_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY (plan_id) REFERENCES v2_central_merge_plans(plan_id) ON DELETE CASCADE,
+  FOREIGN KEY (job_id) REFERENCES v2_session_jobs(job_id) ON DELETE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS v2_graph_commits (
   graph_commit_id TEXT PRIMARY KEY,
   plan_id TEXT NOT NULL DEFAULT '',
@@ -519,6 +539,9 @@ ON v2_central_merge_plans(status, updated_at DESC);
 
 CREATE INDEX IF NOT EXISTS idx_v2_central_review_candidates_plan
 ON v2_central_review_candidates(plan_id, status);
+
+CREATE INDEX IF NOT EXISTS idx_v2_central_decision_frames_repo
+ON v2_central_decision_frames(repo_id, updated_at DESC);
 
 CREATE INDEX IF NOT EXISTS idx_v2_semantic_eval_runs_status
 ON v2_semantic_eval_runs(status, updated_at DESC);

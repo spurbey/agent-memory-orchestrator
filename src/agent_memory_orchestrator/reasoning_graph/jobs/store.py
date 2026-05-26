@@ -563,6 +563,56 @@ class V2SessionJobStore:
                     now,
                 ),
             )
+        self.conn.execute("DELETE FROM v2_central_decision_frames WHERE plan_id = ?", (plan_id,))
+        diagnostics = plan.get("diagnostics") if isinstance(plan.get("diagnostics"), dict) else {}
+        frames = diagnostics.get("decision_frames") if isinstance(diagnostics.get("decision_frames"), list) else []
+        for frame in frames:
+            if not isinstance(frame, dict):
+                continue
+            frame_id = str(frame.get("frame_id") or "")
+            if not frame_id:
+                continue
+            self.conn.execute(
+                """
+                INSERT INTO v2_central_decision_frames(
+                  frame_id, plan_id, job_id, session_id, repo_id, source_node_id,
+                  frame_kind, source_scope, subject, summary, statement, status,
+                  frame_json, created_at, updated_at
+                )
+                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(frame_id) DO UPDATE SET
+                  plan_id=excluded.plan_id,
+                  job_id=excluded.job_id,
+                  session_id=excluded.session_id,
+                  repo_id=excluded.repo_id,
+                  source_node_id=excluded.source_node_id,
+                  frame_kind=excluded.frame_kind,
+                  source_scope=excluded.source_scope,
+                  subject=excluded.subject,
+                  summary=excluded.summary,
+                  statement=excluded.statement,
+                  status=excluded.status,
+                  frame_json=excluded.frame_json,
+                  updated_at=excluded.updated_at
+                """,
+                (
+                    frame_id,
+                    plan_id,
+                    str(plan.get("job_id") or ""),
+                    str(plan.get("session_id") or ""),
+                    str(frame.get("repo_id") or plan.get("repo_id") or ""),
+                    str(frame.get("source_node_id") or ""),
+                    str(frame.get("frame_kind") or ""),
+                    str(frame.get("source_scope") or "session"),
+                    str(frame.get("subject") or ""),
+                    str(frame.get("summary") or ""),
+                    str(frame.get("statement") or ""),
+                    "review",
+                    json.dumps(frame, sort_keys=True),
+                    now,
+                    now,
+                ),
+            )
         if graph_commit.get("graph_commit_id"):
             self.conn.execute(
                 """
@@ -682,6 +732,21 @@ class V2SessionJobStore:
                 "SELECT * FROM v2_central_review_candidates WHERE plan_id = ? ORDER BY created_at ASC",
                 (plan_id,),
             ).fetchall()
+        return [_row(row) for row in rows]
+
+    def list_decision_frames(self, *, repo_id: str, exclude_job_id: str = "", status: str = "") -> list[dict[str, Any]]:
+        clauses = ["repo_id = ?"]
+        params: list[Any] = [repo_id]
+        if exclude_job_id:
+            clauses.append("job_id != ?")
+            params.append(exclude_job_id)
+        if status:
+            clauses.append("status = ?")
+            params.append(status)
+        rows = self.conn.execute(
+            f"SELECT * FROM v2_central_decision_frames WHERE {' AND '.join(clauses)} ORDER BY updated_at DESC",
+            tuple(params),
+        ).fetchall()
         return [_row(row) for row in rows]
 
     def ensure_graph_view(self, *, repo_id: str = "", branch: str = "main", mode: str = "active") -> dict[str, Any]:

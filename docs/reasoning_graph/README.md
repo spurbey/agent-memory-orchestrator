@@ -89,6 +89,18 @@ Decision/problem duplicate, refine, supersede, conflict, and revert relations
 are not automatic yet. They remain dry-run/review territory until semantic evals
 prove the matching rules are safe.
 
+The bridge toward that semantic versioning layer is the decision-frame ledger.
+Every central merge plan persists accepted decision/problem frames into SQLite
+`v2_central_decision_frames`. A later session compares its new frames against
+those persisted frames and may emit review candidates such as `DUPLICATE_OF` or
+`REFINES`, but it still does not mutate active decision status. This gives AMO a
+Git-like history of agent work proposals before the system is trusted to mark
+old decisions superseded or contested.
+
+Quality evaluation must use the current plan/result pair. If a new
+`merge_plan.json` exists beside an older `merge_result.json`, the older result is
+treated as stale and cannot make the job product-ready.
+
 Reasoning review also has a deterministic semantic alignment signal. A
 structurally valid Qwen node can still be demoted to `needs_review` if its text
 does not line up with the commit message or changed files. This catches noisy

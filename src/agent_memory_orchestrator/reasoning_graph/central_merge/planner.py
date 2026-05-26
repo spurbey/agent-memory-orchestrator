@@ -29,6 +29,7 @@ def build_dry_run_merge_plan(
     parent_graph_commit_id: str = "",
     existing_atoms_by_canonical_key: dict[str, dict[str, Any]] | None = None,
     active_central_versions: list[dict[str, Any]] | None = None,
+    historical_decision_frames: list[dict[str, Any]] | None = None,
 ) -> MergePlan:
     repo = _repo_identity_from_job(job)
     nodes = _nodes(compact_graph)
@@ -57,6 +58,7 @@ def build_dry_run_merge_plan(
     decision_result = build_decision_review_candidates(
         compact_graph=compact_graph,
         central_nodes=active_central_versions or [],
+        historical_frames=historical_decision_frames or [],
         repo_id=repo.repo_id,
         job_id=job_id,
         plan_id=plan_id,

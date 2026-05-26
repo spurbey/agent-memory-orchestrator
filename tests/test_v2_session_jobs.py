@@ -641,6 +641,111 @@ def test_v2_central_merge_backfill_does_not_reopen_completed_job(tmp_path: Path)
     assert any(event["event_type"] == "central_merge_backfilled" for event in events)
 
 
+def test_v2_central_merge_persists_decision_frames_for_cross_session_dry_run(tmp_path: Path) -> None:
+    settings = make_settings(tmp_path)
+    store = V2SessionJobStore(settings)
+    try:
+        first_job = store.enqueue_session(session_id="s-decision-a", boundary_event_id="raw_boundary_a", repo_path=str(tmp_path)).job
+        first_graph = {
+            "nodes": [
+                {
+                    "id": "reason:WP0001:abc:00",
+                    "kind": "ReasoningNode",
+                    "properties": {
+                        "node_type": "Decision",
+                        "status": "accepted",
+                        "subject": "Qwen JSON hardening",
+                        "statement": "Disable Ollama thinking for Qwen JSON calls.",
+                        "selected_files": ["src/agent_memory_orchestrator/llm/qwen.py"],
+                    },
+                }
+            ],
+            "edges": [],
+        }
+        first_plan = build_dry_run_merge_plan(job=first_job, compact_graph=first_graph, parent_graph_commit_id="")
+        first_stored = store.upsert_central_merge_plan(_product_plan(first_plan))
+
+        frames = store.list_decision_frames(repo_id=first_stored["repo_id"])
+
+        assert len(frames) == 1
+        assert frames[0]["frame"]["subject"] == "Qwen JSON hardening"
+        assert frames[0]["status"] == "review"
+
+        second_job = store.enqueue_session(session_id="s-decision-b", boundary_event_id="raw_boundary_b", repo_path=str(tmp_path)).job
+        second_graph = {
+            "nodes": [
+                {
+                    "id": "reason:WP0002:def:00",
+                    "kind": "ReasoningNode",
+                    "properties": {
+                        "node_type": "Decision",
+                        "status": "accepted",
+                        "subject": "Qwen JSON hardening",
+                        "statement": "Disable Ollama thinking for Qwen JSON calls.",
+                        "selected_files": ["src/agent_memory_orchestrator/llm/qwen.py"],
+                    },
+                }
+            ],
+            "edges": [],
+        }
+        second_plan = build_dry_run_merge_plan(
+            job=second_job,
+            compact_graph=second_graph,
+            parent_graph_commit_id="",
+            historical_decision_frames=store.list_decision_frames(repo_id=first_stored["repo_id"], exclude_job_id=second_job["job_id"]),
+        )
+
+        assert second_plan.metrics["historical_decision_frame_count"] == 1
+        assert second_plan.metrics["decision_candidate_count"] == 1
+        assert second_plan.review_candidates[0]["proposed_relation"] == "DUPLICATE_OF"
+        assert second_plan.review_candidates[0]["score"]["target_scope"] == "decision_frame_ledger"
+
+        third_job = store.enqueue_session(session_id="s-decision-c", boundary_event_id="raw_boundary_c", repo_path=str(tmp_path)).job
+        third_graph = {
+            "nodes": [
+                {
+                    "id": "reason:WP0003:ghi:00",
+                    "kind": "ReasoningNode",
+                    "properties": {
+                        "node_type": "Decision",
+                        "status": "accepted",
+                        "subject": "Installer output",
+                        "statement": "Simplify first-run installer output.",
+                        "selected_files": ["npm/agent-memory-orchestrator-cli/bin/cli.js"],
+                    },
+                },
+                {
+                    "id": "reason:WP0004:jkl:00",
+                    "kind": "ReasoningNode",
+                    "properties": {
+                        "node_type": "Decision",
+                        "status": "accepted",
+                        "subject": "Installer output",
+                        "statement": "Simplify first-run installer output.",
+                        "selected_files": ["npm/agent-memory-orchestrator-cli/bin/cli.js"],
+                    },
+                },
+            ],
+            "edges": [],
+        }
+        third_plan = build_dry_run_merge_plan(
+            job=third_job,
+            compact_graph=third_graph,
+            parent_graph_commit_id="",
+            historical_decision_frames=store.list_decision_frames(repo_id=first_stored["repo_id"], exclude_job_id=third_job["job_id"]),
+        )
+        intra_session_candidates = [
+            candidate
+            for candidate in third_plan.review_candidates
+            if candidate["source_node_id"].endswith("ghi:00") and candidate["target_node_id"].endswith("jkl:00")
+        ]
+
+        assert intra_session_candidates
+        assert intra_session_candidates[0]["proposed_relation"] == "DUPLICATE_OF"
+    finally:
+        store.close()
+
+
 def test_v2_fixture_embedding_coverage_counts_only_current_retrieval_docs(tmp_path: Path) -> None:
     settings = make_settings(tmp_path)
     settings.retrieval_db_path.parent.mkdir(parents=True, exist_ok=True)
