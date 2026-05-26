@@ -146,7 +146,12 @@ def review_reasoning_extraction_results(
         for diagnostic in diagnostics_all
         if str(diagnostic.get("kind") or "") in BLOCKING_REVIEW_DIAGNOSTIC_KINDS
     ]
-    stage_acceptance = "PASS_WITH_REVIEW_BUCKET" if reviewed_results and accepted_all and not blocking_diagnostics else "FAIL"
+    if not reviewed_results or blocking_diagnostics:
+        stage_acceptance = "FAIL"
+    elif accepted_all:
+        stage_acceptance = "PASS_WITH_REVIEW_BUCKET"
+    else:
+        stage_acceptance = "PASS_REVIEW_ONLY"
     summary = {
         "packet_count": len(reviewed_results),
         "unique_packet_count": len(packet_ids),
@@ -176,6 +181,7 @@ def review_reasoning_extraction_results(
         "blocking_diagnostic_count": len(blocking_diagnostics),
         "blocking_diagnostic_kinds": _diagnostic_counts(blocking_diagnostics, "kind"),
         "stage_acceptance": stage_acceptance,
+        "review_only": stage_acceptance == "PASS_REVIEW_ONLY",
     }
     return ReasoningExtractionReview(
         results=tuple(reviewed_results),

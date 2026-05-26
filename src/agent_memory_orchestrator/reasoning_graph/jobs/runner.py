@@ -391,14 +391,14 @@ class V2SessionJobRunner:
         (stage_dir / "stage4_reasoning_review.json").write_text(json.dumps(review.as_dict(), indent=2, ensure_ascii=False), encoding="utf-8")
         output = stage_dir / "accepted_reasoning_nodes.json"
         output.write_text(json.dumps(list(review.accepted_nodes), indent=2, ensure_ascii=False), encoding="utf-8")
-        if review.summary.get("stage_acceptance") == "FAIL" or not review.accepted_nodes:
+        if review.summary.get("stage_acceptance") == "FAIL":
             raise StageFailed(
                 "reasoning_review_acceptance_failed",
                 {
                     "summary": review.summary,
                     "review_artifact": str(stage_dir / "stage4_reasoning_review.json"),
                     "accepted_nodes_artifact": str(output),
-                    "note": "Curated graph promotion is blocked when Qwen reasoning has structural errors or produces no accepted answer-grade nodes.",
+                    "note": "Curated graph promotion is blocked only when Qwen reasoning has structural errors. Review-only output can still produce deterministic commit/file memory.",
                 },
             )
         return StageResult(output_path=output, diagnostics={"summary": review.summary})
