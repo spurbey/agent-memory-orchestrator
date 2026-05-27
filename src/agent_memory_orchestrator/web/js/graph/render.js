@@ -206,7 +206,9 @@ function drawNodes(ctx, state, selectedNeighbors) {
     ctx.globalAlpha = alpha;
     if (selected || hovered || traced) drawNodeHalo(ctx, projected, radius, selected ? "#ffffff" : style.halo, selected ? 0.30 : 0.22);
     drawNodeShape(ctx, projected, radius, style, nodeStatus(node), selected || traced);
-    const showLabel = state.showLabels && (selected || hovered || neighbor || traced || projected.perspective > 0.78 || state.visibleNodes.length < 54);
+    const traceLabel = state.mode === "trace" && traced && state.visibleNodes.length <= 14;
+    const atlasLabel = state.mode !== "trace" && (neighbor || traced || projected.perspective > 0.78 || state.visibleNodes.length < 54);
+    const showLabel = state.showLabels && (selected || hovered || traceLabel || atlasLabel);
     if (showLabel) {
       ctx.globalAlpha = selected || hovered || traced ? 1 : Math.min(0.86, alpha + 0.18);
       ctx.font = `${selected ? 13 : 11}px ui-monospace, monospace`;
