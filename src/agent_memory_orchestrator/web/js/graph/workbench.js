@@ -50,6 +50,9 @@ const state = {
   dragging: false,
   dragMode: "rotate",
   dragStart: null,
+  pointerDownHitId: "",
+  pointerMoved: false,
+  pointerButton: 0,
   spaceDown: false,
   running: false,
   traceStages: [],
@@ -88,6 +91,23 @@ function setStatus(message, tone = "") {
   if (!target) return;
   target.textContent = message;
   target.className = `status-chip ${tone}`.trim();
+}
+
+function syncWorkbenchChrome() {
+  const hasSelection = !!state.selectedId;
+  const traceOpen = state.mode === "trace" || state.traceStages.length > 0;
+  const detailOpen = hasSelection || traceOpen;
+  setPanelOpen("inspectorPanel", hasSelection);
+  setPanelOpen("lineagePanel", hasSelection);
+  setPanelOpen("traceHud", traceOpen);
+  setPanelOpen("statsPanel", detailOpen);
+}
+
+function setPanelOpen(id, open) {
+  const panel = $(id);
+  if (!panel) return;
+  panel.classList.toggle("is-collapsed", !open);
+  panel.setAttribute("aria-hidden", open ? "false" : "true");
 }
 
 async function loadGraph({ full = state.centralGraph.full } = {}) {
@@ -153,6 +173,7 @@ function rebuildGraph() {
   renderLineage();
   renderLegend();
   updateStats();
+  syncWorkbenchChrome();
 }
 
 function renderCapForMode(query) {
@@ -319,6 +340,7 @@ function applyTraceStage(index) {
   state.traceStages.slice(0, state.traceStageIndex + 1).forEach(stage => stage.ids.forEach(id => ids.add(id)));
   state.traceNodeIds = ids;
   renderTraceSteps();
+  syncWorkbenchChrome();
 }
 
 function renderTraceSteps() {
@@ -434,6 +456,11 @@ function selectNode(id) {
   if (id) state.traceNodeIds.add(id);
   renderInspector();
   renderLineage();
+  syncWorkbenchChrome();
+}
+
+function clearSelection() {
+  selectNode("");
 }
 
 function focusNeighborhood() {
@@ -503,7 +530,10 @@ function onWheel(event) {
 
 function onPointerDown(event) {
   const hit = nodeAtPoint(state, event.clientX, event.clientY);
-  if (hit) selectNode(nodeId(hit));
+  state.pointerDownHitId = hit ? nodeId(hit) : "";
+  state.pointerMoved = false;
+  state.pointerButton = event.button;
+  if (state.pointerDownHitId) selectNode(state.pointerDownHitId);
   state.dragging = true;
   state.dragMode = event.shiftKey || state.spaceDown || event.button === 1 || event.button === 2 ? "pan" : "rotate";
   state.dragStart = {
@@ -522,6 +552,7 @@ function onPointerMove(event) {
   if (state.dragging && state.dragStart) {
     const dx = event.clientX - state.dragStart.x;
     const dy = event.clientY - state.dragStart.y;
+    if (Math.abs(dx) + Math.abs(dy) > 5) state.pointerMoved = true;
     if (state.dragMode === "pan") {
       state.tx = state.dragStart.tx + dx;
       state.ty = state.dragStart.ty + dy;
@@ -536,11 +567,19 @@ function onPointerMove(event) {
 }
 
 function onPointerUp(event) {
+  const shouldClearSelection = event.type === "pointerup"
+    && state.pointerButton === 0
+    && !state.pointerMoved
+    && !state.pointerDownHitId;
   state.dragging = false;
   state.dragStart = null;
   state.dragMode = "";
+  state.pointerDownHitId = "";
+  state.pointerMoved = false;
+  state.pointerButton = 0;
   state.canvas.classList.remove("dragging");
   try { state.canvas.releasePointerCapture(event.pointerId); } catch (_) {}
+  if (shouldClearSelection) clearSelection();
 }
 
 function onKeyDown(event) {
@@ -558,6 +597,7 @@ function onKeyDown(event) {
   else if (key === "+" || key === "=") state.scale = Math.min(7.5, state.scale * 1.12);
   else if (key === "-" || key === "_") state.scale = Math.max(0.12, state.scale * 0.88);
   else if (key === "0") resetCamera();
+  else if (key === "escape") clearSelection();
   else return;
   event.preventDefault();
 }
