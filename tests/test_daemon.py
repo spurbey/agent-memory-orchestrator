@@ -7,6 +7,7 @@ from agent_memory_orchestrator.app.daemon import (
     _graph_workbench_html,
     _load_web_asset,
     _session_cockpit_html,
+    _v2_stage_requires_graph_write_lock,
     _web_asset_bytes,
 )
 
@@ -51,3 +52,11 @@ def test_web_assets_load_from_package_static_folder() -> None:
 def test_web_asset_loader_blocks_path_traversal() -> None:
     with pytest.raises(ValueError):
         _web_asset_bytes("../daemon.py")
+
+
+def test_daemon_v2_lock_scope_keeps_long_stages_unlocked() -> None:
+    assert _v2_stage_requires_graph_write_lock("kuzu_write") is True
+    assert _v2_stage_requires_graph_write_lock("central_version_merge") is True
+    assert _v2_stage_requires_graph_write_lock("qwen_reasoning") is False
+    assert _v2_stage_requires_graph_write_lock("ast_code_nodes") is False
+    assert _v2_stage_requires_graph_write_lock("embeddings") is False
