@@ -3,6 +3,8 @@ from __future__ import annotations
 import pytest
 
 from agent_memory_orchestrator.app.daemon import (
+    DaemonAlreadyRunning,
+    _DaemonOwnerLock,
     _bounded_int,
     _graph_workbench_html,
     _load_web_asset,
@@ -10,6 +12,7 @@ from agent_memory_orchestrator.app.daemon import (
     _v2_stage_requires_graph_write_lock,
     _web_asset_bytes,
 )
+from agent_memory_orchestrator.core.config import Settings
 
 
 def test_root_daemon_module_keeps_compatibility_exports() -> None:
@@ -60,3 +63,43 @@ def test_daemon_v2_lock_scope_keeps_long_stages_unlocked() -> None:
     assert _v2_stage_requires_graph_write_lock("qwen_reasoning") is False
     assert _v2_stage_requires_graph_write_lock("ast_code_nodes") is False
     assert _v2_stage_requires_graph_write_lock("embeddings") is False
+
+
+def test_daemon_owner_lock_blocks_second_process_owner(tmp_path) -> None:
+    settings = _settings_for_daemon_lock(tmp_path)
+    first = _DaemonOwnerLock.acquire(settings)
+    try:
+        with pytest.raises(DaemonAlreadyRunning):
+            _DaemonOwnerLock.acquire(settings)
+    finally:
+        first.release()
+
+    second = _DaemonOwnerLock.acquire(settings)
+    second.release()
+
+
+def _settings_for_daemon_lock(tmp_path) -> Settings:
+    return Settings(
+        home=tmp_path,
+        db_path=tmp_path / ".data" / "agent_memory.db",
+        export_dir=tmp_path / "exports",
+        local_only=True,
+        mcp_transport="stdio",
+        mcp_host="127.0.0.1",
+        mcp_port=8765,
+        embedding_dims=16,
+        embedding_model="hash-fallback",
+        reranker_model="",
+        vector_backend="sqlite",
+        approval_mode="manual",
+        owner_user_id="local",
+        workspace_id="local",
+        project_id="default",
+        visibility_scope="private",
+        sensitivity_level="normal",
+        consensus_threshold=0.7,
+        max_review_rounds=5,
+        graph_path=tmp_path / ".graph" / "amo.kuzu",
+        retrieval_db_path=tmp_path / ".data" / "retrieval.sqlite",
+        evidence_dir=tmp_path / ".evidence",
+    )
