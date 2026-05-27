@@ -20,6 +20,7 @@ from ...llm.qwen import OllamaQwenClient
 from ...llm.qwen import QwenUnavailable
 from ..code_analysis import extract_code_nodes_from_commit
 from ..central_merge import build_dry_run_merge_plan
+from ..central_merge.applier import apply_merge_plan
 from ..central_merge.applier import repo_central_graph_path
 from ..central_merge.identity import atoms_by_canonical_key
 from ..embedding_store import GraphEmbeddingStore
@@ -602,13 +603,36 @@ class V2SessionJobRunner:
         self.job_store.upsert_central_merge_plan(plan_payload)
         output = stage_dir / "merge_plan.json"
         output.write_text(json.dumps(plan_payload, indent=2, ensure_ascii=False), encoding="utf-8")
+        central_graph = self.graph_store_factory(repo_central_graph_path(self.settings, repo_id))
+        try:
+            apply_result = apply_merge_plan(
+                settings=self.settings,
+                plan_id=plan.plan_id,
+                store=self.job_store,
+                graph_store=central_graph,
+                lock_owner=f"v2-job:{job.get('job_id') or ''}",
+            )
+        finally:
+            central_graph.close()
+        if not apply_result.get("ok"):
+            raise StageFailed("central_merge_apply_failed", apply_result)
         diagnostics = {
-            "mode": plan.mode,
+            "status": apply_result.get("status") or "applied",
+            "mode": apply_result.get("mode") or "apply_exact_atoms",
             "plan_id": plan.plan_id,
             "plan_hash": plan.plan_hash,
             "input_graph_hash": plan.input_graph_hash,
             "repo_id": plan.repo_id,
             "repo_path": plan.repo_path,
+            "graph_commit_id": apply_result.get("graph_commit_id") or "",
+            "graph_view_id": apply_result.get("graph_view_id") or "",
+            "result_artifact": apply_result.get("result_artifact") or "",
+            "added_node_count": apply_result.get("added_node_count") or 0,
+            "added_edge_count": apply_result.get("added_edge_count") or 0,
+            "applied_atom_counts": apply_result.get("applied_atom_counts") or {},
+            "applied_version_counts": apply_result.get("applied_version_counts") or {},
+            "deferred_atom_counts": apply_result.get("deferred_atom_counts") or {},
+            "status_update_count": apply_result.get("status_update_count") or 0,
             "graph_commit_preview": plan.graph_commit_preview,
             "metrics": plan.metrics,
             "review_candidate_count": len(plan.review_candidates),
