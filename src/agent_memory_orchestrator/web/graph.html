@@ -46,7 +46,7 @@
       <label><input id="axesToggle" type="checkbox" /> axes</label>
     </section>
 
-    <section class="hud trace-hud" aria-label="Retrieval trace runner">
+    <section id="traceHud" class="hud trace-hud is-collapsed" aria-label="Retrieval trace runner" aria-hidden="true">
       <div>
         <p class="eyebrow">Retrieval Trace</p>
         <h2>Watch query evidence flow</h2>
@@ -56,10 +56,10 @@
         <button id="traceBtn" class="primary-btn">Run Trace</button>
       </div>
       <div id="traceSteps" class="trace-steps"></div>
-      <div id="tracePanel" class="trace-panel"><span class="muted">Run a query to animate candidates, graph expansion, reranking, and answer support.</span></div>
+      <div id="tracePanel" class="trace-panel"><span class="muted">Run a query to isolate candidates and the graph neighborhood that supports them.</span></div>
     </section>
 
-    <aside class="hud inspector" aria-label="Node inspector">
+    <aside id="inspectorPanel" class="hud inspector is-collapsed" aria-label="Node inspector" aria-hidden="true">
       <div class="panel-title">
         <p class="eyebrow">Inspector</p>
         <h2 id="inspectorTitle">Select a node</h2>
@@ -68,12 +68,12 @@
       <div id="inspectorBody" class="inspector-body"></div>
     </aside>
 
-    <section class="hud stats-hud" aria-label="Graph stats">
+    <section id="statsPanel" class="hud stats-hud is-collapsed" aria-label="Graph stats" aria-hidden="true">
       <div id="graphStats" class="graph-stats"></div>
       <div id="legend" class="legend"></div>
     </section>
 
-    <section class="hud lineage-hud" aria-label="Knowledge creation flow">
+    <section id="lineagePanel" class="hud lineage-hud is-collapsed" aria-label="Knowledge creation flow" aria-hidden="true">
       <div class="lineage-head">
         <div>
           <p class="eyebrow">Knowledge Creation Flow</p>

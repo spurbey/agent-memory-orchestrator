@@ -154,8 +154,9 @@ function drawEdges(ctx, state, selectedEdgeIds, now) {
     const style = styleForEdge(edge);
     const highlighted = selectedEdgeIds.has(String(edge.id)) || (state.selectedId && (edgeSource(edge) === state.selectedId || edgeTarget(edge) === state.selectedId));
     const traceActive = state.traceNodeIds.has(edgeSource(edge)) && state.traceNodeIds.has(edgeTarget(edge));
+    const traceFocus = state.mode === "trace" && state.traceNodeIds.size > 0;
     const depthAlpha = Math.max(0.07, Math.min(0.62, 1.04 - ((source.depth + target.depth) / 2) / 1450));
-    ctx.globalAlpha = state.selectedId ? (highlighted ? 0.92 : 0.10) : traceActive ? 0.92 : depthAlpha;
+    ctx.globalAlpha = edgeAlpha({ highlighted, traceActive, traceFocus, selectedId: state.selectedId, depthAlpha });
     ctx.strokeStyle = traceActive ? "#f2cf78" : style.color;
     ctx.lineWidth = (highlighted || traceActive ? 1.8 : 1) * Math.max(0.75, style.width * ((source.perspective + target.perspective) / 2));
     ctx.setLineDash(style.dash || []);
@@ -198,15 +199,18 @@ function drawNodes(ctx, state, selectedNeighbors) {
     const neighbor = selectedNeighbors.has(id);
     const hovered = id === state.hoveredId;
     const traced = state.traceNodeIds.has(id);
+    const traceFocus = state.mode === "trace" && state.traceNodeIds.size > 0;
     const style = styleForNode(node);
     const depthAlpha = Math.max(0.30, Math.min(1, 1.09 - projected.depth / 1720));
-    const alpha = state.selectedId ? (selected || neighbor ? 1 : 0.16) : traced ? 1 : depthAlpha;
+    const alpha = nodeAlpha({ selected, neighbor, traced, traceFocus, selectedId: state.selectedId, depthAlpha });
     const radius = projected.radius * (selected ? 1.7 : hovered ? 1.36 : traced ? 1.24 : 1);
     ctx.save();
     ctx.globalAlpha = alpha;
     if (selected || hovered || traced) drawNodeHalo(ctx, projected, radius, selected ? "#ffffff" : style.halo, selected ? 0.30 : 0.22);
     drawNodeShape(ctx, projected, radius, style, nodeStatus(node), selected || traced);
-    const showLabel = state.showLabels && (selected || hovered || neighbor || traced || projected.perspective > 0.78 || state.visibleNodes.length < 54);
+    const traceLabel = state.mode === "trace" && traced && state.traceNodeIds.size <= 28;
+    const atlasLabel = state.mode !== "trace" && (neighbor || traced || projected.perspective > 0.78 || state.visibleNodes.length < 54);
+    const showLabel = state.showLabels && (selected || hovered || traceLabel || atlasLabel);
     if (showLabel) {
       ctx.globalAlpha = selected || hovered || traced ? 1 : Math.min(0.86, alpha + 0.18);
       ctx.font = `${selected ? 13 : 11}px ui-monospace, monospace`;
@@ -215,6 +219,18 @@ function drawNodes(ctx, state, selectedNeighbors) {
     }
     ctx.restore();
   });
+}
+
+function edgeAlpha({ highlighted, traceActive, traceFocus, selectedId, depthAlpha }) {
+  if (selectedId) return highlighted ? 0.92 : traceFocus && traceActive ? 0.34 : 0.035;
+  if (traceFocus) return traceActive ? 0.95 : 0.03;
+  return traceActive ? 0.92 : depthAlpha;
+}
+
+function nodeAlpha({ selected, neighbor, traced, traceFocus, selectedId, depthAlpha }) {
+  if (selectedId) return selected || neighbor ? 1 : traceFocus && traced ? 0.42 : 0.055;
+  if (traceFocus) return traced ? 1 : 0.06;
+  return traced ? 1 : depthAlpha;
 }
 
 function drawNodeHalo(ctx, projected, radius, color, alpha) {

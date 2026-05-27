@@ -11,6 +11,7 @@ from agent_memory_orchestrator.reasoning_graph.central_merge.production_eval imp
 from agent_memory_orchestrator.reasoning_graph.central_merge.production_eval import _faiss_state
 from agent_memory_orchestrator.reasoning_graph.central_merge.production_eval import _retrieval_query_gates
 from agent_memory_orchestrator.reasoning_graph.central_merge.production_eval import run_production_semantic_eval
+from agent_memory_orchestrator.reasoning_graph.central_merge import production_eval
 from agent_memory_orchestrator.reasoning_graph import GraphEmbeddingRecord
 from agent_memory_orchestrator.reasoning_graph import GraphEmbeddingStore
 from agent_memory_orchestrator.reasoning_graph.jobs import V2SessionJobStore
@@ -281,6 +282,65 @@ def test_quality_eval_can_be_product_ready_when_independent_gates_pass() -> None
     quality_case = next(case for case in cases if case["case_id"] == "quality_product_ready_matches_independent_gates")
     assert quality_case["passed"] is True
     assert quality_case["blocking_failures"] == []
+
+
+def test_post_apply_eval_accepts_active_repo_projection_without_job_manifest() -> None:
+    cases = _cases(
+        mode="post_apply",
+        kuzu_write={"curated_manifest_exists": False},
+        central={
+            "source": "repo_central_graph",
+            "applied": True,
+            "plan_status": "applied",
+            "plan_mode": "repo_active_graph_view",
+            "graph_commit_status": "applied",
+            "active_graph_view_head": "v2gcommit:repo",
+        },
+        retrieval={
+            "active_projection": {
+                "metadata": {
+                    "curated_manifest_exists": True,
+                    "retrieval_source": "curated_graph_manifest",
+                }
+            },
+            "repo_doc_count": 2,
+            "trace_doc_count": 0,
+            "curated_doc_count": 2,
+            "full_trace_dominated": False,
+            "strict_repo_legacy_leak": False,
+            "embedding_coverage": {"status": "ready"},
+            "faiss": {"status": "ready"},
+            "vector_status_truthful": True,
+            "query_gates": [],
+        },
+        quality={},
+    )
+
+    assert next(case for case in cases if case["case_id"] == "curated_manifest_present")["passed"] is True
+    assert next(case for case in cases if case["case_id"] == "central_merge_applied")["passed"] is True
+    assert next(case for case in cases if case["case_id"] == "quality_product_ready_matches_independent_gates")["passed"] is True
+
+
+def test_central_state_prefers_repo_central_graph_when_applied(tmp_path: Path, monkeypatch) -> None:
+    settings = make_settings(tmp_path)
+
+    def fake_graph_state(_settings: Settings, *, repo_id: str) -> dict[str, object]:
+        return {
+            "source": "repo_central_graph",
+            "repo_id": repo_id,
+            "applied": True,
+            "graph_commit_status": "applied",
+            "active_graph_view_head": "v2gcommit:repo",
+        }
+
+    monkeypatch.setattr(production_eval, "_central_graph_state", fake_graph_state)
+
+    state = production_eval._central_state(settings, job_id="missing-job", repo_id="repo:remote:test")
+
+    assert state["source"] == "repo_central_graph"
+    assert state["applied"] is True
+    assert state["active_graph_view_head"] == "v2gcommit:repo"
+    assert state["db_job_state"]["source"] == "sqlite_job_rows"
 
 
 def test_stage_config_hashes_are_stage_specific(tmp_path: Path) -> None:

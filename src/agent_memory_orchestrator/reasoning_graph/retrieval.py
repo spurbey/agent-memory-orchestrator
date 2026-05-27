@@ -540,6 +540,10 @@ class RetrievalIndexStore:
     def activate_projection(self, *, repo_id: str, projection_id: str) -> dict[str, Any]:
         now = _utc_now()
         safe_repo_id = str(repo_id or "").strip()
+        self.conn.execute(
+            "UPDATE retrieval_projections SET status='historical' WHERE repo_id=? AND projection_id != ? AND status='active'",
+            (safe_repo_id, projection_id),
+        )
         self.conn.execute("UPDATE retrieval_projections SET status='active', activated_at=? WHERE projection_id=?", (now, projection_id))
         self.conn.execute(
             """
@@ -954,6 +958,13 @@ def embed_missing_retrieval_documents(
             importance=doc.importance,
             memory_tier="hot",
             status="active",
+        )
+        embedding_store.mark_stale_for_graph_path(
+            graph_path=doc.doc_id,
+            embedding_kind=embedding_kind,
+            model=model,
+            graph_scope=graph_scope,
+            keep_content_hash=record.content_hash,
         )
         embedding_store.upsert(record)
         existing_hashes.add((doc.doc_id, content_hash))
@@ -1971,7 +1982,21 @@ def _central_version_boost(
     metadata = doc.metadata.get("node_metadata") if isinstance(doc.metadata, dict) else {}
     atom_kind = str(metadata.get("atom_kind") or "") if isinstance(metadata, dict) else ""
     if atom_kind in {"decision", "problem"}:
-        return 0.85
+        if intent == "decision_history":
+            if topic_overlap_ratio >= 0.6:
+                return 0.85
+            if topic_overlap_ratio >= 0.4:
+                return 0.45
+            return 0.0
+        if intent == "code_why" or _query_has_code_locator(query):
+            if topic_overlap_ratio >= 0.75:
+                return 0.35
+            if topic_overlap_ratio >= 0.6:
+                return 0.20
+            return 0.0
+        if topic_overlap_ratio >= 0.6:
+            return 0.25
+        return 0.0
     if intent == "version_flow" or _query_has_code_locator(query):
         return 0.55
     if topic_overlap_ratio >= 0.6:

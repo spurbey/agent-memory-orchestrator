@@ -131,6 +131,25 @@ amo-cli graph-retrieve --query "why did this code change?" --require-vector
 amo-cli graph-retrieve --repo-id repo:remote:... --query "why did this code change?"
 ```
 
+Retrieval has two storage phases:
+
+```text
+candidate search -> SQLite FTS / embedding ledger / FAISS
+graph expansion -> read-only Kuzu traversal for selected hits
+```
+
+`--no-answer --no-vector` is index-only and does not open Kuzu. Graph-expanded
+retrieval opens Kuzu read-only. For repo-scoped retrieval, expansion uses the
+repo central graph path, not the global `amo.kuzu` graph:
+
+```text
+AMO_HOME/.graph/central/<safe_repo_id>/central.kuzu
+```
+
+If a direct offline graph-expanded command reports a Kuzu lock, use the daemon
+endpoint or stop the incompatible graph owner. Do not retry by opening another
+read-write Kuzu handle.
+
 Enable cross-encoder reranking:
 
 ```bash
