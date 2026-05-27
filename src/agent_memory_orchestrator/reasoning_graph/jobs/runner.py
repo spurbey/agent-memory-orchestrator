@@ -4,10 +4,11 @@ import hashlib
 import json
 import os
 import uuid
+from contextlib import nullcontext
 from dataclasses import dataclass
 from dataclasses import replace as dataclass_replace
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, ContextManager
 
 from ...core.config import Settings
 from ...core.db import connect
@@ -74,10 +75,12 @@ class V2SessionJobRunner:
         *,
         job_store: V2SessionJobStore | None = None,
         graph_store_factory: Callable[[Path], GraphStore] = KuzuGraphStore,
+        stage_lock_factory: Callable[[str], ContextManager[Any]] | None = None,
     ) -> None:
         self.settings = settings
         self.job_store = job_store or V2SessionJobStore(settings)
         self.graph_store_factory = graph_store_factory
+        self.stage_lock_factory = stage_lock_factory or (lambda _stage: nullcontext())
 
     def close(self) -> None:
         self.job_store.close()
@@ -163,7 +166,8 @@ class V2SessionJobRunner:
             input_hash=input_hash,
             stage_config_hash=config_hash,
         )
-        result = getattr(self, f"_stage_{stage}")(job, artifact_dir, stage_dir)
+        with self.stage_lock_factory(stage):
+            result = getattr(self, f"_stage_{stage}")(job, artifact_dir, stage_dir)
         if superseded:
             diagnostics = {**result.diagnostics, "superseded_previous_stage": superseded}
             return StageResult(output_path=result.output_path, diagnostics=diagnostics)

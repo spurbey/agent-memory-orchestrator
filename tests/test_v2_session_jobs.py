@@ -1520,8 +1520,9 @@ def test_auto_drain_closes_graph_before_v2_runner_opens(
             events.append("graph_close")
 
     class FakeRunner:
-        def __init__(self, settings: Settings) -> None:
+        def __init__(self, settings: Settings, stage_lock_factory: object | None = None) -> None:
             del settings
+            assert stage_lock_factory is daemon_module._v2_stage_lock
             events.append("runner_open")
 
         def run_next(self) -> dict[str, object]:
