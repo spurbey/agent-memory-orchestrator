@@ -144,7 +144,6 @@ function rebuildGraph() {
   const status = $("statusFilter")?.value || "";
   const mode = state.mode;
   const rawNodes = (state.centralGraph.nodes || []).filter(node => {
-    if (mode === "trace" && !state.traceNodeIds.has(nodeId(node))) return false;
     if (mode !== "trace" && !state.showSupport && !isAnswerNode(node)) return false;
     if (kind && nodeKind(node) !== kind) return false;
     if (status && nodeStatus(node) !== status) return false;
@@ -264,7 +263,7 @@ async function runTrace() {
       limit: 10,
       use_vector: true,
       require_vector: false,
-      include_answer: false,
+      include_answer: true,
     });
     buildTraceFromRetrieval(result, query);
     setStatus("retrieval trace ready", "good");
@@ -345,23 +344,40 @@ function renderTraceSteps() {
 function renderTraceResult(result, query) {
   const retrieval = result.retrieval || {};
   const hits = retrieval.hits || [];
+  const answer = result.answer || {};
   return `<div class="trace-summary">
     <p class="eyebrow">Retrieval trace</p>
     <h3>${escapeHtml(retrieval.intent || "query")}</h3>
     <p>${escapeHtml(query)}</p>
     <div class="trace-pills">
       <span>vector ${escapeHtml(retrieval.vector_status || "unknown")}</span>
-      <span>${escapeHtml(retrieval.reranker || "reranker")}</span>
       <span>${escapeHtml(hits.length)} hits</span>
     </div>
+    <pre>${escapeHtml(answer.text || "No generated answer returned.")}</pre>
     <div class="trace-hit-list">${hits.slice(0, 6).map((hit, index) => {
       const doc = hit.document || {};
       return `<button class="trace-hit-row" data-node-id="${escapeHtml(doc.graph_node_id || hit.graph_node?.id || "")}">
-        <strong>${escapeHtml(index + 1)}. ${escapeHtml(doc.doc_type || "hit")}</strong>
+        <strong>${escapeHtml(index + 1)}. ${escapeHtml(formatTraceDocType(doc.doc_type))}</strong>
         <span>${escapeHtml(truncate(doc.title || doc.body || "retrieval candidate", 96))}</span>
       </button>`;
     }).join("") || `<span class="muted">No candidates returned.</span>`}</div>
   </div>`;
+}
+
+function formatTraceDocType(value) {
+  const docType = String(value || "hit").toLowerCase();
+  return {
+    central_version: "Central memory",
+    central_atom: "Central atom",
+    file_impact: "File impact",
+    code_impact: "Code impact",
+    reasoning: "Reasoning",
+    packet: "Work packet",
+    commit: "Commit",
+    evidence: "Evidence",
+    symbol_ref: "Symbol support",
+    code_region_ref: "Code support",
+  }[docType] || docType.replace(/_/g, " ");
 }
 
 function renderInspector() {
