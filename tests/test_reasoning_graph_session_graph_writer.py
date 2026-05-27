@@ -98,6 +98,27 @@ def test_compact_session_graph_writes_kuzu_when_available(tmp_path: Path) -> Non
     assert any(hit["kind"] == "ReasoningNode" for hit in hits)
 
 
+def test_kuzu_store_read_only_opens_for_reads_and_blocks_writes(tmp_path: Path) -> None:
+    pytest.importorskip("kuzu")
+    graph = _minimal_graph()
+    graph_path = tmp_path / "session_graph.kuzu"
+    write_compact_session_graph(graph_path=graph_path, nodes=graph.nodes, edges=graph.edges, force=True)
+
+    store = KuzuGraphStore(graph_path, read_only=True)
+    try:
+        assert store.read_only is True
+        assert sum(store.merge_status()["counts"].values()) == 4
+        assert store.list_edges(limit=10)
+        with pytest.raises(RuntimeError, match="kuzu_read_only_store_cannot_init_schema"):
+            store.init_schema()
+        with pytest.raises(RuntimeError, match="kuzu_read_only_store_cannot_upsert_node"):
+            store.upsert_node(GraphNode(id="blocked", kind="Test", label="Blocked"))
+        with pytest.raises(RuntimeError, match="kuzu_read_only_store_cannot_upsert_edge"):
+            store.upsert_edge(GraphEdge(id="blocked", source_id="WP0001", target_id="E0001", kind="BLOCKED"))
+    finally:
+        store.close()
+
+
 def test_kuzu_store_upsert_supports_compact_v2_schema(tmp_path: Path) -> None:
     pytest.importorskip("kuzu")
     graph = _minimal_graph()

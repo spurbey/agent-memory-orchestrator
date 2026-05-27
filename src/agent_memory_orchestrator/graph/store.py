@@ -178,7 +178,7 @@ class KuzuGraphStore:
     for traversals.
     """
 
-    def __init__(self, graph_path: Path) -> None:
+    def __init__(self, graph_path: Path, *, read_only: bool = False) -> None:
         try:
             import kuzu  # type: ignore
         except Exception as exc:  # pragma: no cover - depends on optional local install
@@ -186,11 +186,18 @@ class KuzuGraphStore:
                 "kuzu_unavailable: install the Kuzu Python package in this environment"
             ) from exc
         self.graph_path = graph_path
+        self.read_only = bool(read_only)
         self.graph_path.parent.mkdir(parents=True, exist_ok=True)
-        self._db = kuzu.Database(str(graph_path), buffer_pool_size=_kuzu_buffer_pool_size(), max_num_threads=_kuzu_max_threads())
+        self._db = kuzu.Database(
+            str(graph_path),
+            read_only=self.read_only,
+            buffer_pool_size=_kuzu_buffer_pool_size(),
+            max_num_threads=_kuzu_max_threads(),
+        )
         self._conn = kuzu.Connection(self._db)
 
     def init_schema(self) -> None:
+        self._ensure_writable("init_schema")
         self._conn.execute(
             """
             CREATE NODE TABLE IF NOT EXISTS GraphNode(
@@ -228,6 +235,7 @@ class KuzuGraphStore:
         )
 
     def upsert_node(self, node: GraphNode) -> None:
+        self._ensure_writable("upsert_node")
         now = _now()
         created_at = node.created_at or now
         updated = GraphNode(**{**node.as_dict(), "created_at": created_at, "updated_at": now})
@@ -257,6 +265,7 @@ class KuzuGraphStore:
             )
 
     def upsert_edge(self, edge: GraphEdge) -> None:
+        self._ensure_writable("upsert_edge")
         created_at = edge.created_at or _now()
         if self._uses_compact_node_schema():
             self._upsert_compact_edge(edge, created_at=created_at)
@@ -406,6 +415,7 @@ class KuzuGraphStore:
         return {"backend": "kuzu", "graph_path": str(self.graph_path), "counts": counts}
 
     def set_node_status(self, node_id: str, status: str) -> bool:
+        self._ensure_writable("set_node_status")
         if self._uses_compact_node_schema():
             return False
         self._conn.execute(
@@ -429,6 +439,10 @@ class KuzuGraphStore:
 
     def _uses_compact_node_schema(self) -> bool:
         return "properties_json" in self._node_columns() and "status" not in self._node_columns()
+
+    def _ensure_writable(self, operation: str) -> None:
+        if self.read_only:
+            raise RuntimeError(f"kuzu_read_only_store_cannot_{operation}")
 
     def _node_columns(self) -> set[str]:
         cached = getattr(self, "_node_columns_cache", None)

@@ -155,9 +155,11 @@ class GraphRagService:
         planner: QwenPlanner | None = None,
         version_backend: VersionBackend | None = None,
         evidence_store: RawEvidenceStore | None = None,
+        read_only: bool = False,
     ) -> None:
         self.settings = settings
-        self.store = store or KuzuGraphStore(settings.graph_path)
+        self.store = store or KuzuGraphStore(settings.graph_path, read_only=read_only)
+        self.read_only = bool(read_only or getattr(self.store, "read_only", False))
         self.planner = planner or OllamaQwenClient(
             endpoint=settings.qwen_endpoint,
             model=settings.qwen_model,
@@ -169,7 +171,8 @@ class GraphRagService:
         self.version_backend = version_backend or LocalGitBackend()
         self.evidence = evidence_store or RawEvidenceStore(settings.evidence_dir)
         self.search_cache = GraphSearchCache(settings.home / ".cache" / "graph_nodes_bm25.json")
-        self.store.init_schema()
+        if not self.read_only:
+            self.store.init_schema()
 
     def close(self) -> None:
         self.store.close()

@@ -23,6 +23,13 @@ class _PollutedSeedStore(InMemoryGraphStore):
         return [{**raw.as_dict(), "graph_score": 1.0}] if raw else []
 
 
+class _ReadOnlyInitFailStore(InMemoryGraphStore):
+    read_only = True
+
+    def init_schema(self) -> None:
+        raise AssertionError("read-only GraphRagService must not initialize schema")
+
+
 def make_settings(tmp_path: Path) -> Settings:
     return Settings(
         home=tmp_path,
@@ -47,6 +54,16 @@ def make_settings(tmp_path: Path) -> Settings:
         graph_path=tmp_path / "graph" / "amo.kuzu",
         evidence_dir=tmp_path / "evidence",
     )
+
+
+def test_read_only_graph_service_skips_schema_initialization(tmp_path: Path) -> None:
+    svc = GraphRagService(
+        make_settings(tmp_path),
+        store=_ReadOnlyInitFailStore(),
+        planner=DeterministicPlanner(),
+        read_only=True,
+    )
+    svc.close()
 
 
 def test_hook_capture_writes_raw_evidence_and_no_prompt_injection(tmp_path: Path) -> None:
