@@ -44,6 +44,22 @@ button { cursor: pointer; }
   box-shadow: var(--shadow);
   backdrop-filter: blur(22px);
   border-radius: 24px;
+  transition: opacity 160ms ease, transform 160ms ease, visibility 160ms ease;
+}
+.hud.is-collapsed {
+  opacity: 0;
+  pointer-events: none;
+  visibility: hidden;
+}
+.inspector.is-collapsed,
+.stats-hud.is-collapsed {
+  transform: translateX(18px) scale(0.985);
+}
+.trace-hud.is-collapsed {
+  transform: translateX(-18px) scale(0.985);
+}
+.lineage-hud.is-collapsed {
+  transform: translateY(18px) scale(0.985);
 }
 .eyebrow { margin: 0 0 4px; color: var(--cyan); text-transform: uppercase; letter-spacing: 0.15em; font-size: 11px; font-weight: 900; }
 h1, h2, h3, p { margin-top: 0; }
