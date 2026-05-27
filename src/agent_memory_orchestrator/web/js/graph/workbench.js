@@ -50,6 +50,9 @@ const state = {
   dragging: false,
   dragMode: "rotate",
   dragStart: null,
+  pointerDownHitId: "",
+  pointerMoved: false,
+  pointerButton: 0,
   spaceDown: false,
   running: false,
   traceStages: [],
@@ -90,6 +93,22 @@ function setStatus(message, tone = "") {
   target.className = `status-chip ${tone}`.trim();
 }
 
+function syncWorkbenchChrome() {
+  const hasSelection = !!state.selectedId;
+  const traceOpen = state.mode === "trace" || state.traceStages.length > 0;
+  setPanelOpen("inspectorPanel", hasSelection);
+  setPanelOpen("lineagePanel", hasSelection);
+  setPanelOpen("traceHud", traceOpen);
+  setPanelOpen("statsPanel", traceOpen && !hasSelection);
+}
+
+function setPanelOpen(id, open) {
+  const panel = $(id);
+  if (!panel) return;
+  panel.classList.toggle("is-collapsed", !open);
+  panel.setAttribute("aria-hidden", open ? "false" : "true");
+}
+
 async function loadGraph({ full = state.centralGraph.full } = {}) {
   const limit = full ? 5000 : state.graphLimit;
   const params = new URLSearchParams({ limit: String(limit) });
@@ -125,7 +144,7 @@ function rebuildGraph() {
   const status = $("statusFilter")?.value || "";
   const mode = state.mode;
   const rawNodes = (state.centralGraph.nodes || []).filter(node => {
-    if (!state.showSupport && !isAnswerNode(node)) return false;
+    if (mode !== "trace" && !state.showSupport && !isAnswerNode(node)) return false;
     if (kind && nodeKind(node) !== kind) return false;
     if (status && nodeStatus(node) !== status) return false;
     if (mode === "causal" && !["EvidenceRef", "RawEvidenceRef", "Packet", "ReasoningNode", "Decision", "Fix", "Commit", "GitCommit", "CodeNode", "CodeVersion", "Symbol"].includes(nodeKind(node))) return false;
@@ -153,6 +172,7 @@ function rebuildGraph() {
   renderLineage();
   renderLegend();
   updateStats();
+  syncWorkbenchChrome();
 }
 
 function renderCapForMode(query) {
@@ -225,7 +245,7 @@ function setMode(mode) {
     atlas: "Brain map: high-signal reasoning, packets, code, and commits. Raw provenance stays hidden until requested.",
     causal: "Causal replay: evidence, reasoning, and code lanes without dumping every raw event.",
     similarity: "Similarity lens: only retrievable memory clusters and code/reasoning anchors.",
-    trace: "Retrieval trace: run a query to animate candidates, graph expansion, reranking, and answer support.",
+    trace: "Retrieval trace: isolate candidates and their graph neighborhood without showing the whole graph.",
   }[mode] || "Graph mode";
   rebuildGraph();
 }
@@ -256,13 +276,11 @@ async function runTrace() {
 function buildTraceFromRetrieval(result, query) {
   const retrieval = result.retrieval || {};
   const hits = retrieval.hits || [];
-  const citations = result.answer?.citations || [];
   const existing = new Map(state.centralGraph.nodes.map(node => [nodeId(node), node]));
   const extraNodes = [];
   const extraEdges = [];
   const queryNode = { id: `query:${Date.now()}`, kind: "Query", label: query, summary: `Retrieval query: ${query}`, status: "active", scope: "trace" };
-  const answerNode = { id: `answer:${Date.now()}`, kind: "Answer", label: "Indexed graph answer", summary: result.answer?.text || "No answer text returned.", status: "active", scope: "trace" };
-  extraNodes.push(queryNode, answerNode);
+  extraNodes.push(queryNode);
   const hitIds = [];
   hits.forEach((hit, index) => {
     const graphId = hit.document?.graph_node_id || hit.graph_node?.id;
@@ -273,7 +291,6 @@ function buildTraceFromRetrieval(result, query) {
     }
     if (graphId) {
       extraEdges.push({ id: `trace:q:${index}:${graphId}`, source_id: queryNode.id, target_id: graphId, kind: index < 3 ? "SUPPORTS_ANSWER" : "SIMILAR_TO" });
-      extraEdges.push({ id: `trace:a:${index}:${graphId}`, source_id: graphId, target_id: answerNode.id, kind: "SUPPORTS_ANSWER" });
     }
     (hit.neighbors || []).slice(0, 4).forEach((neighbor, nIndex) => {
       if (!neighbor.id) return;
@@ -291,14 +308,9 @@ function buildTraceFromRetrieval(result, query) {
     { name: "query", ids: [queryNode.id], caption: "Query enters the graph as an active node." },
     { name: "candidates", ids: hitIds.slice(0, 10), caption: `Candidates from ${Object.entries(retrieval.candidate_counts || {}).map(([k, v]) => `${k}:${v}`).join(" ") || "indexed retrieval"}.` },
     { name: "neighborhood", ids: hits.flatMap(hit => (hit.neighbors || []).map(n => n.id)).filter(Boolean).slice(0, 16), caption: "Graph neighborhood expansion adds adjacent evidence/code/commit nodes." },
-    { name: "rerank", ids: hitIds.slice(0, 5), caption: `Reranker: ${retrieval.reranker || "deterministic"}.` },
-    { name: "answer", ids: [answerNode.id, ...citations.map(c => c.graph_node_id).filter(Boolean).slice(0, 5)], caption: "Answer support path with citations." },
   ];
-  state.traceStageIndex = 0;
-  applyTraceStage(0);
   $("tracePanel").innerHTML = renderTraceResult(result, query);
   fillFilters();
-  rebuildGraph();
   applyTraceStage(0);
 }
 
@@ -319,6 +331,8 @@ function applyTraceStage(index) {
   state.traceStages.slice(0, state.traceStageIndex + 1).forEach(stage => stage.ids.forEach(id => ids.add(id)));
   state.traceNodeIds = ids;
   renderTraceSteps();
+  if (state.mode === "trace") rebuildGraph();
+  else syncWorkbenchChrome();
 }
 
 function renderTraceSteps() {
@@ -337,11 +351,33 @@ function renderTraceResult(result, query) {
     <p>${escapeHtml(query)}</p>
     <div class="trace-pills">
       <span>vector ${escapeHtml(retrieval.vector_status || "unknown")}</span>
-      <span>${escapeHtml(retrieval.reranker || "reranker")}</span>
       <span>${escapeHtml(hits.length)} hits</span>
     </div>
     <pre>${escapeHtml(answer.text || "No generated answer returned.")}</pre>
+    <div class="trace-hit-list">${hits.slice(0, 6).map((hit, index) => {
+      const doc = hit.document || {};
+      return `<button class="trace-hit-row" data-node-id="${escapeHtml(doc.graph_node_id || hit.graph_node?.id || "")}">
+        <strong>${escapeHtml(index + 1)}. ${escapeHtml(formatTraceDocType(doc.doc_type))}</strong>
+        <span>${escapeHtml(truncate(doc.title || doc.body || "retrieval candidate", 96))}</span>
+      </button>`;
+    }).join("") || `<span class="muted">No candidates returned.</span>`}</div>
   </div>`;
+}
+
+function formatTraceDocType(value) {
+  const docType = String(value || "hit").toLowerCase();
+  return {
+    central_version: "Central memory",
+    central_atom: "Central atom",
+    file_impact: "File impact",
+    code_impact: "Code impact",
+    reasoning: "Reasoning",
+    packet: "Work packet",
+    commit: "Commit",
+    evidence: "Evidence",
+    symbol_ref: "Symbol support",
+    code_region_ref: "Code support",
+  }[docType] || docType.replace(/_/g, " ");
 }
 
 function renderInspector() {
@@ -430,10 +466,20 @@ function renderLegend() {
 }
 
 function selectNode(id) {
+  const shouldRebuildTrace = state.mode === "trace" && id && !state.traceNodeIds.has(id);
   state.selectedId = id || "";
   if (id) state.traceNodeIds.add(id);
+  if (shouldRebuildTrace) {
+    rebuildGraph();
+    return;
+  }
   renderInspector();
   renderLineage();
+  syncWorkbenchChrome();
+}
+
+function clearSelection() {
+  selectNode("");
 }
 
 function focusNeighborhood() {
@@ -470,7 +516,7 @@ function bindEvents() {
   $("axesToggle").addEventListener("change", event => { state.showAxes = event.target.checked; });
   qsa("[data-mode]").forEach(button => button.addEventListener("click", () => setMode(button.dataset.mode)));
   document.body.addEventListener("click", event => {
-    const edge = event.target.closest(".edge-row, .lineage-card");
+    const edge = event.target.closest(".edge-row, .lineage-card, .trace-hit-row");
     if (edge?.dataset.nodeId) {
       selectNode(edge.dataset.nodeId);
       focusNeighborhood();
@@ -503,7 +549,10 @@ function onWheel(event) {
 
 function onPointerDown(event) {
   const hit = nodeAtPoint(state, event.clientX, event.clientY);
-  if (hit) selectNode(nodeId(hit));
+  state.pointerDownHitId = hit ? nodeId(hit) : "";
+  state.pointerMoved = false;
+  state.pointerButton = event.button;
+  if (state.pointerDownHitId) selectNode(state.pointerDownHitId);
   state.dragging = true;
   state.dragMode = event.shiftKey || state.spaceDown || event.button === 1 || event.button === 2 ? "pan" : "rotate";
   state.dragStart = {
@@ -522,6 +571,7 @@ function onPointerMove(event) {
   if (state.dragging && state.dragStart) {
     const dx = event.clientX - state.dragStart.x;
     const dy = event.clientY - state.dragStart.y;
+    if (Math.abs(dx) + Math.abs(dy) > 5) state.pointerMoved = true;
     if (state.dragMode === "pan") {
       state.tx = state.dragStart.tx + dx;
       state.ty = state.dragStart.ty + dy;
@@ -536,11 +586,19 @@ function onPointerMove(event) {
 }
 
 function onPointerUp(event) {
+  const shouldClearSelection = event.type === "pointerup"
+    && state.pointerButton === 0
+    && !state.pointerMoved
+    && !state.pointerDownHitId;
   state.dragging = false;
   state.dragStart = null;
   state.dragMode = "";
+  state.pointerDownHitId = "";
+  state.pointerMoved = false;
+  state.pointerButton = 0;
   state.canvas.classList.remove("dragging");
   try { state.canvas.releasePointerCapture(event.pointerId); } catch (_) {}
+  if (shouldClearSelection) clearSelection();
 }
 
 function onKeyDown(event) {
@@ -558,6 +616,7 @@ function onKeyDown(event) {
   else if (key === "+" || key === "=") state.scale = Math.min(7.5, state.scale * 1.12);
   else if (key === "-" || key === "_") state.scale = Math.max(0.12, state.scale * 0.88);
   else if (key === "0") resetCamera();
+  else if (key === "escape") clearSelection();
   else return;
   event.preventDefault();
 }

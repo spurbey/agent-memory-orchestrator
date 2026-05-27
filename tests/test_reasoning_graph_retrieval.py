@@ -370,6 +370,29 @@ def test_offline_index_only_retrieval_respects_repo_scope(tmp_path: Path) -> Non
         conn.close()
 
 
+def test_activating_projection_retires_prior_repo_projection(tmp_path: Path) -> None:
+    conn, index_store, _embedding_store = _sqlite_store(tmp_path)
+    try:
+        for projection_id in ("rproj:old", "rproj:new"):
+            index_store.upsert_projection(
+                projection_id=projection_id,
+                repo_id="repo:amo",
+                projection_version="test",
+                source_artifact_hash=projection_id,
+                doc_content_hash=projection_id,
+                status="validated",
+            )
+
+        index_store.activate_projection(repo_id="repo:amo", projection_id="rproj:old")
+        index_store.activate_projection(repo_id="repo:amo", projection_id="rproj:new")
+
+        assert index_store.active_projection_id("repo:amo") == "rproj:new"
+        assert index_store.projection("rproj:new")["status"] == "active"
+        assert index_store.projection("rproj:old")["status"] == "historical"
+    finally:
+        conn.close()
+
+
 def test_offline_index_only_requires_active_projection_for_repo_scope(tmp_path: Path) -> None:
     settings = _settings(tmp_path)
     conn, index_store, _embedding_store = _sqlite_store(tmp_path)
@@ -412,18 +435,27 @@ def test_offline_graph_retrieve_with_repo_id_uses_repo_central_graph(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     settings = _settings(tmp_path)
-    opened_paths: list[Path] = []
+    opened_paths: list[tuple[Path, bool]] = []
     service_paths: list[Path] = []
     service_stores: list[object] = []
+    service_read_only: list[bool] = []
 
     class CapturingStore:
-        def __init__(self, graph_path: Path) -> None:
-            opened_paths.append(graph_path)
+        def __init__(self, graph_path: Path, *, read_only: bool = False) -> None:
+            opened_paths.append((graph_path, read_only))
 
     class CapturingService:
-        def __init__(self, service_settings: Settings, *, store: object | None = None, **_: object) -> None:
+        def __init__(
+            self,
+            service_settings: Settings,
+            *,
+            store: object | None = None,
+            read_only: bool = False,
+            **_: object,
+        ) -> None:
             service_paths.append(service_settings.graph_path)
             service_stores.append(store)
+            service_read_only.append(read_only)
 
         def retrieve_indexed_graph(self, **kwargs: object) -> dict[str, object]:
             return {"ok": True, "repo_id": kwargs.get("repo_id"), "graph_path": str(service_paths[-1])}
@@ -449,8 +481,9 @@ def test_offline_graph_retrieve_with_repo_id_uses_repo_central_graph(
 
     expected_path = repo_central_graph_path(settings, "repo:amo")
     assert exit_code == 0
-    assert opened_paths == [expected_path]
+    assert opened_paths == [(expected_path, True)]
     assert service_paths == [expected_path]
+    assert service_read_only == [True]
     assert service_stores
     assert service_stores[0] is not None
     assert json.loads(capsys.readouterr().out)["graph_path"] == str(expected_path)
@@ -783,6 +816,57 @@ def test_generic_query_does_not_overboost_low_overlap_exact_central_version(tmp_
         for hit in result.hits
         if hit.document.graph_node_id == "kver:debug-html"
     )
+
+
+def test_code_query_does_not_overboost_weakly_related_central_decision(tmp_path: Path) -> None:
+    graph = InMemoryGraphStore()
+    _conn, index_store, _embedding_store = _sqlite_store(tmp_path)
+    index_store.upsert_documents(
+        [
+            RetrievalDocument(
+                doc_id="doc:central-slack",
+                doc_type="central_version",
+                graph_node_id="kver:decision:slack",
+                node_kind="KnowledgeVersion",
+                repo_id="repo:amo",
+                title="Decision: Can now answer Slack mentions",
+                body="kind: KnowledgeVersion\natom_kind: decision\nsummary: AMO web memory can answer Slack mentions.",
+                metadata={"node_metadata": {"atom_kind": "decision", "status": "active"}},
+                memory_class="central_active_memory",
+                importance=0.95,
+                packet_id="",
+                commit_sha="",
+            ),
+            RetrievalDocument(
+                doc_id="doc:file-amo-js",
+                doc_type="file_impact",
+                graph_node_id="fileimpact:amo-js",
+                node_kind="FileImpactSummary",
+                repo_id="repo:amo",
+                title="Impact summary for src/agent_memory_orchestrator/web/amo.js",
+                body="AMO control web UI changed in the graph workbench implementation.",
+                metadata={"source": "curated_graph_manifest"},
+                memory_class="file_impact_summary",
+                importance=0.84,
+                packet_id="WP0015",
+                commit_sha="bdf1c3f",
+            ),
+        ]
+    )
+
+    result = retrieve_session_graph(
+        query="what changed for AMO control room web UI?",
+        index_store=index_store,
+        graph_store=graph,
+        repo_id="repo:amo",
+        limit=2,
+        expand_neighbors=0,
+    )
+
+    assert result.intent == "code_why"
+    assert result.hits[0].document.doc_type == "file_impact"
+    assert result.hits[0].document.graph_node_id == "fileimpact:amo-js"
+    assert any("central_low_topic_overlap_penalty" in hit.reasons for hit in result.hits if hit.document.doc_type == "central_version")
 
 
 def test_embedding_missing_retrieval_documents_is_resumable(tmp_path: Path) -> None:

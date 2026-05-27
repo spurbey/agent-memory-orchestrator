@@ -232,7 +232,7 @@ class SlackConnectorService:
             return {"ok": False, "error": "empty_mention_query"}
         from ....graph.service import GraphRagService
 
-        graph = GraphRagService(self.settings)
+        graph = GraphRagService(self.settings, read_only=True)
         try:
             return graph.graph_search(query=query, limit=6, include_historical=True)
         except Exception as exc:  # Slack should receive a safe failure instead of dropping the mention.

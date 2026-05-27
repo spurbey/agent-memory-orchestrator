@@ -596,7 +596,7 @@ class PeerAgentService:
             graph = self.graph
             close_after = False
             if graph is None:
-                graph = GraphRagService(self.settings)
+                graph = GraphRagService(self.settings, read_only=True)
                 close_after = True
             try:
                 return graph.retrieve_indexed_graph(

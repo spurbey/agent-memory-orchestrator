@@ -5,15 +5,18 @@ import json
 import os
 import threading
 import time
+from contextlib import nullcontext
 from dataclasses import replace
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any
+from types import TracebackType
+from typing import Any, BinaryIO, ContextManager
 from urllib.parse import parse_qs, unquote, urlparse
 
 from ..core.config import Settings
 from ..graph.diagnostics import debug_drain, debug_graph, debug_hooks, debug_qwen
 from ..graph.service import GraphRagService
+from ..graph.service import build_session_detail_fallback
 from ..graph.store import GraphBackendUnavailable, KuzuGraphStore
 from ..integrations.connectors.slack import SlackConnectorService
 from ..memory import MemoryService
@@ -23,8 +26,156 @@ from ..reasoning_graph.jobs import V2SessionJobStore
 from ..reasoning_graph.central_merge.applier import repo_central_graph_path
 
 _CLIENT_ABORT_ERRORS = (BrokenPipeError, ConnectionAbortedError, ConnectionResetError)
-_GRAPH_LOCK = threading.RLock()
+_GRAPH_WRITE_LOCK = threading.RLock()
+_DRAIN_LOCK = threading.RLock()
+_V2_GRAPH_WRITE_STAGES = frozenset({"kuzu_write", "central_version_merge"})
+_READ_ONLY_GET_GRAPH_PATHS = frozenset(
+    {
+        "/api/graph/status",
+        "/api/graph-merge-status",
+        "/api/graph/session-context",
+        "/api/graph/raw-evidence",
+        "/api/graph/work-trace",
+        "/api/graph/session-detail",
+        "/api/graph/central",
+        "/api/graph/version-flow",
+        "/api/debug/graph",
+        "/api/debug/graph-cache",
+    }
+)
 _WEB_ROOT = Path(__file__).resolve().parents[1] / "web"
+
+
+class DaemonAlreadyRunning(RuntimeError):
+    """Raised when another process already owns this AMO home daemon."""
+
+
+class _DaemonOwnerLock:
+    """Cross-process daemon ownership lock for one AMO home.
+
+    Thread locks only coordinate work inside one daemon process. Kuzu file locks
+    are process-wide, so AMO also needs a process-level owner guard before
+    auto-drain or graph writes can start.
+    """
+
+    def __init__(self, lock_path: Path, handle: BinaryIO) -> None:
+        self.lock_path = lock_path
+        self.handle = handle
+        self.acquired = True
+
+    @classmethod
+    def acquire(cls, settings: Settings) -> "_DaemonOwnerLock":
+        lock_path = _daemon_owner_lock_path(settings)
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        handle = lock_path.open("a+b")
+        try:
+            _ensure_lock_byte(handle)
+            _try_lock_byte(handle)
+            _write_daemon_owner_metadata(handle)
+            return cls(lock_path, handle)
+        except Exception:
+            handle.close()
+            raise
+
+    def release(self) -> None:
+        if not self.acquired:
+            return
+        try:
+            _unlock_byte(self.handle)
+        finally:
+            self.acquired = False
+            self.handle.close()
+
+    def __enter__(self) -> "_DaemonOwnerLock":
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        del exc_type, exc, traceback
+        self.release()
+
+
+def _daemon_owner_lock_path(settings: Settings) -> Path:
+    return settings.home / ".state" / "daemon-owner.lock"
+
+
+def _read_graph_service(settings: Settings, *, repo_id: str = "") -> GraphRagService:
+    safe_repo_id = str(repo_id or "").strip()
+    if safe_repo_id:
+        central_graph_path = repo_central_graph_path(settings, safe_repo_id)
+        graph_settings = replace(settings, graph_path=central_graph_path)
+        return GraphRagService(
+            graph_settings,
+            store=KuzuGraphStore(central_graph_path, read_only=True),
+            read_only=True,
+        )
+    return GraphRagService(settings, read_only=True)
+
+
+def _ensure_lock_byte(handle: BinaryIO) -> None:
+    handle.seek(0, os.SEEK_END)
+    if handle.tell() == 0:
+        handle.write(b"\0")
+        handle.flush()
+    handle.seek(0)
+
+
+def _write_daemon_owner_metadata(handle: BinaryIO) -> None:
+    payload = {
+        "pid": os.getpid(),
+        "started_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    }
+    data = json.dumps(payload, sort_keys=True).encode("utf-8")
+    handle.seek(1)
+    handle.truncate(1)
+    handle.write(data)
+    handle.flush()
+
+
+def _try_lock_byte(handle: BinaryIO) -> None:
+    if os.name == "nt":
+        import msvcrt
+
+        handle.seek(0)
+        try:
+            msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+        except OSError as exc:
+            if _is_daemon_lock_busy(exc):
+                raise DaemonAlreadyRunning(f"daemon_already_running:{handle.name}") from exc
+            raise
+        return
+
+    import fcntl
+
+    try:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError as exc:
+        if _is_daemon_lock_busy(exc):
+            raise DaemonAlreadyRunning(f"daemon_already_running:{handle.name}") from exc
+        raise
+
+
+def _unlock_byte(handle: BinaryIO) -> None:
+    if os.name == "nt":
+        import msvcrt
+
+        handle.seek(0)
+        msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+        return
+
+    import fcntl
+
+    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
+def _is_daemon_lock_busy(exc: OSError) -> bool:
+    if os.name == "nt":
+        return getattr(exc, "winerror", None) == 33 or exc.errno in {13}
+    return exc.errno in {11, 13}
 
 
 def _load_web_asset(name: str) -> str:
@@ -60,6 +211,115 @@ def _bounded_int(raw: str | None, *, default: int, minimum: int, maximum: int) -
     except (TypeError, ValueError):
         value = default
     return max(minimum, min(maximum, value))
+
+
+def _v2_stage_requires_graph_write_lock(stage: str) -> bool:
+    return stage in _V2_GRAPH_WRITE_STAGES
+
+
+def _v2_stage_lock(stage: str) -> ContextManager[Any]:
+    return _GRAPH_WRITE_LOCK if _v2_stage_requires_graph_write_lock(stage) else nullcontext()
+
+
+def _graph_write_lock_if(condition: bool) -> ContextManager[Any]:
+    return _GRAPH_WRITE_LOCK if condition else nullcontext()
+
+
+def _list_repositories_fast(settings: Settings, *, limit: int = 200) -> dict[str, Any]:
+    """Return dashboard repository scope from SQLite control state only.
+
+    The dashboard must remain available while graph writes or Qwen jobs are in
+    flight. Repo scope is operational metadata, so it should not require opening
+    Kuzu or waiting on graph write locks.
+    """
+
+    job_store = V2SessionJobStore(settings)
+    try:
+        return {"ok": True, "repos": job_store.list_repositories(limit=limit), "source": "sqlite_control_state"}
+    finally:
+        job_store.close()
+
+
+def _session_overview_fast(settings: Settings, *, limit: int = 80, repo_id: str = "") -> dict[str, Any]:
+    """Return dashboard session cards from SQLite control rows.
+
+    The session list is a dashboard boot dependency. It must not scan Kuzu or
+    raw transcript files; detailed session views can pay that cost after the
+    operator selects one session.
+    """
+
+    safe_limit = max(1, min(500, int(limit)))
+    safe_repo_id = str(repo_id or "").strip()
+    job_store = V2SessionJobStore(settings)
+    try:
+        rows: list[dict[str, Any]] = []
+        jobs = job_store.list_jobs(limit=safe_limit, repo_id=safe_repo_id)
+        for job in jobs:
+            diagnostics = _stage_diagnostics(job_store, str(job.get("job_id") or ""), "evidence_view")
+            quality = diagnostics.get("quality") if isinstance(diagnostics.get("quality"), dict) else {}
+            raw_events = int(diagnostics.get("raw_record_count") or quality.get("raw_record_count") or 0)
+            source_app = str(job.get("source_app") or "codex")
+            rows.append(
+                {
+                    "session_id": str(job.get("session_id") or ""),
+                    "raw_events": raw_events,
+                    "source_apps": [source_app] if source_app else [],
+                    "event_counts": {},
+                    "first_at": str(job.get("created_at") or ""),
+                    "latest_at": str(job.get("updated_at") or ""),
+                    "latest_event": "closed_session",
+                    "cwd": str(job.get("repo_path") or ""),
+                    "repo": str(job.get("repo_path") or ""),
+                    "repo_id": str(job.get("repo_id") or ""),
+                    "repo_path": str(job.get("repo_path") or ""),
+                    "branch": "",
+                    "graph_counts": {},
+                    "latest_context": None,
+                }
+            )
+        return {
+            "ok": True,
+            "repo_id": safe_repo_id,
+            "source": "sqlite_control_state",
+            "graph_status": {"ok": True, "source": "not_loaded_for_dashboard_session_list"},
+            "sessions": rows,
+        }
+    finally:
+        job_store.close()
+
+
+def _stage_diagnostics(job_store: V2SessionJobStore, job_id: str, stage: str) -> dict[str, Any]:
+    row = job_store.stage_row(job_id=job_id, stage=stage)
+    if not row:
+        return {}
+    try:
+        payload = json.loads(str(row.get("diagnostics_json") or "{}"))
+    except json.JSONDecodeError:
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _dashboard_graph_unavailable_payload(settings: Settings, *, path: str, repo_id: str, error: Exception, limit: int) -> dict[str, Any]:
+    payload = {
+        "ok": False,
+        "backend": settings.graph_backend,
+        "graph_path": str(settings.graph_path),
+        "error": str(error),
+        "error_type": type(error).__name__,
+        "warning": "graph_temporarily_unavailable",
+    }
+    if path == "/api/graph/central":
+        return {
+            **payload,
+            "repo_id": str(repo_id or ""),
+            "nodes": [],
+            "edges": [],
+            "full": False,
+            "limit": max(1, int(limit)),
+            "status": payload,
+            "warnings": ["graph_temporarily_unavailable"],
+        }
+    return payload
 
 
 class AmoHandler(BaseHTTPRequestHandler):
@@ -178,14 +438,9 @@ class AmoHandler(BaseHTTPRequestHandler):
                 svc.close()
             return
         if path == "/api/repos":
-            with _GRAPH_LOCK:
-                graph = GraphRagService(self.settings)
-                try:
-                    raw_limit = (query.get("limit") or ["200"])[0]
-                    limit = _bounded_int(raw_limit, default=200, minimum=1, maximum=1000)
-                    self._write_json(200, graph.list_repositories(limit=limit))
-                finally:
-                    graph.close()
+            raw_limit = (query.get("limit") or ["200"])[0]
+            limit = _bounded_int(raw_limit, default=200, minimum=1, maximum=1000)
+            self._write_json(200, _list_repositories_fast(self.settings, limit=limit))
             return
         if path == "/api/connectors/slack/status":
             try:
@@ -237,6 +492,24 @@ class AmoHandler(BaseHTTPRequestHandler):
             finally:
                 job_store.close()
             return
+        if path == "/api/graph/sessions":
+            raw_limit = (query.get("limit") or ["80"])[0]
+            limit = _bounded_int(raw_limit, default=80, minimum=1, maximum=500)
+            repo_id = (query.get("repo_id") or [""])[0]
+            try:
+                self._write_json(200, _session_overview_fast(self.settings, limit=limit, repo_id=repo_id))
+            except Exception as exc:
+                self._write_json(500, {"ok": False, "error": str(exc)})
+            return
+        if path == "/api/graph/session-detail" and (query.get("include_graph") or ["false"])[0].lower() != "true":
+            raw_limit = (query.get("limit") or ["120"])[0]
+            limit = _bounded_int(raw_limit, default=120, minimum=1, maximum=500)
+            session_id = (query.get("session_id") or [""])[0]
+            try:
+                self._write_json(200, build_session_detail_fallback(self.settings, session_id=session_id, limit=limit))
+            except Exception as exc:
+                self._write_json(500, {"ok": False, "error": str(exc)})
+            return
         if path.startswith("/api/graph/") or path.startswith("/api/debug/") or path == "/api/graph-merge-status":
             try:
                 raw_limit = (query.get("limit") or ["25"])[0]
@@ -250,73 +523,132 @@ class AmoHandler(BaseHTTPRequestHandler):
                     sample = (query.get("sample") or ["Classify a decision lookup query."])[0]
                     self._write_json(200, debug_qwen(self.settings, sample=sample))
                     return
-                with _GRAPH_LOCK:
+                if path in _READ_ONLY_GET_GRAPH_PATHS:
+                    graph = _read_graph_service(
+                        self.settings,
+                        repo_id=repo_id if path in {"/api/graph/central", "/api/graph/version-flow"} else "",
+                    )
+                else:
                     graph = GraphRagService(self.settings)
-                    try:
-                        if path == "/api/graph/status" or path == "/api/graph-merge-status":
-                            self._write_json(200, graph.merge_status(session_id=session_id))
-                            return
-                        if path == "/api/graph/session-context":
-                            self._write_json(200, graph.current_context(session_id=session_id, limit=limit))
-                            return
-                        if path == "/api/graph/raw-evidence":
-                            graph_query = (query.get("query") or query.get("q") or [""])[0]
-                            self._write_json(200, graph.raw_evidence(query=graph_query, limit=limit))
-                            return
-                        if path == "/api/graph/work-trace":
-                            commit = (query.get("commit") or ["HEAD"])[0] or "HEAD"
-                            cwd = (query.get("cwd") or [""])[0] or None
-                            self._write_json(200, graph.work_trace(commit=commit, cwd=cwd))
-                            return
-                        if path == "/api/graph/sessions":
-                            self._write_json(200, graph.session_overview(limit=limit, repo_id=repo_id))
-                            return
-                        if path == "/api/graph/session-detail":
-                            self._write_json(200, graph.session_detail(session_id=session_id, limit=limit))
-                            return
-                        if path == "/api/graph/central":
-                            full = (query.get("full") or ["false"])[0].lower() == "true"
-                            central_limit = _bounded_int(
-                                raw_limit,
-                                default=5000 if full else 360,
-                                minimum=1,
-                                maximum=10000 if full else 500,
-                            )
-                            self._write_json(200, graph.central_graph(limit=central_limit, full=full, repo_id=repo_id))
-                            return
-                        if path == "/api/graph/version-flow":
-                            commit = (query.get("commit") or [""])[0]
-                            self._write_json(
-                                200,
-                                graph.version_flow(commit=commit, session_id=session_id, repo_id=repo_id, limit=limit),
-                            )
-                            return
-                        if path == "/api/debug/drain":
+                try:
+                    if path == "/api/graph/status" or path == "/api/graph-merge-status":
+                        self._write_json(200, graph.merge_status(session_id=session_id))
+                        return
+                    if path == "/api/graph/session-context":
+                        self._write_json(200, graph.current_context(session_id=session_id, limit=limit))
+                        return
+                    if path == "/api/graph/raw-evidence":
+                        graph_query = (query.get("query") or query.get("q") or [""])[0]
+                        self._write_json(200, graph.raw_evidence(query=graph_query, limit=limit))
+                        return
+                    if path == "/api/graph/work-trace":
+                        commit = (query.get("commit") or ["HEAD"])[0] or "HEAD"
+                        cwd = (query.get("cwd") or [""])[0] or None
+                        self._write_json(200, graph.work_trace(commit=commit, cwd=cwd))
+                        return
+                    if path == "/api/graph/session-detail":
+                        self._write_json(200, graph.session_detail(session_id=session_id, limit=limit))
+                        return
+                    if path == "/api/graph/central":
+                        full = (query.get("full") or ["false"])[0].lower() == "true"
+                        central_limit = _bounded_int(
+                            raw_limit,
+                            default=5000 if full else 360,
+                            minimum=1,
+                            maximum=10000 if full else 500,
+                        )
+                        self._write_json(200, graph.central_graph(limit=central_limit, full=full, repo_id=repo_id))
+                        return
+                    if path == "/api/graph/version-flow":
+                        commit = (query.get("commit") or [""])[0]
+                        self._write_json(
+                            200,
+                            graph.version_flow(commit=commit, session_id=session_id, repo_id=repo_id, limit=limit),
+                        )
+                        return
+                    if path == "/api/debug/drain":
+                        with _DRAIN_LOCK, _GRAPH_WRITE_LOCK:
                             self._write_json(200, debug_drain(graph._new_drain(), session_id=session_id))  # noqa: SLF001
-                            return
-                        if path == "/api/debug/graph":
-                            self._write_json(200, debug_graph(graph, session_id=session_id))
-                            return
-                        if path == "/api/debug/cleanup-noisy":
-                            apply = (query.get("apply") or ["false"])[0].lower() == "true"
-                            self._write_json(200, graph.cleanup_noisy_drafts(limit=limit, apply=apply))
-                            return
-                        if path == "/api/debug/consolidate":
-                            apply = (query.get("apply") or ["false"])[0].lower() == "true"
-                            self._write_json(200, graph.consolidate_graph(limit=limit, apply=apply))
-                            return
-                        if path == "/api/debug/graph-cache":
-                            self._write_json(200, graph.graph_cache_status())
-                            return
-                    finally:
-                        graph.close()
+                        return
+                    if path == "/api/debug/graph":
+                        self._write_json(200, debug_graph(graph, session_id=session_id))
+                        return
+                    if path == "/api/debug/cleanup-noisy":
+                        apply = (query.get("apply") or ["false"])[0].lower() == "true"
+                        if apply:
+                            with _GRAPH_WRITE_LOCK:
+                                result = graph.cleanup_noisy_drafts(limit=limit, apply=True)
+                        else:
+                            result = graph.cleanup_noisy_drafts(limit=limit, apply=False)
+                        self._write_json(200, result)
+                        return
+                    if path == "/api/debug/consolidate":
+                        apply = (query.get("apply") or ["false"])[0].lower() == "true"
+                        if apply:
+                            with _GRAPH_WRITE_LOCK:
+                                result = graph.consolidate_graph(limit=limit, apply=True)
+                        else:
+                            result = graph.consolidate_graph(limit=limit, apply=False)
+                        self._write_json(200, result)
+                        return
+                    if path == "/api/debug/graph-cache":
+                        self._write_json(200, graph.graph_cache_status())
+                        return
+                finally:
+                    graph.close()
             except _CLIENT_ABORT_ERRORS:
                 return
             except (GraphBackendUnavailable, QwenUnavailable) as exc:
-                self._write_json(200, {"ok": False, "error": str(exc)})
+                if path == "/api/graph/session-detail":
+                    self._write_json(
+                        200,
+                        build_session_detail_fallback(
+                            self.settings,
+                            session_id=session_id,
+                            limit=limit,
+                            error=exc,
+                        ),
+                    )
+                    return
+                if path in {"/api/graph/status", "/api/graph-merge-status", "/api/graph/central"}:
+                    self._write_json(
+                        200,
+                        _dashboard_graph_unavailable_payload(
+                            self.settings,
+                            path=path,
+                            repo_id=repo_id,
+                            error=exc,
+                            limit=limit,
+                        ),
+                    )
+                else:
+                    self._write_json(200, {"ok": False, "error": str(exc)})
                 return
             except Exception as exc:
-                self._write_json(500, {"ok": False, "error": str(exc)})
+                if path == "/api/graph/session-detail":
+                    self._write_json(
+                        200,
+                        build_session_detail_fallback(
+                            self.settings,
+                            session_id=session_id,
+                            limit=limit,
+                            error=exc,
+                        ),
+                    )
+                    return
+                if path in {"/api/graph/status", "/api/graph-merge-status", "/api/graph/central"}:
+                    self._write_json(
+                        200,
+                        _dashboard_graph_unavailable_payload(
+                            self.settings,
+                            path=path,
+                            repo_id=repo_id,
+                            error=exc,
+                            limit=limit,
+                        ),
+                    )
+                else:
+                    self._write_json(500, {"ok": False, "error": str(exc)})
                 return
         if path.startswith("/api/"):
             svc = MemoryService(self.settings)
@@ -407,7 +739,7 @@ class AmoHandler(BaseHTTPRequestHandler):
                     job_store.close()
                 return
             if self.path == "/hooks/ingest":
-                with _GRAPH_LOCK:
+                with _GRAPH_WRITE_LOCK:
                     graph = GraphRagService(self.settings)
                     try:
                         result = graph.capture_hook(payload, default_agent=str(payload.get("agent") or "codex"))
@@ -416,22 +748,21 @@ class AmoHandler(BaseHTTPRequestHandler):
                         graph.close()
                 return
             if self.path == "/graph/search":
-                with _GRAPH_LOCK:
-                    graph = GraphRagService(self.settings)
-                    try:
-                        limit = _bounded_int(str(payload.get("limit") or ""), default=8, minimum=1, maximum=50)
-                        result = graph.graph_search(
-                            query=str(payload.get("query") or ""),
-                            limit=limit,
-                            include_raw=bool(payload.get("include_raw")),
-                            include_historical=bool(payload.get("include_historical")),
-                        )
-                        self._write_json(200, result)
-                    finally:
-                        graph.close()
+                graph = _read_graph_service(self.settings)
+                try:
+                    limit = _bounded_int(str(payload.get("limit") or ""), default=8, minimum=1, maximum=50)
+                    result = graph.graph_search(
+                        query=str(payload.get("query") or ""),
+                        limit=limit,
+                        include_raw=bool(payload.get("include_raw")),
+                        include_historical=bool(payload.get("include_historical")),
+                    )
+                    self._write_json(200, result)
+                finally:
+                    graph.close()
                 return
             if self.path == "/graph/drain":
-                with _GRAPH_LOCK:
+                with _DRAIN_LOCK, _GRAPH_WRITE_LOCK:
                     graph = GraphRagService(self.settings)
                     try:
                         limit = _bounded_int(str(payload.get("limit") or ""), default=500, minimum=1, maximum=5000)
@@ -451,19 +782,18 @@ class AmoHandler(BaseHTTPRequestHandler):
                         graph.close()
                 return
             if self.path == "/graph/work-trace":
-                with _GRAPH_LOCK:
-                    graph = GraphRagService(self.settings)
-                    try:
-                        result = graph.work_trace(
-                            commit=str(payload.get("commit") or "HEAD"),
-                            cwd=payload.get("cwd") or None,
-                        )
-                        self._write_json(200, result)
-                    finally:
-                        graph.close()
+                graph = _read_graph_service(self.settings)
+                try:
+                    result = graph.work_trace(
+                        commit=str(payload.get("commit") or "HEAD"),
+                        cwd=payload.get("cwd") or None,
+                    )
+                    self._write_json(200, result)
+                finally:
+                    graph.close()
                 return
             if self.path == "/graph/cleanup-noisy":
-                with _GRAPH_LOCK:
+                with _graph_write_lock_if(bool(payload.get("apply"))):
                     graph = GraphRagService(self.settings)
                     try:
                         limit = _bounded_int(str(payload.get("limit") or ""), default=500, minimum=1, maximum=5000)
@@ -473,7 +803,7 @@ class AmoHandler(BaseHTTPRequestHandler):
                         graph.close()
                 return
             if self.path == "/graph/consolidate":
-                with _GRAPH_LOCK:
+                with _graph_write_lock_if(bool(payload.get("apply"))):
                     graph = GraphRagService(self.settings)
                     try:
                         limit = _bounded_int(str(payload.get("limit") or ""), default=500, minimum=1, maximum=5000)
@@ -483,105 +813,100 @@ class AmoHandler(BaseHTTPRequestHandler):
                         graph.close()
                 return
             if self.path == "/graph/rebuild-cache":
-                with _GRAPH_LOCK:
-                    graph = GraphRagService(self.settings)
-                    try:
-                        limit = _bounded_int(str(payload.get("limit") or ""), default=5000, minimum=1, maximum=20000)
-                        result = graph.rebuild_graph_cache(limit=limit)
-                        self._write_json(200, result)
-                    finally:
-                        graph.close()
+                graph = GraphRagService(self.settings)
+                try:
+                    limit = _bounded_int(str(payload.get("limit") or ""), default=5000, minimum=1, maximum=20000)
+                    result = graph.rebuild_graph_cache(limit=limit)
+                    self._write_json(200, result)
+                finally:
+                    graph.close()
                 return
             if self.path == "/graph/retrieval-build":
-                with _GRAPH_LOCK:
-                    graph_settings = _settings_with_payload_paths(self.settings, payload, prefer_retrieval=True)
-                    graph = GraphRagService(graph_settings)
-                    try:
-                        limit = _bounded_int(str(payload.get("limit") or ""), default=10000, minimum=1, maximum=100000)
-                        max_doc_chars = _bounded_int(
-                            str(payload.get("max_doc_chars") or ""),
-                            default=5000,
-                            minimum=1000,
-                            maximum=50000,
-                        )
-                        result = graph.rebuild_retrieval_index(
-                            db_path=_optional_payload_path(payload, "db_path"),
-                            session_id=str(payload.get("session_id") or ""),
-                            repo_id=str(payload.get("repo_id") or ""),
-                            limit=limit,
-                            max_doc_chars=max_doc_chars,
-                        )
-                        self._write_json(200, result)
-                    finally:
-                        graph.close()
+                graph_settings = _settings_with_payload_paths(self.settings, payload, prefer_retrieval=True)
+                graph = _read_graph_service(graph_settings)
+                try:
+                    limit = _bounded_int(str(payload.get("limit") or ""), default=10000, minimum=1, maximum=100000)
+                    max_doc_chars = _bounded_int(
+                        str(payload.get("max_doc_chars") or ""),
+                        default=5000,
+                        minimum=1000,
+                        maximum=50000,
+                    )
+                    result = graph.rebuild_retrieval_index(
+                        db_path=_optional_payload_path(payload, "db_path"),
+                        session_id=str(payload.get("session_id") or ""),
+                        repo_id=str(payload.get("repo_id") or ""),
+                        limit=limit,
+                        max_doc_chars=max_doc_chars,
+                    )
+                    self._write_json(200, result)
+                finally:
+                    graph.close()
                 return
             if self.path == "/graph/retrieval-embed":
-                with _GRAPH_LOCK:
-                    graph_settings = _settings_with_payload_paths(self.settings, payload, prefer_retrieval=True)
-                    graph = GraphRagService(graph_settings)
+                graph_settings = _settings_with_payload_paths(self.settings, payload, prefer_retrieval=True)
+                graph = _read_graph_service(graph_settings)
+                try:
+                    limit = _bounded_int(str(payload.get("limit") or ""), default=100, minimum=0, maximum=100000)
+                    result = graph.embed_retrieval_index(
+                        db_path=_optional_payload_path(payload, "db_path"),
+                        session_id=str(payload.get("session_id") or ""),
+                        repo_id=str(payload.get("repo_id") or ""),
+                        limit=limit,
+                        model=str(payload.get("model") or ""),
+                        graph_scope=str(payload.get("graph_scope") or ""),
+                        rebuild_faiss=bool(payload.get("rebuild_faiss", True)),
+                    )
+                    self._write_json(200, result)
+                finally:
+                    graph.close()
+                return
+            if self.path == "/graph/retrieve":
+                graph_settings = _settings_with_payload_paths(self.settings, payload, prefer_retrieval=True)
+                graph = _read_graph_service(graph_settings, repo_id=str(payload.get("repo_id") or ""))
+                try:
+                    limit = _bounded_int(str(payload.get("limit") or ""), default=8, minimum=1, maximum=50)
                     try:
-                        limit = _bounded_int(str(payload.get("limit") or ""), default=100, minimum=0, maximum=100000)
-                        result = graph.embed_retrieval_index(
+                        result = graph.retrieve_indexed_graph(
+                            query=str(payload.get("query") or ""),
                             db_path=_optional_payload_path(payload, "db_path"),
                             session_id=str(payload.get("session_id") or ""),
                             repo_id=str(payload.get("repo_id") or ""),
                             limit=limit,
+                            use_vector=bool(payload.get("use_vector", True)),
                             model=str(payload.get("model") or ""),
                             graph_scope=str(payload.get("graph_scope") or ""),
-                            rebuild_faiss=bool(payload.get("rebuild_faiss", True)),
+                            require_vector=bool(payload.get("require_vector", False)),
+                            include_answer=bool(payload.get("include_answer", True)),
                         )
-                        self._write_json(200, result)
-                    finally:
-                        graph.close()
-                return
-            if self.path == "/graph/retrieve":
-                with _GRAPH_LOCK:
-                    graph_settings = _settings_with_payload_paths(self.settings, payload, prefer_retrieval=True)
-                    graph = GraphRagService(graph_settings)
-                    try:
-                        limit = _bounded_int(str(payload.get("limit") or ""), default=8, minimum=1, maximum=50)
-                        try:
-                            result = graph.retrieve_indexed_graph(
-                                query=str(payload.get("query") or ""),
-                                db_path=_optional_payload_path(payload, "db_path"),
-                                session_id=str(payload.get("session_id") or ""),
-                                repo_id=str(payload.get("repo_id") or ""),
-                                limit=limit,
-                                use_vector=bool(payload.get("use_vector", True)),
-                                model=str(payload.get("model") or ""),
-                                graph_scope=str(payload.get("graph_scope") or ""),
-                                require_vector=bool(payload.get("require_vector", False)),
-                                include_answer=bool(payload.get("include_answer", True)),
-                            )
-                        except ValueError as exc:
-                            result = {
-                                "ok": False,
-                                "error": str(exc),
-                                "hint": "Build the V2 retrieval index and embeddings for the configured graph, or configure retrieval_graph_path/retrieval_db_path.",
-                                "graph_path": str(graph_settings.graph_path),
-                                "db_path": str(graph_settings.retrieval_db_path),
-                            }
-                        self._write_json(200, result)
-                    finally:
-                        graph.close()
+                    except ValueError as exc:
+                        result = {
+                            "ok": False,
+                            "error": str(exc),
+                            "hint": "Build the V2 retrieval index and embeddings for the configured graph, or configure retrieval_graph_path/retrieval_db_path.",
+                            "graph_path": str(graph_settings.graph_path),
+                            "db_path": str(graph_settings.retrieval_db_path),
+                        }
+                    self._write_json(200, result)
+                finally:
+                    graph.close()
                 return
             if self.path == "/graph/drain-smoke":
-                with _GRAPH_LOCK:
-                    graph = GraphRagService(self.settings)
-                    try:
-                        limit = _bounded_int(str(payload.get("limit") or ""), default=500, minimum=1, maximum=5000)
-                        max_windows = _bounded_int(
-                            str(payload.get("max_windows") or ""),
-                            default=self.settings.drain_max_windows_per_run,
-                            minimum=1,
-                            maximum=25,
-                        )
-                        self._write_json(200, graph.drain_evidence_smoke(limit=limit, max_windows=max_windows))
-                    finally:
-                        graph.close()
+                graph = GraphRagService(self.settings)
+                try:
+                    limit = _bounded_int(str(payload.get("limit") or ""), default=500, minimum=1, maximum=5000)
+                    max_windows = _bounded_int(
+                        str(payload.get("max_windows") or ""),
+                        default=self.settings.drain_max_windows_per_run,
+                        minimum=1,
+                        maximum=25,
+                    )
+                    self._write_json(200, graph.drain_evidence_smoke(limit=limit, max_windows=max_windows))
+                finally:
+                    graph.close()
                 return
             if self.path == "/graph/finalize-session":
-                with _GRAPH_LOCK:
+                with _graph_write_lock_if(bool(payload.get("apply"))):
                     graph = GraphRagService(self.settings)
                     try:
                         limit = _bounded_int(str(payload.get("limit") or ""), default=500, minimum=1, maximum=5000)
@@ -597,7 +922,7 @@ class AmoHandler(BaseHTTPRequestHandler):
                         graph.close()
                 return
             if self.path == "/graph/rebuild-central":
-                with _GRAPH_LOCK:
+                with _graph_write_lock_if(bool(payload.get("apply"))):
                     graph = GraphRagService(self.settings)
                     try:
                         limit = _bounded_int(str(payload.get("limit") or ""), default=100000, minimum=1, maximum=500000)
@@ -618,26 +943,19 @@ class AmoHandler(BaseHTTPRequestHandler):
                         graph.close()
                 return
             if self.path == "/graph/version-flow":
-                with _GRAPH_LOCK:
-                    repo_id = str(payload.get("repo_id") or "")
-                    graph_settings = self.settings
-                    graph_store = None
-                    if repo_id.strip():
-                        central_graph_path = repo_central_graph_path(self.settings, repo_id)
-                        graph_settings = replace(self.settings, graph_path=central_graph_path)
-                        graph_store = KuzuGraphStore(central_graph_path)
-                    graph = GraphRagService(graph_settings, store=graph_store)
-                    try:
-                        limit = _bounded_int(str(payload.get("limit") or ""), default=100, minimum=1, maximum=500)
-                        result = graph.version_flow(
-                            commit=str(payload.get("commit") or ""),
-                            session_id=str(payload.get("session_id") or ""),
-                            repo_id=repo_id,
-                            limit=limit,
-                        )
-                        self._write_json(200, result)
-                    finally:
-                        graph.close()
+                repo_id = str(payload.get("repo_id") or "")
+                graph = _read_graph_service(self.settings, repo_id=repo_id)
+                try:
+                    limit = _bounded_int(str(payload.get("limit") or ""), default=100, minimum=1, maximum=500)
+                    result = graph.version_flow(
+                        commit=str(payload.get("commit") or ""),
+                        session_id=str(payload.get("session_id") or ""),
+                        repo_id=repo_id,
+                        limit=limit,
+                    )
+                    self._write_json(200, result)
+                finally:
+                    graph.close()
                 return
             svc = MemoryService(self.settings)
             try:
@@ -716,7 +1034,7 @@ def _auto_drain_loop(settings: Settings) -> None:
 
 
 def _run_auto_drain_once(settings: Settings) -> dict[str, Any]:
-    with _GRAPH_LOCK:
+    with _DRAIN_LOCK, _GRAPH_WRITE_LOCK:
         graph = GraphRagService(settings)
         try:
             drain = graph.drain_evidence(
@@ -725,19 +1043,20 @@ def _run_auto_drain_once(settings: Settings) -> dict[str, Any]:
             )
         finally:
             graph.close()
-        runner = V2SessionJobRunner(settings)
-        try:
-            job_run = runner.run_next()
-        finally:
-            runner.close()
-        result: dict[str, Any] = {
-            "records_ingested": int(drain.get("records_ingested") or 0),
-            "windows_processed": int(drain.get("windows_processed") or 0),
-            "stopped_reason": drain.get("stopped_reason"),
-            "pending_sessions": drain.get("pending_sessions"),
-            "v2_job_run": job_run,
-        }
-        return result
+
+    runner = V2SessionJobRunner(settings, stage_lock_factory=_v2_stage_lock)
+    try:
+        job_run = runner.run_next()
+    finally:
+        runner.close()
+    result: dict[str, Any] = {
+        "records_ingested": int(drain.get("records_ingested") or 0),
+        "windows_processed": int(drain.get("windows_processed") or 0),
+        "stopped_reason": drain.get("stopped_reason"),
+        "pending_sessions": drain.get("pending_sessions"),
+        "v2_job_run": job_run,
+    }
+    return result
 
 
 def _daemon_log(settings: Settings, event: str, **fields: object) -> None:
@@ -776,16 +1095,24 @@ def main(argv: list[str] | None = None) -> int:
     if settings.local_only and host not in {"127.0.0.1", "localhost", "::1"}:
         raise ValueError("AMO_LOCAL_ONLY=true requires daemon host to be localhost")
 
-    AmoHandler.settings = settings
-    _start_auto_drain_worker(settings)
-    server = ThreadingHTTPServer((host, port), AmoHandler)
-    print(f"amo-daemon listening on http://{host}:{port}")
     try:
-        server.serve_forever()
-    except KeyboardInterrupt:
-        return 0
-    finally:
-        server.server_close()
+        owner_lock = _DaemonOwnerLock.acquire(settings)
+    except DaemonAlreadyRunning as exc:
+        _daemon_log(settings, "daemon_start_rejected", reason="daemon_already_running", error=str(exc))
+        print(f"amo-daemon already running for AMO home: {settings.home}")
+        return 2
+
+    with owner_lock:
+        AmoHandler.settings = settings
+        server = ThreadingHTTPServer((host, port), AmoHandler)
+        _start_auto_drain_worker(settings)
+        print(f"amo-daemon listening on http://{host}:{port}")
+        try:
+            server.serve_forever()
+        except KeyboardInterrupt:
+            return 0
+        finally:
+            server.server_close()
     return 0
 
 

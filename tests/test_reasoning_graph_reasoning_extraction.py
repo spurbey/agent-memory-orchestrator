@@ -173,6 +173,103 @@ def test_reasoning_review_demotes_generic_plan_overlap_to_review() -> None:
     assert result.summary["accepted_node_count"] == 0
     assert result.summary["needs_review_node_count"] == 1
     assert result.summary["diagnostic_kind_counts"]["semantic_alignment_low_overlap"] == 1
+    assert result.summary["stage_acceptance"] == "PASS_REVIEW_ONLY"
+    assert result.summary["review_only"] is True
+
+
+def test_reasoning_review_review_only_is_not_structural_failure() -> None:
+    packet = {
+        "packet_id": "WP0001",
+        "commit": {
+            "short_sha": "abc1234",
+            "message": "feat(reasoning-graph): import real session timelines",
+            "changed_file_sample": ["src/agent_memory_orchestrator/reasoning_graph/timeline.py"],
+        },
+        "problem_refs": [{"ref": "E0001"}],
+        "rationale_refs": [{"ref": "E0002"}],
+        "validation_refs": [{"ref": "E0003"}],
+    }
+    result = review_reasoning_extraction_results(
+        packets=[packet],
+        results=[
+            {
+                "packet_id": "WP0001",
+                "commit_sha": "abc1234",
+                "parsed_output": {
+                    "packet_id": "WP0001",
+                    "commit_sha": "abc1234",
+                    "nodes": [
+                        {
+                            "node_type": "Decision",
+                            "subject": "Generic implementation plan",
+                            "statement": "Implement the plan described in the prompt.",
+                            "reason": "The prompt asks for implementation.",
+                            "confidence": 0.4,
+                            "evidence_refs": ["E0002"],
+                            "status": "accepted",
+                        }
+                    ],
+                },
+            }
+        ],
+        source_name="unit",
+    )
+
+    assert result.summary["stage_acceptance"] == "PASS_REVIEW_ONLY"
+    assert result.summary["blocking_diagnostic_count"] == 0
+    assert result.summary["accepted_node_count"] == 0
+    assert result.summary["needs_review_node_count"] == 1
+
+
+def test_reasoning_review_demotes_file_term_only_overlap_to_review() -> None:
+    packet = {
+        "packet_id": "WP0001",
+        "commit": {
+            "short_sha": "abc1234",
+            "message": "fix(graph-rag): harden qwen json handling",
+            "changed_file_sample": [
+                "src/agent_memory_orchestrator/graph_service.py",
+                "src/agent_memory_orchestrator/qwen_client.py",
+                "src/agent_memory_orchestrator/session_graph.py",
+                "tests/test_evidence_window.py",
+            ],
+        },
+        "problem_refs": [{"ref": "E0001"}],
+        "rationale_refs": [{"ref": "E0002"}],
+        "validation_refs": [{"ref": "E0003"}],
+    }
+    result = review_reasoning_extraction_results(
+        packets=[packet],
+        results=[
+            {
+                "packet_id": "WP0001",
+                "commit_sha": "abc1234",
+                "parsed_output": {
+                    "packet_id": "WP0001",
+                    "commit_sha": "abc1234",
+                    "nodes": [
+                        {
+                            "node_type": "Decision",
+                            "subject": "qwen3 can create a useful session graph from one cleaned evidence window",
+                            "statement": "The code path calls graph search after retrieval and proves a useful session graph from one cleaned evidence window.",
+                            "reason": "This is related to graph_service.py and session_graph.py.",
+                            "confidence": 0.9,
+                            "evidence_refs": ["E0002"],
+                            "status": "accepted",
+                        }
+                    ],
+                },
+            }
+        ],
+        source_name="unit",
+    )
+
+    assert result.summary["accepted_node_count"] == 0
+    assert result.summary["needs_review_node_count"] == 1
+    assert result.summary["diagnostic_kind_counts"]["semantic_alignment_low_overlap"] == 1
+    alignment = result.needs_review_nodes[0]["post_validation"]["semantic_alignment"]
+    assert alignment["anchor_overlap_terms"] == []
+    assert "session" in alignment["file_overlap_terms"]
 
 
 def test_reasoning_extraction_rejects_bad_refs_and_raw_ids() -> None:
@@ -281,14 +378,14 @@ def test_real_stage4_final_merge_revalidates_to_expected_counts() -> None:
     assert review.summary["packet_count"] == 59
     assert review.summary["missing_packets"] == []
     assert review.summary["packet_error_ids"] == []
-    assert review.summary["accepted_node_count"] == 224
-    assert review.summary["needs_review_node_count"] == 80
+    assert review.summary["accepted_node_count"] == 129
+    assert review.summary["needs_review_node_count"] == 175
     assert review.summary["rejected_node_count"] == 0
-    assert review.summary["diagnostic_kind_counts"]["semantic_alignment_low_overlap"] == 70
+    assert review.summary["diagnostic_kind_counts"]["semantic_alignment_low_overlap"] == 172
     assert review.summary["accepted_node_type_counts"] == {
-        "Decision": 53,
-        "Constraint": 13,
-        "Fix": 76,
-        "Problem": 64,
-        "Cause": 18,
+        "Decision": 36,
+        "Constraint": 7,
+        "Fix": 44,
+        "Problem": 34,
+        "Cause": 8,
     }

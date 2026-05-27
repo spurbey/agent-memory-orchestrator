@@ -36,6 +36,9 @@ from agent_memory_orchestrator.reasoning_graph.stage4_contract import stage4_con
 from agent_memory_orchestrator.reasoning_graph.retrieval import RetrievalDocument
 from agent_memory_orchestrator.reasoning_graph.retrieval import RetrievalIndexStore
 from agent_memory_orchestrator.graph.service import GraphRagService
+from agent_memory_orchestrator.graph.service import build_session_detail_fallback
+from agent_memory_orchestrator.graph.service import _load_session_evidence_records
+from agent_memory_orchestrator.graph.service import _session_pending_summary
 from agent_memory_orchestrator.graph.store import GraphNode
 from agent_memory_orchestrator.graph.store import InMemoryGraphStore
 
@@ -294,7 +297,7 @@ def test_v2_jobs_and_repository_list_are_repo_scoped(tmp_path: Path) -> None:
     assert {row["repo_id"] for row in repos} >= {job_a["repo_id"], job_b["repo_id"]}
 
 
-def test_v2_central_merge_stage_writes_dry_run_plan_and_preserves_session_graph(tmp_path: Path) -> None:
+def test_v2_central_merge_stage_writes_plan_and_applies_exact_atoms(tmp_path: Path) -> None:
     settings = make_settings(tmp_path)
     store = V2SessionJobStore(settings)
     try:
@@ -340,18 +343,29 @@ def test_v2_central_merge_stage_writes_dry_run_plan_and_preserves_session_graph(
         assert run["status"] == "pending"
         plan_row = store.get_central_merge_plan_for_job(job["job_id"])
         assert plan_row is not None
-        assert plan_row["mode"] == "dry_run"
+        assert plan_row["status"] == "applied"
+        assert plan_row["mode"] == "apply_exact_atoms"
         assert plan_row["metrics"]["exact_atom_created_count"] == 4
         assert plan_row["metrics"]["review_candidate_count"] == 0
         assert plan_row["plan"]["new_atoms"]
         assert plan_row["plan"]["new_versions"]
-        assert store.graph_view(repo_id=plan_row["repo_id"], branch="main", mode="active") is not None
+        view = store.graph_view(repo_id=plan_row["repo_id"], branch="main", mode="active")
+        assert view is not None
+        assert view["graph_commit_id"]
         stage = store.stage_row(job_id=job["job_id"], stage="central_version_merge")
         assert stage is not None
         assert Path(stage["output_artifact"]).name == "merge_plan.json"
+        assert stage["diagnostics"]["mode"] == "apply_exact_atoms"
+        assert stage["diagnostics"]["graph_commit_id"] == view["graph_commit_id"]
+        merge_result = artifact_dir / "central_version_merge" / "merge_result.json"
+        assert merge_result.exists()
+        merge_payload = json.loads(merge_result.read_text(encoding="utf-8"))
+        assert merge_payload["status"] == "applied"
+        assert merge_payload["input_source"] == "curated_graph_manifest"
         fixture = export_job_fixture(settings, job_id=job["job_id"], out_dir=tmp_path / "fixture")
         semantic_context = fixture["fixture"]["semantic_context"]
         assert semantic_context["central_version_merge"]["repo_id"].startswith("repo:")
+        assert semantic_context["central_version_merge"]["applied"] is True
         result = run_semantic_eval_fixture(fixture_path=Path(fixture["path"]), case_set="baseline")
         assert result["status"] == "passed"
         assert result["metrics"]["case_count"] >= 5
@@ -1520,8 +1534,9 @@ def test_auto_drain_closes_graph_before_v2_runner_opens(
             events.append("graph_close")
 
     class FakeRunner:
-        def __init__(self, settings: Settings) -> None:
+        def __init__(self, settings: Settings, stage_lock_factory: object | None = None) -> None:
             del settings
+            assert stage_lock_factory is daemon_module._v2_stage_lock
             events.append("runner_open")
 
         def run_next(self) -> dict[str, object]:
@@ -1538,6 +1553,63 @@ def test_auto_drain_closes_graph_before_v2_runner_opens(
 
     assert result["records_ingested"] == 1
     assert events == ["graph_open", "drain", "graph_close", "runner_open", "runner_run", "runner_close"]
+
+
+def test_session_detail_prefers_v2_raw_artifact_and_skips_pending_scan(tmp_path: Path) -> None:
+    settings = make_settings(tmp_path)
+    store = V2SessionJobStore(settings)
+    try:
+        session_id = "session-fast-detail"
+        job = store.enqueue_session(
+            session_id=session_id,
+            boundary_event_id="evt-boundary",
+            source_app="codex",
+            repo_path=str(tmp_path),
+            source_evidence_day="2026-05-27",
+        ).job
+        stage_dir = Path(job["artifact_dir"]) / "evidence_view"
+        stage_dir.mkdir(parents=True, exist_ok=True)
+        raw_path = stage_dir / "session_raw_evidence.jsonl"
+        raw_path.write_text(
+            "\n".join(
+                [
+                    json.dumps({"id": "raw-1", "session_id": session_id, "created_at": "2026-05-27T00:00:01Z", "event_name": "prompt", "payload": {"prompt": "build it"}}),
+                    json.dumps({"id": "raw-2", "session_id": session_id, "created_at": "2026-05-27T00:00:02Z", "event_name": "stop", "payload": {"last_assistant_message": "done"}}),
+                ]
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        view_path = stage_dir / "reasoning_evidence_view.json"
+        view_path.write_text(json.dumps({"input_raw": str(raw_path), "raw_record_count": 2}), encoding="utf-8")
+        store.start_stage(
+            job_id=str(job["job_id"]),
+            stage="evidence_view",
+            input_artifact="raw",
+            input_hash="raw-hash",
+            stage_config_hash="config-hash",
+        )
+        store.complete_stage(
+            job_id=str(job["job_id"]),
+            stage="evidence_view",
+            output_artifact=str(view_path),
+            output_hash="view-hash",
+            diagnostics={"raw_record_count": 2},
+        )
+    finally:
+        store.close()
+
+    records, source = _load_session_evidence_records(settings, session_id=session_id, limit=10)
+    pending = _session_pending_summary(settings, session_id=session_id)
+    fallback = build_session_detail_fallback(settings, session_id=session_id, limit=10, error=RuntimeError("locked"))
+
+    assert source == "v2_session_raw_evidence_artifact"
+    assert [record["id"] for record in records] == ["raw-1", "raw-2"]
+    assert pending["source"] == "v2_job_state"
+    assert pending["count"] == 0
+    assert fallback["degraded"] is True
+    assert len(fallback["timeline"]) == 2
+    assert fallback["graph"]["nodes"] == []
 
 
 def test_legacy_graphdelta_smoke_uses_disposable_graph_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

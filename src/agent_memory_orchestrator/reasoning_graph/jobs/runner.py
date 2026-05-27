@@ -4,10 +4,11 @@ import hashlib
 import json
 import os
 import uuid
+from contextlib import nullcontext
 from dataclasses import dataclass
 from dataclasses import replace as dataclass_replace
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, ContextManager
 
 from ...core.config import Settings
 from ...core.db import connect
@@ -19,6 +20,7 @@ from ...llm.qwen import OllamaQwenClient
 from ...llm.qwen import QwenUnavailable
 from ..code_analysis import extract_code_nodes_from_commit
 from ..central_merge import build_dry_run_merge_plan
+from ..central_merge.applier import apply_merge_plan
 from ..central_merge.applier import repo_central_graph_path
 from ..central_merge.identity import atoms_by_canonical_key
 from ..embedding_store import GraphEmbeddingStore
@@ -74,10 +76,12 @@ class V2SessionJobRunner:
         *,
         job_store: V2SessionJobStore | None = None,
         graph_store_factory: Callable[[Path], GraphStore] = KuzuGraphStore,
+        stage_lock_factory: Callable[[str], ContextManager[Any]] | None = None,
     ) -> None:
         self.settings = settings
         self.job_store = job_store or V2SessionJobStore(settings)
         self.graph_store_factory = graph_store_factory
+        self.stage_lock_factory = stage_lock_factory or (lambda _stage: nullcontext())
 
     def close(self) -> None:
         self.job_store.close()
@@ -163,7 +167,8 @@ class V2SessionJobRunner:
             input_hash=input_hash,
             stage_config_hash=config_hash,
         )
-        result = getattr(self, f"_stage_{stage}")(job, artifact_dir, stage_dir)
+        with self.stage_lock_factory(stage):
+            result = getattr(self, f"_stage_{stage}")(job, artifact_dir, stage_dir)
         if superseded:
             diagnostics = {**result.diagnostics, "superseded_previous_stage": superseded}
             return StageResult(output_path=result.output_path, diagnostics=diagnostics)
@@ -391,14 +396,14 @@ class V2SessionJobRunner:
         (stage_dir / "stage4_reasoning_review.json").write_text(json.dumps(review.as_dict(), indent=2, ensure_ascii=False), encoding="utf-8")
         output = stage_dir / "accepted_reasoning_nodes.json"
         output.write_text(json.dumps(list(review.accepted_nodes), indent=2, ensure_ascii=False), encoding="utf-8")
-        if review.summary.get("stage_acceptance") == "FAIL" or not review.accepted_nodes:
+        if review.summary.get("stage_acceptance") == "FAIL":
             raise StageFailed(
                 "reasoning_review_acceptance_failed",
                 {
                     "summary": review.summary,
                     "review_artifact": str(stage_dir / "stage4_reasoning_review.json"),
                     "accepted_nodes_artifact": str(output),
-                    "note": "Curated graph promotion is blocked when Qwen reasoning has structural errors or produces no accepted answer-grade nodes.",
+                    "note": "Curated graph promotion is blocked only when Qwen reasoning has structural errors. Review-only output can still produce deterministic commit/file memory.",
                 },
             )
         return StageResult(output_path=output, diagnostics={"summary": review.summary})
@@ -598,13 +603,36 @@ class V2SessionJobRunner:
         self.job_store.upsert_central_merge_plan(plan_payload)
         output = stage_dir / "merge_plan.json"
         output.write_text(json.dumps(plan_payload, indent=2, ensure_ascii=False), encoding="utf-8")
+        central_graph = self.graph_store_factory(repo_central_graph_path(self.settings, repo_id))
+        try:
+            apply_result = apply_merge_plan(
+                settings=self.settings,
+                plan_id=plan.plan_id,
+                store=self.job_store,
+                graph_store=central_graph,
+                lock_owner=f"v2-job:{job.get('job_id') or ''}",
+            )
+        finally:
+            central_graph.close()
+        if not apply_result.get("ok"):
+            raise StageFailed("central_merge_apply_failed", apply_result)
         diagnostics = {
-            "mode": plan.mode,
+            "status": apply_result.get("status") or "applied",
+            "mode": apply_result.get("mode") or "apply_exact_atoms",
             "plan_id": plan.plan_id,
             "plan_hash": plan.plan_hash,
             "input_graph_hash": plan.input_graph_hash,
             "repo_id": plan.repo_id,
             "repo_path": plan.repo_path,
+            "graph_commit_id": apply_result.get("graph_commit_id") or "",
+            "graph_view_id": apply_result.get("graph_view_id") or "",
+            "result_artifact": apply_result.get("result_artifact") or "",
+            "added_node_count": apply_result.get("added_node_count") or 0,
+            "added_edge_count": apply_result.get("added_edge_count") or 0,
+            "applied_atom_counts": apply_result.get("applied_atom_counts") or {},
+            "applied_version_counts": apply_result.get("applied_version_counts") or {},
+            "deferred_atom_counts": apply_result.get("deferred_atom_counts") or {},
+            "status_update_count": apply_result.get("status_update_count") or 0,
             "graph_commit_preview": plan.graph_commit_preview,
             "metrics": plan.metrics,
             "review_candidate_count": len(plan.review_candidates),
@@ -779,20 +807,25 @@ class V2SessionJobRunner:
         return StageResult(output_path=output, diagnostics=payload)
 
     def _stage_faiss(self, job: dict[str, Any], artifact_dir: Path, stage_dir: Path) -> StageResult:
-        del job, artifact_dir
+        del artifact_dir
+        repo_id = _job_repo_id(job)
         conn = connect(self.settings.retrieval_db_path)
         try:
+            index = RetrievalIndexStore(conn)
+            active_docs = index.list_documents(limit=100000, repo_id=repo_id)
             embedding_store = GraphEmbeddingStore(conn, db_path=self.settings.retrieval_db_path)
             result = embedding_store.build_faiss_cache(
                 embedding_kind=RETRIEVAL_EMBEDDING_KIND,
                 model=self.settings.embedding_model,
                 graph_scope="v2",
+                graph_paths={doc.doc_id for doc in active_docs},
             )
         finally:
             conn.close()
         output = stage_dir / "faiss_result.json"
-        output.write_text(json.dumps(result.as_dict(), indent=2), encoding="utf-8")
-        return StageResult(output_path=output, diagnostics=result.as_dict())
+        payload = {**result.as_dict(), "repo_id": repo_id, "active_projection_doc_count": len(active_docs)}
+        output.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        return StageResult(output_path=output, diagnostics=payload)
 
     def _stage_quality_eval(self, job: dict[str, Any], artifact_dir: Path, stage_dir: Path) -> StageResult:
         del job
@@ -1815,6 +1848,16 @@ def _quality_issues(
                 "status": faiss_status,
             }
         )
+    if total_docs and faiss_items > total_docs:
+        issues.append(
+            {
+                "code": "faiss_coverage_stale",
+                "message": "FAISS cache includes vectors outside active retrieval document coverage",
+                "item_count": faiss_items,
+                "total_docs": total_docs,
+                "status": faiss_status,
+            }
+        )
     return issues
 
 
@@ -1844,7 +1887,7 @@ def _quality_readiness(
         and str(retrieval_result.get("retrieval_source") or "") in {"curated_graph_manifest", "central_active_graph_view"}
         and bool(str(retrieval_result.get("active_projection_id") or ""))
     )
-    vector_retrieval_ready = bool(total_docs) and covered >= total_docs and faiss_items >= total_docs
+    vector_retrieval_ready = bool(total_docs) and covered >= total_docs and faiss_items == total_docs
     answer_trace_ready = central_memory_ready and lexical_retrieval_ready
     product_ready = central_memory_ready and lexical_retrieval_ready and vector_retrieval_ready and answer_trace_ready and not issue_codes
     return {
