@@ -29,6 +29,20 @@ _CLIENT_ABORT_ERRORS = (BrokenPipeError, ConnectionAbortedError, ConnectionReset
 _GRAPH_WRITE_LOCK = threading.RLock()
 _DRAIN_LOCK = threading.RLock()
 _V2_GRAPH_WRITE_STAGES = frozenset({"kuzu_write", "central_version_merge"})
+_READ_ONLY_GET_GRAPH_PATHS = frozenset(
+    {
+        "/api/graph/status",
+        "/api/graph-merge-status",
+        "/api/graph/session-context",
+        "/api/graph/raw-evidence",
+        "/api/graph/work-trace",
+        "/api/graph/session-detail",
+        "/api/graph/central",
+        "/api/graph/version-flow",
+        "/api/debug/graph",
+        "/api/debug/graph-cache",
+    }
+)
 _WEB_ROOT = Path(__file__).resolve().parents[1] / "web"
 
 
@@ -87,6 +101,19 @@ class _DaemonOwnerLock:
 
 def _daemon_owner_lock_path(settings: Settings) -> Path:
     return settings.home / ".state" / "daemon-owner.lock"
+
+
+def _read_graph_service(settings: Settings, *, repo_id: str = "") -> GraphRagService:
+    safe_repo_id = str(repo_id or "").strip()
+    if safe_repo_id:
+        central_graph_path = repo_central_graph_path(settings, safe_repo_id)
+        graph_settings = replace(settings, graph_path=central_graph_path)
+        return GraphRagService(
+            graph_settings,
+            store=KuzuGraphStore(central_graph_path, read_only=True),
+            read_only=True,
+        )
+    return GraphRagService(settings, read_only=True)
 
 
 def _ensure_lock_byte(handle: BinaryIO) -> None:
@@ -496,7 +523,13 @@ class AmoHandler(BaseHTTPRequestHandler):
                     sample = (query.get("sample") or ["Classify a decision lookup query."])[0]
                     self._write_json(200, debug_qwen(self.settings, sample=sample))
                     return
-                graph = GraphRagService(self.settings)
+                if path in _READ_ONLY_GET_GRAPH_PATHS:
+                    graph = _read_graph_service(
+                        self.settings,
+                        repo_id=repo_id if path in {"/api/graph/central", "/api/graph/version-flow"} else "",
+                    )
+                else:
+                    graph = GraphRagService(self.settings)
                 try:
                     if path == "/api/graph/status" or path == "/api/graph-merge-status":
                         self._write_json(200, graph.merge_status(session_id=session_id))
@@ -715,7 +748,7 @@ class AmoHandler(BaseHTTPRequestHandler):
                         graph.close()
                 return
             if self.path == "/graph/search":
-                graph = GraphRagService(self.settings)
+                graph = _read_graph_service(self.settings)
                 try:
                     limit = _bounded_int(str(payload.get("limit") or ""), default=8, minimum=1, maximum=50)
                     result = graph.graph_search(
@@ -749,7 +782,7 @@ class AmoHandler(BaseHTTPRequestHandler):
                         graph.close()
                 return
             if self.path == "/graph/work-trace":
-                graph = GraphRagService(self.settings)
+                graph = _read_graph_service(self.settings)
                 try:
                     result = graph.work_trace(
                         commit=str(payload.get("commit") or "HEAD"),
@@ -790,7 +823,7 @@ class AmoHandler(BaseHTTPRequestHandler):
                 return
             if self.path == "/graph/retrieval-build":
                 graph_settings = _settings_with_payload_paths(self.settings, payload, prefer_retrieval=True)
-                graph = GraphRagService(graph_settings)
+                graph = _read_graph_service(graph_settings)
                 try:
                     limit = _bounded_int(str(payload.get("limit") or ""), default=10000, minimum=1, maximum=100000)
                     max_doc_chars = _bounded_int(
@@ -812,7 +845,7 @@ class AmoHandler(BaseHTTPRequestHandler):
                 return
             if self.path == "/graph/retrieval-embed":
                 graph_settings = _settings_with_payload_paths(self.settings, payload, prefer_retrieval=True)
-                graph = GraphRagService(graph_settings)
+                graph = _read_graph_service(graph_settings)
                 try:
                     limit = _bounded_int(str(payload.get("limit") or ""), default=100, minimum=0, maximum=100000)
                     result = graph.embed_retrieval_index(
@@ -830,7 +863,7 @@ class AmoHandler(BaseHTTPRequestHandler):
                 return
             if self.path == "/graph/retrieve":
                 graph_settings = _settings_with_payload_paths(self.settings, payload, prefer_retrieval=True)
-                graph = GraphRagService(graph_settings)
+                graph = _read_graph_service(graph_settings, repo_id=str(payload.get("repo_id") or ""))
                 try:
                     limit = _bounded_int(str(payload.get("limit") or ""), default=8, minimum=1, maximum=50)
                     try:
@@ -911,13 +944,7 @@ class AmoHandler(BaseHTTPRequestHandler):
                 return
             if self.path == "/graph/version-flow":
                 repo_id = str(payload.get("repo_id") or "")
-                graph_settings = self.settings
-                graph_store = None
-                if repo_id.strip():
-                    central_graph_path = repo_central_graph_path(self.settings, repo_id)
-                    graph_settings = replace(self.settings, graph_path=central_graph_path)
-                    graph_store = KuzuGraphStore(central_graph_path)
-                graph = GraphRagService(graph_settings, store=graph_store)
+                graph = _read_graph_service(self.settings, repo_id=repo_id)
                 try:
                     limit = _bounded_int(str(payload.get("limit") or ""), default=100, minimum=1, maximum=500)
                     result = graph.version_flow(

@@ -435,18 +435,27 @@ def test_offline_graph_retrieve_with_repo_id_uses_repo_central_graph(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     settings = _settings(tmp_path)
-    opened_paths: list[Path] = []
+    opened_paths: list[tuple[Path, bool]] = []
     service_paths: list[Path] = []
     service_stores: list[object] = []
+    service_read_only: list[bool] = []
 
     class CapturingStore:
-        def __init__(self, graph_path: Path) -> None:
-            opened_paths.append(graph_path)
+        def __init__(self, graph_path: Path, *, read_only: bool = False) -> None:
+            opened_paths.append((graph_path, read_only))
 
     class CapturingService:
-        def __init__(self, service_settings: Settings, *, store: object | None = None, **_: object) -> None:
+        def __init__(
+            self,
+            service_settings: Settings,
+            *,
+            store: object | None = None,
+            read_only: bool = False,
+            **_: object,
+        ) -> None:
             service_paths.append(service_settings.graph_path)
             service_stores.append(store)
+            service_read_only.append(read_only)
 
         def retrieve_indexed_graph(self, **kwargs: object) -> dict[str, object]:
             return {"ok": True, "repo_id": kwargs.get("repo_id"), "graph_path": str(service_paths[-1])}
@@ -472,8 +481,9 @@ def test_offline_graph_retrieve_with_repo_id_uses_repo_central_graph(
 
     expected_path = repo_central_graph_path(settings, "repo:amo")
     assert exit_code == 0
-    assert opened_paths == [expected_path]
+    assert opened_paths == [(expected_path, True)]
     assert service_paths == [expected_path]
+    assert service_read_only == [True]
     assert service_stores
     assert service_stores[0] is not None
     assert json.loads(capsys.readouterr().out)["graph_path"] == str(expected_path)
