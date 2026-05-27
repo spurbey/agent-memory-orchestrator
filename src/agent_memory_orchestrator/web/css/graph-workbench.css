@@ -181,7 +181,7 @@ input[type="checkbox"] { accent-color: var(--accent); }
 }
 .trace-form { display: flex; gap: 8px; margin: 12px 0; }
 .trace-form input { flex: 1; }
-.trace-steps { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 7px; margin-bottom: 10px; }
+.trace-steps { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 7px; margin-bottom: 10px; }
 .trace-step {
   min-height: 70px;
   border: 1px solid var(--line);
@@ -219,6 +219,22 @@ input[type="checkbox"] { accent-color: var(--accent); }
 }
 .trace-card { display: grid; gap: 5px; color: var(--muted); }
 .trace-card.error { color: var(--red); }
+.trace-hit-list { display: grid; gap: 7px; margin-top: 10px; }
+.trace-hit-row {
+  width: 100%;
+  min-height: 48px;
+  text-align: left;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: rgba(3, 9, 7, 0.42);
+  color: var(--muted);
+  padding: 8px 10px;
+}
+.trace-hit-row:hover { border-color: var(--line-strong); color: var(--ink); }
+.trace-hit-row strong,
+.trace-hit-row span { display: block; }
+.trace-hit-row strong { color: var(--accent); font-size: 12px; }
+.trace-hit-row span { margin-top: 3px; font-size: 12px; }
 
 .inspector {
   top: 130px;
