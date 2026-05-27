@@ -1564,11 +1564,19 @@ def main(argv: list[str] | None = None) -> int:
                     return 0
                 graph_settings = settings
                 graph_store = None
+                read_only_graph = args.command in {
+                    "graph-search",
+                    "graph-cache-status",
+                    "graph-retrieval-build",
+                    "graph-retrieval-embed",
+                    "graph-retrieve",
+                    "graph-version-flow",
+                }
                 if args.command in {"graph-retrieve", "graph-version-flow"} and str(args.repo_id or "").strip():
                     central_graph_path = repo_central_graph_path(settings, args.repo_id)
                     graph_settings = replace(settings, graph_path=central_graph_path)
-                    graph_store = KuzuGraphStore(central_graph_path)
-                graph = GraphRagService(graph_settings, store=graph_store)
+                    graph_store = KuzuGraphStore(central_graph_path, read_only=True)
+                graph = GraphRagService(graph_settings, store=graph_store, read_only=read_only_graph)
                 try:
                     if args.command == "graph-search":
                         result = graph.graph_search(

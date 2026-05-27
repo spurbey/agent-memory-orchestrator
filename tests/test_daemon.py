@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import pytest
 
+from agent_memory_orchestrator.app import daemon as daemon_module
 from agent_memory_orchestrator.app.daemon import (
     DaemonAlreadyRunning,
     _DaemonOwnerLock,
     _bounded_int,
     _graph_workbench_html,
     _load_web_asset,
+    _read_graph_service,
     _session_cockpit_html,
     _v2_stage_requires_graph_write_lock,
     _web_asset_bytes,
@@ -76,6 +78,38 @@ def test_daemon_owner_lock_blocks_second_process_owner(tmp_path) -> None:
 
     second = _DaemonOwnerLock.acquire(settings)
     second.release()
+
+
+def test_read_graph_service_uses_repo_central_graph_read_only(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    settings = _settings_for_daemon_lock(tmp_path)
+    opened_stores: list[tuple[object, bool]] = []
+    opened_services: list[tuple[object, object | None, bool]] = []
+
+    class FakeStore:
+        def __init__(self, graph_path: object, *, read_only: bool = False) -> None:
+            self.graph_path = graph_path
+            self.read_only = read_only
+            opened_stores.append((graph_path, read_only))
+
+    class FakeGraph:
+        def __init__(self, graph_settings: Settings, *, store: object | None = None, read_only: bool = False, **_: object) -> None:
+            opened_services.append((graph_settings.graph_path, store, read_only))
+
+        def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(daemon_module, "KuzuGraphStore", FakeStore)
+    monkeypatch.setattr(daemon_module, "GraphRagService", FakeGraph)
+
+    graph = _read_graph_service(settings, repo_id="repo:amo")
+
+    expected_path = daemon_module.repo_central_graph_path(settings, "repo:amo")
+    assert graph is not None
+    assert opened_stores == [(expected_path, True)]
+    service_path, service_store, service_read_only = opened_services[0]
+    assert service_path == expected_path
+    assert service_store is not None
+    assert service_read_only is True
 
 
 def _settings_for_daemon_lock(tmp_path) -> Settings:
