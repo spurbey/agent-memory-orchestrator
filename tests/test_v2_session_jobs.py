@@ -297,7 +297,7 @@ def test_v2_jobs_and_repository_list_are_repo_scoped(tmp_path: Path) -> None:
     assert {row["repo_id"] for row in repos} >= {job_a["repo_id"], job_b["repo_id"]}
 
 
-def test_v2_central_merge_stage_writes_dry_run_plan_and_preserves_session_graph(tmp_path: Path) -> None:
+def test_v2_central_merge_stage_writes_plan_and_applies_exact_atoms(tmp_path: Path) -> None:
     settings = make_settings(tmp_path)
     store = V2SessionJobStore(settings)
     try:
@@ -343,18 +343,29 @@ def test_v2_central_merge_stage_writes_dry_run_plan_and_preserves_session_graph(
         assert run["status"] == "pending"
         plan_row = store.get_central_merge_plan_for_job(job["job_id"])
         assert plan_row is not None
-        assert plan_row["mode"] == "dry_run"
+        assert plan_row["status"] == "applied"
+        assert plan_row["mode"] == "apply_exact_atoms"
         assert plan_row["metrics"]["exact_atom_created_count"] == 4
         assert plan_row["metrics"]["review_candidate_count"] == 0
         assert plan_row["plan"]["new_atoms"]
         assert plan_row["plan"]["new_versions"]
-        assert store.graph_view(repo_id=plan_row["repo_id"], branch="main", mode="active") is not None
+        view = store.graph_view(repo_id=plan_row["repo_id"], branch="main", mode="active")
+        assert view is not None
+        assert view["graph_commit_id"]
         stage = store.stage_row(job_id=job["job_id"], stage="central_version_merge")
         assert stage is not None
         assert Path(stage["output_artifact"]).name == "merge_plan.json"
+        assert stage["diagnostics"]["mode"] == "apply_exact_atoms"
+        assert stage["diagnostics"]["graph_commit_id"] == view["graph_commit_id"]
+        merge_result = artifact_dir / "central_version_merge" / "merge_result.json"
+        assert merge_result.exists()
+        merge_payload = json.loads(merge_result.read_text(encoding="utf-8"))
+        assert merge_payload["status"] == "applied"
+        assert merge_payload["input_source"] == "curated_graph_manifest"
         fixture = export_job_fixture(settings, job_id=job["job_id"], out_dir=tmp_path / "fixture")
         semantic_context = fixture["fixture"]["semantic_context"]
         assert semantic_context["central_version_merge"]["repo_id"].startswith("repo:")
+        assert semantic_context["central_version_merge"]["applied"] is True
         result = run_semantic_eval_fixture(fixture_path=Path(fixture["path"]), case_set="baseline")
         assert result["status"] == "passed"
         assert result["metrics"]["case_count"] >= 5
