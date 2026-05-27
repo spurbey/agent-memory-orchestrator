@@ -15,6 +15,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 from ..core.config import Settings
 from ..graph.diagnostics import debug_drain, debug_graph, debug_hooks, debug_qwen
 from ..graph.service import GraphRagService
+from ..graph.service import build_session_detail_fallback
 from ..graph.store import GraphBackendUnavailable, KuzuGraphStore
 from ..integrations.connectors.slack import SlackConnectorService
 from ..memory import MemoryService
@@ -353,6 +354,15 @@ class AmoHandler(BaseHTTPRequestHandler):
             except Exception as exc:
                 self._write_json(500, {"ok": False, "error": str(exc)})
             return
+        if path == "/api/graph/session-detail" and (query.get("include_graph") or ["false"])[0].lower() != "true":
+            raw_limit = (query.get("limit") or ["120"])[0]
+            limit = _bounded_int(raw_limit, default=120, minimum=1, maximum=500)
+            session_id = (query.get("session_id") or [""])[0]
+            try:
+                self._write_json(200, build_session_detail_fallback(self.settings, session_id=session_id, limit=limit))
+            except Exception as exc:
+                self._write_json(500, {"ok": False, "error": str(exc)})
+            return
         if path.startswith("/api/graph/") or path.startswith("/api/debug/") or path == "/api/graph-merge-status":
             try:
                 raw_limit = (query.get("limit") or ["25"])[0]
@@ -436,6 +446,17 @@ class AmoHandler(BaseHTTPRequestHandler):
             except _CLIENT_ABORT_ERRORS:
                 return
             except (GraphBackendUnavailable, QwenUnavailable) as exc:
+                if path == "/api/graph/session-detail":
+                    self._write_json(
+                        200,
+                        build_session_detail_fallback(
+                            self.settings,
+                            session_id=session_id,
+                            limit=limit,
+                            error=exc,
+                        ),
+                    )
+                    return
                 if path in {"/api/graph/status", "/api/graph-merge-status", "/api/graph/central"}:
                     self._write_json(
                         200,
@@ -451,6 +472,17 @@ class AmoHandler(BaseHTTPRequestHandler):
                     self._write_json(200, {"ok": False, "error": str(exc)})
                 return
             except Exception as exc:
+                if path == "/api/graph/session-detail":
+                    self._write_json(
+                        200,
+                        build_session_detail_fallback(
+                            self.settings,
+                            session_id=session_id,
+                            limit=limit,
+                            error=exc,
+                        ),
+                    )
+                    return
                 if path in {"/api/graph/status", "/api/graph-merge-status", "/api/graph/central"}:
                     self._write_json(
                         200,

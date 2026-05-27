@@ -666,10 +666,10 @@ class GraphRagService:
         if not session_id:
             raise ValueError("session_id is required")
         safe_limit = max(1, min(500, int(limit)))
-        records = _load_evidence_records(_evidence_roots(self.settings), session_id=session_id, limit=safe_limit)
+        records, evidence_source = _load_session_evidence_records(self.settings, session_id=session_id, limit=safe_limit)
         nodes = [_sanitize_output_node(node) for node in self.store.list_nodes(session_id=session_id, limit=300)]
         edges = self.store.list_edges(session_id=session_id, limit=500)
-        pending = self.pending_evidence(session_id=session_id)
+        pending = _session_pending_summary(self.settings, session_id=session_id)
         windows = _reconstruct_clean_windows(records, nodes)
         merge_preview = CommitMergeEngine(self.settings, self.store, self.version_backend, classifier=None).finalize_session(
             session_id=session_id,
@@ -685,7 +685,8 @@ class GraphRagService:
             "current_context": self.current_context(session_id=session_id, limit=5),
             "merge_status": self.merge_status(session_id=session_id),
             "merge_preview": merge_preview,
-            "pending": {"count": pending.get("count", 0), "cursor_path": pending.get("cursor_path")},
+            "pending": {"count": pending.get("count", 0), "cursor_path": pending.get("cursor_path"), "source": pending.get("source")},
+            "evidence_source": evidence_source,
             "graph": {
                 "nodes": nodes,
                 "edges": edges,
@@ -2295,6 +2296,108 @@ def _load_evidence_records(
                 records.append(record)
     records.sort(key=lambda record: str(record.get("created_at") or ""))
     return records[-max(1, int(limit)) :]
+
+
+def build_session_detail_fallback(
+    settings: Settings,
+    *,
+    session_id: str,
+    limit: int = 120,
+    error: Exception | None = None,
+) -> dict[str, Any]:
+    """Return selected-session detail without opening Kuzu.
+
+    This is the dashboard fallback path when the graph file is temporarily
+    unavailable. It still shows immutable raw/V2 artifacts so the operator can
+    inspect the session while graph reads recover.
+    """
+
+    safe_session_id = str(session_id or "").strip()
+    if not safe_session_id:
+        raise ValueError("session_id is required")
+    safe_limit = max(1, min(500, int(limit)))
+    records, evidence_source = _load_session_evidence_records(settings, session_id=safe_session_id, limit=safe_limit)
+    pending = _session_pending_summary(settings, session_id=safe_session_id)
+    graph_warning = "graph_temporarily_unavailable" if error is not None else "graph_not_loaded_for_fast_session_detail"
+    warning = {
+        "ok": False,
+        "error": str(error or graph_warning),
+        "error_type": type(error).__name__ if error is not None else "GraphUnavailable",
+        "warning": graph_warning,
+    }
+    return {
+        "ok": True,
+        "degraded": error is not None,
+        "mode": "artifact_only",
+        "session_id": safe_session_id,
+        "timeline": [_timeline_row(record) for record in records],
+        "windows": _reconstruct_clean_windows(records, []),
+        "current_context": {"ok": True, "nodes": [], "source": "not_loaded_graph_unavailable"},
+        "merge_status": warning,
+        "merge_preview": warning,
+        "pending": {"count": pending.get("count", 0), "cursor_path": pending.get("cursor_path"), "source": pending.get("source")},
+        "evidence_source": evidence_source,
+        "graph": {"nodes": [], "edges": [], "warning": graph_warning},
+        "central_graph": {"ok": False, "nodes": [], "edges": [], "warnings": [graph_warning], "status": warning},
+    }
+
+
+def _load_session_evidence_records(settings: Settings, *, session_id: str, limit: int = 500) -> tuple[list[dict[str, Any]], str]:
+    artifact_records = _load_v2_session_raw_evidence_artifact(settings, session_id=session_id, limit=limit)
+    if artifact_records is not None:
+        return artifact_records, "v2_session_raw_evidence_artifact"
+    return _load_evidence_records(_evidence_roots(settings), session_id=session_id, limit=limit), "raw_evidence_scan"
+
+
+def _load_v2_session_raw_evidence_artifact(settings: Settings, *, session_id: str, limit: int = 500) -> list[dict[str, Any]] | None:
+    job_store = V2SessionJobStore(settings)
+    try:
+        job = job_store.get_job_by_session(session_id=session_id)
+        if not job:
+            return None
+        stage = job_store.stage_row(job_id=str(job.get("job_id") or ""), stage="evidence_view")
+        if not stage:
+            return None
+    finally:
+        job_store.close()
+    view_path = Path(str(stage.get("output_artifact") or ""))
+    if not view_path.exists():
+        return None
+    try:
+        view = json.loads(view_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    raw_path = Path(str(view.get("input_raw") or ""))
+    if not raw_path.exists() or raw_path.is_dir():
+        return None
+    records = [record for _next_offset, record in _read_jsonl_from(raw_path, 0)]
+    records.sort(key=lambda record: str(record.get("created_at") or ""))
+    return records[-max(1, int(limit)) :]
+
+
+def _session_pending_summary(settings: Settings, *, session_id: str) -> dict[str, Any]:
+    job_store = V2SessionJobStore(settings)
+    try:
+        job = job_store.get_job_by_session(session_id=session_id)
+    finally:
+        job_store.close()
+    if job:
+        return {
+            "ok": True,
+            "count": 0,
+            "pending": [],
+            "cursor_path": "",
+            "source": "v2_job_state",
+            "job_status": job.get("status"),
+            "current_stage": job.get("current_stage"),
+        }
+    return {
+        "ok": True,
+        "count": 0,
+        "pending": [],
+        "cursor_path": "",
+        "source": "not_loaded_no_v2_job",
+    }
 
 
 def _timeline_row(record: dict[str, Any]) -> dict[str, Any]:

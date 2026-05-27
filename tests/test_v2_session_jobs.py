@@ -36,6 +36,9 @@ from agent_memory_orchestrator.reasoning_graph.stage4_contract import stage4_con
 from agent_memory_orchestrator.reasoning_graph.retrieval import RetrievalDocument
 from agent_memory_orchestrator.reasoning_graph.retrieval import RetrievalIndexStore
 from agent_memory_orchestrator.graph.service import GraphRagService
+from agent_memory_orchestrator.graph.service import build_session_detail_fallback
+from agent_memory_orchestrator.graph.service import _load_session_evidence_records
+from agent_memory_orchestrator.graph.service import _session_pending_summary
 from agent_memory_orchestrator.graph.store import GraphNode
 from agent_memory_orchestrator.graph.store import InMemoryGraphStore
 
@@ -1539,6 +1542,63 @@ def test_auto_drain_closes_graph_before_v2_runner_opens(
 
     assert result["records_ingested"] == 1
     assert events == ["graph_open", "drain", "graph_close", "runner_open", "runner_run", "runner_close"]
+
+
+def test_session_detail_prefers_v2_raw_artifact_and_skips_pending_scan(tmp_path: Path) -> None:
+    settings = make_settings(tmp_path)
+    store = V2SessionJobStore(settings)
+    try:
+        session_id = "session-fast-detail"
+        job = store.enqueue_session(
+            session_id=session_id,
+            boundary_event_id="evt-boundary",
+            source_app="codex",
+            repo_path=str(tmp_path),
+            source_evidence_day="2026-05-27",
+        ).job
+        stage_dir = Path(job["artifact_dir"]) / "evidence_view"
+        stage_dir.mkdir(parents=True, exist_ok=True)
+        raw_path = stage_dir / "session_raw_evidence.jsonl"
+        raw_path.write_text(
+            "\n".join(
+                [
+                    json.dumps({"id": "raw-1", "session_id": session_id, "created_at": "2026-05-27T00:00:01Z", "event_name": "prompt", "payload": {"prompt": "build it"}}),
+                    json.dumps({"id": "raw-2", "session_id": session_id, "created_at": "2026-05-27T00:00:02Z", "event_name": "stop", "payload": {"last_assistant_message": "done"}}),
+                ]
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        view_path = stage_dir / "reasoning_evidence_view.json"
+        view_path.write_text(json.dumps({"input_raw": str(raw_path), "raw_record_count": 2}), encoding="utf-8")
+        store.start_stage(
+            job_id=str(job["job_id"]),
+            stage="evidence_view",
+            input_artifact="raw",
+            input_hash="raw-hash",
+            stage_config_hash="config-hash",
+        )
+        store.complete_stage(
+            job_id=str(job["job_id"]),
+            stage="evidence_view",
+            output_artifact=str(view_path),
+            output_hash="view-hash",
+            diagnostics={"raw_record_count": 2},
+        )
+    finally:
+        store.close()
+
+    records, source = _load_session_evidence_records(settings, session_id=session_id, limit=10)
+    pending = _session_pending_summary(settings, session_id=session_id)
+    fallback = build_session_detail_fallback(settings, session_id=session_id, limit=10, error=RuntimeError("locked"))
+
+    assert source == "v2_session_raw_evidence_artifact"
+    assert [record["id"] for record in records] == ["raw-1", "raw-2"]
+    assert pending["source"] == "v2_job_state"
+    assert pending["count"] == 0
+    assert fallback["degraded"] is True
+    assert len(fallback["timeline"]) == 2
+    assert fallback["graph"]["nodes"] == []
 
 
 def test_legacy_graphdelta_smoke_uses_disposable_graph_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
