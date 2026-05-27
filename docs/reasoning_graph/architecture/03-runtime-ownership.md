@@ -62,6 +62,19 @@ CLI, API, and MCP should call daemon endpoints by default. They should not silen
 
 Offline diagnostic commands can exist, but they must clearly state when they are opening Kuzu directly and may fail on locks.
 
+## Daemon Ownership Lock
+
+Only one daemon process may own graph writes for a given AMO home. In-process
+locks serialize multiple jobs inside one daemon, but they do not coordinate two
+separate OS processes. The daemon therefore holds
+`.state/daemon-owner.lock` for its whole lifetime before auto-drain starts or
+Kuzu is opened for graph writes.
+
+If a second daemon starts for the same AMO home, it must exit before starting
+auto-drain. Dashboard/API readers should use SQLite, retrieval projections, and
+V2 artifacts by default; explicit graph expansion can still fail fast if Kuzu is
+locked by the graph owner.
+
 ## Job Queue Rule
 
 Stop/finalize should enqueue graph processing work. The queue must be idempotent by session id, evidence id range, extraction run id, and commit id. Retrying a job must not duplicate graph nodes.
