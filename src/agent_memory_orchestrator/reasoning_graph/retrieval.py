@@ -1982,7 +1982,21 @@ def _central_version_boost(
     metadata = doc.metadata.get("node_metadata") if isinstance(doc.metadata, dict) else {}
     atom_kind = str(metadata.get("atom_kind") or "") if isinstance(metadata, dict) else ""
     if atom_kind in {"decision", "problem"}:
-        return 0.85
+        if intent == "decision_history":
+            if topic_overlap_ratio >= 0.6:
+                return 0.85
+            if topic_overlap_ratio >= 0.4:
+                return 0.45
+            return 0.0
+        if intent == "code_why" or _query_has_code_locator(query):
+            if topic_overlap_ratio >= 0.75:
+                return 0.35
+            if topic_overlap_ratio >= 0.6:
+                return 0.20
+            return 0.0
+        if topic_overlap_ratio >= 0.6:
+            return 0.25
+        return 0.0
     if intent == "version_flow" or _query_has_code_locator(query):
         return 0.55
     if topic_overlap_ratio >= 0.6:

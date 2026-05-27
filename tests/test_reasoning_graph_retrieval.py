@@ -808,6 +808,57 @@ def test_generic_query_does_not_overboost_low_overlap_exact_central_version(tmp_
     )
 
 
+def test_code_query_does_not_overboost_weakly_related_central_decision(tmp_path: Path) -> None:
+    graph = InMemoryGraphStore()
+    _conn, index_store, _embedding_store = _sqlite_store(tmp_path)
+    index_store.upsert_documents(
+        [
+            RetrievalDocument(
+                doc_id="doc:central-slack",
+                doc_type="central_version",
+                graph_node_id="kver:decision:slack",
+                node_kind="KnowledgeVersion",
+                repo_id="repo:amo",
+                title="Decision: Can now answer Slack mentions",
+                body="kind: KnowledgeVersion\natom_kind: decision\nsummary: AMO web memory can answer Slack mentions.",
+                metadata={"node_metadata": {"atom_kind": "decision", "status": "active"}},
+                memory_class="central_active_memory",
+                importance=0.95,
+                packet_id="",
+                commit_sha="",
+            ),
+            RetrievalDocument(
+                doc_id="doc:file-amo-js",
+                doc_type="file_impact",
+                graph_node_id="fileimpact:amo-js",
+                node_kind="FileImpactSummary",
+                repo_id="repo:amo",
+                title="Impact summary for src/agent_memory_orchestrator/web/amo.js",
+                body="AMO control web UI changed in the graph workbench implementation.",
+                metadata={"source": "curated_graph_manifest"},
+                memory_class="file_impact_summary",
+                importance=0.84,
+                packet_id="WP0015",
+                commit_sha="bdf1c3f",
+            ),
+        ]
+    )
+
+    result = retrieve_session_graph(
+        query="what changed for AMO control room web UI?",
+        index_store=index_store,
+        graph_store=graph,
+        repo_id="repo:amo",
+        limit=2,
+        expand_neighbors=0,
+    )
+
+    assert result.intent == "code_why"
+    assert result.hits[0].document.doc_type == "file_impact"
+    assert result.hits[0].document.graph_node_id == "fileimpact:amo-js"
+    assert any("central_low_topic_overlap_penalty" in hit.reasons for hit in result.hits if hit.document.doc_type == "central_version")
+
+
 def test_embedding_missing_retrieval_documents_is_resumable(tmp_path: Path) -> None:
     conn, index_store, embedding_store = _sqlite_store(tmp_path)
     index_store.upsert_documents(build_retrieval_documents_from_graph(_graph(), session_id="s1"))
