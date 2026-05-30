@@ -18,6 +18,11 @@ from ..domain.retrieval.models import RetrievalDocument
 from ..domain.retrieval.models import RetrievalHit
 from ..domain.retrieval.models import RetrievalResult
 from ..domain.retrieval.models import TextEmbeddingProvider
+from ..domain.retrieval.text import QUERY_STOPWORDS
+from ..domain.retrieval.text import exact_tokens as _exact_tokens
+from ..domain.retrieval.text import normalize as _normalize
+from ..domain.retrieval.text import stem_term as _stem_term
+from ..domain.retrieval.text import terms as _terms
 from ..graph.store import GraphStore
 from ..llm.rerankers import RerankCandidate
 from ..llm.rerankers import rerank_candidates
@@ -53,33 +58,6 @@ CENTRAL_RETRIEVAL_NODE_KINDS = (
     "GraphView",
 )
 DEFAULT_RETRIEVAL_NODE_KINDS = SESSION_RETRIEVAL_NODE_KINDS + CENTRAL_RETRIEVAL_NODE_KINDS
-
-QUERY_STOPWORDS = {
-    "about",
-    "after",
-    "again",
-    "and",
-    "are",
-    "code",
-    "did",
-    "does",
-    "for",
-    "from",
-    "how",
-    "into",
-    "made",
-    "make",
-    "the",
-    "this",
-    "was",
-    "what",
-    "when",
-    "where",
-    "which",
-    "why",
-    "were",
-    "with",
-}
 
 VERSION_FLOW_OPERATOR_TERMS = {
     "flow",
@@ -1761,43 +1739,6 @@ def _importance(doc_type: str, node_kind: str, metadata: dict[str, Any]) -> floa
 def _fts_query(query: str) -> str:
     terms = sorted(_expanded_query_terms(query))[:12]
     return " OR ".join(terms)
-
-
-def _exact_tokens(query: str) -> list[str]:
-    tokens = []
-    for token in re.findall(r"[A-Za-z0-9_./:-]+", query):
-        if len(token) <= 2:
-            continue
-        if token.lower() in QUERY_STOPWORDS:
-            continue
-        if "/" in token or "\\" in token or "." in token or "::" in token or re.fullmatch(r"[0-9a-f]{6,40}", token):
-            tokens.append(token.replace("\\", "/"))
-    return tokens
-
-
-def _terms(text: str) -> set[str]:
-    terms: set[str] = set()
-    for token in re.split(r"[^a-zA-Z0-9_]+", text.lower()):
-        if len(token) <= 2 or token in QUERY_STOPWORDS:
-            continue
-        if re.fullmatch(r"[0-9a-f]{16,40}", token):
-            continue
-        terms.add(_stem_term(token))
-    return terms
-
-
-def _normalize(text: str) -> str:
-    return " ".join(re.findall(r"[a-zA-Z0-9_./:-]+", str(text).lower()))
-
-
-def _stem_term(token: str) -> str:
-    if len(token) > 4 and token.endswith("ies"):
-        return token[:-3] + "y"
-    if len(token) > 4 and token.endswith("es"):
-        return token[:-2]
-    if len(token) > 3 and token.endswith("s"):
-        return token[:-1]
-    return token
 
 
 def _topic_terms(query: str, intent: str) -> set[str]:
