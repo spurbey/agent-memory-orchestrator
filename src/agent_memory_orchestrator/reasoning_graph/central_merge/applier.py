@@ -15,8 +15,8 @@ from ...graph.store import GraphStore
 from ...graph.store import KuzuGraphStore
 from ..jobs.store import V2SessionJobStore
 from ..jobs.store import graph_view_id
-from .models import CENTRAL_MERGE_PLAN_VERSION
-from .models import utc_now
+from ...domain.versioning.models import CENTRAL_MERGE_PLAN_VERSION
+from ...domain.versioning.models import utc_now
 
 
 EXACT_APPLY_ATOM_KINDS = frozenset({"commit", "file"})

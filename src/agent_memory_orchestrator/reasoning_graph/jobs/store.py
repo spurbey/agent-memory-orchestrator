@@ -12,7 +12,7 @@ from typing import Any
 from ...core.config import Settings
 from ...core.db import connect
 from ...core.db import init_schema
-from ..central_merge.repo_identity import resolve_repo_identity
+from ...domain.versioning.repo_identity import resolve_repo_identity
 from .constants import GRAPH_SCHEMA_VERSION
 from .constants import PIPELINE_VERSION
 from .constants import RESET_MARKER_KEY

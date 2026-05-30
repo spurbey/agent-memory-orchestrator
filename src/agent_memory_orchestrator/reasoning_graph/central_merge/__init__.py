@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from .models import CENTRAL_MERGE_PLAN_VERSION
-from .models import MergePlan
-from .repo_identity import RepoIdentity
-from .repo_identity import resolve_repo_identity
+from ...domain.versioning.models import CENTRAL_MERGE_PLAN_VERSION
+from ...domain.versioning.models import MergePlan
+from ...domain.versioning.repo_identity import RepoIdentity
+from ...domain.versioning.repo_identity import resolve_repo_identity
 
 __all__ = [
     "CENTRAL_MERGE_PLAN_VERSION",

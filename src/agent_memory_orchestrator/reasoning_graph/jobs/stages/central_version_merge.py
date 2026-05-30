@@ -7,7 +7,7 @@ from typing import Any
 from ...central_merge import build_dry_run_merge_plan
 from ...central_merge.applier import apply_merge_plan
 from ...central_merge.applier import repo_central_graph_path
-from ...central_merge.repo_identity import resolve_repo_identity
+from ....domain.versioning.repo_identity import resolve_repo_identity
 from ..runner import StageFailed
 from ..runner import StageResult
 from ..runner import _product_manifest_info

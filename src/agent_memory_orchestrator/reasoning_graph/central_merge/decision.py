@@ -7,8 +7,8 @@ from dataclasses import dataclass
 from itertools import combinations
 from typing import Any
 
-from .models import ReviewCandidate
-from .models import stable_hash
+from ...domain.versioning.models import ReviewCandidate
+from ...domain.versioning.models import stable_hash
 
 
 REASONING_EDGE_PREFIX = "REASON_NODE_"

@@ -25,7 +25,7 @@ from ..evidence.window import clean_evidence_window
 from ..llm.embeddings import embed_text
 from ..llm.qwen import DeterministicPlanner, OllamaQwenClient, QueryPlan, QwenPlanner, QwenUnavailable
 from ..reasoning_graph.embedding_store import GraphEmbeddingStore
-from ..reasoning_graph.central_merge.repo_identity import resolve_repo_identity
+from ..domain.versioning.repo_identity import resolve_repo_identity
 from ..reasoning_graph.jobs import V2SessionJobStore
 from ..infrastructure.sqlite.retrieval_store import RetrievalIndexStore
 from ..reasoning_graph.retrieval import RETRIEVAL_EMBEDDING_KIND
