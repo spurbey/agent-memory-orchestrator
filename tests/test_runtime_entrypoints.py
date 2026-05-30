@@ -12,7 +12,8 @@ def test_console_scripts_point_to_runtime_adapters() -> None:
     assert 'amo-hook = "agent_memory_orchestrator.runtime.hook.launcher:main"' in pyproject
 
 
-def test_runtime_adapters_delegate_to_existing_implementations() -> None:
+def test_runtime_adapters_keep_compatibility_imports() -> None:
+    from agent_memory_orchestrator import cli as compat_cli
     from agent_memory_orchestrator.app import cli as app_cli
     from agent_memory_orchestrator.app import daemon as app_daemon
     from agent_memory_orchestrator.app import hook as app_hook
@@ -24,7 +25,8 @@ def test_runtime_adapters_delegate_to_existing_implementations() -> None:
     from agent_memory_orchestrator.runtime.mcp import server as runtime_mcp
     from agent_memory_orchestrator.runtime.mcp import tools as runtime_mcp_tools
 
-    assert runtime_cli._impl is app_cli
+    assert compat_cli is runtime_cli
+    assert app_cli is runtime_cli
     assert runtime_daemon.main is app_daemon.main
     assert runtime_hook.main is app_hook.main
     assert runtime_mcp.main is mcp_server.main
