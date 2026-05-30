@@ -9,9 +9,9 @@ from ...core.config import Settings
 from ...graph.store import KuzuGraphStore
 from ..jobs.store import V2SessionJobStore
 from ..jobs.store import utc_now
-from .identity import atoms_by_canonical_key
+from ...domain.versioning.identity import atoms_by_canonical_key
+from ...domain.versioning.repo_identity import resolve_repo_identity
 from .planner import build_dry_run_merge_plan
-from .repo_identity import resolve_repo_identity
 
 
 def backfill_central_merge_plan(settings: Settings, *, job_id: str, forced_by: str = "manual-backfill") -> dict[str, Any]:

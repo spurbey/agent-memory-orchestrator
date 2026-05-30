@@ -9,14 +9,14 @@ from typing import Any
 from ..jobs.constants import GRAPH_SCHEMA_VERSION
 from ..jobs.constants import PIPELINE_VERSION
 from .decision import build_decision_review_candidates
-from .models import CANONICAL_KEY_VERSION
-from .models import KnowledgeAtomPreview
-from .models import KnowledgeVersionPreview
-from .models import MergePlan
-from .models import merge_plan_id_for
-from .models import stable_hash
-from .repo_identity import RepoIdentity
-from .repo_identity import resolve_repo_identity
+from ...domain.versioning.models import CANONICAL_KEY_VERSION
+from ...domain.versioning.models import KnowledgeAtomPreview
+from ...domain.versioning.models import KnowledgeVersionPreview
+from ...domain.versioning.models import MergePlan
+from ...domain.versioning.models import merge_plan_id_for
+from ...domain.versioning.models import stable_hash
+from ...domain.versioning.repo_identity import RepoIdentity
+from ...domain.versioning.repo_identity import resolve_repo_identity
 
 
 EXACT_ATOM_KINDS = frozenset({"commit", "file", "symbol", "code_region"})

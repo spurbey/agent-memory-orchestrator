@@ -19,13 +19,13 @@ from ...llm.qwen import OllamaQwenClient
 from ...llm.qwen import QwenUnavailable
 from ..code_analysis import extract_code_nodes_from_commit
 from ..central_merge.applier import repo_central_graph_path
-from ..central_merge.identity import atoms_by_canonical_key
+from ...domain.versioning.identity import atoms_by_canonical_key
 from ..evidence_view import build_reasoning_evidence_view
 from ..evidence_view import git_commit_truth
 from ..evidence_view import write_reasoning_evidence_view_artifacts
 from ..reasoning_extraction import review_reasoning_extraction_results
 from ..repo_resolution import resolve_session_repo_root
-from ..central_merge.repo_identity import resolve_repo_identity
+from ...domain.versioning.repo_identity import resolve_repo_identity
 from ..retrieval import RetrievalDocument
 from ..stage4_contract import build_stage4_packet_prompt
 from ..stage4_contract import stage4_contract_hash
