@@ -171,7 +171,11 @@ def doctor(target: str = "all", user_home: Path | None = None, amo_home: Path | 
             "hooks_file_exists": bool(hooks_payload),
             "managed_block": MANAGED_BEGIN in text and MANAGED_END in text,
             "mcp_configured": CODEX_MCP_NAME in text,
-            "hooks_configured": "agent_memory_orchestrator.hook" in text or _codex_has_amo_hooks(hooks_payload),
+            "hooks_configured": (
+                "agent_memory_orchestrator.hook" in text
+                or "agent_memory_orchestrator.runtime.hook.launcher" in text
+                or _codex_has_amo_hooks(hooks_payload)
+            ),
             "codex_hooks_enabled": bool(re.search(r"(?m)^\s*codex_hooks\s*=\s*true\s*$", text)),
             "skill_checkpoint_configured": (home / ".codex" / "skills" / "amo-skill-checkpoint" / "SKILL.md").exists(),
         }
@@ -234,7 +238,7 @@ def _hook_launcher_script() -> str:
         "if str(IMPORT_ROOT) not in sys.path:\n"
         "    sys.path.insert(0, str(IMPORT_ROOT))\n\n"
         "try:\n"
-        "    runpy.run_module('agent_memory_orchestrator.hook', run_name='__main__')\n"
+        "    runpy.run_module('agent_memory_orchestrator.runtime.hook.launcher', run_name='__main__')\n"
         "except SystemExit as exc:\n"
         "    if exc.code in (0, None):\n"
         "        raise\n"
@@ -438,7 +442,7 @@ def _skill_checkpoint_mark_command(
 ) -> str:
     note = note_placeholder.replace('"', '\\"')
     return (
-        f'{_shell_command_atom(python_command)} -m agent_memory_orchestrator.app.cli '
+        f'{_shell_command_atom(python_command)} -m agent_memory_orchestrator.runtime.cli.main '
         f'skill-checkpoint mark --agent {agent} --amo-home "{amo_home}" --note "{note}"'
     )
 
@@ -448,7 +452,7 @@ def _claude_operation(*, settings_path: Path, amo_home: Path, python_command: st
     payload.setdefault("mcpServers", {})
     payload["mcpServers"][CLAUDE_MCP_NAME] = {
         "command": python_command,
-        "args": ["-m", "agent_memory_orchestrator.mcp.server", "--amo-home", str(amo_home)],
+        "args": ["-m", "agent_memory_orchestrator.runtime.mcp.server", "--amo-home", str(amo_home)],
     }
     hooks = payload.setdefault("hooks", {})
     for event, matcher, status in _hook_events():
@@ -478,7 +482,7 @@ def _claude_operation(*, settings_path: Path, amo_home: Path, python_command: st
 
 
 def _codex_managed_block(*, amo_home: Path, python_command: str) -> str:
-    mcp_args = ["-m", "agent_memory_orchestrator.mcp.server", "--amo-home", str(amo_home)]
+    mcp_args = ["-m", "agent_memory_orchestrator.runtime.mcp.server", "--amo-home", str(amo_home)]
     lines = [
         MANAGED_BEGIN,
         "# Managed by Agent Memory Orchestrator. Do not edit inside this block.",
@@ -510,7 +514,10 @@ def _hook_command(
 ) -> str:
     if hook_launcher is not None:
         return f'{_shell_command_atom(python_command)} "{hook_launcher}" --agent {agent} --amo-home "{amo_home}"'
-    return f'{_shell_command_atom(python_command)} -m agent_memory_orchestrator.hook --agent {agent} --amo-home "{amo_home}"'
+    return (
+        f'{_shell_command_atom(python_command)} -m agent_memory_orchestrator.runtime.hook.launcher '
+        f'--agent {agent} --amo-home "{amo_home}"'
+    )
 
 
 def _shell_command_atom(value: str) -> str:
@@ -642,7 +649,11 @@ def _is_amo_claude_hook(entry: Any) -> bool:
 
 
 def _is_amo_hook_command(command: str) -> bool:
-    return "agent_memory_orchestrator.hook" in command or "amo_hook_launcher.py" in command
+    return (
+        "agent_memory_orchestrator.hook" in command
+        or "agent_memory_orchestrator.runtime.hook.launcher" in command
+        or "amo_hook_launcher.py" in command
+    )
 
 
 def _is_amo_codex_hook(entry: Any) -> bool:
