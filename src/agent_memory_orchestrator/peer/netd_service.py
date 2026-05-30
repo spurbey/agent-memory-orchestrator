@@ -377,7 +377,7 @@ def _enable_command(settings: Settings, launch: PeerNetdLaunchOptions) -> list[s
     command = [
         sys.executable or "python",
         "-m",
-        "agent_memory_orchestrator.app.cli",
+        "agent_memory_orchestrator.runtime.cli.main",
         "peer",
         "--amo-home",
         str(settings.home),
@@ -431,7 +431,7 @@ def _watch_command(settings: Settings) -> list[str]:
     return [
         sys.executable or "python",
         "-m",
-        "agent_memory_orchestrator.app.cli",
+        "agent_memory_orchestrator.runtime.cli.main",
         "peer-agent",
         "--amo-home",
         str(settings.home),
