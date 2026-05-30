@@ -25,6 +25,10 @@ from ...reasoning_graph.jobs import ProductionSessionJobStore
 from ...reasoning_graph.central_merge.applier import repo_central_graph_path
 from .owner_lock import DaemonAlreadyRunning
 from .owner_lock import DaemonOwnerLock
+from .web_assets import graph_workbench_html
+from .web_assets import load_web_asset
+from .web_assets import session_cockpit_html
+from .web_assets import web_asset_bytes
 
 _DaemonOwnerLock = DaemonOwnerLock
 _CLIENT_ABORT_ERRORS = (BrokenPipeError, ConnectionAbortedError, ConnectionResetError)
@@ -45,7 +49,6 @@ _READ_ONLY_GET_GRAPH_PATHS = frozenset(
         "/api/debug/graph-cache",
     }
 )
-_WEB_ROOT = Path(__file__).resolve().parents[2] / "web"
 
 
 def _read_graph_service(settings: Settings, *, repo_id: str = "") -> GraphRagService:
@@ -62,30 +65,19 @@ def _read_graph_service(settings: Settings, *, repo_id: str = "") -> GraphRagSer
 
 
 def _load_web_asset(name: str) -> str:
-    return (_WEB_ROOT / name).read_text(encoding="utf-8")
+    return load_web_asset(name)
 
 
 def _web_asset_bytes(name: str) -> tuple[bytes, str]:
-    path = (_WEB_ROOT / name).resolve()
-    root = _WEB_ROOT.resolve()
-    if root not in path.parents and path != root:
-        raise ValueError("invalid web asset path")
-    data = path.read_bytes()
-    suffix = path.suffix.lower()
-    content_type = {
-        ".css": "text/css; charset=utf-8",
-        ".js": "application/javascript; charset=utf-8",
-        ".html": "text/html; charset=utf-8",
-    }.get(suffix, "application/octet-stream")
-    return data, content_type
+    return web_asset_bytes(name)
 
 
 def _session_cockpit_html() -> str:
-    return _load_web_asset("index.html")
+    return session_cockpit_html()
 
 
 def _graph_workbench_html() -> str:
-    return _load_web_asset("graph.html")
+    return graph_workbench_html()
 
 
 def _bounded_int(raw: str | None, *, default: int, minimum: int, maximum: int) -> int:
