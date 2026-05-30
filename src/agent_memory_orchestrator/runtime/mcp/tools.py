@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from ...app.client import DaemonClient, DaemonUnavailable
+from ..daemon.client import DaemonClient, DaemonUnavailable
 from ...core.config import Settings
 from ...graph.service import GraphRagService
 from ...graph.store import GraphBackendUnavailable

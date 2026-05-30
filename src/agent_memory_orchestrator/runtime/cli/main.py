@@ -70,7 +70,7 @@ from ...skill_checkpoint import list_skill_checkpoints
 from ...skill_checkpoint import mark_skill_checkpoint
 from ...skill_checkpoint import run_local_skill_checkpoint_extraction
 from ...skill_checkpoint import write_skill_checkpoint_outputs
-from ...app.client import DaemonClient, DaemonUnavailable
+from ..daemon.client import DaemonClient, DaemonUnavailable
 
 
 def _print(payload: object) -> None:
