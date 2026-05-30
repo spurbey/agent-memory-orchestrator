@@ -6,8 +6,8 @@ import time
 from pathlib import Path
 from typing import Any
 
-from ...app.client import DaemonClient
-from ...app.client import DaemonUnavailable
+from ...runtime.daemon.client import DaemonClient
+from ...runtime.daemon.client import DaemonUnavailable
 from ...core.config import Settings
 from ...core.db import connect
 from ...graph.store import KuzuGraphStore

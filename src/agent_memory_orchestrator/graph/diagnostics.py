@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from ..core.config import Settings
-from ..app.client import DaemonClient, DaemonUnavailable
+from ..runtime.daemon.client import DaemonClient, DaemonUnavailable
 from ..evidence.drain import EvidenceDrain
 from ..evidence.triggers import detect_trigger
 from ..evidence.triggers import is_session_start
