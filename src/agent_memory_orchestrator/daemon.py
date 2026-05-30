@@ -1,13 +1,10 @@
 from __future__ import annotations
 
-from .app import daemon as _impl
+import sys
 
-for _name in dir(_impl):
-    if not _name.startswith("__"):
-        globals()[_name] = getattr(_impl, _name)
-
-main = _impl.main
-
+from .runtime.daemon import server as _impl
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(_impl.main())
+
+sys.modules[__name__] = _impl
