@@ -106,6 +106,9 @@ def create_server(settings: Settings) -> FastMCP:
     def amo_graph_search(
         query: str,
         limit: int = 8,
+        repo_id: str = "",
+        use_vector: bool = True,
+        require_vector: bool = False,
         include_raw: bool = False,
         include_historical: bool = False,
     ) -> dict:
@@ -113,6 +116,9 @@ def create_server(settings: Settings) -> FastMCP:
         return memory_tools.amo_graph_search(
             query=query,
             limit=limit,
+            repo_id=repo_id,
+            use_vector=use_vector,
+            require_vector=require_vector,
             include_raw=include_raw,
             include_historical=include_historical,
         )

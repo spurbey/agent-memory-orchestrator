@@ -1246,6 +1246,258 @@ def test_graph_service_wires_retrieval_build_embed_and_answer(tmp_path: Path) ->
     assert "code:retrieval:retrieve_session_graph" in first_citation["code_node_ids"]
 
 
+def test_code_locator_query_penalizes_unrelated_add_file_impacts(tmp_path: Path) -> None:
+    conn, index_store, _embedding_store = _sqlite_store(tmp_path)
+    try:
+        index_store.upsert_documents(
+            [
+                RetrievalDocument(
+                    doc_id="doc:demo:file",
+                    doc_type="file_impact",
+                    graph_node_id="fileimpact:demo",
+                    node_kind="FileImpactSummary",
+                    repo_id="repo:amo",
+                    packet_id="WP0001",
+                    commit_sha="7ea1d74",
+                    title="Impact summary for src/agent_memory_orchestrator/demo_marker.py",
+                    body='Add demo_marker_message returning "amo demo memory marker".',
+                    metadata={"path": "src/agent_memory_orchestrator/demo_marker.py"},
+                ),
+                RetrievalDocument(
+                    doc_id="doc:peer:file",
+                    doc_type="file_impact",
+                    graph_node_id="fileimpact:peer",
+                    node_kind="FileImpactSummary",
+                    repo_id="repo:amo",
+                    packet_id="WP0002",
+                    commit_sha="8df94c2",
+                    title="Impact summary for src/agent_memory_orchestrator/peer/service.py",
+                    body="Add peer transport behavior for libp2p room messages.",
+                    metadata={"path": "src/agent_memory_orchestrator/peer/service.py"},
+                ),
+            ]
+        )
+
+        result = retrieve_session_graph(
+            query="why did we add demo_marker_message?",
+            index_store=index_store,
+            graph_store=_NoGraphWalkStore(),
+            repo_id="repo:amo",
+            limit=2,
+            expand_neighbors=0,
+            include_graph_nodes=False,
+        )
+    finally:
+        conn.close()
+
+    assert result.hits
+    assert result.hits[0].document.doc_id == "doc:demo:file"
+    peer_hit = next(hit for hit in result.hits if hit.document.doc_id == "doc:peer:file")
+    assert "code_locator_mismatch_penalty" in peer_hit.reasons
+
+
+def test_version_flow_query_prefers_matching_file_impact_rollup(tmp_path: Path) -> None:
+    conn, index_store, _embedding_store = _sqlite_store(tmp_path)
+    try:
+        index_store.upsert_documents(
+            [
+                RetrievalDocument(
+                    doc_id="doc:central:file-version",
+                    doc_type="central_version",
+                    graph_node_id="kver:file:demo-marker",
+                    node_kind="KnowledgeVersion",
+                    repo_id="repo:amo",
+                    packet_id="",
+                    commit_sha="",
+                    title="File version: src/agent_memory_orchestrator/demo_marker.py",
+                    body="kind: KnowledgeVersion\natom_kind: file\nfile_path: src/agent_memory_orchestrator/demo_marker.py",
+                    metadata={"node_metadata": {"atom_kind": "file"}},
+                ),
+                RetrievalDocument(
+                    doc_id="doc:file-impact:demo-marker",
+                    doc_type="file_impact",
+                    graph_node_id="fileimpact:demo-marker",
+                    node_kind="FileImpactSummary",
+                    repo_id="repo:amo",
+                    packet_id="WP0001",
+                    commit_sha="7ea1d74",
+                    title="Impact summary for src/agent_memory_orchestrator/demo_marker.py",
+                    body="demo_marker.py was touched by two curated code impacts.",
+                    metadata={
+                        "path": "src/agent_memory_orchestrator/demo_marker.py",
+                        "commit_shas": ["7ea1d74", "ac2e1db"],
+                        "commit_messages": ["demo(amo): add demo marker function", "demo(amo): update marker after retrieval fix"],
+                        "reasons": [
+                            "Add demo_marker_message for the AMO memory capture demo.",
+                            "Update the marker after the retrieval fix on the demo branch.",
+                        ],
+                    },
+                ),
+                RetrievalDocument(
+                    doc_id="doc:packet:unrelated",
+                    doc_type="packet",
+                    graph_node_id="WP0099",
+                    node_kind="Packet",
+                    repo_id="repo:amo",
+                    packet_id="WP0099",
+                    commit_sha="9bad999",
+                    title="WP0099 fix(retrieval): unrelated version warning",
+                    body="Unrelated retrieval version warning text.",
+                ),
+            ]
+        )
+
+        result = retrieve_session_graph(
+            query="how did demo_marker.py evolve over time",
+            index_store=index_store,
+            graph_store=_NoGraphWalkStore(),
+            repo_id="repo:amo",
+            limit=3,
+            expand_neighbors=0,
+            include_graph_nodes=False,
+        )
+    finally:
+        conn.close()
+
+    assert result.intent == "version_flow"
+    assert result.hits[0].document.doc_id == "doc:file-impact:demo-marker"
+    assert "version_file_impact_boost" in result.hits[0].reasons
+    assert "version_locator_file_rollup_boost" in result.hits[0].reasons
+
+
+def test_answer_renderer_builds_version_timeline_from_file_impact() -> None:
+    result = {
+        "query": "what was the demo_marker function about?",
+        "hits": [
+            {
+                "document": RetrievalDocument(
+                    doc_id="doc:file-impact:demo-marker",
+                    doc_type="file_impact",
+                    graph_node_id="fileimpact:demo-marker",
+                    node_kind="FileImpactSummary",
+                    repo_id="repo:amo",
+                    packet_id="WP0001",
+                    commit_sha="7ea1d74",
+                    title="Impact summary for src/agent_memory_orchestrator/demo_marker.py",
+                    body="demo_marker.py was touched by two curated code impacts.",
+                    metadata={
+                        "path": "src/agent_memory_orchestrator/demo_marker.py",
+                        "selected_files": ["src/agent_memory_orchestrator/demo_marker.py", "tests/test_demo_marker.py"],
+                        "commit_shas": ["7ea1d74", "ac2e1db"],
+                        "commit_messages": ["demo(amo): add demo marker function", "demo(amo): update marker after retrieval fix"],
+                        "packet_ids": ["WP0001", "WP0002"],
+                        "reasons": [
+                            "Add demo_marker_message returning the AMO demo memory marker and validate it with a focused test.",
+                            "Update the marker after the retrieval fix on the demo branch.",
+                        ],
+                    },
+                ).as_dict(),
+                "score": 1.2,
+            },
+            {
+                "document": RetrievalDocument(
+                    doc_id="doc:file-version:demo-marker",
+                    doc_type="central_version",
+                    graph_node_id="kver:file:demo-marker",
+                    node_kind="KnowledgeVersion",
+                    repo_id="repo:amo",
+                    packet_id="",
+                    commit_sha="",
+                    title="File version: src/agent_memory_orchestrator/demo_marker.py",
+                    body="kind: KnowledgeVersion\natom_kind: file\nfile_path: src/agent_memory_orchestrator/demo_marker.py",
+                    metadata={"node_metadata": {"atom_kind": "file"}},
+                ).as_dict(),
+                "score": 1.1,
+            },
+            {
+                "document": RetrievalDocument(
+                    doc_id="doc:decision:update",
+                    doc_type="central_version",
+                    graph_node_id="kver:decision:update",
+                    node_kind="KnowledgeVersion",
+                    repo_id="repo:amo",
+                    packet_id="",
+                    commit_sha="",
+                    title="Decision: Commit to demo branch",
+                    body="statement: Commit to demo branch to address the demo marker function after retrieval fix.",
+                    metadata={
+                        "node_metadata": {
+                            "atom_kind": "decision",
+                            "version_metadata": {
+                                "linked_commits": ["ac2e1db"],
+                                "linked_files": ["src/agent_memory_orchestrator/demo_marker.py"],
+                                "linked_packets": ["WP0002"],
+                                "statement": "Commit to demo branch to address the demo marker function after retrieval fix.",
+                            },
+                        }
+                    },
+                ).as_dict(),
+                "score": 1.0,
+            },
+        ],
+    }
+
+    answer = _answer_from_retrieval_result(result, graph_store=InMemoryGraphStore())
+    text = answer["text"]
+
+    assert "Version history for src/agent_memory_orchestrator/demo_marker.py:" in text
+    assert "7ea1d74 demo(amo): add demo marker function" in text
+    assert "ac2e1db demo(amo): update marker after retrieval fix" in text
+    assert "Why: Add demo_marker_message returning the AMO demo memory marker" in text
+    assert "File version: src/agent_memory_orchestrator/demo_marker.py" not in text
+    assert "Support: file-impact summary, packet-backed" in text
+    assert answer["context"]["version_timeline"]["commit_count"] == 2
+
+
+def test_answer_renderer_preserves_packet_discussion_before_file_versions() -> None:
+    result = {
+        "query": "how is peer-to-peer communication configured, especially context management?",
+        "hits": [
+            {
+                "document": RetrievalDocument(
+                    doc_id="doc:packet",
+                    doc_type="packet",
+                    graph_node_id="job:WP0006",
+                    node_kind="Packet",
+                    repo_id="repo:amo",
+                    packet_id="WP0006",
+                    commit_sha="f22bc4c",
+                    title="WP0006 docs(peer): promote peer-agent watcher flow",
+                    body=(
+                        "Packet: WP0006 docs(peer): promote peer-agent watcher flow\n"
+                        "Analyze agent to agent communication with memory and context management across devices."
+                    ),
+                ).as_dict(),
+                "score": 1.0,
+            },
+            {
+                "document": RetrievalDocument(
+                    doc_id="doc:file-version",
+                    doc_type="central_version",
+                    graph_node_id="kver:file:peer-context",
+                    node_kind="KnowledgeVersion",
+                    repo_id="repo:amo",
+                    packet_id="",
+                    commit_sha="",
+                    title="File version: src/agent_memory_orchestrator/peer/context.py",
+                    body="kind: KnowledgeVersion\natom_kind: file\nfile_path: src/agent_memory_orchestrator/peer/context.py",
+                    metadata={"node_metadata": {"atom_kind": "file"}},
+                ).as_dict(),
+                "score": 0.99,
+            },
+        ],
+    }
+
+    answer = _answer_from_retrieval_result(result, graph_store=InMemoryGraphStore())
+    text = answer["text"]
+
+    assert "Relevant work and discussion:" in text
+    assert "agent to agent communication with memory and context management" in text
+    assert "Decisions and reasoning:" not in text
+    assert "File version: src/agent_memory_orchestrator/peer/context.py" not in text
+    assert answer["context"]["items"][0]["doc_type"] == "packet"
+
+
 def test_graph_service_retrieve_uses_active_embedding_scope_when_unspecified(tmp_path: Path) -> None:
     svc = GraphRagService(
         _settings(tmp_path),
@@ -1671,7 +1923,7 @@ def test_graph_service_answer_includes_multihop_trace(tmp_path: Path) -> None:
 
     assert result["ok"] is True
     assert "Evidence:" in result["answer"]["text"]
-    assert "commit-backed -> code-backed" in result["answer"]["text"]
+    assert "Support: session context, commit-backed, code-linked" in result["answer"]["text"]
     assert "Hooks became capture-only" in result["answer"]["text"]
     citation = result["answer"]["citations"][0]
     assert citation["trace"]["support"]["packet_ids"] == ["WP0018"]

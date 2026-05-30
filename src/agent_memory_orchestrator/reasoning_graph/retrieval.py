@@ -1640,6 +1640,9 @@ def _rerank_document(
         else:
             score -= 0.05
             reasons.append("central_low_topic_overlap_penalty")
+        if intent == "version_flow" and _query_has_code_locator(query) and not _code_locator_match(query, text):
+            score -= 0.25
+            reasons.append("code_locator_mismatch_penalty")
     elif doc.doc_type == "central_atom":
         if topic_overlap_ratio >= 0.4 or intent == "version_flow" or _query_has_code_locator(query):
             score += 0.10
@@ -1653,16 +1656,48 @@ def _rerank_document(
     if intent == "code_why" and doc.doc_type == "code_impact":
         score += 0.24
         reasons.append("code_impact_boost")
-        if _query_has_code_locator(query):
+        if _code_locator_match(query, text):
             score += 0.12
             reasons.append("code_locator_impact_boost")
     if intent == "code_why" and doc.doc_type == "file_impact":
         score += 0.32
         reasons.append("file_impact_boost")
-        if _query_has_code_locator(query):
+        if _code_locator_match(query, text):
             score += 0.18
             reasons.append("code_locator_file_rollup_boost")
+        elif _query_has_code_locator(query):
+            score -= 0.28
+            reasons.append("code_locator_mismatch_penalty")
     code_locator_query = _query_has_code_locator(query)
+    if intent == "version_flow" and doc.doc_type == "file_impact":
+        # FileImpactSummary is the curated per-file rollup that carries the
+        # ordered commit/reason packet context. A central file KnowledgeVersion
+        # only says "this file exists in active memory"; it is not enough to
+        # explain evolution by itself.
+        score += 0.36
+        reasons.append("version_file_impact_boost")
+        if _code_locator_match(query, text):
+            score += 0.24
+            reasons.append("version_locator_file_rollup_boost")
+        elif code_locator_query:
+            score -= 0.50
+            reasons.append("code_locator_mismatch_penalty")
+    if intent == "version_flow" and doc.doc_type == "code_impact":
+        score += 0.26
+        reasons.append("version_code_impact_boost")
+        if _code_locator_match(query, text):
+            score += 0.18
+            reasons.append("version_locator_code_impact_boost")
+        elif code_locator_query:
+            score -= 0.40
+            reasons.append("code_locator_mismatch_penalty")
+    if intent == "version_flow" and doc.doc_type in {"packet", "reasoning"} and code_locator_query:
+        if _code_locator_match(query, text):
+            score += 0.14
+            reasons.append("version_locator_reasoning_context_boost")
+        else:
+            score -= 0.20
+            reasons.append("code_locator_mismatch_penalty")
     if intent in {"code_why", "version_flow"} and doc.doc_type in {"file_ref", "symbol_ref", "code_region_ref"}:
         if code_locator_query:
             score += 0.08
@@ -1949,6 +1984,27 @@ def _query_has_code_locator(query: str) -> bool:
     )
 
 
+def _code_locator_terms(query: str) -> set[str]:
+    terms: set[str] = set()
+    for token in re.findall(r"[A-Za-z0-9_./:-]+", str(query or "")):
+        lowered = token.lower().replace("\\", "/")
+        if not lowered:
+            continue
+        if "_" in lowered or "::" in lowered or "/" in lowered or "." in lowered:
+            terms.add(lowered)
+            parts = [part for part in re.split(r"[^a-zA-Z0-9_]+", lowered) if len(part) > 2]
+            terms.update(_stem_term(part) for part in parts if part not in QUERY_STOPWORDS)
+    return terms
+
+
+def _code_locator_match(query: str, normalized_doc_text: str) -> bool:
+    locator_terms = _code_locator_terms(query)
+    if not locator_terms:
+        return False
+    text = normalized_doc_text.lower()
+    return any(term in text for term in locator_terms)
+
+
 def _primary_rank_text(doc: RetrievalDocument, *, include_code_locator_context: bool = False) -> str:
     if doc.doc_type != "reasoning":
         return _normalize(f"{doc.title} {doc.body}")
@@ -1997,8 +2053,21 @@ def _central_version_boost(
         if topic_overlap_ratio >= 0.6:
             return 0.25
         return 0.0
-    if intent == "version_flow" or _query_has_code_locator(query):
+    if intent == "version_flow":
+        # File/commit KnowledgeVersions are identity stubs. Keep them visible,
+        # but let curated FileImpact/CodeImpact docs explain the actual
+        # evolution when they are available.
+        if atom_kind in {"file", "commit"}:
+            return 0.25
         return 0.55
+    if _query_has_code_locator(query):
+        return 0.55
+    if atom_kind in {"file", "commit"} and intent == "semantic_search":
+        if topic_overlap_ratio >= 0.6:
+            return 0.18
+        if topic_overlap_ratio >= 0.4:
+            return 0.08
+        return 0.0
     if topic_overlap_ratio >= 0.6:
         return 0.65
     if topic_overlap_ratio >= 0.4:
