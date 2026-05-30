@@ -10,8 +10,11 @@ from .models import RetrievalDocument
 from .models import RetrievalHit
 from .models import RetrievalResult
 from .models import TextEmbeddingProvider
+from .text import HOOK_QUERY_EXPANSION_TERMS
 from .text import QUERY_STOPWORDS
 from .text import exact_tokens
+from .text import expanded_query_terms
+from .text import fts_query
 from .text import normalize
 from .text import stem_term
 from .text import terms
@@ -19,6 +22,7 @@ from .text import terms
 __all__ = [
     "QUERY_STOPWORDS",
     "EmbeddingRunResult",
+    "HOOK_QUERY_EXPANSION_TERMS",
     "RetrievalCandidate",
     "RetrievalDocument",
     "RetrievalHit",
@@ -27,6 +31,8 @@ __all__ = [
     "candidate_raw_scores",
     "classify_query",
     "exact_tokens",
+    "expanded_query_terms",
+    "fts_query",
     "normalize",
     "query_has_code_locator",
     "rrf_fuse",
