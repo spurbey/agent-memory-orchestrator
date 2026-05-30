@@ -35,7 +35,6 @@ from agent_memory_orchestrator.reasoning_graph.stage4_contract import build_stag
 from agent_memory_orchestrator.reasoning_graph.stage4_contract import stage4_contract_hash
 from agent_memory_orchestrator.reasoning_graph.retrieval import RetrievalDocument
 from agent_memory_orchestrator.reasoning_graph.retrieval import RetrievalIndexStore
-from agent_memory_orchestrator.graph.service import GraphRagService
 from agent_memory_orchestrator.graph.service import build_session_detail_fallback
 from agent_memory_orchestrator.graph.service import _load_session_evidence_records
 from agent_memory_orchestrator.graph.service import _session_pending_summary
@@ -1536,7 +1535,7 @@ def test_auto_drain_closes_graph_before_v2_runner_opens(
     class FakeRunner:
         def __init__(self, settings: Settings, stage_lock_factory: object | None = None) -> None:
             del settings
-            assert stage_lock_factory is daemon_module._v2_stage_lock
+            assert stage_lock_factory is daemon_module._production_stage_lock
             events.append("runner_open")
 
         def run_next(self) -> dict[str, object]:
@@ -1547,7 +1546,7 @@ def test_auto_drain_closes_graph_before_v2_runner_opens(
             events.append("runner_close")
 
     monkeypatch.setattr(daemon_module, "GraphRagService", FakeGraph)
-    monkeypatch.setattr(daemon_module, "V2SessionJobRunner", FakeRunner)
+    monkeypatch.setattr(daemon_module, "ProductionSessionJobRunner", FakeRunner)
 
     result = daemon_module._run_auto_drain_once(settings)
 
@@ -1610,36 +1609,3 @@ def test_session_detail_prefers_v2_raw_artifact_and_skips_pending_scan(tmp_path:
     assert fallback["degraded"] is True
     assert len(fallback["timeline"]) == 2
     assert fallback["graph"]["nodes"] == []
-
-
-def test_legacy_graphdelta_smoke_uses_disposable_graph_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    settings = make_settings(tmp_path)
-    created_paths: list[Path] = []
-
-    class FakeSmokeStore:
-        def __init__(self, path: Path) -> None:
-            self.path = path
-            created_paths.append(path)
-
-        def init_schema(self) -> None:
-            pass
-
-        def close(self) -> None:
-            pass
-
-    def fake_drain_fresh_graph(self: GraphRagService, store: FakeSmokeStore, **kwargs: object) -> dict[str, object]:
-        return {"records_seen": 1, "windows_processed": 1, "cursor_path": str(kwargs["cursor_path"])}
-
-    monkeypatch.setattr("agent_memory_orchestrator.graph.service.KuzuGraphStore", FakeSmokeStore)
-    monkeypatch.setattr(GraphRagService, "_drain_fresh_graph", fake_drain_fresh_graph)
-
-    svc = GraphRagService(settings, store=InMemoryGraphStore())
-    try:
-        result = svc.drain_evidence_smoke(limit=10, max_windows=1)
-    finally:
-        svc.close()
-
-    assert result["mode"] == "legacy_graphdelta_smoke"
-    assert result["graph_path"] != str(settings.graph_path)
-    assert ".state" in str(result["graph_path"])
-    assert created_paths == [Path(str(result["graph_path"]))]

@@ -899,20 +899,6 @@ class AmoHandler(BaseHTTPRequestHandler):
                 finally:
                     graph.close()
                 return
-            if self.path == "/graph/drain-smoke":
-                graph = GraphRagService(self.settings)
-                try:
-                    limit = _bounded_int(str(payload.get("limit") or ""), default=500, minimum=1, maximum=5000)
-                    max_windows = _bounded_int(
-                        str(payload.get("max_windows") or ""),
-                        default=self.settings.drain_max_windows_per_run,
-                        minimum=1,
-                        maximum=25,
-                    )
-                    self._write_json(200, graph.drain_evidence_smoke(limit=limit, max_windows=max_windows))
-                finally:
-                    graph.close()
-                return
             if self.path == "/graph/finalize-session":
                 with _graph_write_lock_if(bool(payload.get("apply"))):
                     graph = GraphRagService(self.settings)

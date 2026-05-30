@@ -53,9 +53,6 @@ The reset command never deletes raw JSONL evidence, config, or production job ta
 It writes the production reset marker only after both graph and retrieval/vector
 storage have been cleaned from a verified backup; backup-only runs do not unlock
 production writes.
-The legacy `GraphDelta` path is isolated to `graph-drain-smoke` and writes to a
-disposable graph under `.state/smoke/`, not the production Kuzu path.
-
 ## Retrieval Shape
 
 ```text
