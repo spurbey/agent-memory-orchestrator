@@ -50,7 +50,7 @@ from ..reasoning_graph.session_runtime import build_and_query_session_graph
 from ..reasoning_graph.session_runtime import build_session_graph
 from ..reasoning_graph.session_runtime import default_session_graph_path
 from ..reasoning_graph.session_runtime import query_session_graph
-from ..reasoning_graph.retrieval import RetrievalIndexStore
+from ..infrastructure.sqlite.retrieval_store import RetrievalIndexStore
 from ..reasoning_graph.retrieval import retrieve_session_graph as retrieve_indexed_docs
 from ..reasoning_graph.jobs.reset import adopt_existing_v2_production_storage
 from ..reasoning_graph.jobs.reset import initialize_fresh_v2_production_storage
