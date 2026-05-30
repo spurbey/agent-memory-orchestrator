@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 from ...domain.retrieval.models import RetrievalResult
+from ...domain.retrieval.models import TextEmbeddingProvider
 from ...graph.store import GraphStore
+from ...infrastructure.sqlite.retrieval_store import RetrievalIndexStore
 from ...reasoning_graph.embedding_store import GraphEmbeddingStore
 from ...reasoning_graph.retrieval import RETRIEVAL_EMBEDDING_KIND
-from ...reasoning_graph.retrieval import RetrievalIndexStore
-from ...reasoning_graph.retrieval import TextEmbeddingProvider
 from ...reasoning_graph.retrieval import retrieve_session_graph
 
 __all__ = ["RetrievalQueryService", "retrieve_session_graph"]

@@ -27,7 +27,7 @@ from ..llm.qwen import DeterministicPlanner, OllamaQwenClient, QueryPlan, QwenPl
 from ..reasoning_graph.embedding_store import GraphEmbeddingStore
 from ..reasoning_graph.central_merge.repo_identity import resolve_repo_identity
 from ..reasoning_graph.jobs import V2SessionJobStore
-from ..reasoning_graph.retrieval import RetrievalIndexStore
+from ..infrastructure.sqlite.retrieval_store import RetrievalIndexStore
 from ..reasoning_graph.retrieval import RETRIEVAL_EMBEDDING_KIND
 from ..reasoning_graph.retrieval import build_retrieval_documents_from_graph
 from ..reasoning_graph.retrieval import embed_missing_retrieval_documents
