@@ -14,6 +14,7 @@ from .projection import CENTRAL_RETRIEVAL_NODE_KINDS
 from .projection import DEFAULT_RETRIEVAL_NODE_KINDS
 from .projection import SESSION_RETRIEVAL_NODE_KINDS
 from .projection import build_retrieval_documents_from_graph
+from .ranking import rerank_document
 from .text import HOOK_QUERY_EXPANSION_TERMS
 from .text import QUERY_STOPWORDS
 from .text import exact_tokens
@@ -43,6 +44,7 @@ __all__ = [
     "fts_query",
     "normalize",
     "query_has_code_locator",
+    "rerank_document",
     "rrf_fuse",
     "stem_term",
     "terms",
