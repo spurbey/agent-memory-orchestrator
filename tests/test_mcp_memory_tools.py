@@ -40,6 +40,19 @@ def make_settings(tmp_path: Path) -> Settings:
     )
 
 
+class _FakeIndexedGraph:
+    def __init__(self, payload: dict) -> None:
+        self.payload = payload
+        self.calls: list[dict] = []
+
+    def retrieve_indexed_graph(self, **kwargs) -> dict:
+        self.calls.append(kwargs)
+        return self.payload
+
+    def close(self) -> None:
+        pass
+
+
 def test_mcp_memory_tool_contracts_are_explicit(tmp_path) -> None:
     svc = MemoryMcpToolService(make_settings(tmp_path))
     try:
@@ -115,6 +128,74 @@ def test_mcp_graph_tool_without_injected_graph_requires_daemon(tmp_path) -> None
     assert result["ok"] is False
     assert result["requires_daemon"] is True
     assert result["tool"] == "amo_graph_search"
+
+
+def test_mcp_graph_search_uses_active_repo_projection_when_repo_id_is_provided(tmp_path) -> None:
+    payload = {
+        "ok": True,
+        "retrieval": {
+            "query": "why did graph service change?",
+            "vector_status": "faiss:completed",
+            "hits": [
+                {
+                    "score": 1.42,
+                    "reasons": ["term_overlap:graph,service"],
+                    "document": {
+                        "doc_id": "doc:file-impact",
+                        "doc_type": "file_impact",
+                        "node_kind": "FileImpactSummary",
+                        "repo_id": "repo:amo",
+                        "packet_id": "WP0001",
+                        "commit_sha": "abc1234",
+                        "title": "Impact summary for src/agent_memory_orchestrator/graph/service.py",
+                        "body": "FileImpactSummary: graph/service.py changed to render active repository retrieval context.",
+                        "metadata": {
+                            "path": "src/agent_memory_orchestrator/graph/service.py",
+                            "commit": {"message": "feat(retrieval): render repository context"},
+                            "problem_refs": [{"excerpt": "The answer only showed prompt text."}],
+                            "rationale_refs": [{"excerpt": "Render file impact and version context for MCP."}],
+                        },
+                    },
+                }
+            ],
+        },
+        "answer": {
+            "text": "Answer from repository memory:\nUse this as retrieval context for synthesis.",
+            "context": {
+                "version_timeline": {
+                    "entries": [
+                        {
+                            "commit_sha": "abc1234",
+                            "message": "feat(retrieval): render repository context",
+                            "why": "Render file impact and version context for MCP.",
+                        }
+                    ]
+                }
+            },
+        },
+    }
+    graph = _FakeIndexedGraph(payload)
+    svc = MemoryMcpToolService(make_settings(tmp_path), graph=graph)  # type: ignore[arg-type]
+    try:
+        result = svc.amo_graph_search(
+            query="why did graph service change?",
+            repo_id="repo:amo",
+            limit=5,
+            require_vector=True,
+        )
+    finally:
+        svc.close()
+
+    assert graph.calls[0]["repo_id"] == "repo:amo"
+    assert graph.calls[0]["require_vector"] is True
+    assert result["ok"] is True
+    assert result["retrieval_mode"] == "v2_active_repository_memory"
+    assert "retrieval context" in result["context_for_synthesis"]
+    assert result["retrieval_status"]["vector"] == "faiss:completed"
+    assert result["hits"][0]["kind"] == "file_impact"
+    assert result["hits"][0]["commit"]["sha"] == "abc1234"
+    assert result["hits"][0]["evidence"][0]["role"] == "user_goal"
+    assert result["version_history"][0]["commit"] == "abc1234"
 
 
 def test_mcp_memory_write_search_context_and_timeline(tmp_path) -> None:
