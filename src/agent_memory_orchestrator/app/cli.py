@@ -336,11 +336,6 @@ def _build_parser() -> argparse.ArgumentParser:
     graph_drain.add_argument("--max-windows", type=int, default=None, help="Maximum Qwen trigger windows to process in one request.")
     graph_drain.add_argument("--offline", action="store_true", help="Open Kuzu directly for single-process maintenance.")
 
-    graph_drain_smoke = sub.add_parser("graph-drain-smoke", help="Run legacy GraphDelta drain into a disposable smoke graph")
-    graph_drain_smoke.add_argument("--limit", type=int, default=500)
-    graph_drain_smoke.add_argument("--max-windows", type=int, default=None)
-    graph_drain_smoke.add_argument("--offline", action="store_true", help="Open Kuzu directly for single-process maintenance.")
-
     graph_cleanup = sub.add_parser("graph-cleanup-noisy", help="Find or abandon noisy draft graph answer nodes")
     graph_cleanup.add_argument("--limit", type=int, default=500)
     graph_cleanup.add_argument("--apply", action="store_true", help="Mark noisy nodes abandoned.")
@@ -1599,7 +1594,6 @@ def main(argv: list[str] | None = None) -> int:
             "graph-search",
             "graph-status",
             "graph-drain",
-            "graph-drain-smoke",
             "graph-cleanup-noisy",
             "graph-consolidate",
             "graph-cache-status",
@@ -1641,8 +1635,6 @@ def main(argv: list[str] | None = None) -> int:
                         )
                     elif args.command == "graph-drain":
                         result = graph.drain_evidence(limit=args.limit, session_id=args.session_id, max_windows=args.max_windows)
-                    elif args.command == "graph-drain-smoke":
-                        result = graph.drain_evidence_smoke(limit=args.limit, max_windows=args.max_windows)
                     elif args.command == "graph-cleanup-noisy":
                         result = graph.cleanup_noisy_drafts(limit=args.limit, apply=args.apply)
                     elif args.command == "graph-consolidate":
@@ -1710,7 +1702,6 @@ def main(argv: list[str] | None = None) -> int:
                     if args.command
                     in {
                         "graph-drain",
-                        "graph-drain-smoke",
                         "graph-consolidate",
                         "graph-rebuild-cache",
                         "graph-retrieval-build",
@@ -1737,11 +1728,6 @@ def main(argv: list[str] | None = None) -> int:
                         result = client.post(
                             "/graph/drain",
                             {"session_id": args.session_id, "limit": args.limit, "max_windows": args.max_windows},
-                        )
-                    elif args.command == "graph-drain-smoke":
-                        result = client.post(
-                            "/graph/drain-smoke",
-                            {"limit": args.limit, "max_windows": args.max_windows},
                         )
                     elif args.command == "graph-cleanup-noisy":
                         result = client.post("/graph/cleanup-noisy", {"limit": args.limit, "apply": args.apply})

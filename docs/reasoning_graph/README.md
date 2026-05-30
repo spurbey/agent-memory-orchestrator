@@ -132,9 +132,8 @@ The production reset marker is written only after both graph and retrieval
 cleanup complete, and the runner refuses production Kuzu/retrieval stages if the
 marker is missing, version-mismatched, or incomplete.
 
-Legacy `GraphDelta` generation is available only for `graph-drain-smoke`, which
-writes to a disposable smoke graph. Production closed-session processing writes
-production graph node kinds such as `Packet`, `Commit`, `EvidenceRef`, `ReasoningNode`,
+Production closed-session processing writes graph node kinds such as `Packet`,
+`Commit`, `EvidenceRef`, `ReasoningNode`,
 `CodeHunk`, `CodeNode`, `CodeVersion`, and `Symbol`.
 
 Current production writes both an exhaustive trace graph manifest and a curated
