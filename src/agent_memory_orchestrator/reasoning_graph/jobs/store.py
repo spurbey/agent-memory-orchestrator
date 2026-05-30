@@ -1034,6 +1034,9 @@ def _next_stage(stage: str) -> str:
     return V2_STAGES[index + 1]
 
 
+ProductionSessionJobStore = V2SessionJobStore
+
+
 def _dedupe(values: list[str]) -> list[str]:
     seen: set[str] = set()
     out: list[str] = []

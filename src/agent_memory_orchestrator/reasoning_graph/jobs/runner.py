@@ -11,7 +11,6 @@ from pathlib import Path
 from typing import Any, Callable, ContextManager
 
 from ...core.config import Settings
-from ...core.db import connect
 from ...graph.store import GraphEdge
 from ...graph.store import GraphNode
 from ...graph.store import GraphStore
@@ -19,26 +18,15 @@ from ...graph.store import KuzuGraphStore
 from ...llm.qwen import OllamaQwenClient
 from ...llm.qwen import QwenUnavailable
 from ..code_analysis import extract_code_nodes_from_commit
-from ..central_merge import build_dry_run_merge_plan
-from ..central_merge.applier import apply_merge_plan
 from ..central_merge.applier import repo_central_graph_path
 from ..central_merge.identity import atoms_by_canonical_key
-from ..embedding_store import GraphEmbeddingStore
 from ..evidence_view import build_reasoning_evidence_view
 from ..evidence_view import git_commit_truth
 from ..evidence_view import write_reasoning_evidence_view_artifacts
 from ..reasoning_extraction import review_reasoning_extraction_results
 from ..repo_resolution import resolve_session_repo_root
 from ..central_merge.repo_identity import resolve_repo_identity
-from ..promotion import build_curated_session_graph
-from ..retrieval import RETRIEVAL_EMBEDDING_KIND
 from ..retrieval import RetrievalDocument
-from ..retrieval import RetrievalIndexStore
-from ..retrieval import build_retrieval_documents_from_graph
-from ..retrieval import embed_missing_retrieval_documents
-from ..session_graph_writer import build_compact_session_graph
-from ..session_graph_writer import write_compact_session_graph
-from ..session_runtime import StrictTextEmbedder
 from ..stage4_contract import build_stage4_packet_prompt
 from ..stage4_contract import stage4_contract_hash
 from ..stage4_contract import stage4_output_schema
@@ -53,7 +41,6 @@ from .constants import QUALITY_EVAL_POLICY_VERSION
 from .constants import REASONING_CODE_LINK_POLICY_VERSION
 from .constants import REASONING_REVIEW_POLICY_VERSION
 from .constants import RETRIEVAL_PROJECTION_VERSION
-from .constants import RESET_MARKER_KEY
 from .constants import SESSION_GRAPH_WRITER_VERSION
 from .constants import SYMBOL_VERSION_POLICY_VERSION
 from .constants import V2_STAGES
@@ -484,164 +471,14 @@ class V2SessionJobRunner:
         return StageResult(output_path=output, diagnostics={"edge_count": len(edges)})
 
     def _stage_kuzu_write(self, job: dict[str, Any], artifact_dir: Path, stage_dir: Path) -> StageResult:
-        require_complete_v2_reset_marker(self.job_store.marker(RESET_MARKER_KEY))
-        packets = _versioned_items(_read_json(_stage_output(artifact_dir, "work_packets")), job)
-        reasoning_nodes = _versioned_items(_read_json(_stage_output(artifact_dir, "reasoning_review")), job)
-        hunk_nodes = _versioned_items(_read_json(_stage_output(artifact_dir, "git_hunks")), job)
-        code_nodes = _versioned_items(_read_json(_stage_output(artifact_dir, "ast_code_nodes")), job)
-        symbol_versions = _read_json(_stage_output(artifact_dir, "symbol_versions"))
-        symbols = _versioned_items(symbol_versions.get("symbols", []) if isinstance(symbol_versions, dict) else [], job)
-        versions = _versioned_items(symbol_versions.get("code_versions", []) if isinstance(symbol_versions, dict) else [], job)
-        raw_edges = _read_json(_stage_output(artifact_dir, "reasoning_code_links"))
-        evidence_refs = _versioned_items(_evidence_ref_nodes(packets), job)
-        commits = _versioned_items(_commit_nodes(packets), job)
-        graph = build_compact_session_graph(
-            packets=packets,
-            reasoning_nodes=reasoning_nodes,
-            evidence_refs=evidence_refs,
-            commit_nodes=commits,
-            code_hunks=hunk_nodes,
-            code_nodes=code_nodes,
-            symbols=symbols,
-            code_versions=versions,
-            raw_edges=raw_edges if isinstance(raw_edges, list) else [],
-        )
-        curated = build_curated_session_graph(
-            packets=packets,
-            reasoning_nodes=reasoning_nodes,
-            evidence_refs=evidence_refs,
-            commit_nodes=commits,
-            code_hunks=hunk_nodes,
-            code_nodes=code_nodes,
-        )
-        manifest = stage_dir / "compact_graph_manifest.json"
-        manifest.write_text(json.dumps(graph.as_dict(), indent=2, ensure_ascii=False), encoding="utf-8")
-        curated_manifest = stage_dir / "curated_graph_manifest.json"
-        curated_manifest.write_text(json.dumps(curated.graph.as_dict(), indent=2, ensure_ascii=False), encoding="utf-8")
-        (stage_dir / "curation_audit.json").write_text(json.dumps(curated.audit, indent=2, ensure_ascii=False), encoding="utf-8")
-        artifact_graph_path = stage_dir / "session_graph.kuzu"
-        artifact_graph_written = _should_write_artifact_kuzu(curated.graph.inventory)
-        if artifact_graph_written:
-            write_compact_session_graph(
-                graph_path=artifact_graph_path,
-                nodes=list(curated.graph.nodes),
-                edges=list(curated.graph.edges),
-                force=True,
-            )
-        central_write = _write_curated_session_graph_to_central(
-            self.graph_store_factory,
-            self.settings.graph_path,
-            nodes=curated.graph.nodes,
-            edges=curated.graph.edges,
-            job=job,
-        )
-        diagnostics = {
-            **curated.graph.inventory,
-            "trace_inventory": graph.inventory,
-            "curated_inventory": curated.graph.inventory,
-            "promotion": _promotion_summary(curated.audit),
-            "central_write": central_write,
-        }
-        output = stage_dir / "kuzu_write_result.json"
-        output.write_text(
-            json.dumps(
-                {
-                    "ok": graph.inventory.get("unresolved_edge_count") == 0,
-                    "graph_path": str(self.settings.graph_path),
-                    "artifact_graph_path": str(artifact_graph_path) if artifact_graph_written else "",
-                    "artifact_graph_written": artifact_graph_written,
-                    "central_write": central_write,
-                    "inventory": curated.graph.inventory,
-                    "trace_inventory": graph.inventory,
-                    "curated_manifest_path": str(curated_manifest),
-                    "promotion": _promotion_summary(curated.audit),
-                },
-                indent=2,
-                ensure_ascii=False,
-            ),
-            encoding="utf-8",
-        )
-        return StageResult(output_path=output, diagnostics=diagnostics)
+        from .stages.session_graph_write import run_session_graph_write_stage
+
+        return run_session_graph_write_stage(self, job, artifact_dir, stage_dir)
 
     def _stage_central_version_merge(self, job: dict[str, Any], artifact_dir: Path, stage_dir: Path) -> StageResult:
-        del artifact_dir
-        kuzu_result = _read_json(_stage_output(Path(str(job["artifact_dir"])), "kuzu_write"))
-        manifest_info = _product_manifest_info(Path(str(job["artifact_dir"])))
-        manifest_path = Path(str(manifest_info["curated_manifest_path"]))
-        compact_graph = _read_json(manifest_path)
-        repo_id = str(job.get("repo_id") or "") or resolve_repo_identity(str(job.get("repo_path") or "")).repo_id
-        active_view = self.job_store.ensure_graph_view(repo_id=repo_id, branch="main", mode="active")
-        parent_graph_commit_id = str(active_view.get("graph_commit_id") or "")
-        existing_atom_scan_error = ""
-        try:
-            existing_atoms = self._central_atoms_by_canonical_key(repo_id=repo_id)
-            active_central_versions = self._central_active_versions(repo_id=repo_id)
-        except Exception as exc:
-            existing_atoms = {}
-            active_central_versions = []
-            existing_atom_scan_error = f"{type(exc).__name__}: {exc}"
-        historical_decision_frames = self.job_store.list_decision_frames(repo_id=repo_id, exclude_job_id=str(job.get("job_id") or ""))
-        plan = build_dry_run_merge_plan(
-            job={**job, "repo_id": repo_id},
-            compact_graph=compact_graph if isinstance(compact_graph, dict) else {},
-            parent_graph_commit_id=parent_graph_commit_id,
-            existing_atoms_by_canonical_key=existing_atoms,
-            active_central_versions=active_central_versions,
-            historical_decision_frames=historical_decision_frames,
-        )
-        plan_payload = plan.as_dict()
-        plan_payload["session_graph_write"] = kuzu_result if isinstance(kuzu_result, dict) else {}
-        plan_payload["input_source"] = "curated_graph_manifest"
-        plan_payload["curated_input_hash"] = manifest_info["curated_input_hash"]
-        plan_payload["trace_input_hash"] = manifest_info["trace_input_hash"]
-        plan_payload["curated_manifest_path"] = str(manifest_path)
-        plan_payload["apply_scope"] = plan.metrics.get("apply_scope", [])
-        plan_payload["deferred_atom_kinds"] = ["symbol", "code_region", "decision", "problem"]
-        plan_payload["deferred_atom_counts"] = plan.metrics.get("deferred_atom_counts", {})
-        if existing_atom_scan_error:
-            plan_payload["existing_atom_scan_error"] = existing_atom_scan_error
-        self.job_store.upsert_central_merge_plan(plan_payload)
-        output = stage_dir / "merge_plan.json"
-        output.write_text(json.dumps(plan_payload, indent=2, ensure_ascii=False), encoding="utf-8")
-        central_graph = self.graph_store_factory(repo_central_graph_path(self.settings, repo_id))
-        try:
-            apply_result = apply_merge_plan(
-                settings=self.settings,
-                plan_id=plan.plan_id,
-                store=self.job_store,
-                graph_store=central_graph,
-                lock_owner=f"v2-job:{job.get('job_id') or ''}",
-            )
-        finally:
-            central_graph.close()
-        if not apply_result.get("ok"):
-            raise StageFailed("central_merge_apply_failed", apply_result)
-        diagnostics = {
-            "status": apply_result.get("status") or "applied",
-            "mode": apply_result.get("mode") or "apply_exact_atoms",
-            "plan_id": plan.plan_id,
-            "plan_hash": plan.plan_hash,
-            "input_graph_hash": plan.input_graph_hash,
-            "repo_id": plan.repo_id,
-            "repo_path": plan.repo_path,
-            "graph_commit_id": apply_result.get("graph_commit_id") or "",
-            "graph_view_id": apply_result.get("graph_view_id") or "",
-            "result_artifact": apply_result.get("result_artifact") or "",
-            "added_node_count": apply_result.get("added_node_count") or 0,
-            "added_edge_count": apply_result.get("added_edge_count") or 0,
-            "applied_atom_counts": apply_result.get("applied_atom_counts") or {},
-            "applied_version_counts": apply_result.get("applied_version_counts") or {},
-            "deferred_atom_counts": apply_result.get("deferred_atom_counts") or {},
-            "status_update_count": apply_result.get("status_update_count") or 0,
-            "graph_commit_preview": plan.graph_commit_preview,
-            "metrics": plan.metrics,
-            "review_candidate_count": len(plan.review_candidates),
-            "existing_atom_scan_error": existing_atom_scan_error,
-            "input_source": "curated_graph_manifest",
-            "curated_input_hash": manifest_info["curated_input_hash"],
-            "trace_input_hash": manifest_info["trace_input_hash"],
-        }
-        return StageResult(output_path=output, diagnostics=diagnostics)
+        from .stages.central_version_merge import run_central_version_merge_stage
+
+        return run_central_version_merge_stage(self, job, artifact_dir, stage_dir)
 
     def _central_atoms_by_canonical_key(self, *, repo_id: str) -> dict[str, dict[str, Any]]:
         graph = self.graph_store_factory(repo_central_graph_path(self.settings, repo_id))
@@ -669,199 +506,29 @@ class V2SessionJobRunner:
         return out
 
     def _stage_retrieval_docs(self, job: dict[str, Any], artifact_dir: Path, stage_dir: Path) -> StageResult:
-        del artifact_dir
-        require_complete_v2_reset_marker(self.job_store.marker(RESET_MARKER_KEY))
-        repo_id = _job_repo_id(job)
-        manifest_info = _optional_product_manifest_info(Path(str(job["artifact_dir"])))
-        conn = connect(self.settings.retrieval_db_path)
-        try:
-            index = RetrievalIndexStore(conn)
-            graph_error = ""
-            if manifest_info.get("curated_manifest_exists"):
-                current_docs = _retrieval_documents_from_manifest(
-                    manifest_path=Path(str(manifest_info["curated_manifest_path"])),
-                    source="curated_graph_manifest",
-                    job=job,
-                    repo_id=repo_id,
-                    max_doc_chars=self.settings.auto_retrieval_max_doc_chars,
-                    limit=self.settings.auto_retrieval_node_limit,
-                )
-                central_docs, central_graph_error = self._central_active_retrieval_docs(repo_id=repo_id)
-                current_docs = [*current_docs, *central_docs]
-                retrieval_source = "curated_graph_manifest"
-                if central_graph_error:
-                    graph_error = central_graph_error
-            else:
-                current_docs = []
-                retrieval_source = "curated_graph_manifest_missing"
-                graph_error = "curated_graph_manifest_missing"
-            existing_docs = index.list_repo_documents_all(repo_id=repo_id) if retrieval_source == "curated_graph_manifest" else []
-            docs = _merge_cumulative_retrieval_docs(existing_docs=existing_docs, current_docs=current_docs)
-            doc_content_hash = _retrieval_doc_content_hash(docs)
-            projection_id = _retrieval_projection_id(
-                repo_id=repo_id,
-                projection_version=RETRIEVAL_PROJECTION_VERSION,
-                source_artifact_hash=str(manifest_info.get("curated_input_hash") or ""),
-                doc_content_hash=doc_content_hash,
-            )
-            projection: dict[str, Any] = {}
-            activation_gate: dict[str, Any] = {
-                "passed": False,
-                "blocking_failures": ["retrieval_projection_no_docs"],
-                "summary": {},
-            }
-            if retrieval_source == "curated_graph_manifest" and docs:
-                activation_gate = _retrieval_projection_activation_gate(docs)
-                projection = index.upsert_projection(
-                    projection_id=projection_id,
-                    repo_id=repo_id,
-                    projection_version=RETRIEVAL_PROJECTION_VERSION,
-                    source_artifact_hash=str(manifest_info.get("curated_input_hash") or ""),
-                    doc_content_hash=doc_content_hash,
-                    status="building",
-                    metadata={"retrieval_source": retrieval_source, "activation_gate": activation_gate, **manifest_info},
-                )
-                index.replace_projection_documents(docs, repo_id=repo_id, projection_id=projection_id)
-                if activation_gate["passed"]:
-                    index.set_projection_status(projection_id, "validated")
-                    projection = index.activate_projection(repo_id=repo_id, projection_id=projection_id)
-                else:
-                    index.set_projection_status(projection_id, "review_required")
-                    projection = index.projection(projection_id) or {}
-        finally:
-            conn.close()
-        output = stage_dir / "retrieval_docs_result.json"
-        payload = {
-            "doc_count": len(docs),
-            "repo_id": repo_id,
-            "retrieval_source": retrieval_source,
-            "graph_error": graph_error,
-            "projection_id": projection_id,
-            "projection_version": RETRIEVAL_PROJECTION_VERSION,
-            "projection_status": projection.get("status"),
-            "active_projection_id": projection.get("projection_id") if activation_gate["passed"] else "",
-            "activation_gate": activation_gate,
-            "current_doc_count": len(current_docs),
-            "central_active_doc_count": len([doc for doc in current_docs if doc.metadata.get("source") == "central_active_graph_view"]),
-            "carried_forward_doc_count": max(0, len(docs) - len(current_docs)),
-            "doc_content_hash": doc_content_hash,
-            **manifest_info,
-        }
-        output.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-        return StageResult(output_path=output, diagnostics=payload)
+        from .stages.retrieval_projection import run_retrieval_docs_stage
+
+        return run_retrieval_docs_stage(self, job, artifact_dir, stage_dir)
 
     def _central_active_retrieval_docs(self, *, repo_id: str) -> tuple[list[RetrievalDocument], str]:
-        graph = self.graph_store_factory(repo_central_graph_path(self.settings, repo_id))
-        try:
-            graph.init_schema()
-            docs = build_retrieval_documents_from_graph(
-                graph,
-                node_limit=self.settings.auto_retrieval_node_limit,
-                max_doc_chars=self.settings.auto_retrieval_max_doc_chars,
-                pipeline_version="",
-                graph_schema_version="",
-                repo_id=repo_id,
-            )
-        except Exception as exc:  # pragma: no cover - central graph may be locked by another process
-            return [], f"central_active_graph_view_scan_failed:{type(exc).__name__}:{exc}"
-        finally:
-            graph.close()
-        central_docs = [
-            dataclass_replace(
-                doc,
-                metadata={**doc.metadata, "source": "central_active_graph_view", "repo_id": repo_id},
-            )
-            for doc in docs
-            if doc.doc_type in {"central_version", "central_atom", "graph_lineage"}
-        ]
-        return central_docs, ""
+        from .stages.retrieval_projection import central_active_retrieval_docs
+
+        return central_active_retrieval_docs(self, repo_id=repo_id)
 
     def _stage_embeddings(self, job: dict[str, Any], artifact_dir: Path, stage_dir: Path) -> StageResult:
-        del artifact_dir
-        repo_id = _job_repo_id(job)
-        conn = connect(self.settings.retrieval_db_path)
-        try:
-            index = RetrievalIndexStore(conn)
-            embedding_store = GraphEmbeddingStore(conn, db_path=self.settings.retrieval_db_path)
-            try:
-                embedder = StrictTextEmbedder(self.settings.embedding_model, dims=self.settings.embedding_dims)
-            except RuntimeError as exc:
-                raise PendingModel("embedding_model_unavailable", {"error": str(exc), "model": self.settings.embedding_model}) from exc
-            result = embed_missing_retrieval_documents(
-                index_store=index,
-                embedding_store=embedding_store,
-                embedder=embedder,
-                model=self.settings.embedding_model,
-                graph_scope="v2",
-                session_id=str(job["session_id"]),
-                repo_id=repo_id,
-                extraction_run_id=str(job["job_id"]),
-                limit=self.settings.auto_embedding_batch_size,
-                embedding_kind=RETRIEVAL_EMBEDDING_KIND,
-            )
-        finally:
-            conn.close()
-        output = stage_dir / "embeddings_result.json"
-        payload = {**result.as_dict(), "repo_id": repo_id}
-        output.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-        return StageResult(output_path=output, diagnostics=payload)
+        from .stages.retrieval_projection import run_embeddings_stage
+
+        return run_embeddings_stage(self, job, artifact_dir, stage_dir)
 
     def _stage_faiss(self, job: dict[str, Any], artifact_dir: Path, stage_dir: Path) -> StageResult:
-        del artifact_dir
-        repo_id = _job_repo_id(job)
-        conn = connect(self.settings.retrieval_db_path)
-        try:
-            index = RetrievalIndexStore(conn)
-            active_docs = index.list_documents(limit=100000, repo_id=repo_id)
-            embedding_store = GraphEmbeddingStore(conn, db_path=self.settings.retrieval_db_path)
-            result = embedding_store.build_faiss_cache(
-                embedding_kind=RETRIEVAL_EMBEDDING_KIND,
-                model=self.settings.embedding_model,
-                graph_scope="v2",
-                graph_paths={doc.doc_id for doc in active_docs},
-            )
-        finally:
-            conn.close()
-        output = stage_dir / "faiss_result.json"
-        payload = {**result.as_dict(), "repo_id": repo_id, "active_projection_doc_count": len(active_docs)}
-        output.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-        return StageResult(output_path=output, diagnostics=payload)
+        from .stages.retrieval_projection import run_faiss_stage
+
+        return run_faiss_stage(self, job, artifact_dir, stage_dir)
 
     def _stage_quality_eval(self, job: dict[str, Any], artifact_dir: Path, stage_dir: Path) -> StageResult:
-        del job
-        kuzu_result = _read_json(_stage_output(artifact_dir, "kuzu_write"))
-        central_result = _central_merge_quality_result(artifact_dir)
-        retrieval_result = _read_json(_stage_output(artifact_dir, "retrieval_docs"))
-        embedding_result = _read_json(_stage_output(artifact_dir, "embeddings"))
-        faiss_result = _read_json(_stage_output(artifact_dir, "faiss"))
-        issues = _quality_issues(
-            central_result=central_result if isinstance(central_result, dict) else {},
-            retrieval_result=retrieval_result if isinstance(retrieval_result, dict) else {},
-            embedding_result=embedding_result if isinstance(embedding_result, dict) else {},
-            faiss_result=faiss_result if isinstance(faiss_result, dict) else {},
-        )
-        readiness = _quality_readiness(
-            issues=issues,
-            central_result=central_result if isinstance(central_result, dict) else {},
-            retrieval_result=retrieval_result if isinstance(retrieval_result, dict) else {},
-            embedding_result=embedding_result if isinstance(embedding_result, dict) else {},
-            faiss_result=faiss_result if isinstance(faiss_result, dict) else {},
-        )
-        output = stage_dir / "quality_eval.json"
-        payload = {
-            "ok": not issues,
-            **readiness,
-            "blocking_issues": issues,
-            "kuzu": kuzu_result,
-            "central_version_merge": central_result,
-            "retrieval_docs": retrieval_result,
-            "embeddings": embedding_result,
-            "faiss": faiss_result,
-        }
-        output.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
-        if issues:
-            raise StageFailed("quality_eval_product_readiness_failed", payload)
-        return StageResult(output_path=output, diagnostics=payload)
+        from .stages.retrieval_projection import run_quality_eval_stage
+
+        return run_quality_eval_stage(self, job, artifact_dir, stage_dir)
 
 
 class PendingModel(RuntimeError):
@@ -876,6 +543,9 @@ class StageFailed(RuntimeError):
         super().__init__(reason)
         self.reason = reason
         self.diagnostics = diagnostics or {}
+
+
+ProductionSessionJobRunner = V2SessionJobRunner
 
 
 def require_complete_v2_reset_marker(marker: dict[str, Any] | None) -> dict[str, Any]:
