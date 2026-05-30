@@ -30,4 +30,23 @@ V2_STAGES: tuple[str, ...] = (
     "quality_eval",
 )
 
+PRODUCTION_STAGES = V2_STAGES
+
+STAGE_DISPLAY_NAMES: dict[str, str] = {
+    "evidence_view": "Evidence View",
+    "work_packets": "Work Packets",
+    "qwen_reasoning": "Qwen Reasoning",
+    "reasoning_review": "Reasoning Review",
+    "git_hunks": "Git Hunks",
+    "ast_code_nodes": "AST Code Nodes",
+    "symbol_versions": "Symbol Versions",
+    "reasoning_code_links": "Reason-Code Links",
+    "kuzu_write": "Session Graph Write",
+    "central_version_merge": "Central Version Merge",
+    "retrieval_docs": "Retrieval Docs",
+    "embeddings": "Embeddings",
+    "faiss": "FAISS",
+    "quality_eval": "Quality Eval",
+}
+
 RESET_MARKER_KEY = "production_v2_reset"
