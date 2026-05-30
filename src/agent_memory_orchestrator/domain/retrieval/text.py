@@ -30,6 +30,14 @@ QUERY_STOPWORDS = {
     "with",
 }
 
+HOOK_QUERY_EXPANSION_TERMS = {
+    "capture",
+    "inject",
+    "injection",
+    "prompt",
+    "userpromptsubmit",
+}
+
 
 def exact_tokens(query: str) -> list[str]:
     tokens = []
@@ -68,4 +76,24 @@ def terms(text: str) -> set[str]:
     return out
 
 
-__all__ = ["QUERY_STOPWORDS", "exact_tokens", "normalize", "stem_term", "terms"]
+def expanded_query_terms(query: str) -> set[str]:
+    out = terms(query)
+    if "hook" in out:
+        out.update(HOOK_QUERY_EXPANSION_TERMS)
+    return out
+
+
+def fts_query(query: str) -> str:
+    return " OR ".join(sorted(expanded_query_terms(query))[:12])
+
+
+__all__ = [
+    "HOOK_QUERY_EXPANSION_TERMS",
+    "QUERY_STOPWORDS",
+    "exact_tokens",
+    "expanded_query_terms",
+    "fts_query",
+    "normalize",
+    "stem_term",
+    "terms",
+]
