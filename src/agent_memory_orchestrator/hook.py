@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import sys
 
-from .app import hook as _impl
+from .runtime.hook import launcher as _impl
 
 if __name__ == "__main__":
     raise SystemExit(_impl.main())

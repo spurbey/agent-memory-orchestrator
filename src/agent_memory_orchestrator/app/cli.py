@@ -1927,7 +1927,7 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _codex_hooks_snippet() -> dict:
-    command = "python -m agent_memory_orchestrator.hook --agent codex"
+    command = "python -m agent_memory_orchestrator.runtime.hook.launcher --agent codex"
     return {
         "format": "toml",
         "snippet": "\n".join(
@@ -2453,4 +2453,5 @@ def _rebuild_clean_db(settings: Settings, out_path: Path, codex_root: Path, limi
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
 
