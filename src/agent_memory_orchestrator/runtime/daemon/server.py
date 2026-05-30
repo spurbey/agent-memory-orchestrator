@@ -9,8 +9,7 @@ from contextlib import nullcontext
 from dataclasses import replace
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from types import TracebackType
-from typing import Any, BinaryIO, ContextManager
+from typing import Any, ContextManager
 from urllib.parse import parse_qs, unquote, urlparse
 
 from ...core.config import Settings
@@ -24,7 +23,10 @@ from ...llm.qwen import QwenUnavailable
 from ...reasoning_graph.jobs import ProductionSessionJobRunner
 from ...reasoning_graph.jobs import ProductionSessionJobStore
 from ...reasoning_graph.central_merge.applier import repo_central_graph_path
+from .owner_lock import DaemonAlreadyRunning
+from .owner_lock import DaemonOwnerLock
 
+_DaemonOwnerLock = DaemonOwnerLock
 _CLIENT_ABORT_ERRORS = (BrokenPipeError, ConnectionAbortedError, ConnectionResetError)
 _GRAPH_WRITE_LOCK = threading.RLock()
 _DRAIN_LOCK = threading.RLock()
@@ -46,63 +48,6 @@ _READ_ONLY_GET_GRAPH_PATHS = frozenset(
 _WEB_ROOT = Path(__file__).resolve().parents[2] / "web"
 
 
-class DaemonAlreadyRunning(RuntimeError):
-    """Raised when another process already owns this AMO home daemon."""
-
-
-class _DaemonOwnerLock:
-    """Cross-process daemon ownership lock for one AMO home.
-
-    Thread locks only coordinate work inside one daemon process. Kuzu file locks
-    are process-wide, so AMO also needs a process-level owner guard before
-    auto-drain or graph writes can start.
-    """
-
-    def __init__(self, lock_path: Path, handle: BinaryIO) -> None:
-        self.lock_path = lock_path
-        self.handle = handle
-        self.acquired = True
-
-    @classmethod
-    def acquire(cls, settings: Settings) -> "_DaemonOwnerLock":
-        lock_path = _daemon_owner_lock_path(settings)
-        lock_path.parent.mkdir(parents=True, exist_ok=True)
-        handle = lock_path.open("a+b")
-        try:
-            _ensure_lock_byte(handle)
-            _try_lock_byte(handle)
-            _write_daemon_owner_metadata(handle)
-            return cls(lock_path, handle)
-        except Exception:
-            handle.close()
-            raise
-
-    def release(self) -> None:
-        if not self.acquired:
-            return
-        try:
-            _unlock_byte(self.handle)
-        finally:
-            self.acquired = False
-            self.handle.close()
-
-    def __enter__(self) -> "_DaemonOwnerLock":
-        return self
-
-    def __exit__(
-        self,
-        exc_type: type[BaseException] | None,
-        exc: BaseException | None,
-        traceback: TracebackType | None,
-    ) -> None:
-        del exc_type, exc, traceback
-        self.release()
-
-
-def _daemon_owner_lock_path(settings: Settings) -> Path:
-    return settings.home / ".state" / "daemon-owner.lock"
-
-
 def _read_graph_service(settings: Settings, *, repo_id: str = "") -> GraphRagService:
     safe_repo_id = str(repo_id or "").strip()
     if safe_repo_id:
@@ -114,68 +59,6 @@ def _read_graph_service(settings: Settings, *, repo_id: str = "") -> GraphRagSer
             read_only=True,
         )
     return GraphRagService(settings, read_only=True)
-
-
-def _ensure_lock_byte(handle: BinaryIO) -> None:
-    handle.seek(0, os.SEEK_END)
-    if handle.tell() == 0:
-        handle.write(b"\0")
-        handle.flush()
-    handle.seek(0)
-
-
-def _write_daemon_owner_metadata(handle: BinaryIO) -> None:
-    payload = {
-        "pid": os.getpid(),
-        "started_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-    }
-    data = json.dumps(payload, sort_keys=True).encode("utf-8")
-    handle.seek(1)
-    handle.truncate(1)
-    handle.write(data)
-    handle.flush()
-
-
-def _try_lock_byte(handle: BinaryIO) -> None:
-    if os.name == "nt":
-        import msvcrt
-
-        handle.seek(0)
-        try:
-            msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
-        except OSError as exc:
-            if _is_daemon_lock_busy(exc):
-                raise DaemonAlreadyRunning(f"daemon_already_running:{handle.name}") from exc
-            raise
-        return
-
-    import fcntl
-
-    try:
-        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except OSError as exc:
-        if _is_daemon_lock_busy(exc):
-            raise DaemonAlreadyRunning(f"daemon_already_running:{handle.name}") from exc
-        raise
-
-
-def _unlock_byte(handle: BinaryIO) -> None:
-    if os.name == "nt":
-        import msvcrt
-
-        handle.seek(0)
-        msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
-        return
-
-    import fcntl
-
-    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
-
-
-def _is_daemon_lock_busy(exc: OSError) -> bool:
-    if os.name == "nt":
-        return getattr(exc, "winerror", None) == 33 or exc.errno in {13}
-    return exc.errno in {11, 13}
 
 
 def _load_web_asset(name: str) -> str:
@@ -1092,7 +975,7 @@ def main(argv: list[str] | None = None) -> int:
         raise ValueError("AMO_LOCAL_ONLY=true requires daemon host to be localhost")
 
     try:
-        owner_lock = _DaemonOwnerLock.acquire(settings)
+        owner_lock = DaemonOwnerLock.acquire(settings)
     except DaemonAlreadyRunning as exc:
         _daemon_log(settings, "daemon_start_rejected", reason="daemon_already_running", error=str(exc))
         print(f"amo-daemon already running for AMO home: {settings.home}")
