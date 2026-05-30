@@ -10,6 +10,10 @@ from .models import RetrievalDocument
 from .models import RetrievalHit
 from .models import RetrievalResult
 from .models import TextEmbeddingProvider
+from .projection import CENTRAL_RETRIEVAL_NODE_KINDS
+from .projection import DEFAULT_RETRIEVAL_NODE_KINDS
+from .projection import SESSION_RETRIEVAL_NODE_KINDS
+from .projection import build_retrieval_documents_from_graph
 from .text import HOOK_QUERY_EXPANSION_TERMS
 from .text import QUERY_STOPWORDS
 from .text import exact_tokens
@@ -21,13 +25,17 @@ from .text import terms
 
 __all__ = [
     "QUERY_STOPWORDS",
+    "CENTRAL_RETRIEVAL_NODE_KINDS",
+    "DEFAULT_RETRIEVAL_NODE_KINDS",
     "EmbeddingRunResult",
     "HOOK_QUERY_EXPANSION_TERMS",
     "RetrievalCandidate",
     "RetrievalDocument",
     "RetrievalHit",
     "RetrievalResult",
+    "SESSION_RETRIEVAL_NODE_KINDS",
     "TextEmbeddingProvider",
+    "build_retrieval_documents_from_graph",
     "candidate_raw_scores",
     "classify_query",
     "exact_tokens",
