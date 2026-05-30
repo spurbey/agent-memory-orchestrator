@@ -1,6 +1,6 @@
 # Curated Session Graph and Central Merge Boundary
 
-AMO keeps two graph products for a completed V2 job:
+AMO keeps two graph products for a completed production job:
 
 1. **Trace graph manifest**: exhaustive debug trace from packets, reasoning nodes, hunks, AST nodes, symbols, and code versions.
 2. **Curated graph manifest**: answer-grade and support-grade memory used by central merge and retrieval.
@@ -9,7 +9,7 @@ The trace graph is not central memory. It exists so operators can audit how extr
 
 ## Why This Exists
 
-The V2 job `v2job:0b68249f48c244c68fb12977eb93d9ba` proved that a full trace graph can become too noisy:
+The production job `v2job:0b68249f48c244c68fb12977eb93d9ba` proved that a full trace graph can become too noisy:
 
 - raw trace: `20086` nodes and `45506` edges
 - curated graph after promotion policy: about `2400` nodes and `3100` edges
@@ -18,7 +18,7 @@ The large trace graph was not wrong as a debug artifact, but it was wrong as a r
 
 ## Stage Boundary
 
-The V2 runner still builds the full compact graph manifest:
+The production runner still builds the full compact graph manifest:
 
 ```text
 kuzu_write/compact_graph_manifest.json
@@ -143,7 +143,7 @@ The `WP0086` production probe is the reference case:
 
 ```text
 commit: feat(graph-ui): add spatial graph controls
-bad node: dashboard exclusively uses the V2 retrieval path
+bad node: dashboard exclusively uses the production retrieval path
 result: needs_review, not answer_grade
 ```
 

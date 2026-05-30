@@ -9,7 +9,7 @@ amo_graph_search(query, repo_id="", limit=8, use_vector=true, require_vector=fal
 The tool is intentionally the only MCP retrieval surface for coding agents. Older
 local-memory/context-pack, work-history, decision-history, and raw-evidence tools
 are not registered on the MCP server because they let agents choose inconsistent
-retrieval paths. Repository memory should come from the active V2 projection.
+retrieval paths. Repository memory should come from the active production projection.
 
 ## Retrieval Flow
 
@@ -143,8 +143,8 @@ agents should not use them as alternate repository search paths.
 
 ## Failure Modes
 
-`active_repo_projection_missing` means no active V2 retrieval projection exists
-for the resolved repo. Build/apply the V2 curated retrieval projection first.
+`active_repo_projection_missing` means no active production retrieval projection exists
+for the resolved repo. Build/apply the curated production retrieval projection first.
 
 `daemon_unavailable` means the MCP process could not reach the AMO daemon. Start
 or restart the daemon/MCP process.

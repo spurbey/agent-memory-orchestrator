@@ -36,7 +36,7 @@ export async function retryJob(jobId) {
 export async function runRetrieval(setView) {
   const query = $("retrievalQuery").value.trim() || $("globalSearch").value.trim();
   if (!query) return;
-  $("retrievalResult").innerHTML = `<section class="panel"><p class="muted">Searching V2 graph memory...</p></section>`;
+  $("retrievalResult").innerHTML = `<section class="panel"><p class="muted">Searching production graph memory...</p></section>`;
   setView("retrieval");
   try {
     const result = await apiPost("/graph/retrieve", {

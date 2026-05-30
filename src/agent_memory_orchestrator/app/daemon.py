@@ -21,14 +21,14 @@ from ..graph.store import GraphBackendUnavailable, KuzuGraphStore
 from ..integrations.connectors.slack import SlackConnectorService
 from ..memory import MemoryService
 from ..llm.qwen import QwenUnavailable
-from ..reasoning_graph.jobs import V2SessionJobRunner
-from ..reasoning_graph.jobs import V2SessionJobStore
+from ..reasoning_graph.jobs import ProductionSessionJobRunner
+from ..reasoning_graph.jobs import ProductionSessionJobStore
 from ..reasoning_graph.central_merge.applier import repo_central_graph_path
 
 _CLIENT_ABORT_ERRORS = (BrokenPipeError, ConnectionAbortedError, ConnectionResetError)
 _GRAPH_WRITE_LOCK = threading.RLock()
 _DRAIN_LOCK = threading.RLock()
-_V2_GRAPH_WRITE_STAGES = frozenset({"kuzu_write", "central_version_merge"})
+_PRODUCTION_GRAPH_WRITE_STAGES = frozenset({"kuzu_write", "central_version_merge"})
 _READ_ONLY_GET_GRAPH_PATHS = frozenset(
     {
         "/api/graph/status",
@@ -214,11 +214,19 @@ def _bounded_int(raw: str | None, *, default: int, minimum: int, maximum: int) -
 
 
 def _v2_stage_requires_graph_write_lock(stage: str) -> bool:
-    return stage in _V2_GRAPH_WRITE_STAGES
+    return _production_stage_requires_graph_write_lock(stage)
 
 
 def _v2_stage_lock(stage: str) -> ContextManager[Any]:
-    return _GRAPH_WRITE_LOCK if _v2_stage_requires_graph_write_lock(stage) else nullcontext()
+    return _production_stage_lock(stage)
+
+
+def _production_stage_requires_graph_write_lock(stage: str) -> bool:
+    return stage in _PRODUCTION_GRAPH_WRITE_STAGES
+
+
+def _production_stage_lock(stage: str) -> ContextManager[Any]:
+    return _GRAPH_WRITE_LOCK if _production_stage_requires_graph_write_lock(stage) else nullcontext()
 
 
 def _graph_write_lock_if(condition: bool) -> ContextManager[Any]:
@@ -233,7 +241,7 @@ def _list_repositories_fast(settings: Settings, *, limit: int = 200) -> dict[str
     Kuzu or waiting on graph write locks.
     """
 
-    job_store = V2SessionJobStore(settings)
+    job_store = ProductionSessionJobStore(settings)
     try:
         return {"ok": True, "repos": job_store.list_repositories(limit=limit), "source": "sqlite_control_state"}
     finally:
@@ -250,7 +258,7 @@ def _session_overview_fast(settings: Settings, *, limit: int = 80, repo_id: str 
 
     safe_limit = max(1, min(500, int(limit)))
     safe_repo_id = str(repo_id or "").strip()
-    job_store = V2SessionJobStore(settings)
+    job_store = ProductionSessionJobStore(settings)
     try:
         rows: list[dict[str, Any]] = []
         jobs = job_store.list_jobs(limit=safe_limit, repo_id=safe_repo_id)
@@ -288,7 +296,7 @@ def _session_overview_fast(settings: Settings, *, limit: int = 80, repo_id: str 
         job_store.close()
 
 
-def _stage_diagnostics(job_store: V2SessionJobStore, job_id: str, stage: str) -> dict[str, Any]:
+def _stage_diagnostics(job_store: ProductionSessionJobStore, job_id: str, stage: str) -> dict[str, Any]:
     row = job_store.stage_row(job_id=job_id, stage=stage)
     if not row:
         return {}
@@ -401,7 +409,7 @@ class AmoHandler(BaseHTTPRequestHandler):
             self._write_html(200, _graph_workbench_html())
             return
         if path == "/health":
-            job_store = V2SessionJobStore(self.settings)
+            job_store = ProductionSessionJobStore(self.settings)
             try:
                 reset_marker = job_store.marker()
             finally:
@@ -460,7 +468,7 @@ class AmoHandler(BaseHTTPRequestHandler):
         if path == "/api/jobs" or path.startswith("/api/jobs/"):
             raw_limit = (query.get("limit") or ["100"])[0]
             limit = _bounded_int(raw_limit, default=100, minimum=1, maximum=500)
-            job_store = V2SessionJobStore(self.settings)
+            job_store = ProductionSessionJobStore(self.settings)
             try:
                 if path == "/api/jobs":
                     repo_id = (query.get("repo_id") or [""])[0]
@@ -731,7 +739,7 @@ class AmoHandler(BaseHTTPRequestHandler):
         try:
             if self.path.startswith("/api/jobs/") and self.path.endswith("/retry"):
                 job_id = unquote(self.path.removeprefix("/api/jobs/").removesuffix("/retry").strip("/"))
-                job_store = V2SessionJobStore(self.settings)
+                job_store = ProductionSessionJobStore(self.settings)
                 try:
                     job = job_store.retry_job(job_id, forced_by=str(payload.get("forced_by") or "daemon-api"))
                     self._write_json(200, {"ok": True, "job": job})
@@ -883,7 +891,7 @@ class AmoHandler(BaseHTTPRequestHandler):
                         result = {
                             "ok": False,
                             "error": str(exc),
-                            "hint": "Build the V2 retrieval index and embeddings for the configured graph, or configure retrieval_graph_path/retrieval_db_path.",
+                            "hint": "Build the production retrieval index and embeddings for the configured graph, or configure retrieval_graph_path/retrieval_db_path.",
                             "graph_path": str(graph_settings.graph_path),
                             "db_path": str(graph_settings.retrieval_db_path),
                         }
@@ -1027,7 +1035,8 @@ def _auto_drain_loop(settings: Settings) -> None:
         time.sleep(settings.auto_drain_interval_seconds)
         try:
             result = _run_auto_drain_once(settings)
-            if result.get("windows_processed") or result.get("records_ingested") or result.get("v2_job_run", {}).get("ran"):
+            production_job_run = result.get("production_job_run") or result.get("v2_job_run") or {}
+            if result.get("windows_processed") or result.get("records_ingested") or production_job_run.get("ran"):
                 _daemon_log(settings, "auto_drain_cycle", **result)
         except Exception as exc:
             _daemon_log(settings, "auto_drain_failed", error_type=type(exc).__name__, error=str(exc))
@@ -1044,7 +1053,7 @@ def _run_auto_drain_once(settings: Settings) -> dict[str, Any]:
         finally:
             graph.close()
 
-    runner = V2SessionJobRunner(settings, stage_lock_factory=_v2_stage_lock)
+    runner = ProductionSessionJobRunner(settings, stage_lock_factory=_production_stage_lock)
     try:
         job_run = runner.run_next()
     finally:
@@ -1054,6 +1063,7 @@ def _run_auto_drain_once(settings: Settings) -> dict[str, Any]:
         "windows_processed": int(drain.get("windows_processed") or 0),
         "stopped_reason": drain.get("stopped_reason"),
         "pending_sessions": drain.get("pending_sessions"),
+        "production_job_run": job_run,
         "v2_job_run": job_run,
     }
     return result

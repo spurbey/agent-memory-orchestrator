@@ -36,7 +36,7 @@
         <div>
           <p class="eyebrow">Local first GraphRAG</p>
           <h1 id="pageTitle">Dashboard</h1>
-          <p id="pageSubtitle" class="subtitle">V2 production status from raw capture to answer-grade retrieval.</p>
+          <p id="pageSubtitle" class="subtitle">Production pipeline status from raw capture to answer-grade retrieval.</p>
         </div>
         <div class="top-actions">
           <select id="repoScopeSelect" class="repo-select" aria-label="Repository scope">
@@ -51,9 +51,9 @@
         <div class="metric-grid" id="metricGrid"></div>
         <section class="panel hero-panel">
           <div>
-            <p class="eyebrow">V2 production pipeline</p>
+            <p class="eyebrow">Production pipeline</p>
             <h2>From raw capture to traced answer memory</h2>
-            <p class="muted">The dashboard tracks the real V2 job path: hook JSONL, closed-session queue, evidence view, commit-backed packets, Qwen reasoning, Kuzu write, retrieval docs, and vectors.</p>
+            <p class="muted">The dashboard tracks the real production job path: hook JSONL, closed-session queue, evidence view, commit-backed packets, Qwen reasoning, session graph write, retrieval docs, and vectors.</p>
           </div>
           <div class="pipeline-strip" id="pipelineStrip"></div>
         </section>
@@ -86,7 +86,7 @@
             <div class="panel-head stacked">
               <p class="eyebrow">Sessions</p>
               <h2>Captured workstreams</h2>
-              <p class="muted">Pick a session to inspect raw events, V2 job state, stage artifacts, and job events.</p>
+              <p class="muted">Pick a session to inspect raw events, production job state, stage artifacts, and job events.</p>
             </div>
             <div id="sessionList" class="session-list"></div>
           </aside>
@@ -100,11 +100,11 @@
                 <div>
                   <p class="eyebrow" id="sessionSource">Session</p>
                   <h2 id="sessionTitle">session</h2>
-                  <p class="muted" id="sessionSummary">Raw capture and V2 job state.</p>
+                  <p class="muted" id="sessionSummary">Raw capture and production job state.</p>
                 </div>
                 <div class="button-row">
                   <button id="scanEvidenceBtn" class="btn primary">Scan / Enqueue</button>
-                  <button id="retrySelectedJobBtn" class="btn ghost hidden">Retry V2 Job</button>
+                  <button id="retrySelectedJobBtn" class="btn ghost hidden">Retry Production Job</button>
                 </div>
               </section>
 
@@ -124,7 +124,7 @@
                   <div id="timelineList" class="timeline-list"></div>
                 </section>
                 <section class="panel">
-                  <div class="panel-head"><h2>Selected V2 job</h2></div>
+                  <div class="panel-head"><h2>Selected production job</h2></div>
                   <div id="selectedJobPanel" class="job-list"></div>
                 </section>
               </div>
@@ -141,7 +141,7 @@
               </div>
 
               <section class="panel">
-                <div class="panel-head"><h2>V2 job event log</h2></div>
+                <div class="panel-head"><h2>Production job event log</h2></div>
                 <div id="jobEventLog" class="job-event-list"></div>
               </section>
               <div class="hidden">
@@ -220,7 +220,7 @@
           <div>
             <p class="eyebrow">Graph query inspector</p>
             <h2>See what retrieval actually returns</h2>
-            <p class="muted">Run the V2 indexed GraphRAG path: exact/BM25, vector retrieval, reranking, graph neighborhood expansion, and cited answer assembly.</p>
+            <p class="muted">Run the indexed production GraphRAG path: exact/BM25, vector retrieval, reranking, graph neighborhood expansion, and cited answer assembly.</p>
           </div>
           <div class="retrieval-form">
             <input id="retrievalQuery" class="search" placeholder="Ask AMO memory" />
@@ -270,7 +270,7 @@ amo-cli slack run --reply-mode answer</pre>
         <section class="panel">
           <div class="panel-head">
             <div>
-              <p class="eyebrow">V2 session jobs</p>
+              <p class="eyebrow">Production session jobs</p>
               <h2>Background production pipeline</h2>
               <p class="muted">Closed sessions are enqueued here and processed stage by stage. Failed or model-waiting jobs require an explicit retry.</p>
             </div>

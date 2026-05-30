@@ -31,7 +31,7 @@ the merge planner builds:
 - evidence refs,
 - graph-neighbor signature from typed `REASON_NODE_*` edges.
 
-This is deliberately edge-driven. In the V2 compact graph, the decision text is
+This is deliberately edge-driven. In the production compact graph, the decision text is
 often short; the semantic scope comes from packet, commit, evidence, code-node,
 symbol, and code-version edges.
 
@@ -93,7 +93,7 @@ Future status-transition behavior should follow:
 
 ## Real Production Probe
 
-The current dry-run was checked against the V2 job:
+The current dry-run was checked against the production job:
 
 ```text
 v2job:1fc7fea2efc46cb1cff9b01ebedc4319
