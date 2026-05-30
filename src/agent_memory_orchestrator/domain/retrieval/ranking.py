@@ -152,6 +152,11 @@ def rerank_document(
         else:
             score -= 0.14
             reasons.append("broad_query_code_support_penalty")
+    if intent == "code_why" and doc.doc_type == "packet":
+        # Packets often contain the user's original question verbatim. Keep
+        # them as trace support, but do not let query echo beat impact docs.
+        score -= 0.25
+        reasons.append("packet_support_penalty")
     node_type = _doc_node_type(doc)
     if intent == "decision_history" and doc.doc_type == "reasoning":
         if node_type == "Decision":
@@ -300,6 +305,12 @@ def _central_version_boost(
         if atom_kind in {"file", "commit"}:
             return 0.25
         return 0.55
+    if intent == "code_why" and atom_kind in {"file", "commit"}:
+        # File/commit KnowledgeVersions are identity stubs. A "why" query
+        # needs curated FileImpact/CodeImpact or reasoning docs when available.
+        if _query_has_code_locator(query) and topic_overlap_ratio >= 0.4:
+            return 0.12
+        return 0.0
     if _query_has_code_locator(query):
         return 0.55
     if atom_kind in {"file", "commit"} and intent == "semantic_search":

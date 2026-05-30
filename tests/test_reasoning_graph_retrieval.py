@@ -1365,6 +1365,114 @@ def test_version_flow_query_prefers_matching_file_impact_rollup(tmp_path: Path) 
     assert "version_locator_file_rollup_boost" in result.hits[0].reasons
 
 
+def test_code_why_query_prefers_impact_over_central_file_stub(tmp_path: Path) -> None:
+    conn, index_store, _embedding_store = _sqlite_store(tmp_path)
+    try:
+        index_store.upsert_documents(
+            [
+                RetrievalDocument(
+                    doc_id="doc:central:file-version",
+                    doc_type="central_version",
+                    graph_node_id="kver:file:graph-service",
+                    node_kind="KnowledgeVersion",
+                    repo_id="repo:amo",
+                    packet_id="",
+                    commit_sha="",
+                    title="File version: src/agent_memory_orchestrator/graph_service.py",
+                    body="kind: KnowledgeVersion\natom_kind: file\nfile_path: src/agent_memory_orchestrator/graph_service.py",
+                    metadata={"node_metadata": {"atom_kind": "file"}},
+                    memory_class="central_active_memory",
+                    importance=0.95,
+                ),
+                RetrievalDocument(
+                    doc_id="doc:impact:graph-service",
+                    doc_type="code_impact",
+                    graph_node_id="impact:graph-service",
+                    node_kind="CodeImpactSummary",
+                    repo_id="repo:amo",
+                    packet_id="WP0004",
+                    commit_sha="37943f2",
+                    title="Code impact for graph_service.py",
+                    body="graph_service.py changed to route graph retrieval through curated packet-backed impact summaries.",
+                    metadata={"selected_files": ["src/agent_memory_orchestrator/graph_service.py"]},
+                    memory_class="code_impact_summary",
+                    importance=0.82,
+                ),
+            ]
+        )
+
+        result = retrieve_session_graph(
+            query="why did we change graph_service.py?",
+            index_store=index_store,
+            graph_store=_NoGraphWalkStore(),
+            repo_id="repo:amo",
+            limit=2,
+            expand_neighbors=0,
+            include_graph_nodes=False,
+        )
+    finally:
+        conn.close()
+
+    assert result.intent == "code_why"
+    assert result.hits[0].document.doc_id == "doc:impact:graph-service"
+    central_hit = next(hit for hit in result.hits if hit.document.doc_id == "doc:central:file-version")
+    assert "central_active_boost:0.12" in central_hit.reasons
+
+
+def test_code_why_query_treats_query_echo_packet_as_support(tmp_path: Path) -> None:
+    conn, index_store, _embedding_store = _sqlite_store(tmp_path)
+    try:
+        index_store.upsert_documents(
+            [
+                RetrievalDocument(
+                    doc_id="doc:packet:query-echo",
+                    doc_type="packet",
+                    graph_node_id="WP0063",
+                    node_kind="Packet",
+                    repo_id="repo:amo",
+                    packet_id="WP0063",
+                    commit_sha="9b74876",
+                    title="WP0063 feat(retrieval): add typed answer trace traversal",
+                    body="User asked: why did we change graph_service.py? The packet records the question.",
+                    memory_class="work_packet",
+                    importance=0.5,
+                ),
+                RetrievalDocument(
+                    doc_id="doc:impact:graph-service",
+                    doc_type="code_impact",
+                    graph_node_id="impact:graph-service",
+                    node_kind="CodeImpactSummary",
+                    repo_id="repo:amo",
+                    packet_id="WP0063",
+                    commit_sha="9b74876",
+                    title="Code impact for graph_service.py",
+                    body="graph_service.py changed to add typed answer trace traversal for packet-backed retrieval explanations.",
+                    metadata={"selected_files": ["src/agent_memory_orchestrator/graph_service.py"]},
+                    memory_class="code_impact_summary",
+                    importance=0.82,
+                ),
+            ]
+        )
+
+        result = retrieve_session_graph(
+            query="why did we change graph_service.py?",
+            index_store=index_store,
+            graph_store=_NoGraphWalkStore(),
+            repo_id="repo:amo",
+            limit=2,
+            expand_neighbors=0,
+            include_graph_nodes=False,
+            reranker_backend="lexical",
+        )
+    finally:
+        conn.close()
+
+    assert result.reranker == "deterministic+lexical"
+    assert result.hits[0].document.doc_id == "doc:impact:graph-service"
+    packet_hit = next(hit for hit in result.hits if hit.document.doc_id == "doc:packet:query-echo")
+    assert "packet_support_penalty" in packet_hit.reasons
+
+
 def test_answer_renderer_builds_version_timeline_from_file_impact() -> None:
     result = {
         "query": "what was the demo_marker function about?",
