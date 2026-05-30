@@ -18,8 +18,6 @@ from ...graph.store import KuzuGraphStore
 from ...llm.qwen import OllamaQwenClient
 from ...llm.qwen import QwenUnavailable
 from ..code_analysis import extract_code_nodes_from_commit
-from ..central_merge.applier import repo_central_graph_path
-from ...domain.versioning.identity import atoms_by_canonical_key
 from ..evidence_view import build_reasoning_evidence_view
 from ..evidence_view import git_commit_truth
 from ..evidence_view import write_reasoning_evidence_view_artifacts
@@ -479,31 +477,6 @@ class V2SessionJobRunner:
         from .stages.central_version_merge import run_central_version_merge_stage
 
         return run_central_version_merge_stage(self, job, artifact_dir, stage_dir)
-
-    def _central_atoms_by_canonical_key(self, *, repo_id: str) -> dict[str, dict[str, Any]]:
-        graph = self.graph_store_factory(repo_central_graph_path(self.settings, repo_id))
-        try:
-            graph.init_schema()
-            nodes = graph.list_nodes(limit=1_000_000, kinds=["KnowledgeAtom"])
-        finally:
-            graph.close()
-        return atoms_by_canonical_key(nodes)
-
-    def _central_active_versions(self, *, repo_id: str) -> list[dict[str, Any]]:
-        graph = self.graph_store_factory(repo_central_graph_path(self.settings, repo_id))
-        try:
-            graph.init_schema()
-            nodes = graph.list_nodes(limit=1_000_000, kinds=["KnowledgeVersion"])
-        finally:
-            graph.close()
-        out: list[dict[str, Any]] = []
-        for node in nodes:
-            metadata = node.get("metadata") if isinstance(node.get("metadata"), dict) else {}
-            atom_kind = str(metadata.get("atom_kind") or "").lower()
-            status = str(node.get("status") or metadata.get("status") or "")
-            if str(metadata.get("repo_id") or "") == repo_id and (status in {"", "active"} or (atom_kind in {"decision", "problem"} and status == "review")):
-                out.append(node)
-        return out
 
     def _stage_retrieval_docs(self, job: dict[str, Any], artifact_dir: Path, stage_dir: Path) -> StageResult:
         from .stages.retrieval_projection import run_retrieval_docs_stage
