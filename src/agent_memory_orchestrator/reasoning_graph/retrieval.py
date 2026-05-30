@@ -3,12 +3,19 @@ from __future__ import annotations
 import json
 import re
 import sqlite3
-from dataclasses import dataclass, field
 from dataclasses import replace as dataclass_replace
 from datetime import datetime, timezone
-from typing import Any, Iterable, Protocol
+from typing import Any, Iterable
 
 from ..core.db import init_schema
+from ..domain.retrieval.classification import classify_query
+from ..domain.retrieval.classification import query_has_code_locator as _query_has_code_locator
+from ..domain.retrieval.models import EmbeddingRunResult
+from ..domain.retrieval.models import RetrievalCandidate
+from ..domain.retrieval.models import RetrievalDocument
+from ..domain.retrieval.models import RetrievalHit
+from ..domain.retrieval.models import RetrievalResult
+from ..domain.retrieval.models import TextEmbeddingProvider
 from ..graph.store import GraphStore
 from ..llm.rerankers import RerankCandidate
 from ..llm.rerankers import rerank_candidates
@@ -108,127 +115,6 @@ HOOK_QUERY_EXPANSION_TERMS = {
     "prompt",
     "userpromptsubmit",
 }
-
-
-class TextEmbeddingProvider(Protocol):
-    def embed(self, text: str) -> list[float]:
-        ...
-
-
-@dataclass(slots=True, frozen=True)
-class RetrievalDocument:
-    doc_id: str
-    doc_type: str
-    graph_node_id: str
-    node_kind: str
-    packet_id: str
-    commit_sha: str
-    title: str
-    body: str
-    repo_id: str = ""
-    projection_id: str = ""
-    chunk_index: int = 1
-    chunk_count: int = 1
-    memory_class: str = "graph_context"
-    importance: float = 0.5
-    metadata: dict[str, Any] = field(default_factory=dict)
-
-    @property
-    def body_char_count(self) -> int:
-        return len(self.body)
-
-    def embedding_text(self) -> str:
-        return "\n".join(part for part in (self.title.strip(), self.body.strip()) if part)
-
-    def as_dict(self) -> dict[str, Any]:
-        return {
-            "doc_id": self.doc_id,
-            "doc_type": self.doc_type,
-            "graph_node_id": self.graph_node_id,
-            "node_kind": self.node_kind,
-            "repo_id": self.repo_id,
-            "projection_id": self.projection_id,
-            "packet_id": self.packet_id,
-            "commit_sha": self.commit_sha,
-            "title": self.title,
-            "body": self.body,
-            "body_char_count": self.body_char_count,
-            "chunk_index": self.chunk_index,
-            "chunk_count": self.chunk_count,
-            "memory_class": self.memory_class,
-            "importance": self.importance,
-            "metadata": self.metadata,
-        }
-
-
-@dataclass(slots=True, frozen=True)
-class RetrievalCandidate:
-    doc_id: str
-    source: str
-    rank: int
-    raw_score: float
-
-
-@dataclass(slots=True, frozen=True)
-class RetrievalHit:
-    document: RetrievalDocument
-    score: float
-    sources: tuple[str, ...]
-    reasons: tuple[str, ...]
-    graph_node: dict[str, Any]
-    neighbors: tuple[dict[str, Any], ...]
-
-    def as_dict(self) -> dict[str, Any]:
-        return {
-            "document": self.document.as_dict(),
-            "score": self.score,
-            "sources": list(self.sources),
-            "reasons": list(self.reasons),
-            "graph_node": self.graph_node,
-            "neighbors": list(self.neighbors),
-        }
-
-
-@dataclass(slots=True, frozen=True)
-class RetrievalResult:
-    query: str
-    intent: str
-    hits: tuple[RetrievalHit, ...]
-    candidate_counts: dict[str, int]
-    vector_status: str = "not_requested"
-    reranker: str = "deterministic"
-
-    def as_dict(self) -> dict[str, Any]:
-        return {
-            "query": self.query,
-            "intent": self.intent,
-            "candidate_counts": self.candidate_counts,
-            "vector_status": self.vector_status,
-            "reranker": self.reranker,
-            "hits": [hit.as_dict() for hit in self.hits],
-        }
-
-
-@dataclass(slots=True, frozen=True)
-class EmbeddingRunResult:
-    total_docs: int
-    already_embedded: int
-    embedded: int
-    skipped_empty: int
-    model: str
-    dims: int
-    limit_hit: bool = False
-
-    def as_dict(self) -> dict[str, Any]:
-        return {
-            "total_docs": self.total_docs,
-            "already_embedded": self.already_embedded,
-            "embedded": self.embedded,
-            "skipped_empty": self.skipped_empty,
-            "model": self.model,
-            "dims": self.dims,
-            "limit_hit": self.limit_hit,
-        }
 
 
 class RetrievalIndexStore:
@@ -1188,25 +1074,6 @@ def _safe_reranker_prefix(value: str) -> str:
     return re.sub(r"[^a-z0-9]+", "_", value.strip().lower()).strip("_") or "reranker"
 
 
-def classify_query(query: str) -> str:
-    lowered = query.lower()
-    if re.search(r"\b(version flow|version history|version chain|symbol version|symbol history|show versions?|over time|evolved?|evolution)\b", lowered):
-        return "version_flow"
-    if re.search(r"\bwhat changed\b|\bchanges? for\b|\bhow .* changed\b", lowered):
-        return "code_why" if _query_has_code_locator(query) or re.search(r"\b(code|file|function|class|module|ui|graph|service|controls?)\b", lowered) else "semantic_search"
-    if "why" in lowered or "reason" in lowered:
-        return (
-            "code_why"
-            if _query_has_code_locator(query) or re.search(r"\b(code|file|function|class|module|ui|service|controls?)\b", lowered)
-            else "decision_history"
-        )
-    if "decision" in lowered or "decide" in lowered:
-        return "decision_history"
-    if "::" in query or re.search(r"\b[\w./-]+\.(py|js|ts|tsx|jsx|md)\b", lowered):
-        return "version_flow"
-    return "semantic_search"
-
-
 def _documents_for_node(node: dict[str, Any], *, max_doc_chars: int) -> list[RetrievalDocument]:
     node_id = str(node.get("id") or "")
     node_kind = str(node.get("kind") or "GraphNode")
@@ -1973,15 +1840,6 @@ def _expanded_query_terms(query: str) -> set[str]:
     if "hook" in terms:
         terms.update(HOOK_QUERY_EXPANSION_TERMS)
     return terms
-
-
-def _query_has_code_locator(query: str) -> bool:
-    lowered = query.lower()
-    return bool(
-        "::" in query
-        or re.search(r"\b[\w./-]+\.(py|js|ts|tsx|jsx|md|toml|json|yaml|yml)\b", lowered)
-        or re.search(r"\b[a-z0-9]+_[a-z0-9_]+\b", lowered)
-    )
 
 
 def _code_locator_terms(query: str) -> set[str]:
