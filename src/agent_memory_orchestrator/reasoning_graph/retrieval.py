@@ -10,6 +10,8 @@ from typing import Any, Iterable
 from ..core.db import init_schema
 from ..domain.retrieval.classification import classify_query
 from ..domain.retrieval.classification import query_has_code_locator as _query_has_code_locator
+from ..domain.retrieval.fusion import candidate_raw_scores as _candidate_raw_scores
+from ..domain.retrieval.fusion import rrf_fuse as _rrf_fuse
 from ..domain.retrieval.models import EmbeddingRunResult
 from ..domain.retrieval.models import RetrievalCandidate
 from ..domain.retrieval.models import RetrievalDocument
@@ -1439,28 +1441,6 @@ def _vector_candidates(
         ],
         status,
     )
-
-
-def _rrf_fuse(candidate_sets: dict[str, list[RetrievalCandidate]], *, k: int = 60) -> list[tuple[str, float, tuple[str, ...]]]:
-    scores: dict[str, float] = {}
-    sources: dict[str, set[str]] = {}
-    for source, candidates in candidate_sets.items():
-        for candidate in candidates:
-            scores[candidate.doc_id] = scores.get(candidate.doc_id, 0.0) + (1.0 / (k + candidate.rank))
-            sources.setdefault(candidate.doc_id, set()).add(source)
-    return [
-        (doc_id, score, tuple(sorted(sources.get(doc_id, set()))))
-        for doc_id, score in sorted(scores.items(), key=lambda item: item[1], reverse=True)
-    ]
-
-
-def _candidate_raw_scores(candidate_sets: dict[str, list[RetrievalCandidate]]) -> dict[str, dict[str, float]]:
-    scores: dict[str, dict[str, float]] = {}
-    for source, candidates in candidate_sets.items():
-        for candidate in candidates:
-            source_scores = scores.setdefault(candidate.doc_id, {})
-            source_scores[source] = max(float(candidate.raw_score), source_scores.get(source, float("-inf")))
-    return scores
 
 
 def _rerank_document(
