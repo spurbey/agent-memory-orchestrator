@@ -16,7 +16,7 @@
 
 ## Purpose
 
-Provide the single graph persistence backend for AMO Reasoning Graph V2.
+Provide the single graph persistence backend for AMO Reasoning Graph.
 
 ## Inputs
 
@@ -83,8 +83,8 @@ Normal graph writes are daemon-owned:
 
 ```text
 hooks capture raw evidence
-daemon drains evidence and runs V2 jobs
-V2 jobs write session graphs and apply central merges
+daemon drains evidence and runs production jobs
+production jobs write session graphs and apply central merges
 CLI/MCP/UI call daemon endpoints for writes
 ```
 

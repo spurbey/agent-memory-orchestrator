@@ -38,12 +38,12 @@ function setView(view) {
   qsa(".view").forEach(el => el.classList.toggle("active", el.id === `${view}View`));
   qsa(".nav-item").forEach(el => el.classList.toggle("active", el.dataset.view === view));
   const copy = {
-    dashboard: ["Dashboard", "V2 production status from raw capture to answer-grade retrieval."],
-    sessions: ["Sessions", "Inspect raw capture, closed-session job state, artifacts, and V2 stage events."],
+    dashboard: ["Dashboard", "Production pipeline status from raw capture to answer-grade retrieval."],
+    sessions: ["Sessions", "Inspect raw capture, closed-session job state, artifacts, and production stage events."],
     versions: ["Versions", "Inspect commit-centered memory flows."],
-    retrieval: ["Retrieval", "Run the indexed V2 GraphRAG path and inspect citations."],
+    retrieval: ["Retrieval", "Run the indexed production GraphRAG path and inspect citations."],
     connectors: ["Connectors", "Check local connector readiness and external message capture."],
-    admin: ["Admin", "Operate V2 session jobs and daemon diagnostics."],
+    admin: ["Admin", "Operate production session jobs and daemon diagnostics."],
   }[view] || ["AMO", "Local GraphRAG control room"];
   $("pageTitle").textContent = copy[0];
   $("pageSubtitle").textContent = copy[1];

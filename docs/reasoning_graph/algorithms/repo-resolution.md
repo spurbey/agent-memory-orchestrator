@@ -1,4 +1,4 @@
-# V2 Repo Resolution
+# Production Repo Resolution
 
 ## Problem
 
@@ -10,8 +10,8 @@ hook cwd:        C:\Users\sumit\Downloads\Dora
 actual workdir:  C:\Users\sumit\Downloads\Dora\agent-memory-orchestrator
 ```
 
-If V2 validates commits against the parent repo, work packets fail even though
-the commits are real. If V2 accepts the parent path blindly, durable memory can
+If the production pipeline validates commits against the parent repo, work packets fail even though
+the commits are real. If it accepts the parent path blindly, durable memory can
 attach commits, files, symbols, and decisions to the wrong `repo_id`.
 
 ## Rule
@@ -96,7 +96,7 @@ commands accept `--repo-id` for scoped rebuild, embedding, retrieval, and
 version-flow inspection.
 
 Install does not require per-repo setup. Hooks capture the current working
-directory and tool payloads for every Codex/Claude session; V2 resolves the repo
+directory and tool payloads for every Codex/Claude session; production resolves the repo
 when a closed-session job runs. New repositories get their own repo-scoped jobs,
 central atoms, `GraphView`, retrieval docs, and vectors automatically.
 
@@ -110,8 +110,8 @@ nested repo exists
 hook cwd = parent
 transcript workdir = nested
 commit belongs to nested
-V2 job repo_path becomes nested
-V2 job repo_id becomes the nested repo's canonical id
+Production job repo_path becomes nested
+Production job repo_id becomes the nested repo's canonical id
 work_packets produces commit-backed packets
 central merge writes/reads GraphView for only that repo_id
 retrieval can filter to only that repo_id

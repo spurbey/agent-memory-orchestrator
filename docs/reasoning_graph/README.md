@@ -1,21 +1,21 @@
-# Reasoning Graph V2
+# Reasoning Graph
 
 ## Purpose
 
 The Reasoning Graph explains why code changed.
 
-Git already records what changed. AMO V2 adds the reasoning layer around it: problems, causes, decisions, fixes, constraints, evidence, tests, code hunks, symbols, commits, and version relationships.
+Git already records what changed. AMO adds the reasoning layer around it: problems, causes, decisions, fixes, constraints, evidence, tests, code hunks, symbols, commits, and version relationships.
 
-Before commit-backed stages run, V2 resolves the actual Git root for the closed
+Before commit-backed stages run, the production pipeline resolves the actual Git root for the closed
 session. Hook cwd is only a hint; transcript tool workdirs and commit ownership
 decide the repo scope so nested repositories do not get attributed to a parent
 workspace.
 
-## V2 Flow
+## Production Flow
 
 ```text
 raw evidence and transcripts
--> closed-session V2 job
+-> closed-session production job
 -> reasoning evidence view
 -> commit-backed work packets
 -> packet-wise reasoning extraction
@@ -27,7 +27,7 @@ raw evidence and transcripts
 -> retrieval docs, embeddings, graph expansion, reranking
 ```
 
-Production runs this flow through `V2SessionJobRunner`. Drain only detects that
+Production runs this flow through `ProductionSessionJobRunner`. Drain only detects that
 a previous session closed and enqueues a job; it does not run extraction or write
 graph nodes. Completed stage artifacts are reused unless their input hash or
 stage configuration hash changes.
@@ -42,7 +42,7 @@ without turn ids.
 
 ## Source of Truth
 
-V2 uses deterministic facts as the spine:
+The production pipeline uses deterministic facts as the spine:
 
 - Git commits define work boundaries.
 - Git hunks define changed code regions.
@@ -51,13 +51,14 @@ V2 uses deterministic facts as the spine:
 - Kuzu stores graph truth.
 - SQLite stores retrieval/index ledgers.
 - FAISS is a rebuildable vector cache.
-- SQLite also stores V2 job state, stage rows, lock leases, retry metadata, and
+- SQLite also stores production job state, stage rows, lock leases, retry metadata, and
   the explicit production reset marker.
 
 ## Central Merge
 
 The session graph is immutable provenance. It keeps the exact packet, commit,
-evidence, hunk, code node, and symbol facts produced by a closed-session V2 job.
+evidence, hunk, code node, and symbol facts produced by a closed-session
+production job.
 
 `central_version_merge` creates the durable canonical layer beside that session
 graph:
@@ -113,27 +114,27 @@ packet evidence before it becomes answer-grade graph memory.
 
 ## Production Reset
 
-Pre-V2 graph and retrieval rows are treated as scrap after the V2 cutover, but
+Legacy graph and retrieval rows are treated as scrap after the production cutover, but
 cleanup is never automatic on daemon startup. Operators must run:
 
 ```bash
-amo-cli v2-reset-production --backup --clean-graph --clean-retrieval
+amo-cli reset-production --backup --clean-graph --clean-retrieval
 ```
 
 New devices with empty production graph/retrieval stores should use normal
-install/init instead; `amo-cli v2-init-production` writes the fresh-store marker
+install/init instead; `amo-cli init-production` writes the fresh-store marker
 without deleting anything.
 
 The command backs up production graph/retrieval/vector stores first, verifies a
 backup manifest, then cleans only graph/retrieval/vector/FAISS storage. Raw JSONL
-evidence, config, and V2 job tables are preserved.
+evidence, config, and production job tables are preserved.
 The production reset marker is written only after both graph and retrieval
 cleanup complete, and the runner refuses production Kuzu/retrieval stages if the
 marker is missing, version-mismatched, or incomplete.
 
 Legacy `GraphDelta` generation is available only for `graph-drain-smoke`, which
 writes to a disposable smoke graph. Production closed-session processing writes
-V2 node kinds such as `Packet`, `Commit`, `EvidenceRef`, `ReasoningNode`,
+production graph node kinds such as `Packet`, `Commit`, `EvidenceRef`, `ReasoningNode`,
 `CodeHunk`, `CodeNode`, `CodeVersion`, and `Symbol`.
 
 Current production writes both an exhaustive trace graph manifest and a curated

@@ -13,7 +13,7 @@ export const state = {
   versionFlow: { flows: [], nodes: [], edges: [], warnings: [] },
 };
 
-export const V2_STAGES = [
+export const PRODUCTION_STAGES = [
   "evidence_view",
   "work_packets",
   "qwen_reasoning",
@@ -30,7 +30,7 @@ export const V2_STAGES = [
   "quality_eval",
 ];
 
-export const V2_STAGE_LABELS = {
+export const PRODUCTION_STAGE_LABELS = {
   evidence_view: "Evidence View",
   work_packets: "Work Packets",
   qwen_reasoning: "Qwen Reasoning",
@@ -53,7 +53,7 @@ export const PIPELINE_GROUPS = [
   { key: "evidence", label: "Evidence", desc: "Cleaned evidence view" },
   { key: "packets", label: "Packets", desc: "Commit-backed packets" },
   { key: "reason", label: "Reason", desc: "Qwen + review" },
-  { key: "graph", label: "Session Graph", desc: "Immutable V2 graph write" },
+  { key: "graph", label: "Session Graph", desc: "Immutable session graph write" },
   { key: "central", label: "Central", desc: "Version merge plan" },
   { key: "retrieval", label: "Retrieve", desc: "Docs + vectors" },
 ];

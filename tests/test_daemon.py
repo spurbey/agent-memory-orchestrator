@@ -40,7 +40,7 @@ def test_web_assets_load_from_package_static_folder() -> None:
     graph_css, graph_css_type = _web_asset_bytes("css/graph-workbench.css")
 
     assert "AMO Control Room" in html
-    assert "V2 production pipeline" in _session_cockpit_html()
+    assert "Production pipeline" in _session_cockpit_html()
     assert 'type="module" src="/web/amo.js"' in _session_cockpit_html()
     assert b"control-room/app.js" in js
     assert content_type.startswith("application/javascript")
