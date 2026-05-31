@@ -33,3 +33,20 @@ def resolve_graph_view(store: GraphViewStore, *, repo_id: str = "", branch: str 
         graph_commit_id=str(row.get("graph_commit_id") or ""),
         status=str(row.get("status") or "active"),
     )
+
+
+def graph_view_id(*, repo_id: str = "", branch: str = "main", mode: str = "active") -> str:
+    safe_repo = _safe_part(repo_id)[:72] if repo_id else ""
+    if safe_repo:
+        return f"v2view:{safe_repo}:{_safe_part(branch)}:{_safe_part(mode)}"
+    return f"v2view:{_safe_part(branch)}:{_safe_part(mode)}"
+
+
+def _safe_part(value: str) -> str:
+    out = []
+    for ch in str(value):
+        if ch.isalnum() or ch in {"-", "_", "."}:
+            out.append(ch)
+        else:
+            out.append("_")
+    return "".join(out).strip("_") or "value"

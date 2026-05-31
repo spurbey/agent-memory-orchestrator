@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from .views import GraphViewRef
 from .views import GraphViewStore
+from .views import graph_view_id
 from .views import resolve_graph_view
 
-__all__ = ["GraphViewRef", "GraphViewStore", "resolve_graph_view"]
+__all__ = ["GraphViewRef", "GraphViewStore", "graph_view_id", "resolve_graph_view"]
