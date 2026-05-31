@@ -35,6 +35,93 @@ GRAPH_COMMANDS = (
 )
 
 
+def add_graph_subcommands(sub: Any) -> None:
+    graph_search = sub.add_parser("graph-search", help="Explicit Kuzu GraphRAG search")
+    graph_search.add_argument("--query", required=True)
+    graph_search.add_argument("--limit", type=int, default=8)
+    graph_search.add_argument("--include-raw", action="store_true")
+    graph_search.add_argument("--include-historical", action="store_true")
+    graph_search.add_argument("--offline", action="store_true", help="Open Kuzu directly for single-process maintenance.")
+
+    graph_status = sub.add_parser("graph-status", help="Inspect Kuzu graph merge status")
+    graph_status.add_argument("--session-id", default="")
+    graph_status.add_argument("--offline", action="store_true", help="Open Kuzu directly for single-process maintenance.")
+
+    graph_drain = sub.add_parser("graph-drain", help="Daemon drains captured evidence into the Kuzu session graph")
+    graph_drain.add_argument("--session-id", default="")
+    graph_drain.add_argument("--limit", type=int, default=500)
+    graph_drain.add_argument("--max-windows", type=int, default=None, help="Maximum Qwen trigger windows to process in one request.")
+    graph_drain.add_argument("--offline", action="store_true", help="Open Kuzu directly for single-process maintenance.")
+
+    graph_retrieval_build = sub.add_parser("graph-retrieval-build", help="Build SQLite/FTS retrieval docs from the graph")
+    graph_retrieval_build.add_argument("--session-id", default="")
+    graph_retrieval_build.add_argument("--repo-id", default="", help="Limit retrieval docs to one canonical repo id.")
+    graph_retrieval_build.add_argument("--limit", type=int, default=10000)
+    graph_retrieval_build.add_argument("--max-doc-chars", type=int, default=5000)
+    graph_retrieval_build.add_argument("--db-path", type=Path, default=None)
+    graph_retrieval_build.add_argument("--graph-path", type=Path, default=None)
+    graph_retrieval_build.add_argument("--offline", action="store_true", help="Open Kuzu directly for single-process maintenance.")
+
+    graph_retrieval_embed = sub.add_parser("graph-retrieval-embed", help="Resume embedding missing graph retrieval docs")
+    graph_retrieval_embed.add_argument("--session-id", default="")
+    graph_retrieval_embed.add_argument("--repo-id", default="", help="Limit embedding work to one canonical repo id.")
+    graph_retrieval_embed.add_argument("--limit", type=int, default=100)
+    graph_retrieval_embed.add_argument("--model", default="")
+    graph_retrieval_embed.add_argument("--graph-scope", default="")
+    graph_retrieval_embed.add_argument("--db-path", type=Path, default=None)
+    graph_retrieval_embed.add_argument("--graph-path", type=Path, default=None)
+    graph_retrieval_embed.add_argument("--no-faiss", action="store_true", help="Do not rebuild the FAISS cache after embedding.")
+    graph_retrieval_embed.add_argument("--offline", action="store_true", help="Open Kuzu directly for single-process maintenance.")
+
+    graph_retrieve = sub.add_parser("graph-retrieve", help="Retrieve over graph docs with exact/BM25/vector/Kuzu expansion")
+    graph_retrieve.add_argument("--query", required=True)
+    graph_retrieve.add_argument("--session-id", default="")
+    graph_retrieve.add_argument("--repo-id", default="", help="Search one canonical repo id.")
+    graph_retrieve.add_argument("--limit", type=int, default=8)
+    graph_retrieve.add_argument("--model", default="")
+    graph_retrieve.add_argument("--graph-scope", default="")
+    graph_retrieve.add_argument("--db-path", type=Path, default=None)
+    graph_retrieve.add_argument("--graph-path", type=Path, default=None)
+    graph_retrieve.add_argument("--no-vector", action="store_true")
+    graph_retrieve.add_argument("--require-vector", action="store_true", help="Fail instead of falling back if vector retrieval returns no candidates.")
+    graph_retrieve.add_argument("--no-answer", action="store_true")
+    graph_retrieve.add_argument("--offline", action="store_true", help="Open Kuzu directly for single-process maintenance.")
+
+    graph_version_flow = sub.add_parser("graph-version-flow", help="Show commit-centric graph versioning flow")
+    graph_version_flow.add_argument("--commit", default="", help="Commit SHA/prefix to inspect. Omit to list recent flows.")
+    graph_version_flow.add_argument("--session-id", default="", help="Restrict version flow to one AMO session.")
+    graph_version_flow.add_argument("--repo-id", default="", help="Limit version flow to one canonical repo id.")
+    graph_version_flow.add_argument("--limit", type=int, default=100)
+    graph_version_flow.add_argument("--offline", action="store_true", help="Open Kuzu directly for single-process maintenance.")
+
+    graph_build_session = sub.add_parser(
+        "graph-build-session",
+        help="Build an isolated production session graph from real AMO evidence and Codex transcripts",
+    )
+    graph_build_session.add_argument("--session-id", required=True)
+    graph_build_session.add_argument("--commit", required=True)
+    graph_build_session.add_argument("--repo-root", type=Path, default=Path.cwd())
+    graph_build_session.add_argument("--graph-path", type=Path, default=None)
+    graph_build_session.add_argument("--evidence-path", action="append", type=Path, default=[])
+    graph_build_session.add_argument("--transcript-path", action="append", type=Path, default=[])
+    graph_build_session.add_argument("--file-path", action="append", default=[])
+    graph_build_session.add_argument("--query", default="")
+    graph_build_session.add_argument("--code-query", default="")
+    graph_build_session.add_argument("--limit", type=int, default=8)
+    graph_build_session.add_argument("--limit-events", type=int, default=None)
+    graph_build_session.add_argument("--force", action="store_true", help="Replace the target session graph path.")
+    graph_build_session.add_argument("--text-embedding-model", default="")
+    graph_build_session.add_argument("--code-embedding-model", default=DEFAULT_CODE_EMBEDDING_MODEL)
+
+    graph_session_search = sub.add_parser("graph-session-search", help="Search an isolated production session graph")
+    graph_session_search.add_argument("--graph-path", required=True, type=Path)
+    graph_session_search.add_argument("--query", default="")
+    graph_session_search.add_argument("--code-query", default="")
+    graph_session_search.add_argument("--limit", type=int, default=8)
+    graph_session_search.add_argument("--text-embedding-model", default="")
+    graph_session_search.add_argument("--code-embedding-model", default=DEFAULT_CODE_EMBEDDING_MODEL)
+
+
 class _NoGraphWalkStore:
     def neighbors(self, node_id: str, *, limit: int = 25) -> list[dict[str, object]]:
         raise AssertionError("index-only graph retrieval should not expand Kuzu neighbors")
@@ -329,4 +416,4 @@ def handle_graph_command(args: argparse.Namespace, *, emit: Callable[[object], N
     return 0
 
 
-__all__ = ["GRAPH_COMMANDS", "handle_graph_command"]
+__all__ = ["GRAPH_COMMANDS", "add_graph_subcommands", "handle_graph_command"]
