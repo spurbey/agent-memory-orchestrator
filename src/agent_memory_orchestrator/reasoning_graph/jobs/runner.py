@@ -17,7 +17,6 @@ from ...graph.store import GraphStore
 from ...graph.store import KuzuGraphStore
 from ...llm.qwen import OllamaQwenClient as OllamaQwenClient  # noqa: F401
 from ...llm.qwen import QwenUnavailable as QwenUnavailable  # noqa: F401
-from ..code_analysis import extract_code_nodes_from_commit
 from ...domain.versioning.repo_identity import resolve_repo_identity
 from ..retrieval import RetrievalDocument
 from ..stage4_contract import stage4_contract_hash
@@ -199,79 +198,24 @@ class ProductionSessionJobRunner:
         return run_reasoning_review_stage(self, job, artifact_dir, stage_dir)
 
     def _stage_git_hunks(self, job: dict[str, Any], artifact_dir: Path, stage_dir: Path) -> StageResult:
-        packets = _read_json(_stage_output(artifact_dir, "work_packets"))
-        repo_root = Path(str(job.get("repo_path") or ".")).resolve()
-        hunks: list[dict[str, Any]] = []
-        errors: list[dict[str, str]] = []
-        for packet in packets if isinstance(packets, list) else []:
-            try:
-                packet_hunks, _nodes = extract_code_nodes_from_commit(
-                    repo_root=repo_root,
-                    commit=_packet_full_sha(packet),
-                    session_id=str(job["session_id"]),
-                    extraction_run_id=str(job["job_id"]),
-                    evidence_ids=tuple(_packet_evidence_refs(packet)),
-                )
-            except Exception as exc:
-                errors.append({"packet_id": str(packet.get("packet_id") or ""), "error": str(exc)})
-                continue
-            for index, hunk in enumerate(packet_hunks, start=1):
-                hunks.append(_hunk_record(packet, hunk.as_dict(), index=index))
-        output = stage_dir / "code_hunks.json"
-        output.write_text(json.dumps(hunks, indent=2, ensure_ascii=False), encoding="utf-8")
-        (stage_dir / "git_hunk_errors.json").write_text(json.dumps(errors, indent=2, ensure_ascii=False), encoding="utf-8")
-        return StageResult(output_path=output, diagnostics={"hunk_count": len(hunks), "error_count": len(errors), "errors": errors[:20]})
+        from .stages.code_graph import run_git_hunks_stage
+
+        return run_git_hunks_stage(self, job, artifact_dir, stage_dir)
 
     def _stage_ast_code_nodes(self, job: dict[str, Any], artifact_dir: Path, stage_dir: Path) -> StageResult:
-        packets = _read_json(_stage_output(artifact_dir, "work_packets"))
-        hunk_records = _read_json(_stage_output(artifact_dir, "git_hunks"))
-        hunk_id_map = {str(item.get("original_hunk_id") or ""): str(item.get("hunk_id") or "") for item in hunk_records if isinstance(item, dict)}
-        repo_root = Path(str(job.get("repo_path") or ".")).resolve()
-        code_nodes: list[dict[str, Any]] = []
-        errors: list[dict[str, str]] = []
-        for packet in packets if isinstance(packets, list) else []:
-            try:
-                _hunks, nodes = extract_code_nodes_from_commit(
-                    repo_root=repo_root,
-                    commit=_packet_full_sha(packet),
-                    session_id=str(job["session_id"]),
-                    extraction_run_id=str(job["job_id"]),
-                    evidence_ids=tuple(_packet_evidence_refs(packet)),
-                )
-            except Exception as exc:
-                errors.append({"packet_id": str(packet.get("packet_id") or ""), "error": str(exc)})
-                continue
-            for node in nodes:
-                code_nodes.append(_code_node_record(packet, node.as_dict(), hunk_id_map=hunk_id_map))
-        output = stage_dir / "code_nodes.json"
-        output.write_text(json.dumps(code_nodes, indent=2, ensure_ascii=False), encoding="utf-8")
-        (stage_dir / "ast_code_node_errors.json").write_text(json.dumps(errors, indent=2, ensure_ascii=False), encoding="utf-8")
-        return StageResult(output_path=output, diagnostics={"code_node_count": len(code_nodes), "error_count": len(errors), "errors": errors[:20]})
+        from .stages.code_graph import run_ast_code_nodes_stage
+
+        return run_ast_code_nodes_stage(self, job, artifact_dir, stage_dir)
 
     def _stage_symbol_versions(self, job: dict[str, Any], artifact_dir: Path, stage_dir: Path) -> StageResult:
-        del job
-        code_nodes = _read_json(_stage_output(artifact_dir, "ast_code_nodes"))
-        symbols, versions, edges = _symbol_versions(code_nodes if isinstance(code_nodes, list) else [])
-        output = stage_dir / "symbol_versions.json"
-        output.write_text(json.dumps({"symbols": symbols, "code_versions": versions, "edges": edges}, indent=2, ensure_ascii=False), encoding="utf-8")
-        return StageResult(output_path=output, diagnostics={"symbol_count": len(symbols), "code_version_count": len(versions), "edge_count": len(edges)})
+        from .stages.code_graph import run_symbol_versions_stage
+
+        return run_symbol_versions_stage(self, job, artifact_dir, stage_dir)
 
     def _stage_reasoning_code_links(self, job: dict[str, Any], artifact_dir: Path, stage_dir: Path) -> StageResult:
-        packets = _read_json(_stage_output(artifact_dir, "work_packets"))
-        reasoning_nodes = _read_json(_stage_output(artifact_dir, "reasoning_review"))
-        code_hunks = _read_json(_stage_output(artifact_dir, "git_hunks"))
-        code_nodes = _read_json(_stage_output(artifact_dir, "ast_code_nodes"))
-        symbol_versions = _read_json(_stage_output(artifact_dir, "symbol_versions"))
-        edges = _relationship_edges(
-            packets if isinstance(packets, list) else [],
-            reasoning_nodes if isinstance(reasoning_nodes, list) else [],
-            code_hunks if isinstance(code_hunks, list) else [],
-            code_nodes if isinstance(code_nodes, list) else [],
-            symbol_versions if isinstance(symbol_versions, dict) else {},
-        )
-        output = stage_dir / "graph_edges.json"
-        output.write_text(json.dumps(edges, indent=2, ensure_ascii=False), encoding="utf-8")
-        return StageResult(output_path=output, diagnostics={"edge_count": len(edges)})
+        from .stages.code_graph import run_reasoning_code_links_stage
+
+        return run_reasoning_code_links_stage(self, job, artifact_dir, stage_dir)
 
     def _stage_kuzu_write(self, job: dict[str, Any], artifact_dir: Path, stage_dir: Path) -> StageResult:
         from .stages.session_graph_write import run_session_graph_write_stage
