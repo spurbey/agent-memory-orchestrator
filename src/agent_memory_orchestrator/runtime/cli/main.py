@@ -1829,7 +1829,7 @@ def main(argv: list[str] | None = None) -> int:
                             "ok": False,
                             "requires_daemon": True,
                             "error": str(exc),
-                            "hint": "Start the daemon with: python -m agent_memory_orchestrator.daemon",
+                            "hint": "Start the daemon with: amo-daemon",
                         }
                     )
                     return 1

@@ -46,19 +46,17 @@ agent_memory_orchestrator/
     loader.py
     registry.py
 
-  compatibility/
-    old_imports.py
 ```
 
 ## Current Migration Policy
 
 - Move one bounded subsystem per commit.
-- Keep existing root wrappers and persisted database names until a deliberate release boundary.
-- Prefer explicit compatibility exports over wildcard re-exports.
+- Keep persisted database names until a deliberate release boundary.
+- Do not reintroduce root-level compatibility wrappers for internal code.
 - Keep application services and workflows as thin coordination boundaries unless production behavior already exists.
 - Do not change retrieval ranking, central merge semantics, evidence capture, or production pipeline behavior during structural refactors.
 - Do not delete raw evidence handling or current production tests.
-- Remove legacy `GraphDelta` / `ContextSnapshot` smoke coverage only when the covered path is no longer reachable from rebuild, compatibility, MCP, dashboard, or production fallback flows.
+- Remove legacy `GraphDelta` / `ContextSnapshot` smoke coverage only when the covered path is no longer reachable from rebuild, MCP, dashboard, or production fallback flows.
 - Run `python -m ruff check src tests` and focused pytest suites after each structural move.
 
 ## Staged Migration
@@ -74,15 +72,9 @@ Stage 7: plugin contracts and private extension loader
 Stage 8: obsolete legacy tests/code removal
 ```
 
-## Compatibility Rule
+## Import Rule
 
-Old imports stay as thin shims until callers are migrated:
-
-```python
-from .new_package.module import PublicClass, public_function
-```
-
-New code should prefer the layered package owner:
+New code must import the layered package owner:
 
 ```text
 domain        = pure contracts and deterministic domain helpers
@@ -91,7 +83,4 @@ infrastructure = SQLite, Kuzu, FAISS, Git, LLM, filesystem, network adapters
 runtime       = CLI, daemon, MCP, hook entrypoints
 integrations  = external agent/connector adapters
 extensions    = local plugin contracts, registry, and loader
-compatibility = documented old import surfaces
 ```
-
-The `compatibility.old_imports` registry is the source of truth for known legacy import paths. Existing `app/`, root module wrappers, and other historical shims are compatibility surfaces, not the target architecture.
