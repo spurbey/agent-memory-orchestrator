@@ -47,6 +47,8 @@ def test_stage1_application_and_infrastructure_boundaries_are_importable() -> No
     from agent_memory_orchestrator.application.services import CentralMergeService
     from agent_memory_orchestrator.application.services import ProductionPipelineService
     from agent_memory_orchestrator.application.services import RetrievalQueryService
+    from agent_memory_orchestrator.domain.evidence import build_reasoning_evidence_view
+    from agent_memory_orchestrator.domain.versioning import resolve_session_repo_root
     from agent_memory_orchestrator.infrastructure.faiss import GraphEmbeddingStore
     from agent_memory_orchestrator.infrastructure.kuzu import KuzuGraphStore
     from agent_memory_orchestrator.infrastructure.sqlite import ProductionSessionJobStore
@@ -59,6 +61,8 @@ def test_stage1_application_and_infrastructure_boundaries_are_importable() -> No
     assert RetrievalIndexStore.__name__ == "RetrievalIndexStore"
     assert KuzuGraphStore.__name__ == "KuzuGraphStore"
     assert GraphEmbeddingStore.__name__ == "GraphEmbeddingStore"
+    assert build_reasoning_evidence_view.__name__ == "build_reasoning_evidence_view"
+    assert resolve_session_repo_root.__name__ == "resolve_session_repo_root"
 
 
 def test_stage1_retrieval_boundary_exports_planned_module_names() -> None:
@@ -84,8 +88,10 @@ def test_stage1_production_code_does_not_depend_on_legacy_reasoning_graph_facade
         "agent_memory_orchestrator.reasoning_graph.code_versioning",
         "agent_memory_orchestrator.reasoning_graph.decision_packets",
         "agent_memory_orchestrator.reasoning_graph.embedding_store",
+        "agent_memory_orchestrator.reasoning_graph.evidence_view",
         "agent_memory_orchestrator.reasoning_graph.retrieval",
         "agent_memory_orchestrator.reasoning_graph.reasoning_extraction",
+        "agent_memory_orchestrator.reasoning_graph.repo_resolution",
         "agent_memory_orchestrator.reasoning_graph.session_runtime",
         "agent_memory_orchestrator.reasoning_graph.stage4_contract",
         "agent_memory_orchestrator.reasoning_graph.work_packets",

@@ -34,6 +34,8 @@ from .models import utc_now
 from .repo_identity import RepoIdentity
 from .repo_identity import normalize_remote_url
 from .repo_identity import resolve_repo_identity
+from .repo_resolution import SessionRepoResolution
+from .repo_resolution import resolve_session_repo_root
 from .status import STATUS_ACTIVE
 from .status import STATUS_CONTESTED
 from .status import STATUS_REFINED
@@ -67,6 +69,7 @@ __all__ = [
     "STATUS_REVIEW",
     "STATUS_SUPERSEDED",
     "SUPERSEDES",
+    "SessionRepoResolution",
     "VERSION_OF",
     "atoms_by_canonical_key",
     "choose_preferred_status",
@@ -78,6 +81,7 @@ __all__ = [
     "normalize_remote_url",
     "resolve_graph_view",
     "resolve_repo_identity",
+    "resolve_session_repo_root",
     "stable_hash",
     "utc_now",
 ]
