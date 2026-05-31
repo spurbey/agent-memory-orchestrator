@@ -7,8 +7,6 @@ from pathlib import Path
 
 from ...graph.store import GraphBackendUnavailable
 from ...llm.qwen import QwenUnavailable
-from ...reasoning_graph.central_merge.production_eval import DEFAULT_TARGET_JOB_ID
-from ...reasoning_graph.central_merge.production_eval import DEFAULT_TARGET_REPO_ID
 from ..daemon.client import DaemonUnavailable
 from .commands.bootstrap import handle_bootstrap_command as _handle_bootstrap_command
 from .commands.debug import add_debug_subcommands as _add_debug_subcommands
@@ -26,6 +24,7 @@ from .commands.models import add_models_subcommands as _add_models_subcommands
 from .commands.models import handle_models_command as _handle_models_command
 from .commands.orchestration import add_orchestration_subcommands as _add_orchestration_subcommands
 from .commands.orchestration import handle_orchestration_command as _handle_orchestration_command
+from .commands.pipeline import add_pipeline_subcommands as _add_pipeline_subcommands
 from .commands.pipeline import handle_pipeline_command as _handle_pipeline_command
 from .commands.peer import add_peer_subcommands as _add_peer_subcommands
 from .commands.peer import handle_peer_command as _handle_peer_command
@@ -50,55 +49,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("init-db", help="Initialize local database schema")
     sub.add_parser("init-graph", help="Initialize local Kuzu GraphRAG schema")
-    sub.add_parser(
-        "init-production",
-        help="Non-destructively mark empty fresh graph/retrieval stores as production-ready",
-    )
-
-    prod_reset = sub.add_parser("reset-production", help="Explicitly back up and reset production graph/retrieval stores")
-    prod_reset.add_argument("--backup", action="store_true", help="Required. Create a timestamped backup before cleaning.")
-    prod_reset.add_argument("--clean-graph", action="store_true", help="Clean/recreate the production Kuzu graph store.")
-    prod_reset.add_argument("--clean-retrieval", action="store_true", help="Clean retrieval docs/vector ledger and FAISS cache.")
-    prod_reset.add_argument(
-        "--force-if-daemon-running",
-        action="store_true",
-        help="Allow reset even if the daemon health endpoint is reachable.",
-    )
-    prod_adopt = sub.add_parser(
-        "adopt-production",
-        help="Back up and mark existing production graph/retrieval stores as runner-ready without deleting them",
-    )
-    prod_adopt.add_argument("--backup", action="store_true", help="Required. Create a timestamped backup before adoption.")
-    prod_adopt.add_argument("--validate-graph", action="store_true", help="Required. Verify the production graph store exists.")
-    prod_adopt.add_argument("--validate-retrieval", action="store_true", help="Required. Verify retrieval documents exist.")
-    prod_adopt.add_argument(
-        "--force-if-daemon-running",
-        action="store_true",
-        help="Allow adoption even if the daemon health endpoint is reachable.",
-    )
-    production = sub.add_parser("production", help="Production job, fixture, semantic eval, and central merge commands")
-    production_sub = production.add_subparsers(dest="production_command", required=True)
-    prod_export_nested = production_sub.add_parser("export-fixture", help="Export a production job fixture for semantic evaluation")
-    prod_export_nested.add_argument("--job-id", required=True)
-    prod_export_nested.add_argument("--out", type=Path, help="Output directory for fixture.json")
-    prod_export_nested.add_argument("--copy-artifacts", action="store_true", help="Copy stage output artifacts into the fixture directory")
-    prod_eval_nested = production_sub.add_parser("semantic-eval", help="Run the baseline semantic eval harness against a fixture")
-    prod_eval_nested.add_argument("--fixture", type=Path, required=True)
-    prod_eval_nested.add_argument("--case-set", default="baseline")
-    prod_eval_nested.add_argument("--out", type=Path, help="Write semantic eval result JSON")
-    prod_prod_eval_nested = production_sub.add_parser("eval", help="Run read-only production semantic eval for curated central memory")
-    prod_prod_eval_nested.add_argument("--job-id", default=DEFAULT_TARGET_JOB_ID)
-    prod_prod_eval_nested.add_argument("--repo-id", default=DEFAULT_TARGET_REPO_ID)
-    prod_prod_eval_nested.add_argument("--mode", default="baseline", choices=["baseline", "pre_apply", "post_apply"])
-    prod_prod_eval_nested.add_argument("--out", type=Path, help="Write production semantic eval JSON")
-    prod_plan_nested = production_sub.add_parser("merge-plan", help="Show the latest central_version_merge plan for a production job")
-    prod_plan_nested.add_argument("--job-id", required=True)
-    prod_plan_nested.add_argument("--backfill", action="store_true", help="Create a dry-run merge plan for an old completed job if missing")
-    prod_plan_nested.add_argument("--forced-by", default="manual-backfill")
-    prod_apply_nested = production_sub.add_parser("merge-apply", help="Apply exact central atoms for an accepted central merge plan")
-    prod_apply_nested.add_argument("--plan-id", required=True)
-    prod_apply_nested.add_argument("--branch", default="main")
-    prod_apply_nested.add_argument("--view", default="active")
+    _add_pipeline_subcommands(sub)
 
     install = sub.add_parser("install", help="Configure Claude/Codex hooks, MCP, and local AMO runtime config")
     install.add_argument("--target", choices=["codex", "claude", "all"], default="all")
