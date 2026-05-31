@@ -13,7 +13,6 @@ from ..evidence.triggers import is_session_start
 from ..evidence.triggers import record_session_id
 from ..evidence.triggers import session_boundary_trigger
 from ..llm.qwen import OllamaQwenClient, QwenUnavailable
-from .merge import QwenMergeClassifier
 from .service import GraphRagService
 
 
@@ -51,31 +50,11 @@ def debug_qwen(settings: Settings, *, sample: str = "Classify a decision lookup 
             planner_timeout_seconds=min(settings.qwen_timeout_seconds, settings.qwen_planner_timeout_seconds),
             num_ctx=settings.qwen_num_ctx,
         ).plan_query(sample)
-        merge_start = time.monotonic()
-        merge_classifier: dict[str, Any]
-        try:
-            merge_result = QwenMergeClassifier(settings).classify(
-                {
-                    "id": "draft:debug",
-                    "kind": "Decision",
-                    "summary": "Use commit merge engine for central graph versioning.",
-                },
-                {
-                    "id": "central:debug",
-                    "kind": "Decision",
-                    "summary": "Use deterministic central graph versioning.",
-                },
-                {"total": 0.58, "same_kind": True},
-            )
-            merge_classifier = {"ok": True, "elapsed_ms": _elapsed_ms(merge_start), "result": merge_result}
-        except QwenUnavailable as exc:
-            merge_classifier = {"ok": False, "elapsed_ms": _elapsed_ms(merge_start), "error": str(exc)}
         return {
             "ok": True,
             "model": settings.qwen_model,
             "elapsed_ms": _elapsed_ms(start),
             "plan": plan.as_dict(),
-            "merge_classifier": merge_classifier,
         }
     except QwenUnavailable as exc:
         return {"ok": False, "model": settings.qwen_model, "elapsed_ms": _elapsed_ms(start), "error": str(exc)}
@@ -84,7 +63,7 @@ def debug_qwen(settings: Settings, *, sample: str = "Classify a decision lookup 
 def debug_graph(graph: GraphRagService, *, session_id: str = "") -> dict[str, Any]:
     status = graph.merge_status(session_id=session_id)
     context = graph.current_context(session_id=session_id, limit=10)
-    return {"ok": True, "status": status, "cache": graph.graph_cache_status(), "current_context": context}
+    return {"ok": True, "status": status, "current_context": context}
 
 
 def debug_retrieval(client: DaemonClient, *, query: str, limit: int = 8) -> dict[str, Any]:

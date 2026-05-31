@@ -140,8 +140,6 @@ function bindEvents() {
   });
   $("versionCommitFilter").addEventListener("keydown", event => { if (event.key === "Enter") $("loadVersionsBtn").click(); });
   $("versionSessionFilter").addEventListener("keydown", event => { if (event.key === "Enter") $("loadVersionsBtn").click(); });
-  $("consolidateBtn").addEventListener("click", () => runAdminJob("consolidate"));
-  $("cacheBtn").addEventListener("click", () => runAdminJob("cache"));
   $("debugGraphBtn").addEventListener("click", () => runAdminJob("debugGraph"));
   $("debugQwenBtn").addEventListener("click", () => runAdminJob("debugQwen"));
   $("refreshJobsBtn").addEventListener("click", async () => { await loadJobs(); renderJobs(state); });

@@ -27,7 +27,6 @@ SUPPORT_ONLY_KINDS = frozenset(
         "ToolUse",
         "ToolResult",
         "CleanedEvidenceWindow",
-        "GraphDelta",
         "Session",
         "Repo",
         "Branch",

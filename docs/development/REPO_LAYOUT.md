@@ -56,7 +56,7 @@ agent_memory_orchestrator/
 - Keep application services and workflows as thin coordination boundaries unless production behavior already exists.
 - Do not change retrieval ranking, central merge semantics, evidence capture, or production pipeline behavior during structural refactors.
 - Do not delete raw evidence handling or current production tests.
-- Remove legacy `GraphDelta` / `ContextSnapshot` smoke coverage only when the covered path is no longer reachable from rebuild, MCP, dashboard, or production fallback flows.
+- Legacy session-extraction paths are removed; do not add new production dependencies on obsolete node kinds.
 - Run `python -m ruff check src tests` and focused pytest suites after each structural move.
 
 ## Staged Migration

@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import threading
 from contextlib import nullcontext
@@ -18,7 +18,6 @@ READ_ONLY_GET_GRAPH_PATHS = frozenset(
         "/api/graph/central",
         "/api/graph/version-flow",
         "/api/debug/graph",
-        "/api/debug/graph-cache",
     }
 )
 
@@ -37,7 +36,3 @@ def production_stage_requires_graph_write_lock(stage: str) -> bool:
 
 def production_stage_lock(stage: str) -> ContextManager[Any]:
     return GRAPH_WRITE_LOCK if production_stage_requires_graph_write_lock(stage) else nullcontext()
-
-
-def graph_write_lock_if(condition: bool) -> ContextManager[Any]:
-    return GRAPH_WRITE_LOCK if condition else nullcontext()

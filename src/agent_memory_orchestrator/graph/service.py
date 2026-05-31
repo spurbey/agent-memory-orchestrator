@@ -4,7 +4,6 @@ import ast
 import json
 import os
 import re
-import shutil
 import sqlite3
 import time
 from pathlib import Path
@@ -34,20 +33,31 @@ from ..reasoning_graph.retrieval import embed_missing_retrieval_documents
 from ..reasoning_graph.retrieval import retrieve_session_graph as retrieve_indexed_session_graph
 from ..reasoning_graph.session_runtime import StrictTextEmbedder
 from ..versioning import LocalGitBackend, VersionBackend, WorkLedger
-from .cache import GraphSearchCache
-from .consolidation import DeterministicGraphConsolidator
 from .answer_trace import build_answer_trace
 from .answer_trace import build_central_answer_trace
-from .merge import CommitMergeEngine, QwenMergeClassifier
-from .session import QwenGraphExtractor, SessionGraphBuilder
 from .store import GraphEdge, GraphNode, GraphStore, KuzuGraphStore
 
 
 HOOK_CONTEXT_EVENTS = {"session_start"}
 CAPTURE_ONLY_EVENTS = {"user_prompt_submit", "prompt", "post_tool_use", "tool_result", "stop", "session_stop"}
 EVIDENCE_ONLY_KINDS = {"RawEvidenceRef", "Prompt", "ToolUse", "ToolResult", "Turn", "Session", "App", "Repo", "Branch"}
-SUPPORT_ONLY_KINDS = {"File", "Symbol", "Topic", "CleanedEvidenceWindow", "GraphDelta"}
-ANSWER_SEED_KINDS = ["ContextSnapshot", "WorkChange", "Decision", "Fix", "Bug", "Blocker", "TestRun", "GitCommit"]
+SUPPORT_ONLY_KINDS = {"File", "Symbol", "Topic", "CleanedEvidenceWindow"}
+ANSWER_SEED_KINDS = [
+    "ReasoningNode",
+    "DecisionUnit",
+    "Decision",
+    "WorkChange",
+    "Fix",
+    "Bug",
+    "Blocker",
+    "TestRun",
+    "GitCommit",
+    "Commit",
+    "KnowledgeAtom",
+    "KnowledgeVersion",
+    "CodeNode",
+    "Symbol",
+]
 ISOLATED_GRAPH_VISUAL_KINDS = {
     "ReasoningNode",
     "DecisionUnit",
@@ -170,7 +180,6 @@ class GraphRagService:
         )
         self.version_backend = version_backend or LocalGitBackend()
         self.evidence = evidence_store or RawEvidenceStore(settings.evidence_dir)
-        self.search_cache = GraphSearchCache(settings.home / ".cache" / "graph_nodes_bm25.json")
         if not self.read_only:
             self.store.init_schema()
 
@@ -249,8 +258,7 @@ class GraphRagService:
         kinds = _seed_kinds_for_retrieval(_kinds_for_intent(plan.intent), include_raw=raw_requested)
         search_started = time.monotonic()
         search_limit = max(limit * 12, 80)
-        cache_nodes = [] if raw_requested else self.search_cache.search(query, limit=search_limit, kinds=kinds)
-        seed_nodes = _merge_seed_nodes(self.store.search_nodes(query, limit=search_limit, kinds=kinds), cache_nodes)
+        seed_nodes = self.store.search_nodes(query, limit=search_limit, kinds=kinds)
         expanded = _filter_answer_grade_nodes(_expand_nodes(seed_nodes, self.store), include_raw=raw_requested)
         candidates = _rank_nodes(query, expanded, include_historical=include_historical or plan.include_historical)
         if not candidates and not raw_requested:
@@ -303,17 +311,13 @@ class GraphRagService:
 
     def current_context(self, *, session_id: str = "", limit: int = 8) -> dict[str, Any]:
         safe_limit = max(1, min(25, int(limit)))
-        nodes = [
-            _sanitize_output_node(node)
-            for node in self.store.list_nodes(kinds=["ContextSnapshot"], session_id=session_id, limit=max(safe_limit * 5, 25))
-            if _is_clean_context_snapshot(node)
-        ][:safe_limit]
+        del safe_limit
         return {
             "ok": True,
             "session_id": session_id,
-            "count": len(nodes),
-            "nodes": nodes,
-            "context": _context_from_snapshots(nodes),
+            "count": 0,
+            "nodes": [],
+            "context": "Current context is captured as raw evidence and production session jobs; query active repository memory for answer-grade context.",
         }
 
     def decision_history(self, *, query: str, limit: int = 8) -> dict[str, Any]:
@@ -330,189 +334,11 @@ class GraphRagService:
 
     def drain_evidence(self, *, limit: int = 500, session_id: str = "", max_windows: int | None = None) -> dict[str, Any]:
         drain = self._new_drain()
-        result = drain.drain(limit=max(1, int(limit)), session_id=session_id, max_windows=max_windows)
-        finalizations: list[dict[str, Any]] = []
-        for row in result.get("triggered", []):
-            if not isinstance(row, dict):
-                continue
-            trigger = row.get("trigger") if isinstance(row.get("trigger"), dict) else {}
-            if not _is_finalize_boundary(trigger):
-                continue
-            latest_event = row.get("latest_event") if isinstance(row.get("latest_event"), dict) else {}
-            git = latest_event.get("git") if isinstance(latest_event.get("git"), dict) else {}
-            commit = str(git.get("head") or "")
-            current_session = str(row.get("session_id") or session_id or "")
-            if not current_session:
-                continue
-            commit = commit or f"finalize:{current_session}"
-            finalizations.append(
-                self.finalize_session(
-                    session_id=current_session,
-                    commit=commit,
-                    apply=True,
-                    cwd=str(git.get("repo_root") or "") or None,
-                )
-            )
-        if finalizations:
-            result["finalizations"] = finalizations
-        return result
+        return drain.drain(limit=max(1, int(limit)), session_id=session_id, max_windows=max_windows)
 
     def pending_evidence(self, *, session_id: str = "") -> dict[str, Any]:
         drain = self._new_drain()
         return drain.pending(session_id=session_id)
-
-    def finalize_session(
-        self,
-        *,
-        session_id: str,
-        commit: str = "HEAD",
-        apply: bool = False,
-        limit: int = 500,
-        cwd: str | Path | None = None,
-    ) -> dict[str, Any]:
-        classifier = QwenMergeClassifier(self.settings) if self.settings.qwen_runtime == "ollama" else None
-        engine = CommitMergeEngine(self.settings, self.store, self.version_backend, classifier=classifier)
-        result = engine.finalize_session(session_id=session_id, commit=commit, apply=apply, limit=limit, cwd=cwd)
-        if apply and result.get("ok"):
-            result["consolidation"] = self.consolidate_graph(limit=limit, apply=True)
-            result["cache"] = self.rebuild_graph_cache(limit=max(limit, 5000))
-        return result
-
-    def rebuild_central_from_evidence(
-        self,
-        *,
-        apply: bool = False,
-        backup_current: bool = True,
-        limit: int = 100000,
-        max_windows: int | None = None,
-    ) -> dict[str, Any]:
-        roots = _evidence_roots(self.settings)
-        evidence_files = [path for root in roots if root.exists() for path in sorted(root.glob("*.jsonl"))]
-        evidence_count = sum(len(_read_jsonl_from(path, 0)) for path in evidence_files)
-        timestamp = time.strftime("%Y%m%d-%H%M%S")
-        current_path = self.settings.graph_path
-        rebuild_path = current_path.parent / f"{current_path.name}.rebuild-{timestamp}"
-        backup_path = current_path.parent / f"{current_path.name}.backup-{timestamp}"
-        plan: dict[str, Any] = {
-            "ok": True,
-            "apply": bool(apply),
-            "from_evidence": True,
-            "evidence_roots": [str(root) for root in roots],
-            "evidence_files": [str(path) for path in evidence_files],
-            "evidence_count": evidence_count,
-            "current_graph_path": str(current_path),
-            "rebuild_graph_path": str(rebuild_path),
-            "backup_graph_path": str(backup_path) if backup_current else "",
-            "limit": max(1, int(limit)),
-            "max_windows": max_windows or self.settings.drain_max_windows_per_run,
-        }
-        if not apply:
-            return plan
-
-        if hasattr(self.store, "nodes") and hasattr(self.store, "edges"):
-            self.store.nodes.clear()  # type: ignore[attr-defined]
-            self.store.edges.clear()  # type: ignore[attr-defined]
-            rebuild_result = self._drain_fresh_graph(
-                self.store,
-                cursor_path=self.settings.home / ".state" / f"rebuild-cursors-{timestamp}.json",
-                limit=limit,
-                max_windows=max_windows,
-            )
-            plan.update(rebuild_result)
-            plan["consolidation"] = self.consolidate_graph(limit=5000, apply=True)
-            plan["cache"] = self.rebuild_graph_cache(limit=20000)
-            return plan
-
-        self.store.close()
-        rebuild_store = KuzuGraphStore(rebuild_path)
-        rebuild_store.init_schema()
-        try:
-            rebuild_result = self._drain_fresh_graph(
-                rebuild_store,
-                cursor_path=self.settings.home / ".state" / f"rebuild-cursors-{timestamp}.json",
-                limit=limit,
-                max_windows=max_windows,
-            )
-            consolidator = DeterministicGraphConsolidator(rebuild_store, project_id=self.settings.project_id)
-            consolidation = consolidator.consolidate(limit=5000, apply=True).as_dict()
-            smoke = _rebuild_smoke(rebuild_store)
-        finally:
-            rebuild_store.close()
-        if not smoke.get("ok"):
-            plan.update({"ok": False, "error": "rebuild_smoke_failed", "smoke": smoke})
-            return plan
-
-        current_path.parent.mkdir(parents=True, exist_ok=True)
-        if current_path.exists() and backup_current:
-            _move_graph_path(current_path, backup_path)
-        elif current_path.exists():
-            _remove_graph_path(current_path)
-        _move_graph_path(rebuild_path, current_path)
-        self.store = KuzuGraphStore(current_path)
-        self.store.init_schema()
-        plan.update(rebuild_result)
-        plan["consolidation"] = consolidation
-        plan["smoke"] = smoke
-        plan["cache"] = self.rebuild_graph_cache(limit=20000)
-        plan["swapped"] = True
-        return plan
-
-    def _drain_fresh_graph(
-        self,
-        store: GraphStore,
-        *,
-        cursor_path: Path,
-        limit: int,
-        max_windows: int | None,
-    ) -> dict[str, Any]:
-        classifier = QwenMergeClassifier(self.settings) if self.settings.qwen_runtime == "ollama" else None
-        extractor = QwenGraphExtractor(self.settings)
-        builder = SessionGraphBuilder(self.settings, store, self.version_backend, extractor=extractor)
-        drain = EvidenceDrain(
-            self.settings,
-            store,
-            self.version_backend,
-            cursor_path=cursor_path,
-            evidence_roots=_evidence_roots(self.settings),
-            builder=builder,
-        )
-        total: dict[str, Any] = {
-            "records_seen": 0,
-            "records_ingested": 0,
-            "records_skipped": 0,
-            "windows_processed": 0,
-            "triggered": [],
-            "finalizations": [],
-            "stopped_reason": "",
-        }
-        remaining = max(1, int(limit))
-        while remaining > 0:
-            chunk = drain.drain(limit=remaining, max_windows=max_windows or 1000)
-            for key in ("records_seen", "records_ingested", "records_skipped", "windows_processed"):
-                total[key] += int(chunk.get(key) or 0)
-            total["triggered"].extend(chunk.get("triggered") or [])
-            for row in chunk.get("triggered") or []:
-                trigger = row.get("trigger") if isinstance(row, dict) and isinstance(row.get("trigger"), dict) else {}
-                latest_event = row.get("latest_event") if isinstance(row, dict) and isinstance(row.get("latest_event"), dict) else {}
-                git = latest_event.get("git") if isinstance(latest_event.get("git"), dict) else {}
-                if not _is_finalize_boundary(trigger):
-                    continue
-                commit = str(git.get("head") or "") or f"finalize:{row.get('session_id') or 'session'}"
-                engine = CommitMergeEngine(self.settings, store, self.version_backend, classifier=classifier)
-                total["finalizations"].append(
-                    engine.finalize_session(
-                        session_id=str(row.get("session_id") or ""),
-                        commit=commit,
-                        cwd=str(git.get("repo_root") or "") or None,
-                        apply=True,
-                    )
-                )
-            remaining -= int(chunk.get("records_ingested") or 0)
-            total["stopped_reason"] = chunk.get("stopped_reason") or ""
-            if chunk.get("stopped_reason") == "evidence_exhausted" or int(chunk.get("records_seen") or 0) == 0:
-                break
-        total["cursor_path"] = str(cursor_path)
-        return total
 
     def session_overview(self, *, limit: int = 25, repo_id: str = "") -> dict[str, Any]:
         safe_limit = max(1, min(100, int(limit)))
@@ -556,11 +382,7 @@ class GraphRagService:
                 row["repo_id"] = _repo_id_for_path(row["repo"] or row["cwd"], repo_cache)
                 row["branch"] = str(git.get("branch") or row.get("branch") or "")
 
-        contexts = {
-            str(node.get("session_id")): _sanitize_output_node(node)
-            for node in self.store.list_nodes(kinds=["ContextSnapshot"], limit=max(safe_limit * 4, 100))
-            if str(node.get("session_id") or "")
-        }
+        contexts: dict[str, dict[str, Any]] = {}
         rows: list[dict[str, Any]] = []
         for session_id, row in sessions.items():
             job = jobs_by_session.get(session_id, {})
@@ -651,12 +473,6 @@ class GraphRagService:
         edges = self.store.list_edges(session_id=session_id, limit=500)
         pending = _session_pending_summary(self.settings, session_id=session_id)
         windows = _reconstruct_clean_windows(records, nodes)
-        merge_preview = CommitMergeEngine(self.settings, self.store, self.version_backend, classifier=None).finalize_session(
-            session_id=session_id,
-            commit="HEAD",
-            apply=False,
-            limit=300,
-        )
         return {
             "ok": True,
             "session_id": session_id,
@@ -664,7 +480,6 @@ class GraphRagService:
             "windows": windows,
             "current_context": self.current_context(session_id=session_id, limit=5),
             "merge_status": self.merge_status(session_id=session_id),
-            "merge_preview": merge_preview,
             "pending": {"count": pending.get("count", 0), "cursor_path": pending.get("cursor_path"), "source": pending.get("source")},
             "evidence_source": evidence_source,
             "graph": {
@@ -842,45 +657,6 @@ class GraphRagService:
             "edges": visible_edges,
             "warnings": _version_flow_warnings(flows),
         }
-
-    def cleanup_noisy_drafts(self, *, limit: int = 500, apply: bool = False) -> dict[str, Any]:
-        candidates = self.store.list_nodes(
-            kinds=["ContextSnapshot", "WorkChange", "Decision", "Fix", "Bug", "TestRun"],
-            limit=max(1, min(5000, int(limit))),
-        )
-        noisy = [node for node in candidates if not _is_answer_quality_node(node)]
-        changed = 0
-        if apply:
-            for node in noisy:
-                if self.store.set_node_status(str(node["id"]), "abandoned"):
-                    changed += 1
-        return {
-            "ok": True,
-            "apply": apply,
-            "scanned": len(candidates),
-            "noisy_count": len(noisy),
-            "changed": changed,
-            "nodes": noisy[:50],
-        }
-
-    def consolidate_graph(self, *, limit: int = 500, apply: bool = False) -> dict[str, Any]:
-        consolidator = DeterministicGraphConsolidator(self.store, project_id=self.settings.project_id)
-        return consolidator.consolidate(limit=limit, apply=apply).as_dict()
-
-    def rebuild_graph_cache(self, *, limit: int = 5000) -> dict[str, Any]:
-        nodes = self.store.list_nodes(kinds=ANSWER_SEED_KINDS, limit=max(1, min(20000, int(limit))))
-        central_nodes = [
-            node
-            for node in nodes
-            if node.get("status") in {"committed", "active"}
-            or node.get("scope") == "central"
-            or (node.get("status") == "draft" and node.get("kind") == "ContextSnapshot")
-        ]
-        answer_nodes = _filter_answer_grade_nodes(central_nodes, include_raw=False)
-        return self.search_cache.rebuild([_sanitize_output_node(node) for node in answer_nodes])
-
-    def graph_cache_status(self) -> dict[str, Any]:
-        return self.search_cache.status()
 
     def rebuild_retrieval_index(
         self,
@@ -1072,8 +848,6 @@ class GraphRagService:
     def _new_drain(self) -> EvidenceDrain:
         return EvidenceDrain(
             self.settings,
-            self.store,
-            self.version_backend,
             evidence_roots=_evidence_roots(self.settings),
         )
 
@@ -2447,13 +2221,13 @@ def _looks_like_commit_event(content: str, metadata: dict[str, Any]) -> bool:
 
 def _kinds_for_intent(intent: str) -> list[str] | None:
     if intent == "decision_lookup":
-        return ["Decision", "Fix", "WorkChange", "ContextSnapshot", "Prompt", "Response", "ToolResult"]
+        return ["KnowledgeVersion", "ReasoningNode", "DecisionUnit", "Decision", "Fix", "WorkChange", "Prompt", "Response", "ToolResult"]
     if intent == "work_history":
-        return ["WorkChange", "ContextSnapshot", "GitCommit", "File", "Decision", "Fix", "ToolResult"]
+        return ["KnowledgeVersion", "ReasoningNode", "WorkChange", "GitCommit", "Commit", "File", "Decision", "Fix", "ToolResult"]
     if intent == "bug_fix_trace":
-        return ["Bug", "Fix", "TestRun", "WorkChange", "ContextSnapshot", "GitCommit"]
+        return ["Bug", "Fix", "TestRun", "WorkChange", "ReasoningNode", "GitCommit", "Commit"]
     if intent == "historical_versions":
-        return ["Decision", "Fix", "WorkChange", "ContextSnapshot", "GitCommit"]
+        return ["KnowledgeVersion", "Decision", "Fix", "WorkChange", "ReasoningNode", "GitCommit", "Commit"]
     return None
 
 
@@ -2474,18 +2248,6 @@ def _expand_nodes(seed_nodes: list[dict[str, Any]], store: GraphStore) -> list[d
         for neighbor in store.neighbors(str(node["id"]), limit=4):
             seen.setdefault(str(neighbor["id"]), neighbor)
     return list(seen.values())
-
-
-def _merge_seed_nodes(primary: list[dict[str, Any]], secondary: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    merged: dict[str, dict[str, Any]] = {}
-    for node in primary + secondary:
-        node_id = str(node.get("id") or "")
-        if not node_id:
-            continue
-        existing = merged.get(node_id)
-        if existing is None or float(node.get("graph_score") or 0.0) > float(existing.get("graph_score") or 0.0):
-            merged[node_id] = node
-    return list(merged.values())
 
 
 def _filter_answer_grade_nodes(nodes: list[dict[str, Any]], *, include_raw: bool) -> list[dict[str, Any]]:
@@ -2604,8 +2366,6 @@ def _parse_literal_list(value: Any) -> list[Any] | None:
 
 def _is_answer_quality_node(node: dict[str, Any]) -> bool:
     kind = str(node.get("kind") or "")
-    if kind == "ContextSnapshot":
-        return _is_clean_context_snapshot(node)
     if kind in {"WorkChange", "Decision", "Fix", "Bug", "Blocker", "TestRun"}:
         return _is_clean_answer_summary(str(node.get("summary") or ""), node.get("metadata"))
     return True
@@ -2671,62 +2431,6 @@ def _trim_weak_tail_matches(nodes: list[dict[str, Any]]) -> list[dict[str, Any]]
     floor = max(2.0, top_score - 3.0)
     trimmed = [node for node in nodes if float(node.get("score") or 0.0) >= floor]
     return trimmed or nodes[:1]
-
-
-def _context_from_snapshots(nodes: list[dict[str, Any]]) -> str:
-    if not nodes:
-        return "No AMO session context snapshot is available yet. A write/test/git/finalize trigger must be drained first."
-    lines = ["AMO current session context."]
-    for node in nodes[:5]:
-        meta = node.get("metadata") if isinstance(node.get("metadata"), dict) else {}
-        lines.append(
-            "\n".join(
-                [
-                    f"- node_id={node.get('id')} status={node.get('status')} evidence_id={node.get('evidence_id')}",
-                    f"  summary: {node.get('summary') or ''}",
-                    f"  goal: {meta.get('goal') or ''}",
-                    f"  latest_decision: {meta.get('latest_decision') or ''}",
-                    f"  changed_files: {', '.join(meta.get('changed_files') or [])}",
-                    f"  tests: {', '.join(meta.get('tests') or [])}",
-                    f"  next_step: {meta.get('next_step') or ''}",
-                ]
-            )
-        )
-    return "\n".join(lines)
-
-
-def _is_clean_context_snapshot(node: dict[str, Any]) -> bool:
-    if not str(node.get("id") or "").startswith("context:"):
-        return False
-    summary = str(node.get("summary") or "").strip()
-    lowered = summary.lower()
-    noisy_prefixes = (
-        '"continue":',
-        "{",
-        "stop:",
-        "from __future__",
-        "import ",
-        "class ",
-        "def ",
-    )
-    noisy_terms = (
-        "hook_event_name",
-        "manualsmoke",
-        "captureonly",
-        "status_porcelain",
-        "raw_",
-    )
-    if lowered.startswith(noisy_prefixes):
-        return False
-    if any(term in lowered for term in noisy_terms):
-        return False
-    if not _is_clean_answer_summary(summary, node.get("metadata")):
-        return False
-    meta = node.get("metadata") if isinstance(node.get("metadata"), dict) else {}
-    return any(
-        bool(meta.get(key))
-        for key in ("goal", "latest_decision", "changed_files", "tests", "blockers", "next_step")
-    ) or bool(summary)
 
 
 def _is_clean_answer_summary(summary: str, metadata: object = None) -> bool:
@@ -3447,36 +3151,6 @@ def _central_graph_warnings(nodes: list[dict[str, Any]], edges: list[dict[str, A
     if nodes and not version_edges:
         warnings.append("central_graph_has_no_visible_version_edges")
     return warnings
-
-
-def _is_finalize_boundary(trigger: dict[str, Any]) -> bool:
-    del trigger
-    return False
-
-
-def _rebuild_smoke(store: GraphStore) -> dict[str, Any]:
-    status = store.merge_status()
-    counts = status.get("counts") if isinstance(status.get("counts"), dict) else {}
-    nodes = store.list_nodes(limit=5)
-    return {
-        "ok": bool(nodes) or not any(int(value or 0) for value in counts.values()),
-        "status": status,
-        "sample_node_count": len(nodes),
-    }
-
-
-def _move_graph_path(source: Path, target: Path) -> None:
-    if target.exists():
-        _remove_graph_path(target)
-    target.parent.mkdir(parents=True, exist_ok=True)
-    shutil.move(str(source), str(target))
-
-
-def _remove_graph_path(path: Path) -> None:
-    if path.is_dir():
-        shutil.rmtree(path)
-    elif path.exists():
-        path.unlink()
 
 
 def _snake(value: str) -> str:
