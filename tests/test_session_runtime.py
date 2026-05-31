@@ -1,7 +1,7 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
-from agent_memory_orchestrator.reasoning_graph.session_runtime import StrictTextEmbedder
-from agent_memory_orchestrator.reasoning_graph.session_runtime import _model_embedding_dimension
+from agent_memory_orchestrator.infrastructure.llm.text_embedder import StrictTextEmbedder
+from agent_memory_orchestrator.infrastructure.llm.text_embedder import _model_embedding_dimension
 
 
 def test_model_embedding_dimension_prefers_current_sentence_transformers_api() -> None:
@@ -30,3 +30,4 @@ def test_strict_text_embedder_supports_explicit_hash_backend() -> None:
 
     assert len(vector) == 16
     assert vector == embedder.embed("curated central memory")
+
