@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-from ....reasoning_graph.code_analysis import AstExpander
-from ....reasoning_graph.code_analysis import AstExpansion
-from ....reasoning_graph.code_analysis import AstExpansionResult
-from ....reasoning_graph.code_analysis import code_nodes_from_hunks
-from ....reasoning_graph.code_analysis import default_ast_expander
-from ....reasoning_graph.code_analysis import extract_code_nodes_from_commit
-from ....reasoning_graph.code_analysis import should_accept_ast_parent
+from ..analysis import AstExpander
+from ..analysis import AstExpansion
+from ..analysis import AstExpansionResult
+from ..analysis import code_nodes_from_hunks
+from ..analysis import default_ast_expander
+from ..analysis import extract_code_nodes_from_commit
+from ..analysis import should_accept_ast_parent
 
 __all__ = [
     "AstExpander",
