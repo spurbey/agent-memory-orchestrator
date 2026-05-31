@@ -25,8 +25,8 @@ from agent_memory_orchestrator.runtime.cli.commands import graph as graph_cli_mo
 from agent_memory_orchestrator.runtime.cli.main import _retrieve_index_only
 from agent_memory_orchestrator.llm.qwen import DeterministicPlanner
 from agent_memory_orchestrator.reasoning_graph.central_merge.applier import repo_central_graph_path
-from agent_memory_orchestrator.reasoning_graph.jobs.constants import GRAPH_SCHEMA_VERSION
-from agent_memory_orchestrator.reasoning_graph.jobs.constants import PIPELINE_VERSION
+from agent_memory_orchestrator.domain.pipeline.constants import GRAPH_SCHEMA_VERSION
+from agent_memory_orchestrator.domain.pipeline.constants import PIPELINE_VERSION
 from agent_memory_orchestrator.reasoning_graph import GraphEmbeddingStore
 from agent_memory_orchestrator.reasoning_graph import RetrievalDocument
 from agent_memory_orchestrator.reasoning_graph import RetrievalIndexStore
