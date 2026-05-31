@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 
 def test_stage1_domain_code_boundary_exports_existing_code_contracts() -> None:
     from agent_memory_orchestrator.domain.code import AstExpansion
@@ -70,3 +72,19 @@ def test_stage1_retrieval_boundary_exports_planned_module_names() -> None:
     assert build_answer_trace.__name__ == "build_answer_trace"
     assert build_central_answer_trace.__name__ == "build_central_answer_trace"
     assert format_answer_trace.__name__ == "format_answer_trace"
+
+
+def test_stage1_production_code_does_not_depend_on_legacy_reasoning_graph_facades() -> None:
+    src_root = Path(__file__).resolve().parents[1] / "src" / "agent_memory_orchestrator"
+    forbidden = ("reasoning_graph.jobs", "reasoning_graph.central_merge")
+    offenders: list[str] = []
+
+    for path in src_root.rglob("*.py"):
+        relative = path.relative_to(src_root).as_posix()
+        if relative.startswith(("reasoning_graph/jobs/", "reasoning_graph/central_merge/")):
+            continue
+        text = path.read_text(encoding="utf-8")
+        if any(pattern in text for pattern in forbidden):
+            offenders.append(relative)
+
+    assert offenders == []
