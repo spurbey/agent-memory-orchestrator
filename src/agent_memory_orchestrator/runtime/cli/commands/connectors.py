@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 from ....core.config import Settings
@@ -25,6 +26,42 @@ SLACK_SUBCOMMANDS = (
     "finalize-session",
     "run",
 )
+
+
+def add_connector_subcommands(sub: Any) -> None:
+    slack = sub.add_parser("slack", help="Configure and run local Slack Socket Mode connector")
+    slack_sub = slack.add_subparsers(dest="slack_command", required=True)
+    slack_manifest = slack_sub.add_parser("manifest", help="Print or write a Slack app manifest for Socket Mode")
+    slack_manifest.add_argument("--out", type=Path, help="Optional output path for manifest JSON")
+    slack_manifest.add_argument("--app-name", default="Agent Memory Orchestrator")
+    slack_setup_link = slack_sub.add_parser("setup-link", help="Print a one-click Slack app creation URL with manifest prefilled")
+    slack_setup_link.add_argument("--app-name", default="Agent Memory Orchestrator")
+    slack_bootstrap = slack_sub.add_parser("bootstrap", help="Create the Slack app through the Manifest API using a config token")
+    slack_bootstrap.add_argument("--config-token", required=True, help="Temporary Slack app configuration token, usually xoxe...")
+    slack_bootstrap.add_argument("--team-id", default="", help="Optional Slack team id for org tokens")
+    slack_bootstrap.add_argument("--app-name", default="Agent Memory Orchestrator")
+    slack_setup = slack_sub.add_parser("setup", help="Write local Slack connector config")
+    slack_setup.add_argument("--team-id", default="")
+    slack_setup.add_argument("--bot-user-id", default="")
+    slack_setup.add_argument("--capture-user-id", action="append", default=[])
+    slack_setup.add_argument("--allowed-channel", action="append", default=[])
+    slack_setup.add_argument("--session-idle-minutes", type=int, default=30)
+    slack_setup.add_argument("--app-token", default="")
+    slack_setup.add_argument("--bot-token", default="")
+    slack_setup.add_argument("--save-tokens", action="store_true", help="Store tokens under AMO_HOME/.secrets/slack.json")
+    slack_setup.add_argument("--skip-token-validation", action="store_true", help="Validate token shape only; do not call Slack API")
+    slack_wizard = slack_sub.add_parser("setup-wizard", help="Interactively paste Slack tokens and write local config")
+    slack_wizard.add_argument("--skip-token-validation", action="store_true", help="Validate token shape only; do not call Slack API")
+    slack_wizard.add_argument("--no-save-tokens", action="store_true", help="Do not save tokens locally by default")
+    slack_sub.add_parser("status", help="Show local Slack connector config without printing token values")
+    slack_ingest = slack_sub.add_parser("ingest-event", help="Ingest one saved Slack Socket Mode event JSON file")
+    slack_ingest.add_argument("--file", required=True, type=Path)
+    slack_finalize = slack_sub.add_parser("finalize-session", help="Append a connector finalize event for graph-drain")
+    slack_finalize.add_argument("--session-id", required=True)
+    slack_finalize.add_argument("--reason", default="idle_timeout")
+    slack_finalize.add_argument("--message-count", type=int, default=0)
+    slack_run = slack_sub.add_parser("run", help="Run the local outbound Slack Socket Mode connector")
+    slack_run.add_argument("--reply-mode", choices=["disabled", "ack", "answer"], default="answer")
 
 
 def handle_connector_command(args: Any, *, emit: Callable[[object], None]) -> int | None:
@@ -103,4 +140,4 @@ def handle_connector_command(args: Any, *, emit: Callable[[object], None]) -> in
     return None
 
 
-__all__ = ["CONNECTOR_COMMANDS", "SLACK_SUBCOMMANDS", "handle_connector_command"]
+__all__ = ["CONNECTOR_COMMANDS", "SLACK_SUBCOMMANDS", "add_connector_subcommands", "handle_connector_command"]
