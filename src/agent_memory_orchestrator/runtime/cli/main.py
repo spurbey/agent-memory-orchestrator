@@ -2,23 +2,15 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import sys
 from pathlib import Path
 
 from ...core.config import Settings
 from ...graph.service import GraphRagService
 from ...graph.store import GraphBackendUnavailable
-from ...install.service import InstallOptions
-from ...install.service import apply_install_plan
-from ...install.service import build_install_plan
-from ...install.service import doctor as install_doctor
-from ...install.service import uninstall as uninstall_targets
 from ...memory import MemoryService
-from ...llm.models import download_models
 from ...llm.qwen import QwenUnavailable
 from ...reasoning_graph.session_runtime import DEFAULT_CODE_EMBEDDING_MODEL
-from ...reasoning_graph.jobs.reset import initialize_fresh_production_storage
 from ...reasoning_graph.central_merge.production_eval import DEFAULT_TARGET_JOB_ID
 from ...reasoning_graph.central_merge.production_eval import DEFAULT_TARGET_REPO_ID
 from ..daemon.client import DaemonUnavailable
@@ -27,10 +19,7 @@ from .commands.connectors import handle_connector_command as _handle_connector_c
 from .commands.graph import _retrieve_index_only as _graph_retrieve_index_only
 from .commands.graph import handle_graph_command as _handle_graph_command
 from .commands.install import add_model_selection_args as _add_model_selection_args
-from .commands.install import confirm as _confirm
-from .commands.install import format_install_plan as _format_install_plan
-from .commands.install import format_install_result as _format_install_result
-from .commands.install import summarize_install_plan as _summarize_install_plan
+from .commands.install import handle_install_command as _handle_install_command
 from .commands.memory import handle_memory_command as _handle_memory_command
 from .commands.memory import rebuild_clean_db
 from .commands.models import handle_models_command as _handle_models_command
@@ -604,99 +593,9 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     try:
-        if args.command == "install":
-            options = InstallOptions(
-                target=args.target,
-                user_home=args.user_home,
-                amo_home=args.amo_home,
-                preset=args.preset,
-                embedding_model=args.embedding_model,
-                reranker_model=args.reranker_model,
-                qwen_model=args.qwen_model,
-                python_command=args.python_command,
-                force=args.force,
-            )
-            plan = build_install_plan(options)
-            summary = _summarize_install_plan(plan)
-            if args.dry_run:
-                if args.json:
-                    _print({"ok": True, "dry_run": True, "plan": summary})
-                else:
-                    print(_format_install_plan(summary, dry_run=True))
-                return 0
-            if not args.yes:
-                if args.json:
-                    _print({"ok": True, "pending_plan": summary})
-                else:
-                    print(_format_install_plan(summary))
-                if not _confirm("Apply AMO install changes?"):
-                    if args.json:
-                        _print({"ok": False, "cancelled": True, "plan": summary})
-                    else:
-                        print("Install cancelled. No files changed.")
-                    return 1
-            result = apply_install_plan(plan)
-            model_result = None
-            if args.download_models:
-                model_result = download_models(
-                    preset=args.preset,
-                    embedding_model=args.embedding_model,
-                    reranker_model=args.reranker_model,
-                    qwen_model=args.qwen_model,
-                )
-            init_result = None
-            init_graph = None
-            init_production = None
-            if not args.skip_init_db:
-                os.environ["AMO_HOME"] = plan["amo_home"]
-                init_settings = Settings.load()
-                svc = MemoryService(init_settings)
-                try:
-                    svc.init_db()
-                    init_result = {"db_path": str(init_settings.db_path)}
-                finally:
-                    svc.close()
-                try:
-                    graph = GraphRagService(init_settings)
-                    graph.close()
-                    init_graph = {"ok": True, "graph_path": str(init_settings.graph_path)}
-                except GraphBackendUnavailable as exc:
-                    init_graph = {"ok": False, "error": str(exc)}
-                if init_graph.get("ok"):
-                    try:
-                        init_production = initialize_fresh_production_storage(init_settings)
-                    except Exception as exc:
-                        init_production = {
-                            "ok": False,
-                            "error": str(exc),
-                            "note": "Existing non-empty graph/retrieval stores need explicit reset-production or adopt-production.",
-                        }
-            payload = {
-                "ok": True,
-                "plan": summary,
-                "apply": result,
-                "models": model_result,
-                "init_db": init_result,
-                "init_graph": init_graph,
-                "init_production": init_production,
-            }
-            if args.json:
-                _print(payload)
-            else:
-                print(_format_install_result(payload))
-            return 0
-
-        if args.command == "doctor":
-            result = install_doctor(target=args.target, user_home=args.user_home, amo_home=args.amo_home)
-            _print(result)
-            return 0 if result["ok"] else 1
-
-        if args.command == "uninstall":
-            if not args.yes and not _confirm("Remove AMO-managed config entries?"):
-                _print({"ok": False, "cancelled": True})
-                return 1
-            _print(uninstall_targets(target=args.target, user_home=args.user_home))
-            return 0
+        install_status = _handle_install_command(args, emit=_print, emit_text=print)
+        if install_status is not None:
+            return install_status
 
         if args.command == "init-db":
             settings = Settings.load()
@@ -761,4 +660,3 @@ def main(argv: list[str] | None = None) -> int:
     except Exception as exc:  # pragma: no cover
         print(json.dumps({"ok": False, "error": str(exc)}), file=sys.stderr)
         return 1
-

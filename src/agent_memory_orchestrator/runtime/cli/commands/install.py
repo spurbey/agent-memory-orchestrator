@@ -2,10 +2,26 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
+from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
+from ....core.config import Settings
 from ....core.privacy import redact_secrets
+from ....graph.service import GraphRagService
+from ....graph.store import GraphBackendUnavailable
+from ....install.service import InstallOptions
+from ....install.service import apply_install_plan
+from ....install.service import build_install_plan
+from ....install.service import doctor as install_doctor
+from ....install.service import uninstall as uninstall_targets
+from ....llm.models import download_models
+from ....memory import MemoryService
+from ....reasoning_graph.jobs.reset import initialize_fresh_production_storage
+
+INSTALL_COMMANDS = ("install", "doctor", "uninstall")
 
 
 def codex_hooks_snippet() -> dict:
@@ -205,11 +221,117 @@ def _operation_label(operation: dict) -> str:
     return labels.get(str(operation.get("target", "")), str(operation.get("target", "config")))
 
 
+def handle_install_command(
+    args: Any,
+    *,
+    emit: Callable[[object], None],
+    emit_text: Callable[[str], None],
+) -> int | None:
+    """Run installer, doctor, and uninstall CLI commands."""
+    if args.command == "install":
+        options = InstallOptions(
+            target=args.target,
+            user_home=args.user_home,
+            amo_home=args.amo_home,
+            python_command=args.python_command,
+            preset=args.preset,
+            embedding_model=args.embedding_model,
+            reranker_model=args.reranker_model,
+            qwen_model=args.qwen_model,
+            force=args.force,
+        )
+        plan = build_install_plan(options)
+        summary = summarize_install_plan(plan)
+        if args.dry_run:
+            if args.json:
+                emit({"ok": True, "dry_run": True, "plan": summary})
+            else:
+                emit_text(format_install_plan(summary, dry_run=True))
+            return 0
+        if not args.yes:
+            if args.json:
+                emit({"ok": True, "pending_plan": summary})
+            else:
+                emit_text(format_install_plan(summary))
+            if not confirm("Apply AMO install changes?"):
+                if args.json:
+                    emit({"ok": False, "cancelled": True, "plan": summary})
+                else:
+                    emit_text("Install cancelled. No files changed.")
+                return 1
+        result = apply_install_plan(plan)
+        model_result = None
+        if args.download_models:
+            model_result = download_models(
+                preset=args.preset,
+                embedding_model=args.embedding_model,
+                reranker_model=args.reranker_model,
+                qwen_model=args.qwen_model,
+            )
+        init_result = None
+        init_graph = None
+        init_production = None
+        if not args.skip_init_db:
+            os.environ["AMO_HOME"] = plan["amo_home"]
+            init_settings = Settings.load()
+            svc = MemoryService(init_settings)
+            try:
+                svc.init_db()
+                init_result = {"db_path": str(init_settings.db_path)}
+            finally:
+                svc.close()
+            try:
+                graph = GraphRagService(init_settings)
+                graph.close()
+                init_graph = {"ok": True, "graph_path": str(init_settings.graph_path)}
+            except GraphBackendUnavailable as exc:
+                init_graph = {"ok": False, "error": str(exc)}
+            if init_graph.get("ok"):
+                try:
+                    init_production = initialize_fresh_production_storage(init_settings)
+                except Exception as exc:
+                    init_production = {
+                        "ok": False,
+                        "error": str(exc),
+                        "note": "Existing non-empty graph/retrieval stores need explicit reset-production or adopt-production.",
+                    }
+        payload = {
+            "ok": True,
+            "plan": summary,
+            "apply": result,
+            "models": model_result,
+            "init_db": init_result,
+            "init_graph": init_graph,
+            "init_production": init_production,
+        }
+        if args.json:
+            emit(payload)
+        else:
+            emit_text(format_install_result(payload))
+        return 0
+
+    if args.command == "doctor":
+        result = install_doctor(target=args.target, user_home=args.user_home, amo_home=args.amo_home)
+        emit(result)
+        return 0 if result["ok"] else 1
+
+    if args.command == "uninstall":
+        if not args.yes and not confirm("Remove AMO-managed config entries?"):
+            emit({"ok": False, "cancelled": True})
+            return 1
+        emit(uninstall_targets(target=args.target, user_home=args.user_home))
+        return 0
+
+    return None
+
+
 __all__ = [
+    "INSTALL_COMMANDS",
     "add_model_selection_args",
     "codex_hooks_snippet",
     "confirm",
     "format_install_plan",
     "format_install_result",
+    "handle_install_command",
     "summarize_install_plan",
 ]
