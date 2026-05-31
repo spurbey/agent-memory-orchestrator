@@ -7,7 +7,6 @@ from agent_memory_orchestrator.application.ports import CentralMergeStorePort
 from agent_memory_orchestrator.infrastructure.sqlite import CentralMergeStore
 from agent_memory_orchestrator.infrastructure.sqlite import ProductionSessionJobStore
 from agent_memory_orchestrator.infrastructure.kuzu import repo_central_graph_path
-from agent_memory_orchestrator.reasoning_graph.central_merge.applier import repo_central_graph_path as legacy_repo_central_graph_path
 from agent_memory_orchestrator.domain.versioning import CONFLICTS_WITH
 from agent_memory_orchestrator.domain.versioning import DECISION_REVIEW_RELATIONS
 from agent_memory_orchestrator.domain.versioning import DUPLICATE_OF
@@ -75,7 +74,6 @@ def test_stage2_central_graph_path_lives_at_infrastructure_boundary() -> None:
     path = repo_central_graph_path(settings, "repo:stage2/main")
 
     assert path == Path("C:/amo-home/.graph/central/repo_stage2_main/central.kuzu")
-    assert legacy_repo_central_graph_path(settings, "repo:stage2/main") == path
 
 
 def test_stage2_central_merge_store_port_uses_sqlite_adapter_alias() -> None:

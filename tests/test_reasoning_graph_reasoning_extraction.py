@@ -3,8 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from agent_memory_orchestrator.reasoning_graph import review_reasoning_extraction_results
-from agent_memory_orchestrator.reasoning_graph import validate_reasoning_node
+from agent_memory_orchestrator.domain.reasoning.review import review_reasoning_extraction_results
+from agent_memory_orchestrator.domain.reasoning.review import validate_reasoning_node
 
 
 def _packet() -> dict:

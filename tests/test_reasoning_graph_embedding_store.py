@@ -3,9 +3,9 @@ from __future__ import annotations
 from pathlib import Path
 
 from agent_memory_orchestrator.core.db import connect
-from agent_memory_orchestrator.reasoning_graph import GraphEmbeddingRecord
-from agent_memory_orchestrator.reasoning_graph import GraphEmbeddingStore
-from agent_memory_orchestrator.reasoning_graph import hash_content
+from agent_memory_orchestrator.infrastructure.faiss import GraphEmbeddingRecord
+from agent_memory_orchestrator.infrastructure.faiss import GraphEmbeddingStore
+from agent_memory_orchestrator.infrastructure.faiss import hash_content
 
 
 def _store(tmp_path: Path) -> GraphEmbeddingStore:

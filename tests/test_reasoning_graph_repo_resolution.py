@@ -1,10 +1,10 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import json
 import subprocess
 from pathlib import Path
 
-from agent_memory_orchestrator.reasoning_graph.repo_resolution import resolve_session_repo_root
+from agent_memory_orchestrator.domain.versioning.repo_resolution import resolve_session_repo_root
 
 
 def test_repo_resolution_prefers_nested_git_root_that_owns_commits(tmp_path: Path) -> None:
@@ -75,3 +75,4 @@ def _git(cwd: Path, *args: str) -> subprocess.CompletedProcess[str]:
     result = subprocess.run(["git", *args], cwd=cwd, text=True, capture_output=True, check=False)
     assert result.returncode == 0, result.stderr
     return result
+

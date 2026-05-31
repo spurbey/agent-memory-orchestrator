@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import json
 import subprocess
@@ -6,8 +6,8 @@ from pathlib import Path
 
 from agent_memory_orchestrator.core.config import Settings
 from agent_memory_orchestrator.application.pipeline.job_runner import ProductionSessionJobRunner
-from agent_memory_orchestrator.reasoning_graph.evidence_view import build_reasoning_evidence_view
-from agent_memory_orchestrator.reasoning_graph.evidence_view import write_reasoning_evidence_view_artifacts
+from agent_memory_orchestrator.domain.evidence.views import build_reasoning_evidence_view
+from agent_memory_orchestrator.domain.evidence.views import write_reasoning_evidence_view_artifacts
 from agent_memory_orchestrator.infrastructure.sqlite.production_job_store import ProductionSessionJobStore
 
 
@@ -225,3 +225,4 @@ def _git(cwd: Path, *args: str) -> subprocess.CompletedProcess[str]:
     result = subprocess.run(["git", *args], cwd=cwd, text=True, capture_output=True, check=False)
     assert result.returncode == 0, result.stderr
     return result
+

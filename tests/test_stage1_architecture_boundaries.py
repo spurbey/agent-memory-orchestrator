@@ -16,15 +16,13 @@ def test_stage1_domain_code_boundary_exports_existing_code_contracts() -> None:
     from agent_memory_orchestrator.domain.code import symbol_key
     from agent_memory_orchestrator.domain.code.hunks import CodeHunk as HunkBoundary
     from agent_memory_orchestrator.domain.code.versions import CodeVersionPlan as VersionBoundary
-    from agent_memory_orchestrator.reasoning_graph import CodeVersionPlan as LegacyCodeVersionPlan
 
     assert CodeHunk.__name__ == "CodeHunk"
     assert CodeNode.__name__ == "CodeNode"
     assert AstExpansion.__name__ == "AstExpansion"
     assert parse_unified_zero_hunks.__name__ == "parse_unified_zero_hunks"
     assert HunkBoundary is CodeHunk
-    assert CodeVersionPlan is LegacyCodeVersionPlan
-    assert VersionBoundary is LegacyCodeVersionPlan
+    assert VersionBoundary is CodeVersionPlan
     assert CodeVersionRecord(version_id="v1", symbol_id="s1", code_node_id="c1").as_dict()["version_id"] == "v1"
     assert SymbolRecord(symbol_id="s1", symbol_key="a.py::f", qualified_name="f").as_dict()["qualified_name"] == "f"
     assert resolve_code_node_version.__name__ == "resolve_code_node_version"
