@@ -9,18 +9,18 @@ from pathlib import Path
 from typing import Any
 
 from ....core.config import Settings
-from ....reasoning_graph.central_merge.applier import apply_merge_plan
-from ....reasoning_graph.central_merge.backfill import backfill_central_merge_plan
-from ....reasoning_graph.central_merge.fixtures import export_job_fixture
-from ....reasoning_graph.central_merge.judge import run_semantic_eval_fixture
-from ....reasoning_graph.central_merge.production_eval import default_production_eval_path
-from ....reasoning_graph.central_merge.production_eval import DEFAULT_TARGET_JOB_ID
-from ....reasoning_graph.central_merge.production_eval import DEFAULT_TARGET_REPO_ID
-from ....reasoning_graph.central_merge.production_eval import run_production_semantic_eval
-from ....reasoning_graph.jobs.reset import adopt_existing_production_storage
-from ....reasoning_graph.jobs.reset import initialize_fresh_production_storage
-from ....reasoning_graph.jobs.reset import reset_production_storage
-from ....reasoning_graph.jobs.store import ProductionSessionJobStore
+from ....application.services.central_merge_apply import apply_merge_plan
+from ....application.pipeline.debug.backfill import backfill_central_merge_plan
+from ....application.pipeline.debug.fixtures import export_job_fixture
+from ....application.pipeline.evaluation.production_eval import default_production_eval_path
+from ....application.pipeline.evaluation.production_eval import DEFAULT_TARGET_JOB_ID
+from ....application.pipeline.evaluation.production_eval import DEFAULT_TARGET_REPO_ID
+from ....application.pipeline.evaluation.production_eval import run_production_semantic_eval
+from ....application.pipeline.evaluation.semantic_fixture import run_semantic_eval_fixture
+from ....application.pipeline.storage_lifecycle import adopt_existing_production_storage
+from ....application.pipeline.storage_lifecycle import initialize_fresh_production_storage
+from ....application.pipeline.storage_lifecycle import reset_production_storage
+from ....infrastructure.sqlite.production_job_store import ProductionSessionJobStore
 
 PIPELINE_COMMANDS = (
     "init-production",
