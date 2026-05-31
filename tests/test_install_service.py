@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 
 from agent_memory_orchestrator.runtime.cli.main import main
-from agent_memory_orchestrator.config import Settings
+from agent_memory_orchestrator.core.config import Settings
 from agent_memory_orchestrator.install.service import InstallOptions
 from agent_memory_orchestrator.install.service import apply_install_plan
 from agent_memory_orchestrator.install.service import build_install_plan

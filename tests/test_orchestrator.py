@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from agent_memory_orchestrator.config import Settings
+from agent_memory_orchestrator.core.config import Settings
 from agent_memory_orchestrator.orchestration import OrchestratorService
 
 

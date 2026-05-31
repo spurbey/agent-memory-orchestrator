@@ -4,7 +4,7 @@ import json
 from urllib.parse import parse_qs, urlparse
 
 from agent_memory_orchestrator.runtime.cli.main import main
-from agent_memory_orchestrator.config import Settings
+from agent_memory_orchestrator.core.config import Settings
 from agent_memory_orchestrator.integrations.connectors.slack import SlackConfig, SlackConnectorService
 from agent_memory_orchestrator.integrations.connectors.slack.client import SlackApiClient
 from agent_memory_orchestrator.integrations.connectors.slack.config import load_slack_config, slack_secret_path

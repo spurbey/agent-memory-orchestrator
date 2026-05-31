@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from agent_memory_orchestrator.config import Settings
+from agent_memory_orchestrator.core.config import Settings
 from agent_memory_orchestrator.graph.service import GraphRagService
 from agent_memory_orchestrator.graph.store import GraphNode, InMemoryGraphStore
 from agent_memory_orchestrator.llm.qwen import DeterministicPlanner

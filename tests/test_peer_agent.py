@@ -7,7 +7,7 @@ from typing import Any
 
 import pytest
 
-from agent_memory_orchestrator.config import Settings
+from agent_memory_orchestrator.core.config import Settings
 from agent_memory_orchestrator.mcp.tools import MCP_MEMORY_TOOL_CONTRACTS, MemoryMcpToolService
 from agent_memory_orchestrator.peer.agent import PeerAgentService
 from agent_memory_orchestrator.peer.agent.schemas import CONTEXT_REQUEST, CONTEXT_RESPONSE, RESPONSE_RETRIEVAL_BUNDLE

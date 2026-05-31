@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from agent_memory_orchestrator.chunker import chunk_text, classify_content_type
-from agent_memory_orchestrator.cleaning import clean_event_text, should_promote_to_memory
-from agent_memory_orchestrator.extraction import confidence_for_signal, extract_memory_candidates
-from agent_memory_orchestrator.privacy import redact_secrets
+from agent_memory_orchestrator.memory.processing.chunker import chunk_text, classify_content_type
+from agent_memory_orchestrator.memory.processing.cleaning import clean_event_text, should_promote_to_memory
+from agent_memory_orchestrator.memory.processing.extraction import confidence_for_signal, extract_memory_candidates
+from agent_memory_orchestrator.core.privacy import redact_secrets
 from agent_memory_orchestrator.retrieval import reciprocal_rank_fusion, understand_query
 
 

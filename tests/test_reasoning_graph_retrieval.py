@@ -9,7 +9,7 @@ from types import SimpleNamespace
 import pytest
 
 from agent_memory_orchestrator.core.db import connect
-from agent_memory_orchestrator.config import Settings
+from agent_memory_orchestrator.core.config import Settings
 from agent_memory_orchestrator.graph.service import GraphRagService
 from agent_memory_orchestrator.graph.service import _active_central_versions_for_support
 from agent_memory_orchestrator.graph.service import _answer_from_retrieval_result
