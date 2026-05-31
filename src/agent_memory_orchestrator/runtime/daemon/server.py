@@ -29,6 +29,7 @@ from .coordination import bounded_int as _bounded_int
 from .coordination import graph_write_lock_if as _graph_write_lock_if
 from .coordination import production_stage_lock as _production_stage_lock
 from .coordination import production_stage_requires_graph_write_lock as _production_stage_requires_graph_write_lock
+from .logging import daemon_log as _daemon_log
 from .owner_lock import DaemonAlreadyRunning
 from .owner_lock import DaemonOwnerLock
 from .web_assets import graph_workbench_html
@@ -897,21 +898,6 @@ def _run_auto_drain_once(settings: Settings) -> dict[str, Any]:
         "v2_job_run": job_run,
     }
     return result
-
-
-def _daemon_log(settings: Settings, event: str, **fields: object) -> None:
-    record = {
-        "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-        "event": event,
-        **fields,
-    }
-    try:
-        path = settings.home / "logs" / "daemon.log"
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with path.open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")
-    except Exception:
-        return
 
 
 SESSION_COCKPIT_HTML = _session_cockpit_html()
