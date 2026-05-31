@@ -26,7 +26,7 @@ from ..llm.embeddings import embed_text
 from ..llm.qwen import DeterministicPlanner, OllamaQwenClient, QueryPlan, QwenPlanner, QwenUnavailable
 from ..reasoning_graph.embedding_store import GraphEmbeddingStore
 from ..domain.versioning.repo_identity import resolve_repo_identity
-from ..reasoning_graph.jobs import V2SessionJobStore
+from ..reasoning_graph.jobs import ProductionSessionJobStore
 from ..infrastructure.sqlite.retrieval_store import RetrievalIndexStore
 from ..reasoning_graph.retrieval import RETRIEVAL_EMBEDDING_KIND
 from ..reasoning_graph.retrieval import build_retrieval_documents_from_graph
@@ -609,7 +609,7 @@ class GraphRagService:
             if updated_at and updated_at > str(row["updated_at"]):
                 row["updated_at"] = updated_at
 
-        job_store = V2SessionJobStore(self.settings)
+        job_store = ProductionSessionJobStore(self.settings)
         try:
             for repo in job_store.list_repositories(limit=limit):
                 add(
@@ -635,7 +635,7 @@ class GraphRagService:
         return {"ok": True, "repos": out[: max(1, int(limit))]}
 
     def _jobs_by_session(self, *, limit: int = 5000) -> dict[str, dict[str, Any]]:
-        job_store = V2SessionJobStore(self.settings)
+        job_store = ProductionSessionJobStore(self.settings)
         try:
             return {str(job.get("session_id") or ""): job for job in job_store.list_jobs(limit=limit) if job.get("session_id")}
         finally:
@@ -2881,7 +2881,7 @@ def _load_session_evidence_records(settings: Settings, *, session_id: str, limit
 
 
 def _load_v2_session_raw_evidence_artifact(settings: Settings, *, session_id: str, limit: int = 500) -> list[dict[str, Any]] | None:
-    job_store = V2SessionJobStore(settings)
+    job_store = ProductionSessionJobStore(settings)
     try:
         job = job_store.get_job_by_session(session_id=session_id)
         if not job:
@@ -2907,7 +2907,7 @@ def _load_v2_session_raw_evidence_artifact(settings: Settings, *, session_id: st
 
 
 def _session_pending_summary(settings: Settings, *, session_id: str) -> dict[str, Any]:
-    job_store = V2SessionJobStore(settings)
+    job_store = ProductionSessionJobStore(settings)
     try:
         job = job_store.get_job_by_session(session_id=session_id)
     finally:
