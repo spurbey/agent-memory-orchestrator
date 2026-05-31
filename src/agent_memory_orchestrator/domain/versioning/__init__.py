@@ -10,6 +10,7 @@ from .graph_commits import graph_commit_id_for_plan
 from .graph_commits import graph_commit_ref_from_row
 from .graph_views import GraphViewRef
 from .graph_views import GraphViewStore
+from .graph_views import graph_view_id
 from .graph_views import resolve_graph_view
 from .merge_relations import CONFLICTS_WITH
 from .merge_relations import DECISION_REVIEW_RELATIONS
@@ -72,6 +73,7 @@ __all__ = [
     "exact_canonical_key",
     "graph_commit_id_for_plan",
     "graph_commit_ref_from_row",
+    "graph_view_id",
     "merge_plan_id_for",
     "normalize_remote_url",
     "resolve_graph_view",
