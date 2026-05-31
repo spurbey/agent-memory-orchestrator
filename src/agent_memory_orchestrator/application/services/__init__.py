@@ -6,10 +6,12 @@ __all__ = [
     "CentralMergeRunResult",
     "CentralMergeService",
     "ConnectorRuntimeService",
+    "EvidenceIngestService",
     "PeerAgentService",
     "ProductionPipelineService",
     "RETRIEVAL_EMBEDDING_KIND",
     "RetrievalQueryService",
+    "SessionBoundaryService",
     "embed_missing_retrieval_documents",
     "retrieve_session_graph",
     "vector_candidates",
@@ -26,6 +28,10 @@ def __getattr__(name: str):
         from .connector_runtime import ConnectorRuntimeService
 
         return ConnectorRuntimeService
+    if name == "EvidenceIngestService":
+        from .evidence_ingest import EvidenceIngestService
+
+        return EvidenceIngestService
     if name == "ProductionPipelineService":
         from .production_pipeline import ProductionPipelineService
 
@@ -34,6 +40,10 @@ def __getattr__(name: str):
         from .peer_agent import PeerAgentService
 
         return PeerAgentService
+    if name == "SessionBoundaryService":
+        from .session_boundary import SessionBoundaryService
+
+        return SessionBoundaryService
     if name in {"RETRIEVAL_EMBEDDING_KIND", "embed_missing_retrieval_documents"}:
         from .retrieval_embedding import RETRIEVAL_EMBEDDING_KIND
         from .retrieval_embedding import embed_missing_retrieval_documents
