@@ -69,6 +69,7 @@ from ...skill_checkpoint import mark_skill_checkpoint
 from ...skill_checkpoint import run_local_skill_checkpoint_extraction
 from ...skill_checkpoint import write_skill_checkpoint_outputs
 from ..daemon.client import DaemonClient, DaemonUnavailable
+from .commands.debug import rebuild_clean_db as _rebuild_clean_db
 from .commands.install import add_model_selection_args as _add_model_selection_args
 from .commands.install import codex_hooks_snippet as _codex_hooks_snippet
 from .commands.install import confirm as _confirm
@@ -2015,31 +2016,3 @@ def _watch_peer_agent(
     except KeyboardInterrupt:
         _print_line({"ok": True, "stopped": True, "reason": "interrupted"})
         return 0
-
-def _rebuild_clean_db(settings: Settings, out_path: Path, codex_root: Path, limit: int, force: bool) -> dict:
-    target = out_path.resolve()
-    if target.exists() and not force:
-        raise FileExistsError(f"refusing to overwrite existing DB without --force: {target}")
-    if force:
-        for path in (target, target.with_name(target.name + "-wal"), target.with_name(target.name + "-shm")):
-            if path.exists():
-                path.unlink()
-    target.parent.mkdir(parents=True, exist_ok=True)
-    clean_settings = replace(settings, db_path=target)
-    svc = MemoryService(clean_settings)
-    try:
-        svc.init_db()
-        result = svc.import_codex_sessions(codex_root, limit=limit)
-        indexes = svc.rebuild_indexes(force_vectors=False)
-        return {
-            "out": str(target),
-            "codex_root": str(codex_root.resolve()),
-            "import": result,
-            "indexes": indexes,
-        }
-    finally:
-        svc.close()
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())
