@@ -5,11 +5,10 @@ import json
 import os
 import threading
 import time
-from contextlib import nullcontext
 from dataclasses import replace
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any, ContextManager
+from typing import Any
 from urllib.parse import parse_qs, unquote, urlparse
 
 from ...core.config import Settings
@@ -23,6 +22,13 @@ from ...llm.qwen import QwenUnavailable
 from ...reasoning_graph.jobs import ProductionSessionJobRunner
 from ...reasoning_graph.jobs import ProductionSessionJobStore
 from ...reasoning_graph.central_merge.applier import repo_central_graph_path
+from .coordination import DRAIN_LOCK as _DRAIN_LOCK
+from .coordination import GRAPH_WRITE_LOCK as _GRAPH_WRITE_LOCK
+from .coordination import READ_ONLY_GET_GRAPH_PATHS as _READ_ONLY_GET_GRAPH_PATHS
+from .coordination import bounded_int as _bounded_int
+from .coordination import graph_write_lock_if as _graph_write_lock_if
+from .coordination import production_stage_lock as _production_stage_lock
+from .coordination import production_stage_requires_graph_write_lock as _production_stage_requires_graph_write_lock
 from .owner_lock import DaemonAlreadyRunning
 from .owner_lock import DaemonOwnerLock
 from .web_assets import graph_workbench_html
@@ -32,23 +38,6 @@ from .web_assets import web_asset_bytes
 
 _DaemonOwnerLock = DaemonOwnerLock
 _CLIENT_ABORT_ERRORS = (BrokenPipeError, ConnectionAbortedError, ConnectionResetError)
-_GRAPH_WRITE_LOCK = threading.RLock()
-_DRAIN_LOCK = threading.RLock()
-_PRODUCTION_GRAPH_WRITE_STAGES = frozenset({"kuzu_write", "central_version_merge"})
-_READ_ONLY_GET_GRAPH_PATHS = frozenset(
-    {
-        "/api/graph/status",
-        "/api/graph-merge-status",
-        "/api/graph/session-context",
-        "/api/graph/raw-evidence",
-        "/api/graph/work-trace",
-        "/api/graph/session-detail",
-        "/api/graph/central",
-        "/api/graph/version-flow",
-        "/api/debug/graph",
-        "/api/debug/graph-cache",
-    }
-)
 
 
 def _read_graph_service(settings: Settings, *, repo_id: str = "") -> GraphRagService:
@@ -80,32 +69,12 @@ def _graph_workbench_html() -> str:
     return graph_workbench_html()
 
 
-def _bounded_int(raw: str | None, *, default: int, minimum: int, maximum: int) -> int:
-    try:
-        value = int(raw) if raw is not None else default
-    except (TypeError, ValueError):
-        value = default
-    return max(minimum, min(maximum, value))
-
-
 def _v2_stage_requires_graph_write_lock(stage: str) -> bool:
     return _production_stage_requires_graph_write_lock(stage)
 
 
-def _v2_stage_lock(stage: str) -> ContextManager[Any]:
+def _v2_stage_lock(stage: str) -> Any:
     return _production_stage_lock(stage)
-
-
-def _production_stage_requires_graph_write_lock(stage: str) -> bool:
-    return stage in _PRODUCTION_GRAPH_WRITE_STAGES
-
-
-def _production_stage_lock(stage: str) -> ContextManager[Any]:
-    return _GRAPH_WRITE_LOCK if _production_stage_requires_graph_write_lock(stage) else nullcontext()
-
-
-def _graph_write_lock_if(condition: bool) -> ContextManager[Any]:
-    return _GRAPH_WRITE_LOCK if condition else nullcontext()
 
 
 def _list_repositories_fast(settings: Settings, *, limit: int = 200) -> dict[str, Any]:
