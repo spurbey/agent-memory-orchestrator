@@ -7,6 +7,7 @@ __all__ = [
     "CentralMergeService",
     "ConnectorRuntimeService",
     "EvidenceIngestService",
+    "LocalAgentReviewService",
     "PeerAgentService",
     "ProductionPipelineService",
     "RETRIEVAL_EMBEDDING_KIND",
@@ -32,6 +33,10 @@ def __getattr__(name: str):
         from .evidence_ingest import EvidenceIngestService
 
         return EvidenceIngestService
+    if name == "LocalAgentReviewService":
+        from .local_agent_review import LocalAgentReviewService
+
+        return LocalAgentReviewService
     if name == "ProductionPipelineService":
         from .production_pipeline import ProductionPipelineService
 
