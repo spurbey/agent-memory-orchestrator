@@ -3,8 +3,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import threading
-import time
 from dataclasses import replace
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -19,9 +17,9 @@ from ...graph.store import GraphBackendUnavailable, KuzuGraphStore
 from ...integrations.connectors.slack import SlackConnectorService
 from ...memory import MemoryService
 from ...llm.qwen import QwenUnavailable
-from ...reasoning_graph.jobs import ProductionSessionJobRunner
 from ...reasoning_graph.jobs import ProductionSessionJobStore
 from ...reasoning_graph.central_merge.applier import repo_central_graph_path
+from . import auto_drain as _auto_drain
 from .coordination import DRAIN_LOCK as _DRAIN_LOCK
 from .coordination import GRAPH_WRITE_LOCK as _GRAPH_WRITE_LOCK
 from .coordination import READ_ONLY_GET_GRAPH_PATHS as _READ_ONLY_GET_GRAPH_PATHS
@@ -76,6 +74,18 @@ def _v2_stage_requires_graph_write_lock(stage: str) -> bool:
 
 def _v2_stage_lock(stage: str) -> Any:
     return _production_stage_lock(stage)
+
+
+def _start_auto_drain_worker(settings: Settings) -> Any:
+    return _auto_drain.start_auto_drain_worker(settings)
+
+
+def _auto_drain_loop(settings: Settings) -> None:
+    _auto_drain._auto_drain_loop(settings)
+
+
+def _run_auto_drain_once(settings: Settings) -> dict[str, Any]:
+    return _auto_drain.run_auto_drain_once(settings)
 
 
 def _list_repositories_fast(settings: Settings, *, limit: int = 200) -> dict[str, Any]:
@@ -844,60 +854,6 @@ def _settings_with_payload_paths(settings: Settings, payload: dict[str, Any], *,
     for path in updates.values():
         path.parent.mkdir(parents=True, exist_ok=True)
     return replace(settings, **updates)
-
-
-def _start_auto_drain_worker(settings: Settings) -> threading.Thread | None:
-    if not settings.auto_drain_enabled:
-        _daemon_log(settings, "auto_drain_disabled")
-        return None
-    worker = threading.Thread(target=_auto_drain_loop, args=(settings,), name="amo-auto-drain", daemon=True)
-    worker.start()
-    _daemon_log(
-        settings,
-        "auto_drain_started",
-        interval_seconds=settings.auto_drain_interval_seconds,
-        embedding_batch_size=settings.auto_embedding_batch_size,
-    )
-    return worker
-
-
-def _auto_drain_loop(settings: Settings) -> None:
-    while True:
-        time.sleep(settings.auto_drain_interval_seconds)
-        try:
-            result = _run_auto_drain_once(settings)
-            production_job_run = result.get("production_job_run") or result.get("v2_job_run") or {}
-            if result.get("windows_processed") or result.get("records_ingested") or production_job_run.get("ran"):
-                _daemon_log(settings, "auto_drain_cycle", **result)
-        except Exception as exc:
-            _daemon_log(settings, "auto_drain_failed", error_type=type(exc).__name__, error=str(exc))
-
-
-def _run_auto_drain_once(settings: Settings) -> dict[str, Any]:
-    with _DRAIN_LOCK, _GRAPH_WRITE_LOCK:
-        graph = GraphRagService(settings)
-        try:
-            drain = graph.drain_evidence(
-                limit=settings.auto_drain_record_limit,
-                max_windows=settings.drain_max_windows_per_run,
-            )
-        finally:
-            graph.close()
-
-    runner = ProductionSessionJobRunner(settings, stage_lock_factory=_production_stage_lock)
-    try:
-        job_run = runner.run_next()
-    finally:
-        runner.close()
-    result: dict[str, Any] = {
-        "records_ingested": int(drain.get("records_ingested") or 0),
-        "windows_processed": int(drain.get("windows_processed") or 0),
-        "stopped_reason": drain.get("stopped_reason"),
-        "pending_sessions": drain.get("pending_sessions"),
-        "production_job_run": job_run,
-        "v2_job_run": job_run,
-    }
-    return result
 
 
 SESSION_COCKPIT_HTML = _session_cockpit_html()
