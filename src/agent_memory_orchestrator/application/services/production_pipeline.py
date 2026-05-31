@@ -8,10 +8,10 @@ from typing import Any, ContextManager
 from ...core.config import Settings
 from ...graph.store import GraphStore
 from ...graph.store import KuzuGraphStore
-from ...reasoning_graph.jobs import PRODUCTION_STAGES
-from ...reasoning_graph.jobs import ProductionSessionJobRunner
-from ...reasoning_graph.jobs import ProductionSessionJobStore
-from ...reasoning_graph.jobs import stage_display_name
+from ...infrastructure.sqlite.production_job_store import ProductionSessionJobStore
+from ..pipeline.job_runner import ProductionSessionJobRunner
+from ...domain.pipeline.constants import PRODUCTION_STAGES
+from ...domain.pipeline.constants import STAGE_DISPLAY_NAMES
 
 __all__ = [
     "PRODUCTION_STAGES",
@@ -20,6 +20,10 @@ __all__ = [
     "ProductionSessionJobStore",
     "stage_display_name",
 ]
+
+
+def stage_display_name(stage: str) -> str:
+    return STAGE_DISPLAY_NAMES.get(stage, stage.replace("_", " ").title())
 
 
 class ProductionPipelineService:
