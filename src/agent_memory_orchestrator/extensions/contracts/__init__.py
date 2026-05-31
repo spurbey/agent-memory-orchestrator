@@ -6,6 +6,9 @@ from .connector import ConnectorResponse
 from .graph_algorithm import GraphAlgorithm
 from .graph_algorithm import GraphAlgorithmContext
 from .graph_algorithm import GraphAlgorithmResult
+from .local_agent_skill import LocalAgentSkill
+from .local_agent_skill import LocalAgentSkillRequest
+from .local_agent_skill import LocalAgentSkillResult
 from .reranker import RerankRequest
 from .reranker import RerankResult
 from .reranker import Reranker
@@ -20,6 +23,9 @@ __all__ = [
     "GraphAlgorithm",
     "GraphAlgorithmContext",
     "GraphAlgorithmResult",
+    "LocalAgentSkill",
+    "LocalAgentSkillRequest",
+    "LocalAgentSkillResult",
     "RerankRequest",
     "RerankResult",
     "Reranker",
