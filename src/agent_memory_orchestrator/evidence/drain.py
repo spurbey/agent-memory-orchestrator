@@ -10,7 +10,7 @@ from typing import Any
 from ..core.config import Settings
 from ..graph.session import SessionGraphBuilder
 from ..graph.store import GraphStore
-from ..reasoning_graph.jobs import V2SessionJobStore
+from ..reasoning_graph.jobs import ProductionSessionJobStore
 from ..versioning import VersionBackend
 from .triggers import detect_trigger
 from .triggers import is_session_start
@@ -70,14 +70,14 @@ class EvidenceDrain:
         pending_path: Path | None = None,
         evidence_roots: list[Path] | None = None,
         builder: SessionGraphBuilder | None = None,
-        job_store: V2SessionJobStore | None = None,
+        job_store: ProductionSessionJobStore | None = None,
     ) -> None:
         self.settings = settings
         self.cursor_path = cursor_path or settings.home / ".state" / "evidence_cursors.json"
         self.pending_path = pending_path or settings.home / ".state" / "evidence_pending_windows.json"
         self.evidence_roots = evidence_roots or [settings.evidence_dir]
         self.builder = builder
-        self.job_store = job_store if job_store is not None else (None if builder is not None else V2SessionJobStore(settings))
+        self.job_store = job_store if job_store is not None else (None if builder is not None else ProductionSessionJobStore(settings))
 
     def drain(self, *, limit: int = 500, session_id: str = "", max_windows: int | None = None) -> dict[str, Any]:
         start = time.monotonic()

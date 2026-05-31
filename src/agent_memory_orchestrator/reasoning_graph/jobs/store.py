@@ -34,7 +34,7 @@ class EnqueueResult:
         return {"job": self.job, "created": self.created, "updated": self.updated, "reason": self.reason}
 
 
-class V2SessionJobStore:
+class ProductionSessionJobStore:
     def __init__(self, settings: Settings, *, db_path: Path | None = None) -> None:
         self.settings = settings
         self.db_path = db_path or settings.db_path
@@ -1034,7 +1034,7 @@ def _next_stage(stage: str) -> str:
     return V2_STAGES[index + 1]
 
 
-ProductionSessionJobStore = V2SessionJobStore
+V2SessionJobStore = ProductionSessionJobStore
 
 
 def _dedupe(values: list[str]) -> list[str]:

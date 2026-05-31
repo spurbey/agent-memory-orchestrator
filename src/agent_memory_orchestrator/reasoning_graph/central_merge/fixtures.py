@@ -10,11 +10,11 @@ from ...core.config import Settings
 from ...core.db import connect
 from ..embedding_store import GraphEmbeddingStore
 from ..retrieval import RetrievalIndexStore
-from ..jobs.store import V2SessionJobStore
+from ..jobs.store import ProductionSessionJobStore
 
 
 def export_job_fixture(settings: Settings, *, job_id: str, out_dir: Path | None = None, copy_artifacts: bool = False) -> dict[str, Any]:
-    store = V2SessionJobStore(settings)
+    store = ProductionSessionJobStore(settings)
     try:
         job = store.get_job(job_id)
         if job is None:

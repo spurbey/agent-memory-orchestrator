@@ -32,7 +32,7 @@ def run_production_semantic_eval(
 ) -> dict[str, Any]:
     """Read-only production semantic state report for curated central memory.
 
-    This deliberately avoids V2SessionJobStore/RetrievalIndexStore because those
+    This deliberately avoids job-store/retrieval-index helpers because those
     constructors initialize schemas. The baseline report must be safe to run
     before regeneration and without mutating production state.
     """

@@ -14,7 +14,7 @@ from ...graph.store import KuzuGraphStore
 from .constants import GRAPH_SCHEMA_VERSION
 from .constants import PIPELINE_VERSION
 from .constants import RESET_MARKER_KEY
-from .store import V2SessionJobStore
+from .store import ProductionSessionJobStore
 
 
 def initialize_fresh_v2_production_storage(settings: Settings) -> dict[str, Any]:
@@ -25,7 +25,7 @@ def initialize_fresh_v2_production_storage(settings: Settings) -> dict[str, Any]
     reset command is wrong. Existing non-empty stores still require explicit
     backup-first reset/adoption.
     """
-    store = V2SessionJobStore(settings)
+    store = ProductionSessionJobStore(settings)
     try:
         existing = store.marker(RESET_MARKER_KEY)
     finally:
@@ -116,7 +116,7 @@ def reset_production_v2_storage(
         "backup_path": str(backup_dir.resolve()),
         "cleaned": cleaned,
     }
-    store = V2SessionJobStore(settings)
+    store = ProductionSessionJobStore(settings)
     try:
         store.upsert_marker(RESET_MARKER_KEY, marker)
     finally:
@@ -266,7 +266,7 @@ def _faiss_index_dir(settings: Settings) -> Path:
 
 
 def _write_marker(settings: Settings, marker: dict[str, Any]) -> None:
-    store = V2SessionJobStore(settings)
+    store = ProductionSessionJobStore(settings)
     try:
         store.upsert_marker(RESET_MARKER_KEY, marker)
     finally:

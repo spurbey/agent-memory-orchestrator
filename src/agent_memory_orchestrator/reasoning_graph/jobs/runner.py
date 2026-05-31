@@ -42,7 +42,7 @@ from .constants import RETRIEVAL_PROJECTION_VERSION
 from .constants import SESSION_GRAPH_WRITER_VERSION
 from .constants import SYMBOL_VERSION_POLICY_VERSION
 from .constants import V2_STAGES
-from .store import V2SessionJobStore
+from .store import ProductionSessionJobStore
 
 
 StageFn = Callable[[dict[str, Any], Path], dict[str, Any]]
@@ -54,17 +54,17 @@ class StageResult:
     diagnostics: dict[str, Any]
 
 
-class V2SessionJobRunner:
+class ProductionSessionJobRunner:
     def __init__(
         self,
         settings: Settings,
         *,
-        job_store: V2SessionJobStore | None = None,
+        job_store: ProductionSessionJobStore | None = None,
         graph_store_factory: Callable[[Path], GraphStore] = KuzuGraphStore,
         stage_lock_factory: Callable[[str], ContextManager[Any]] | None = None,
     ) -> None:
         self.settings = settings
-        self.job_store = job_store or V2SessionJobStore(settings)
+        self.job_store = job_store or ProductionSessionJobStore(settings)
         self.graph_store_factory = graph_store_factory
         self.stage_lock_factory = stage_lock_factory or (lambda _stage: nullcontext())
 
@@ -518,7 +518,7 @@ class StageFailed(RuntimeError):
         self.diagnostics = diagnostics or {}
 
 
-ProductionSessionJobRunner = V2SessionJobRunner
+V2SessionJobRunner = ProductionSessionJobRunner
 
 
 def require_complete_v2_reset_marker(marker: dict[str, Any] | None) -> dict[str, Any]:

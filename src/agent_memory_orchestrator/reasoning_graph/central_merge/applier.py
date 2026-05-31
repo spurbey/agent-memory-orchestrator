@@ -13,7 +13,7 @@ from ...graph.store import GraphEdge
 from ...graph.store import GraphNode
 from ...graph.store import GraphStore
 from ...graph.store import KuzuGraphStore
-from ..jobs.store import V2SessionJobStore
+from ..jobs.store import ProductionSessionJobStore
 from ..jobs.store import graph_view_id
 from ...domain.versioning.models import CENTRAL_MERGE_PLAN_VERSION
 from ...domain.versioning.models import utc_now
@@ -33,7 +33,7 @@ def apply_merge_plan(
     *,
     settings: Settings,
     plan_id: str,
-    store: V2SessionJobStore | None = None,
+    store: ProductionSessionJobStore | None = None,
     graph_store: GraphStore | None = None,
     branch: str = "main",
     mode: str = "active",
@@ -48,7 +48,7 @@ def apply_merge_plan(
 
     close_store = store is None
     close_graph = False
-    owned_store = store or V2SessionJobStore(settings)
+    owned_store = store or ProductionSessionJobStore(settings)
     owned_graph = graph_store
     owner = lock_owner or f"central-merge:{uuid.uuid4().hex}"
     try:
@@ -217,7 +217,7 @@ def repo_central_graph_path(settings: Settings, repo_id: str) -> Path:
     return settings.home / ".graph" / "central" / safe / "central.kuzu"
 
 
-def _write_merge_result_artifact(*, store: V2SessionJobStore, plan: dict[str, Any], result: dict[str, Any]) -> str:
+def _write_merge_result_artifact(*, store: ProductionSessionJobStore, plan: dict[str, Any], result: dict[str, Any]) -> str:
     job_id = str(plan.get("job_id") or result.get("job_id") or "")
     if not job_id:
         return ""

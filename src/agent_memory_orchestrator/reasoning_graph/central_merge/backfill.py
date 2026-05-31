@@ -7,7 +7,7 @@ from typing import Any
 
 from ...core.config import Settings
 from ...graph.store import KuzuGraphStore
-from ..jobs.store import V2SessionJobStore
+from ..jobs.store import ProductionSessionJobStore
 from ..jobs.store import utc_now
 from ...domain.versioning.identity import atoms_by_canonical_key
 from ...domain.versioning.repo_identity import resolve_repo_identity
@@ -15,7 +15,7 @@ from .planner import build_dry_run_merge_plan
 
 
 def backfill_central_merge_plan(settings: Settings, *, job_id: str, forced_by: str = "manual-backfill") -> dict[str, Any]:
-    store = V2SessionJobStore(settings)
+    store = ProductionSessionJobStore(settings)
     try:
         job = store.get_job(job_id)
         if job is None:
@@ -72,7 +72,7 @@ def backfill_central_merge_plan(settings: Settings, *, job_id: str, forced_by: s
 
 
 def _upsert_backfill_stage(
-    store: V2SessionJobStore,
+    store: ProductionSessionJobStore,
     *,
     job_id: str,
     input_artifact: str,
