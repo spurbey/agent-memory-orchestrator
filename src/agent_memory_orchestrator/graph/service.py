@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import ast
 import json
@@ -23,7 +23,7 @@ from ..evidence.triggers import session_boundary_trigger
 from ..evidence.window import clean_evidence_window
 from ..llm.embeddings import embed_text
 from ..llm.qwen import DeterministicPlanner, OllamaQwenClient, QueryPlan, QwenPlanner, QwenUnavailable
-from ..reasoning_graph.embedding_store import GraphEmbeddingStore
+from ..infrastructure.faiss.embedding_store import GraphEmbeddingStore
 from ..domain.versioning.repo_identity import resolve_repo_identity
 from ..infrastructure.sqlite.production_job_store import ProductionSessionJobStore
 from ..infrastructure.sqlite.retrieval_store import RetrievalIndexStore
@@ -3177,4 +3177,5 @@ def _compact_git(git: dict[str, Any]) -> dict[str, Any]:
 
 def _elapsed_ms(start: float) -> int:
     return int((time.monotonic() - start) * 1000)
+
 
