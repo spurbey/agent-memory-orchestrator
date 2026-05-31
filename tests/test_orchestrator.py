@@ -84,8 +84,3 @@ def test_orchestrator_rejects_invalid_decision_timing(tmp_path) -> None:
         orch.user_decision("s2", "approved")
     orch.close()
 
-
-def test_legacy_orchestrator_module_keeps_public_exports() -> None:
-    from agent_memory_orchestrator import orchestrator as legacy_orchestrator
-
-    assert legacy_orchestrator.OrchestratorService is OrchestratorService

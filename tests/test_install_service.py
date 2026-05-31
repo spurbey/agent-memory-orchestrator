@@ -12,13 +12,6 @@ from agent_memory_orchestrator.install.service import doctor
 from agent_memory_orchestrator.install.service import uninstall
 
 
-def test_legacy_install_service_module_keeps_public_exports() -> None:
-    from agent_memory_orchestrator import install_service
-
-    assert install_service.InstallOptions is InstallOptions
-    assert install_service.build_install_plan is build_install_plan
-
-
 def test_codex_install_applies_managed_hooks_and_mcp(tmp_path: Path) -> None:
     user_home = tmp_path / "home"
     amo_home = tmp_path / "amo"

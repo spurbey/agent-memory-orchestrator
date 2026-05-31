@@ -5,7 +5,7 @@ import sys
 import threading
 from pathlib import Path
 
-from agent_memory_orchestrator import hook
+from agent_memory_orchestrator.runtime.hook import launcher as hook
 
 
 class _InteractiveStdin:
@@ -172,3 +172,4 @@ def test_hook_falls_back_to_workspace_spool_when_amo_home_is_not_writable(
     assert payload["ingested"] is True
     assert payload["fallback_spool"] is True
     assert ".amo-spool" in payload["evidence"]["path"]
+

@@ -28,19 +28,19 @@ Print a one-click Slack app setup URL:
 
 ```powershell
 $env:AMO_HOME="$env:USERPROFILE\.agent-memory-orchestrator"
-python -m agent_memory_orchestrator.cli slack setup-link
+amo-cli slack setup-link
 ```
 
 Manual manifest fallback:
 
 ```powershell
-python -m agent_memory_orchestrator.cli slack manifest --out .\slack-app-manifest.json
+amo-cli slack manifest --out .\slack-app-manifest.json
 ```
 
 After creating the Slack app, run the local wizard:
 
 ```powershell
-python -m agent_memory_orchestrator.cli slack setup-wizard
+amo-cli slack setup-wizard
 ```
 
 Run the connector:
@@ -69,5 +69,5 @@ Use environment variables if you do not want AMO to save tokens:
 ```powershell
 $env:AMO_SLACK_APP_TOKEN="xapp-..."
 $env:AMO_SLACK_BOT_TOKEN="xoxb-..."
-python -m agent_memory_orchestrator.cli slack setup --team-id T123 --bot-user-id B123 --capture-user-id U123 --skip-token-validation
+amo-cli slack setup --team-id T123 --bot-user-id B123 --capture-user-id U123 --skip-token-validation
 ```

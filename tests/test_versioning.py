@@ -27,10 +27,7 @@ def test_local_git_backend_reads_commit_metadata_diff_and_patch_id(tmp_path: Pat
     assert patch_id
 
 
-def test_versioning_package_exports_work_ledger_and_legacy_shim() -> None:
-    from agent_memory_orchestrator import work_ledger as legacy_work_ledger
-
-    assert legacy_work_ledger.WorkLedger is WorkLedger
+def test_versioning_package_exports_work_ledger() -> None:
     trace = WorkLedger(_MissingGitBackend()).trace_commit()
     assert trace.patch_id
     assert trace.as_dict()["diff"]["changed_files"] == ["missing.py"]

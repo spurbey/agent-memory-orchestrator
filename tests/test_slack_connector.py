@@ -16,12 +16,6 @@ from agent_memory_orchestrator.integrations.connectors.slack.wizard import run_s
 from agent_memory_orchestrator.evidence.triggers import detect_trigger
 
 
-def test_legacy_slack_connector_package_keeps_public_exports() -> None:
-    from agent_memory_orchestrator.connectors.slack import SlackConnectorService as LegacyService
-
-    assert LegacyService is SlackConnectorService
-
-
 def test_slack_manifest_enables_socket_mode_and_message_scopes() -> None:
     manifest = build_slack_manifest(app_name="AMO Test")
 
