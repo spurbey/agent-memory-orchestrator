@@ -26,10 +26,9 @@ from .coordination import bounded_int as _bounded_int
 from .logging import daemon_log as _daemon_log
 from .owner_lock import DaemonAlreadyRunning
 from .owner_lock import DaemonOwnerLock
-from .payloads import optional_payload_path as _payload_optional_path
-from .payloads import settings_with_payload_paths as _payload_settings_with_paths
 from .routes.jobs import handle_job_retry_post as _handle_job_retry_post
 from .routes.jobs import handle_jobs_get as _handle_jobs_get
+from .routes.retrieval import handle_graph_retrieval_post as _handle_graph_retrieval_post
 from .routes.web import graph_workbench_html as _graph_workbench_html
 from .routes.web import load_web_asset
 from .routes.web import session_cockpit_html as _session_cockpit_html
@@ -486,75 +485,12 @@ class AmoHandler(BaseHTTPRequestHandler):
                 finally:
                     graph.close()
                 return
-            if self.path == "/graph/retrieval-build":
-                graph_settings = _settings_with_payload_paths(self.settings, payload, prefer_retrieval=True)
-                graph = _read_graph_service(graph_settings)
-                try:
-                    limit = _bounded_int(str(payload.get("limit") or ""), default=10000, minimum=1, maximum=100000)
-                    max_doc_chars = _bounded_int(
-                        str(payload.get("max_doc_chars") or ""),
-                        default=5000,
-                        minimum=1000,
-                        maximum=50000,
-                    )
-                    result = graph.rebuild_retrieval_index(
-                        db_path=_optional_payload_path(payload, "db_path"),
-                        session_id=str(payload.get("session_id") or ""),
-                        repo_id=str(payload.get("repo_id") or ""),
-                        limit=limit,
-                        max_doc_chars=max_doc_chars,
-                    )
-                    self._write_json(200, result)
-                finally:
-                    graph.close()
-                return
-            if self.path == "/graph/retrieval-embed":
-                graph_settings = _settings_with_payload_paths(self.settings, payload, prefer_retrieval=True)
-                graph = _read_graph_service(graph_settings)
-                try:
-                    limit = _bounded_int(str(payload.get("limit") or ""), default=100, minimum=0, maximum=100000)
-                    result = graph.embed_retrieval_index(
-                        db_path=_optional_payload_path(payload, "db_path"),
-                        session_id=str(payload.get("session_id") or ""),
-                        repo_id=str(payload.get("repo_id") or ""),
-                        limit=limit,
-                        model=str(payload.get("model") or ""),
-                        graph_scope=str(payload.get("graph_scope") or ""),
-                        rebuild_faiss=bool(payload.get("rebuild_faiss", True)),
-                    )
-                    self._write_json(200, result)
-                finally:
-                    graph.close()
-                return
-            if self.path == "/graph/retrieve":
-                graph_settings = _settings_with_payload_paths(self.settings, payload, prefer_retrieval=True)
-                graph = _read_graph_service(graph_settings, repo_id=str(payload.get("repo_id") or ""))
-                try:
-                    limit = _bounded_int(str(payload.get("limit") or ""), default=8, minimum=1, maximum=50)
-                    try:
-                        result = graph.retrieve_indexed_graph(
-                            query=str(payload.get("query") or ""),
-                            db_path=_optional_payload_path(payload, "db_path"),
-                            session_id=str(payload.get("session_id") or ""),
-                            repo_id=str(payload.get("repo_id") or ""),
-                            limit=limit,
-                            use_vector=bool(payload.get("use_vector", True)),
-                            model=str(payload.get("model") or ""),
-                            graph_scope=str(payload.get("graph_scope") or ""),
-                            require_vector=bool(payload.get("require_vector", False)),
-                            include_answer=bool(payload.get("include_answer", True)),
-                        )
-                    except ValueError as exc:
-                        result = {
-                            "ok": False,
-                            "error": str(exc),
-                            "hint": "Build the production retrieval index and embeddings for the configured graph, or configure retrieval_graph_path/retrieval_db_path.",
-                            "graph_path": str(graph_settings.graph_path),
-                            "db_path": str(graph_settings.retrieval_db_path),
-                        }
-                    self._write_json(200, result)
-                finally:
-                    graph.close()
+            if _handle_graph_retrieval_post(
+                path=self.path,
+                payload=payload,
+                settings=self.settings,
+                write_json=self._write_json,
+            ):
                 return
             if self.path == "/graph/version-flow":
                 repo_id = str(payload.get("repo_id") or "")
@@ -595,14 +531,6 @@ class AmoHandler(BaseHTTPRequestHandler):
 
     def log_message(self, format: str, *args: object) -> None:
         return
-
-
-def _optional_payload_path(payload: dict[str, Any], key: str) -> Any:
-    return _payload_optional_path(payload, key)
-
-
-def _settings_with_payload_paths(settings: Settings, payload: dict[str, Any], *, prefer_retrieval: bool = False) -> Settings:
-    return _payload_settings_with_paths(settings, payload, prefer_retrieval=prefer_retrieval)
 
 
 SESSION_COCKPIT_HTML = _session_cockpit_html()
