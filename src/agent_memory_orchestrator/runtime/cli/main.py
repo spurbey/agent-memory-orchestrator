@@ -11,6 +11,7 @@ from ...reasoning_graph.central_merge.production_eval import DEFAULT_TARGET_JOB_
 from ...reasoning_graph.central_merge.production_eval import DEFAULT_TARGET_REPO_ID
 from ..daemon.client import DaemonUnavailable
 from .commands.bootstrap import handle_bootstrap_command as _handle_bootstrap_command
+from .commands.debug import add_debug_subcommands as _add_debug_subcommands
 from .commands.debug import handle_debug_command as _handle_debug_command
 from .commands.connectors import handle_connector_command as _handle_connector_command
 from .commands.graph import _retrieve_index_only as _graph_retrieve_index_only
@@ -209,18 +210,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     _add_peer_subcommands(sub)
 
-    debug = sub.add_parser("debug", help="Debug AMO hook, drain, Qwen, graph, and retrieval stages")
-    debug_sub = debug.add_subparsers(dest="debug_command", required=True)
-    debug_sub.add_parser("hooks", help="Check hook config, log, and latest evidence")
-    debug_drain = debug_sub.add_parser("drain", help="Show pending drain cursor/evidence state")
-    debug_drain.add_argument("--session-id", default="")
-    debug_qwen_cmd = debug_sub.add_parser("qwen", help="Check Qwen availability and query-planner JSON")
-    debug_qwen_cmd.add_argument("--sample", default="what did we decide about codex hooks")
-    debug_graph_cmd = debug_sub.add_parser("graph", help="Show graph status and current context")
-    debug_graph_cmd.add_argument("--session-id", default="")
-    debug_retrieval = debug_sub.add_parser("retrieval", help="Show retrieval output through daemon")
-    debug_retrieval.add_argument("--query", required=True)
-    debug_retrieval.add_argument("--limit", type=int, default=8)
+    _add_debug_subcommands(sub)
 
     _add_skill_checkpoint_subcommands(sub)
 
