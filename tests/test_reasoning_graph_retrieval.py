@@ -206,7 +206,7 @@ def test_retrieval_index_store_migrates_old_fts_schema_without_packet_columns(tm
     assert hits
 
 
-def test_retrieval_document_build_can_filter_to_v2_graph_schema() -> None:
+def test_retrieval_document_build_can_filter_to_production_graph_schema() -> None:
     graph = InMemoryGraphStore()
     graph.upsert_node(
         GraphNode(

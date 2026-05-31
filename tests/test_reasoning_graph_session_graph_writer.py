@@ -119,7 +119,7 @@ def test_kuzu_store_read_only_opens_for_reads_and_blocks_writes(tmp_path: Path) 
         store.close()
 
 
-def test_kuzu_store_upsert_supports_compact_v2_schema(tmp_path: Path) -> None:
+def test_kuzu_store_upsert_supports_compact_production_schema(tmp_path: Path) -> None:
     pytest.importorskip("kuzu")
     graph = _minimal_graph()
     graph_path = tmp_path / "session_graph.kuzu"

@@ -1309,7 +1309,7 @@ def test_production_fresh_init_refuses_non_empty_retrieval_store(tmp_path: Path)
         initialize_fresh_production_storage(settings)
 
 
-def test_production_adopt_production_backs_up_and_preserves_existing_v2_stores(tmp_path: Path) -> None:
+def test_production_adopt_production_backs_up_and_preserves_existing_stores(tmp_path: Path) -> None:
     settings = make_settings(tmp_path)
     settings.home.mkdir(parents=True, exist_ok=True)
     settings.graph_path.mkdir(parents=True)
@@ -1513,7 +1513,7 @@ def test_qwen_checkpoint_reuse_requires_same_runtime_contract(tmp_path: Path) ->
     assert blocked == {}
 
 
-def test_auto_drain_closes_graph_before_v2_runner_opens(
+def test_auto_drain_closes_graph_before_production_runner_opens(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1555,7 +1555,7 @@ def test_auto_drain_closes_graph_before_v2_runner_opens(
     assert events == ["graph_open", "drain", "graph_close", "runner_open", "runner_run", "runner_close"]
 
 
-def test_session_detail_prefers_v2_raw_artifact_and_skips_pending_scan(tmp_path: Path) -> None:
+def test_session_detail_prefers_production_raw_artifact_and_skips_pending_scan(tmp_path: Path) -> None:
     settings = make_settings(tmp_path)
     store = ProductionSessionJobStore(settings)
     try:

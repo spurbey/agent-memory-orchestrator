@@ -128,13 +128,13 @@ def test_drain_session_boundary_persists_pending_window_across_runs(tmp_path: Pa
         event_name="user_prompt_submit",
     )
 
-    first = _v2_drain(settings).drain(limit=2)
+    first = _production_drain(settings).drain(limit=2)
     assert first["windows_processed"] == 0
     assert first["pending_sessions"] == 1
 
     _append_session_start(evidence, "s2")
 
-    second = _v2_drain(settings).drain(limit=1)
+    second = _production_drain(settings).drain(limit=1)
 
     assert second["windows_processed"] == 1
     assert second["triggered"][0]["session_id"] == "s1"
@@ -370,5 +370,5 @@ def _drain(settings: Settings, store: InMemoryGraphStore, backend: _StaticGitBac
     )
 
 
-def _v2_drain(settings: Settings) -> EvidenceDrain:
+def _production_drain(settings: Settings) -> EvidenceDrain:
     return EvidenceDrain(settings, InMemoryGraphStore(), _StaticGitBackend())
