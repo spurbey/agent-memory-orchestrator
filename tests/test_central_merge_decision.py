@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from agent_memory_orchestrator.reasoning_graph.central_merge.decision import build_decision_review_candidates
-from agent_memory_orchestrator.reasoning_graph.central_merge.planner import build_dry_run_merge_plan
+from agent_memory_orchestrator.domain.versioning.central_merge.decision import build_decision_review_candidates
+from agent_memory_orchestrator.domain.versioning.central_merge.planner import build_dry_run_merge_plan
 
 
 def test_decision_frames_extract_graph_context_from_compact_edges() -> None:
