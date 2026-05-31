@@ -7,6 +7,7 @@ import sys
 from ...graph.store import GraphBackendUnavailable
 from ...llm.qwen import QwenUnavailable
 from ..daemon.client import DaemonUnavailable
+from .commands.bootstrap import add_bootstrap_subcommands as _add_bootstrap_subcommands
 from .commands.bootstrap import handle_bootstrap_command as _handle_bootstrap_command
 from .commands.debug import add_debug_subcommands as _add_debug_subcommands
 from .commands.debug import handle_debug_command as _handle_debug_command
@@ -47,8 +48,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Agent Memory Orchestrator CLI")
     sub = parser.add_subparsers(dest="command", required=True)
 
-    sub.add_parser("init-db", help="Initialize local database schema")
-    sub.add_parser("init-graph", help="Initialize local Kuzu GraphRAG schema")
+    _add_bootstrap_subcommands(sub)
     _add_pipeline_subcommands(sub)
 
     _add_install_subcommands(sub)
