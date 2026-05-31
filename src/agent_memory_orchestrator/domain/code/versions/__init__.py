@@ -3,9 +3,9 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from ....reasoning_graph.code_versioning import CodeVersionPlan
-from ....reasoning_graph.code_versioning import CodeVersionRelation
-from ....reasoning_graph.code_versioning import resolve_code_node_version
+from .resolver import CodeVersionPlan
+from .resolver import CodeVersionRelation
+from .resolver import resolve_code_node_version
 
 
 @dataclass(slots=True, frozen=True)
