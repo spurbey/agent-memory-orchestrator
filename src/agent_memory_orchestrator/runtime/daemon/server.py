@@ -28,6 +28,7 @@ from .owner_lock import DaemonAlreadyRunning
 from .owner_lock import DaemonOwnerLock
 from .routes.jobs import handle_job_retry_post as _handle_job_retry_post
 from .routes.jobs import handle_jobs_get as _handle_jobs_get
+from .routes.health import handle_health_get as _handle_health_get
 from .routes.retrieval import handle_graph_retrieval_post as _handle_graph_retrieval_post
 from .routes.web import graph_workbench_html as _graph_workbench_html
 from .routes.web import load_web_asset
@@ -149,42 +150,7 @@ class AmoHandler(BaseHTTPRequestHandler):
         if path == "/graph3d":
             self._write_html(200, _graph_workbench_html())
             return
-        if path == "/health":
-            job_store = ProductionSessionJobStore(self.settings)
-            try:
-                reset_marker = job_store.marker()
-            finally:
-                job_store.close()
-            self._write_json(
-                200,
-                {
-                    "ok": True,
-                    "service": "agent-memory-orchestrator",
-                    "graph_backend": self.settings.graph_backend,
-                    "graph_path": str(self.settings.graph_path),
-                    "qwen_runtime": self.settings.qwen_runtime,
-                    "qwen_model": self.settings.qwen_model,
-                    "qwen_timeout_seconds": self.settings.qwen_timeout_seconds,
-                    "qwen_planner_timeout_seconds": self.settings.qwen_planner_timeout_seconds,
-                    "qwen_extract_timeout_seconds": self.settings.qwen_extract_timeout_seconds,
-                    "qwen_compress_timeout_seconds": self.settings.qwen_compress_timeout_seconds,
-                    "qwen_num_ctx": self.settings.qwen_num_ctx,
-                    "drain_max_windows_per_run": self.settings.drain_max_windows_per_run,
-                    "auto_drain_enabled": self.settings.auto_drain_enabled,
-                    "auto_drain_interval_seconds": self.settings.auto_drain_interval_seconds,
-                    "auto_drain_record_limit": self.settings.auto_drain_record_limit,
-                    "auto_embedding_batch_size": self.settings.auto_embedding_batch_size,
-                    "production_marker": reset_marker,
-                },
-            )
-            return
-        if path == "/metrics":
-            svc = MemoryService(self.settings)
-            try:
-                svc.init_db()
-                self._write_json(200, svc.inspect_metrics())
-            finally:
-                svc.close()
+        if _handle_health_get(path=path, settings=self.settings, write_json=self._write_json):
             return
         if path == "/api/repos":
             raw_limit = (query.get("limit") or ["200"])[0]
