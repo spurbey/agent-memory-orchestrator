@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Any
 
@@ -11,13 +10,16 @@ from ....graph.store import GraphBackendUnavailable
 from ....llm.qwen import QwenUnavailable
 from ....memory import MemoryService
 from ....peer.agent import PeerAgentService
-from .contracts import AGENTS
 from .contracts import MCP_MEMORY_TOOL_CONTRACTS
 from .graph_results import (
     _indexed_graph_retrieval_ready,
     _indexed_unavailable_context,
     _mcp_graph_result_from_indexed,
 )
+from .validation import bounded_limit as _bounded_limit
+from .validation import normalize_agent as _normalize_agent
+from .validation import parse_metadata as _parse_metadata
+from .validation import require_text as _require_text
 
 
 class MemoryMcpToolService:
@@ -420,37 +422,4 @@ class MemoryMcpToolService:
         except (GraphBackendUnavailable, QwenUnavailable, ValueError) as exc:
             return {"ok": False, "tool": tool, "error": str(exc)}
 
-
-def _require_text(value: str, name: str) -> str:
-    text = str(value or "").strip()
-    if not text:
-        raise ValueError(f"{name} is required")
-    return text
-
-
-def _normalize_agent(agent: str) -> str:
-    normalized = _require_text(agent, "agent").lower()
-    if normalized not in AGENTS:
-        raise ValueError(f"agent must be one of: {', '.join(sorted(AGENTS))}")
-    return normalized
-
-
-def _parse_metadata(metadata_json: str) -> dict[str, Any]:
-    if not metadata_json:
-        return {}
-    try:
-        parsed = json.loads(metadata_json)
-    except json.JSONDecodeError as exc:
-        raise ValueError(f"metadata_json must be a JSON object: {exc}") from exc
-    if not isinstance(parsed, dict):
-        raise ValueError("metadata_json must be a JSON object")
-    return parsed
-
-
-def _bounded_limit(value: int, *, default: int, maximum: int) -> int:
-    try:
-        parsed = int(value)
-    except (TypeError, ValueError):
-        parsed = default
-    return max(1, min(maximum, parsed))
 
