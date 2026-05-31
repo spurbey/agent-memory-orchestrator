@@ -5,15 +5,13 @@ import json
 import sys
 from pathlib import Path
 
-from ...core.config import Settings
-from ...graph.service import GraphRagService
 from ...graph.store import GraphBackendUnavailable
-from ...memory import MemoryService
 from ...llm.qwen import QwenUnavailable
 from ...reasoning_graph.session_runtime import DEFAULT_CODE_EMBEDDING_MODEL
 from ...reasoning_graph.central_merge.production_eval import DEFAULT_TARGET_JOB_ID
 from ...reasoning_graph.central_merge.production_eval import DEFAULT_TARGET_REPO_ID
 from ..daemon.client import DaemonUnavailable
+from .commands.bootstrap import handle_bootstrap_command as _handle_bootstrap_command
 from .commands.debug import handle_debug_command as _handle_debug_command
 from .commands.connectors import handle_connector_command as _handle_connector_command
 from .commands.graph import _retrieve_index_only as _graph_retrieve_index_only
@@ -597,24 +595,9 @@ def main(argv: list[str] | None = None) -> int:
         if install_status is not None:
             return install_status
 
-        if args.command == "init-db":
-            settings = Settings.load()
-            svc = MemoryService(settings)
-            try:
-                svc.init_db()
-            finally:
-                svc.close()
-            _print({"ok": True, "db_path": str(settings.db_path)})
-            return 0
-
-        if args.command == "init-graph":
-            settings = Settings.load()
-            graph = GraphRagService(settings)
-            try:
-                _print({"ok": True, "graph_path": str(settings.graph_path), "backend": settings.graph_backend})
-            finally:
-                graph.close()
-            return 0
+        bootstrap_status = _handle_bootstrap_command(args, emit=_print)
+        if bootstrap_status is not None:
+            return bootstrap_status
 
         pipeline_status = _handle_pipeline_command(args, emit=_print)
         if pipeline_status is not None:
