@@ -15,7 +15,7 @@ from ....reasoning_graph.retrieval import RETRIEVAL_EMBEDDING_KIND
 from ....reasoning_graph.retrieval import RetrievalCandidate
 from ....reasoning_graph.retrieval import RetrievalDocument
 from ....reasoning_graph.retrieval import retrieve_session_graph
-from ....reasoning_graph.session_runtime import StrictTextEmbedder
+from ....infrastructure.llm.text_embedder import StrictTextEmbedder
 
 
 DEFAULT_TARGET_JOB_ID = "v2job:0b68249f48c244c68fb12977eb93d9ba"
@@ -1082,5 +1082,6 @@ def _select(row: dict[str, Any], keys: tuple[str, ...]) -> dict[str, Any]:
 
 def stable_hash(payload: Any) -> str:
     return hashlib.sha256(json.dumps(payload, sort_keys=True, default=str).encode("utf-8")).hexdigest()
+
 
 

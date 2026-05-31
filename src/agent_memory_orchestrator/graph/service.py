@@ -31,7 +31,7 @@ from ..reasoning_graph.retrieval import RETRIEVAL_EMBEDDING_KIND
 from ..reasoning_graph.retrieval import build_retrieval_documents_from_graph
 from ..reasoning_graph.retrieval import embed_missing_retrieval_documents
 from ..reasoning_graph.retrieval import retrieve_session_graph as retrieve_indexed_session_graph
-from ..reasoning_graph.session_runtime import StrictTextEmbedder
+from ..infrastructure.llm.text_embedder import StrictTextEmbedder
 from ..versioning import LocalGitBackend, VersionBackend, WorkLedger
 from .answer_trace import build_answer_trace
 from .answer_trace import build_central_answer_trace
@@ -3177,5 +3177,6 @@ def _compact_git(git: dict[str, Any]) -> dict[str, Any]:
 
 def _elapsed_ms(start: float) -> int:
     return int((time.monotonic() - start) * 1000)
+
 
 

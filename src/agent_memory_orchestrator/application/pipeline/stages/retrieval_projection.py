@@ -12,7 +12,7 @@ from ....reasoning_graph.retrieval import RetrievalDocument
 from ....reasoning_graph.retrieval import RetrievalIndexStore
 from ....reasoning_graph.retrieval import build_retrieval_documents_from_graph
 from ....reasoning_graph.retrieval import embed_missing_retrieval_documents
-from ....reasoning_graph.session_runtime import StrictTextEmbedder
+from ....infrastructure.llm.text_embedder import StrictTextEmbedder
 from ....domain.pipeline.constants import RESET_MARKER_KEY
 from ....domain.pipeline.constants import RETRIEVAL_PROJECTION_VERSION
 from ..job_runner import PendingModel
@@ -238,5 +238,6 @@ def run_quality_eval_stage(runner: Any, job: dict[str, Any], artifact_dir: Path,
     if issues:
         raise StageFailed("quality_eval_product_readiness_failed", payload)
     return StageResult(output_path=output, diagnostics=payload)
+
 
 

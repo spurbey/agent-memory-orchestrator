@@ -1,4 +1,4 @@
-"""LLM and model infrastructure adapters."""
+﻿"""LLM and model infrastructure adapters."""
 
 from __future__ import annotations
 
@@ -13,6 +13,7 @@ from .qwen import QwenUnavailable
 from .rerankers import RerankCandidate
 from .rerankers import RerankResult
 from .rerankers import rerank_candidates
+from .text_embedder import StrictTextEmbedder
 
 __all__ = [
     "DeterministicPlanner",
@@ -22,8 +23,10 @@ __all__ = [
     "QwenUnavailable",
     "RerankCandidate",
     "RerankResult",
+    "StrictTextEmbedder",
     "cosine_similarity",
     "embed_text",
     "embed_text_with_model",
     "rerank_candidates",
 ]
+
