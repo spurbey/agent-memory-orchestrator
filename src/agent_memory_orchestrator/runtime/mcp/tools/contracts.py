@@ -37,7 +37,7 @@ MCP_MEMORY_TOOL_CONTRACTS: dict[str, dict[str, Any]] = {
         "returns": ["rows"],
     },
     "amo_graph_search": {
-        "description": "Explicit graph memory search. With repo_id, uses active production repository memory; without repo_id, uses the legacy graph search path.",
+        "description": "Explicit graph memory search. With repo_id, uses active production repository memory; without repo_id, uses global graph search for debug and raw-evidence inspection.",
         "required": ["query"],
         "returns": ["context", "nodes", "plan", "context_for_synthesis", "hits", "version_history"],
     },

@@ -33,12 +33,12 @@ For unusual machines, you can override the interpreter explicitly:
 npx -y agent-memory-orchestrator-cli -- install --pipx-python /opt/homebrew/bin/python3.13 --target codex
 ```
 
-On a fresh device, install initializes the empty V2 production marker automatically. The
-`v2-reset-production` command is only for an existing AMO home with old pre-V2 graph/retrieval
+On a fresh device, install initializes the empty production marker automatically. The
+`reset-production` command is only for an existing AMO home with graph/retrieval
 data that must be backed up and cleaned explicitly.
 
 Install is per user/device, not per repository. AMO hooks capture Codex/Claude
-sessions from any working directory. Closed-session V2 jobs resolve the actual
+sessions from any working directory. Closed-session production jobs resolve the actual
 Git repository, store a durable `repo_id`, and keep central memory, active
 GraphView, retrieval docs, embeddings, and dashboard views scoped by that repo.
 If a user works in another repo later, AMO creates separate repo-scoped memory

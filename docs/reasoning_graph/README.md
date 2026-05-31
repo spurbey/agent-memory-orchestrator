@@ -37,7 +37,7 @@ files can contain resumed or forked transcript history, so production does not
 scan the whole transcript just because a raw record references `transcript_path`.
 When raw evidence contains `turn_id` values, Stage 2 imports only transcript rows
 inside matching `task_started` / `task_complete` windows. Whole-transcript
-scanning remains a legacy/debug mode for old reset fixtures and raw captures
+scanning remains a debug-only mode for old reset fixtures and raw captures
 without turn ids.
 
 ## Source of Truth
@@ -114,7 +114,7 @@ packet evidence before it becomes answer-grade graph memory.
 
 ## Production Reset
 
-Legacy graph and retrieval rows are treated as scrap after the production cutover, but
+Old graph and retrieval rows are treated as scrap after the production cutover, but
 cleanup is never automatic on daemon startup. Operators must run:
 
 ```bash
@@ -146,7 +146,7 @@ successful `retrieval_docs` stage carries forward previously validated
 curated/central docs for the same `repo_id`, adds the current job's curated docs,
 deduplicates by document id, and activates a new projection only after the
 semantic activation gate passes. This prevents the active repo view from
-shrinking to only the latest session while still excluding legacy `repo_id=""`
+shrinking to only the latest session while still excluding unscoped `repo_id=""`
 or full-trace `CodeNode`/`CodeHunk` docs from product retrieval.
 
 ## Core Concepts
