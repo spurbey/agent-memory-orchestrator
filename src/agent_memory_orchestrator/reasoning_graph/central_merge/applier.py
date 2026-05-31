@@ -13,10 +13,27 @@ from ...graph.store import GraphEdge
 from ...graph.store import GraphNode
 from ...graph.store import GraphStore
 from ...graph.store import KuzuGraphStore
+from ...domain.versioning.merge_relations import CONFLICTS_WITH
+from ...domain.versioning.merge_relations import DECISION_REVIEW_RELATIONS
+from ...domain.versioning.merge_relations import DERIVED_FROM_SESSION_NODE
+from ...domain.versioning.merge_relations import DUPLICATE_OF
+from ...domain.versioning.merge_relations import GRAPH_VIEW_AT
+from ...domain.versioning.merge_relations import REFINES
+from ...domain.versioning.merge_relations import RELATED_REVIEW
+from ...domain.versioning.merge_relations import STATUS_CHANGED
+from ...domain.versioning.merge_relations import SUPERSEDES
+from ...domain.versioning.merge_relations import VERSION_OF
 from ..jobs.store import ProductionSessionJobStore
 from ..jobs.store import graph_view_id
 from ...domain.versioning.models import CENTRAL_MERGE_PLAN_VERSION
 from ...domain.versioning.models import utc_now
+from ...domain.versioning.status import STATUS_ACTIVE
+from ...domain.versioning.status import STATUS_APPLIED
+from ...domain.versioning.status import STATUS_CONTESTED
+from ...domain.versioning.status import STATUS_REFINED
+from ...domain.versioning.status import STATUS_REVIEW
+from ...domain.versioning.status import STATUS_SUPERSEDED
+from ...domain.versioning.status import choose_preferred_status
 
 
 EXACT_APPLY_ATOM_KINDS = frozenset({"commit", "file"})
@@ -349,37 +366,37 @@ def _write_decision_status_transitions(
             relation_version_ids.add(source_id)
         if target_id in decision_version_ids:
             relation_version_ids.add(target_id)
-        if kind == "RELATED_REVIEW":
+        if kind == RELATED_REVIEW:
             ambiguous_version_ids.update(item for item in (source_id, target_id) if item in decision_version_ids)
             continue
         if not _relation_targets_central_version(edge):
             ambiguous_version_ids.update(item for item in (source_id, target_id) if item in decision_version_ids)
             continue
-        if kind == "DUPLICATE_OF" and confidence >= 0.82:
+        if kind == DUPLICATE_OF and confidence >= 0.82:
             if _is_decision_version(nodes.get(target_id, {})):
-                _choose_status(desired, target_id, "active", "duplicate_canonical")
+                _choose_status(desired, target_id, STATUS_ACTIVE, "duplicate_canonical")
             continue
-        if kind == "REFINES" and confidence >= 0.76:
+        if kind == REFINES and confidence >= 0.76:
             if source_id in decision_version_ids:
-                _choose_status(desired, source_id, "active", "refines_newer_version")
+                _choose_status(desired, source_id, STATUS_ACTIVE, "refines_newer_version")
             if _is_decision_version(nodes.get(target_id, {})):
-                _choose_status(desired, target_id, "refined", "refined_by_newer_version")
+                _choose_status(desired, target_id, STATUS_REFINED, "refined_by_newer_version")
             continue
-        if kind == "SUPERSEDES" and _safe_supersedes(confidence=confidence, evidence=evidence):
+        if kind == SUPERSEDES and _safe_supersedes(confidence=confidence, evidence=evidence):
             if source_id in decision_version_ids:
-                _choose_status(desired, source_id, "active", "supersedes_prior_version")
+                _choose_status(desired, source_id, STATUS_ACTIVE, "supersedes_prior_version")
             if _is_decision_version(nodes.get(target_id, {})):
-                _choose_status(desired, target_id, "superseded", "superseded_by_newer_version")
+                _choose_status(desired, target_id, STATUS_SUPERSEDED, "superseded_by_newer_version")
             continue
-        if kind == "CONFLICTS_WITH" and _safe_conflict(confidence=confidence, evidence=evidence):
+        if kind == CONFLICTS_WITH and _safe_conflict(confidence=confidence, evidence=evidence):
             if source_id in decision_version_ids:
-                _choose_status(desired, source_id, "contested", "conflicts_with_review")
+                _choose_status(desired, source_id, STATUS_CONTESTED, "conflicts_with_review")
             if _is_decision_version(nodes.get(target_id, {})):
-                _choose_status(desired, target_id, "contested", "conflicts_with_review")
+                _choose_status(desired, target_id, STATUS_CONTESTED, "conflicts_with_review")
 
     for version_id in sorted(decision_version_ids):
         if version_id not in relation_version_ids and version_id not in ambiguous_version_ids:
-            _choose_status(desired, version_id, "active", "new_decision_no_conflict")
+            _choose_status(desired, version_id, STATUS_ACTIVE, "new_decision_no_conflict")
 
     updates: list[dict[str, str]] = []
     edge_ids: list[str] = []
@@ -387,17 +404,17 @@ def _write_decision_status_transitions(
         node = nodes.get(version_id)
         if not node or not _is_decision_version(node):
             continue
-        old_status = str(node.get("status") or (node.get("metadata") or {}).get("status") or "review")
+        old_status = str(node.get("status") or (node.get("metadata") or {}).get("status") or STATUS_REVIEW)
         if old_status == new_status:
             continue
         _upsert_node_status(graph_store, node=node, status=new_status)
-        edge_id = _edge_id("STATUS_CHANGED", version_id, version_id, graph_commit_id)
+        edge_id = _edge_id(STATUS_CHANGED, version_id, version_id, graph_commit_id)
         graph_store.upsert_edge(
             GraphEdge(
                 id=edge_id,
                 source_id=version_id,
                 target_id=version_id,
-                kind="STATUS_CHANGED",
+                kind=STATUS_CHANGED,
                 confidence=1.0,
                 created_at=now,
                 metadata={
@@ -424,10 +441,10 @@ def _is_decision_version(node: dict[str, Any]) -> bool:
 
 
 def _choose_status(desired: dict[str, tuple[str, str]], version_id: str, status: str, reason: str) -> None:
-    priorities = {"contested": 50, "superseded": 40, "refined": 30, "active": 20, "review": 10}
     current = desired.get(version_id)
-    if current is None or priorities.get(status, 0) > priorities.get(current[0], 0):
-        desired[version_id] = (status, reason)
+    preferred = choose_preferred_status(current, status, reason)
+    if preferred != current:
+        desired[version_id] = preferred
 
 
 def _relation_evidence(edge: dict[str, Any]) -> dict[str, Any]:
@@ -543,7 +560,7 @@ def _write_exact_atoms(
                 kind="KnowledgeAtom",
                 label=_label_for_atom(atom),
                 summary=str(atom.get("canonical_key") or ""),
-                status="review" if atom_kind in REVIEW_APPLY_ATOM_KINDS else "active",
+                status=STATUS_REVIEW if atom_kind in REVIEW_APPLY_ATOM_KINDS else STATUS_ACTIVE,
                 scope="central",
                 session_id=str(plan.get("session_id") or ""),
                 source_app="v2-central-merge",
@@ -573,7 +590,7 @@ def _write_exact_atoms(
                 kind="KnowledgeVersion",
                 label=_label_for_version(version),
                 summary=str(version.get("metadata", {}).get("canonical_key") if isinstance(version.get("metadata"), dict) else ""),
-                status=str(version.get("status") or "active"),
+                status=str(version.get("status") or STATUS_ACTIVE),
                 scope="central",
                 session_id=str(version.get("session_id") or plan.get("session_id") or ""),
                 source_app="v2-central-merge",
@@ -583,7 +600,7 @@ def _write_exact_atoms(
                     "atom_id": atom_id,
                     "atom_kind": str(version.get("atom_kind") or ""),
                     "repo_id": str(plan.get("repo_id") or ""),
-                    "status": str(version.get("status") or "active"),
+                    "status": str(version.get("status") or STATUS_ACTIVE),
                     "source_node_ids": version.get("source_node_ids") if isinstance(version.get("source_node_ids"), list) else [],
                     "version_metadata": version.get("metadata") if isinstance(version.get("metadata"), dict) else {},
                     "idempotency_key": _idempotency_key("node", version_id, graph_commit_id),
@@ -591,13 +608,13 @@ def _write_exact_atoms(
             )
         )
         added_nodes.append(version_id)
-        edge_id = _edge_id("VERSION_OF", version_id, atom_id, graph_commit_id)
+        edge_id = _edge_id(VERSION_OF, version_id, atom_id, graph_commit_id)
         graph_store.upsert_edge(
             GraphEdge(
                 id=edge_id,
                 source_id=version_id,
                 target_id=atom_id,
-                kind="VERSION_OF",
+                kind=VERSION_OF,
                 confidence=1.0,
                 created_at=now,
                 metadata={**base, "idempotency_key": _idempotency_key("edge", edge_id, graph_commit_id)},
@@ -608,13 +625,13 @@ def _write_exact_atoms(
             source_id = resolve_source_id(str(source_node_id or ""))
             if not source_id:
                 continue
-            derived_edge_id = _edge_id("DERIVED_FROM_SESSION_NODE", version_id, source_id, graph_commit_id)
+            derived_edge_id = _edge_id(DERIVED_FROM_SESSION_NODE, version_id, source_id, graph_commit_id)
             graph_store.upsert_edge(
                 GraphEdge(
                     id=derived_edge_id,
                     source_id=version_id,
                     target_id=source_id,
-                    kind="DERIVED_FROM_SESSION_NODE",
+                    kind=DERIVED_FROM_SESSION_NODE,
                     confidence=1.0,
                     created_at=now,
                     metadata={**base, "idempotency_key": _idempotency_key("edge", derived_edge_id, graph_commit_id)},
@@ -630,7 +647,7 @@ def _write_exact_atoms(
         source_id = str(relation.get("source_id") or "")
         target_id = str(relation.get("target_id") or "")
         kind = str(relation.get("kind") or "")
-        if kind not in {"DUPLICATE_OF", "REFINES", "SUPERSEDES", "CONFLICTS_WITH", "RELATED_REVIEW"}:
+        if kind not in DECISION_REVIEW_RELATIONS:
             continue
         if source_id == target_id:
             continue
@@ -646,7 +663,7 @@ def _write_exact_atoms(
                 kind=kind,
                 confidence=float(relation.get("confidence") or 0.0),
                 created_at=now,
-                metadata={**base, **metadata, "idempotency_key": _idempotency_key("edge", edge_id, graph_commit_id), "status": str(relation.get("status") or "review")},
+                metadata={**base, **metadata, "idempotency_key": _idempotency_key("edge", edge_id, graph_commit_id), "status": str(relation.get("status") or STATUS_REVIEW)},
             )
         )
         added_edges.append(edge_id)
@@ -669,7 +686,7 @@ def _write_exact_atoms(
             kind="GraphCommit",
             label=graph_commit_id,
             summary=f"Applied central exact atoms for {plan.get('job_id', '')}",
-            status="applied",
+            status=STATUS_APPLIED,
             scope="central",
             session_id=str(plan.get("session_id") or ""),
             source_app="v2-central-merge",
@@ -707,7 +724,7 @@ def _write_graph_view_node(
             kind="GraphView",
             label=f"{branch}/{mode}",
             summary=f"GraphView {branch}/{mode} at {graph_commit_id}",
-            status="active",
+            status=STATUS_ACTIVE,
             scope="central",
             session_id=str(plan.get("session_id") or ""),
             source_app="v2-central-merge",
@@ -721,13 +738,13 @@ def _write_graph_view_node(
             },
         )
     )
-    view_edge_id = _edge_id("GRAPH_VIEW_AT", graph_view_id_value, graph_commit_id, graph_commit_id)
+    view_edge_id = _edge_id(GRAPH_VIEW_AT, graph_view_id_value, graph_commit_id, graph_commit_id)
     graph_store.upsert_edge(
         GraphEdge(
             id=view_edge_id,
             source_id=graph_view_id_value,
             target_id=graph_commit_id,
-            kind="GRAPH_VIEW_AT",
+            kind=GRAPH_VIEW_AT,
             confidence=1.0,
             created_at=now,
             metadata={**base, "idempotency_key": _idempotency_key("edge", view_edge_id, graph_commit_id)},

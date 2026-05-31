@@ -9,6 +9,8 @@ from datetime import datetime
 from datetime import timezone
 from typing import Any
 
+from .graph_commits import graph_commit_id_for_plan
+
 
 CENTRAL_MERGE_PLAN_VERSION = "central-version-merge-dryrun-v1"
 CANONICAL_KEY_VERSION = 1
@@ -138,7 +140,7 @@ class MergePlan:
             input_graph_hash=input_graph_hash,
         )
         graph_commit_preview = {
-            "graph_commit_id": f"v2gcommit:{stable_hash({'plan_id': plan_id, 'input_graph_hash': input_graph_hash})[:32]}",
+            "graph_commit_id": graph_commit_id_for_plan(plan_id=plan_id, input_graph_hash=input_graph_hash),
             "status": "preview",
             "parent_graph_commit_id": parent_graph_commit_id,
             "merge_plan_id": plan_id,
