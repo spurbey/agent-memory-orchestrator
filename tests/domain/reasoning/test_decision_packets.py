@@ -126,7 +126,7 @@ def test_decision_packets_skip_unresolved_or_workless_windows() -> None:
 
 
 def test_real_stage5c_artifacts_can_build_commit_decision_packet() -> None:
-    root = Path(__file__).resolve().parents[1] / ".tmp" / "reasoning-graph-2026-05-11-stage-run"
+    root = Path(__file__).resolve().parents[3] / ".tmp" / "reasoning-graph-2026-05-11-stage-run"
     windows_path = root / "04c_commit_truth_windows" / "output_commit_truth_windows.json"
     chunks_path = root / "05c_commit_window_embedding_ready_chunks" / "output_embedding_ready_chunks.json"
     work_path = root / "07c_commit_work_changes_full_session" / "output_work_changes.json"
@@ -149,4 +149,5 @@ def test_real_stage5c_artifacts_can_build_commit_decision_packet() -> None:
     assert first["work_change"]["kind"] == "WorkChange"
     assert first["allowed_evidence_event_ids"]
     assert all(chunk["embedding_text_excerpt"] for chunk in first["chunks"])
+
 

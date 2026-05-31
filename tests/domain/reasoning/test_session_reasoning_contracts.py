@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import json
 import os
@@ -772,7 +772,7 @@ def test_large_added_python_file_compacts_to_top_level_regions() -> None:
 
 
 def test_real_commit_produces_code_hunks_and_nodes_without_whole_file_blobs() -> None:
-    repo_root = Path(__file__).resolve().parents[1]
+    repo_root = Path(__file__).resolve().parents[3]
     verify = subprocess.run(
         ["git", "rev-parse", "--verify", "c5326f8^{commit}"],
         cwd=repo_root,
@@ -1307,7 +1307,7 @@ def test_failed_test_after_write_creates_failed_validation_without_bump() -> Non
 
 
 def test_real_session_decision_links_to_real_commit_code_node() -> None:
-    repo_root = Path(__file__).resolve().parents[1]
+    repo_root = Path(__file__).resolve().parents[3]
     verify = subprocess.run(
         ["git", "rev-parse", "--verify", "c5326f8^{commit}"],
         cwd=repo_root,
@@ -1349,3 +1349,4 @@ def test_real_session_decision_links_to_real_commit_code_node() -> None:
 
     assert edges
     assert all(edge.kind == "PRODUCED_CHANGE_IN" for edge in edges)
+

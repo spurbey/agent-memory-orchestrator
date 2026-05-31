@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import json
 import sqlite3
@@ -109,7 +109,7 @@ def _graph() -> InMemoryGraphStore:
                 "commit_sha": "abc1234",
                 "node_type": "Decision",
                 "statement": "Use exact lookup, BM25, vector retrieval, RRF fusion, then graph expansion.",
-                "paths": ["src/agent_memory_orchestrator/reasoning_graph/retrieval.py"],
+                "paths": ["src/agent_memory_orchestrator/application/services/retrieval_query.py"],
             },
         )
     )
@@ -123,7 +123,7 @@ def _graph() -> InMemoryGraphStore:
             session_id="s1",
             commit_id="abc1234",
             metadata={
-                "file_path": "src/agent_memory_orchestrator/reasoning_graph/retrieval.py",
+                "file_path": "src/agent_memory_orchestrator/application/services/retrieval_query.py",
                 "symbol": "retrieve_session_graph",
                 "commit_sha": "abc1234",
             },
@@ -133,13 +133,13 @@ def _graph() -> InMemoryGraphStore:
         GraphNode(
             id="symbol:retrieval:retrieve_session_graph",
             kind="Symbol",
-            label="src/agent_memory_orchestrator/reasoning_graph/retrieval.py::retrieve_session_graph",
+            label="src/agent_memory_orchestrator/application/services/retrieval_query.py::retrieve_session_graph",
             summary="Symbol version flow for retrieve_session_graph.",
             status="accepted",
             session_id="s1",
             commit_id="abc1234",
             metadata={
-                "file_path": "src/agent_memory_orchestrator/reasoning_graph/retrieval.py",
+                "file_path": "src/agent_memory_orchestrator/application/services/retrieval_query.py",
                 "symbol": "retrieve_session_graph",
                 "version_count": 1,
             },
@@ -523,13 +523,13 @@ def _central_graph() -> InMemoryGraphStore:
             metadata={
                 "atom_id": "katom:retrieval",
                 "atom_kind": "code_region",
-                "canonical_key": "code_region|repo:amo|src/agent_memory_orchestrator/reasoning_graph/retrieval.py||retrieve_session_graph",
+                "canonical_key": "code_region|repo:amo|src/agent_memory_orchestrator/application/services/retrieval_query.py||retrieve_session_graph",
                 "graph_commit_id": "g2",
                 "merge_plan_id": "plan:g2",
                 "repo_id": "repo:amo",
                 "source_node_ids": ["reason:job1:WP0001:decision:retrieval"],
                 "status": "active",
-                "version_metadata": {"file_path": "src/agent_memory_orchestrator/reasoning_graph/retrieval.py"},
+                "version_metadata": {"file_path": "src/agent_memory_orchestrator/application/services/retrieval_query.py"},
                 "pipeline_version": PIPELINE_VERSION,
                 "graph_schema_version": GRAPH_SCHEMA_VERSION,
             },
@@ -546,7 +546,7 @@ def _central_graph() -> InMemoryGraphStore:
             session_id="s1",
             metadata={
                 "atom_kind": "code_region",
-                "canonical_key": "code_region|repo:amo|src/agent_memory_orchestrator/reasoning_graph/retrieval.py||retrieve_session_graph",
+                "canonical_key": "code_region|repo:amo|src/agent_memory_orchestrator/application/services/retrieval_query.py||retrieve_session_graph",
                 "canonical_key_version": 1,
                 "graph_commit_id": "g2",
                 "repo_id": "repo:amo",
@@ -680,7 +680,7 @@ def test_version_flow_query_prefers_active_central_version_for_locator(tmp_path:
     )
 
     result = retrieve_session_graph(
-        query="show version flow for src/agent_memory_orchestrator/reasoning_graph/retrieval.py::retrieve_session_graph",
+        query="show version flow for src/agent_memory_orchestrator/application/services/retrieval_query.py::retrieve_session_graph",
         index_store=index_store,
         graph_store=graph,
         session_id="s1",
@@ -2045,3 +2045,4 @@ def test_unique_nonempty_dedupes_nested_citation_values() -> None:
         "E0002",
         "E0003",
     ]
+

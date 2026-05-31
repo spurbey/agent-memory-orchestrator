@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import json
 from pathlib import Path
@@ -93,7 +93,7 @@ def test_packet_raw_internal_id_detector_rejects_transcript_and_call_ids() -> No
 
 
 def test_real_stage2b_view_builds_strict_work_packets() -> None:
-    root = Path(__file__).resolve().parents[1]
+    root = Path(__file__).resolve().parents[3]
     view_path = root / ".tmp" / "reasoning-graph-v2-reset-2026-05-14" / "02b_reasoning_evidence_view_tight" / "reasoning_evidence_view.json"
     if not view_path.exists():
         return
@@ -109,3 +109,4 @@ def test_real_stage2b_view_builds_strict_work_packets() -> None:
     assert result.packets[0]["commit"]["short_sha"] == "61b51d9"
     assert result.packets[-1]["commit"]["short_sha"] == "0b8f7bd"
     assert "167bb3a" in {packet["commit"]["short_sha"] for packet in result.packets}
+

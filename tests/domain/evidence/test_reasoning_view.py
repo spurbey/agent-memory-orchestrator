@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import json
 from pathlib import Path
@@ -134,7 +134,7 @@ def test_evidence_view_falls_back_to_full_transcript_without_raw_turn_ids(tmp_pa
 
 
 def test_real_stage2b_evidence_view_matches_reset_artifact(tmp_path: Path) -> None:
-    root = Path(__file__).resolve().parents[1]
+    root = Path(__file__).resolve().parents[3]
     raw_path = root / ".tmp" / "reasoning-graph-v2-reset-2026-05-14" / "01_raw_jsonl_whole_file" / "input_raw_2026-05-11.full.jsonl"
     stage2b_dir = root / ".tmp" / "reasoning-graph-v2-reset-2026-05-14" / "02b_reasoning_evidence_view_tight"
     golden_path = stage2b_dir / "reasoning_evidence_view.json"
@@ -192,3 +192,4 @@ def _tool_call(call_id: str, command: str) -> dict[str, object]:
 
 def _tool_output(call_id: str, output: str) -> dict[str, object]:
     return {"timestamp": "2026-05-26T00:00:03Z", "type": "response_item", "payload": {"type": "function_call_output", "call_id": call_id, "output": output}}
+

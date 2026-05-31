@@ -34,8 +34,8 @@ def test_tool_fact_extracts_git_status_changed_files() -> None:
     event = _event(
         "1",
         "post_tool_use",
-        " M src/agent_memory_orchestrator/reasoning_graph/chunking.py\n"
-        "?? src/agent_memory_orchestrator/reasoning_graph/session_runtime.py\n",
+        " M src/agent_memory_orchestrator/domain/reasoning/chunking.py\n"
+        "?? src/agent_memory_orchestrator/application/services/session_graph_runtime.py\n",
         tool_name="Bash",
         command="git status --short",
     )
@@ -45,8 +45,8 @@ def test_tool_fact_extracts_git_status_changed_files() -> None:
     assert fact is not None
     assert fact.tool_kind == "git_status"
     assert fact.semantic_payload is True
-    assert "src/agent_memory_orchestrator/reasoning_graph/chunking.py" in fact.changed_files
-    assert "src/agent_memory_orchestrator/reasoning_graph/session_runtime.py" in fact.changed_files
+    assert "src/agent_memory_orchestrator/domain/reasoning/chunking.py" in fact.changed_files
+    assert "src/agent_memory_orchestrator/application/services/session_graph_runtime.py" in fact.changed_files
 
 
 def test_timeline_event_preserves_dict_tool_response_text() -> None:
@@ -335,4 +335,5 @@ def test_cleaned_window_uses_first_target_cluster_only() -> None:
     kept_ids = {event.event_id for event in window.window_events}
     assert "1" in kept_ids
     assert "130" not in kept_ids
+
 

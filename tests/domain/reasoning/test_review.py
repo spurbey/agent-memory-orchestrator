@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import json
 from pathlib import Path
@@ -136,8 +136,8 @@ def test_reasoning_review_demotes_generic_plan_overlap_to_review() -> None:
             "short_sha": "abc1234",
             "message": "feat(reasoning-graph): import real session timelines",
             "changed_file_sample": [
-                "src/agent_memory_orchestrator/reasoning_graph/timeline.py",
-                "tests/test_reasoning_graph_models.py",
+                "src/agent_memory_orchestrator/domain/reasoning/timeline.py",
+                "tests/domain/reasoning/test_session_reasoning_contracts.py",
             ],
         },
         "problem_refs": [{"ref": "E0001"}],
@@ -183,7 +183,7 @@ def test_reasoning_review_review_only_is_not_structural_failure() -> None:
         "commit": {
             "short_sha": "abc1234",
             "message": "feat(reasoning-graph): import real session timelines",
-            "changed_file_sample": ["src/agent_memory_orchestrator/reasoning_graph/timeline.py"],
+            "changed_file_sample": ["src/agent_memory_orchestrator/domain/reasoning/timeline.py"],
         },
         "problem_refs": [{"ref": "E0001"}],
         "rationale_refs": [{"ref": "E0002"}],
@@ -360,7 +360,7 @@ def test_reasoning_extraction_demotes_validation_only_fix() -> None:
 
 
 def test_real_stage4_final_merge_revalidates_to_expected_counts() -> None:
-    root = Path(__file__).resolve().parents[1]
+    root = Path(__file__).resolve().parents[3]
     stage_root = root / ".tmp" / "reasoning-graph-v2-reset-2026-05-14"
     packets_path = stage_root / "03b_reasoning_work_packets_strict_validation" / "reasoning_work_packets.json"
     merged_path = stage_root / "04_reasoning_node_extraction_sample" / "stage4_final_merged_reasoning_extraction.json"
@@ -389,3 +389,5 @@ def test_real_stage4_final_merge_revalidates_to_expected_counts() -> None:
         "Problem": 34,
         "Cause": 8,
     }
+
+
