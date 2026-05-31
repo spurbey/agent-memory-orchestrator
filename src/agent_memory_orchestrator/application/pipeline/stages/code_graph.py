@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from ....reasoning_graph.code_analysis import extract_code_nodes_from_commit
+from ....domain.code import extract_code_nodes_from_commit
 from ..job_runner import StageResult
 from ..job_runner import _code_node_record
 from ..job_runner import _hunk_record
