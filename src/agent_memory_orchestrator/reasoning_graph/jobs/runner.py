@@ -521,7 +521,7 @@ class StageFailed(RuntimeError):
 V2SessionJobRunner = ProductionSessionJobRunner
 
 
-def require_complete_v2_reset_marker(marker: dict[str, Any] | None) -> dict[str, Any]:
+def require_complete_production_marker(marker: dict[str, Any] | None) -> dict[str, Any]:
     if marker is None:
         raise RuntimeError("production_v2_reset_marker_missing")
     cleaned = marker.get("cleaned") if isinstance(marker.get("cleaned"), dict) else {}
@@ -537,6 +537,9 @@ def require_complete_v2_reset_marker(marker: dict[str, Any] | None) -> dict[str,
     if not cleaned_ok and not adopted_ok:
         raise RuntimeError("production_v2_reset_marker_incomplete")
     return marker
+
+
+require_complete_v2_reset_marker = require_complete_production_marker
 
 
 def file_sha256(path: Path) -> str:

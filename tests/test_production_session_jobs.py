@@ -18,7 +18,7 @@ from agent_memory_orchestrator.reasoning_graph.jobs.constants import PIPELINE_VE
 from agent_memory_orchestrator.reasoning_graph.jobs.reset import adopt_existing_production_storage
 from agent_memory_orchestrator.reasoning_graph.jobs.reset import initialize_fresh_production_storage
 from agent_memory_orchestrator.reasoning_graph.jobs.reset import reset_production_storage
-from agent_memory_orchestrator.reasoning_graph.jobs.runner import require_complete_v2_reset_marker
+from agent_memory_orchestrator.reasoning_graph.jobs.runner import require_complete_production_marker
 from agent_memory_orchestrator.reasoning_graph.jobs.runner import ProductionSessionJobRunner
 from agent_memory_orchestrator.reasoning_graph.central_merge import applier as applier_module
 from agent_memory_orchestrator.reasoning_graph.central_merge.applier import apply_merge_plan
@@ -1274,7 +1274,7 @@ def test_production_fresh_init_marks_empty_new_install_without_reset(tmp_path: P
     assert marker["graph_schema_version"] == GRAPH_SCHEMA_VERSION
     assert marker["cleaned"] == {"graph": True, "retrieval": True, "faiss": True}
     assert marker["validated"] == {"graph_empty": True, "retrieval_empty": True}
-    assert require_complete_v2_reset_marker(marker) == marker
+    assert require_complete_production_marker(marker) == marker
 
     again = initialize_fresh_production_storage(settings)
     assert again["created"] is False
@@ -1382,7 +1382,7 @@ def test_production_adopt_production_backs_up_and_preserves_existing_v2_stores(t
     assert marker["adopted_existing_v2"] is True
     assert marker["validated"] == {"graph": True, "retrieval": True}
     assert marker["cleaned"] == {"graph": False, "retrieval": False, "faiss": False}
-    assert require_complete_v2_reset_marker(marker) == marker
+    assert require_complete_production_marker(marker) == marker
 
 
 def test_production_runner_rejects_missing_incomplete_or_wrong_reset_marker() -> None:
@@ -1399,16 +1399,16 @@ def test_production_runner_rejects_missing_incomplete_or_wrong_reset_marker() ->
         "cleaned": {"graph": False, "retrieval": False, "faiss": False},
     }
 
-    assert require_complete_v2_reset_marker(complete_marker) == complete_marker
-    assert require_complete_v2_reset_marker(adopted_marker) == adopted_marker
+    assert require_complete_production_marker(complete_marker) == complete_marker
+    assert require_complete_production_marker(adopted_marker) == adopted_marker
     with pytest.raises(RuntimeError, match="missing"):
-        require_complete_v2_reset_marker(None)
+        require_complete_production_marker(None)
     with pytest.raises(RuntimeError, match="version_mismatch"):
-        require_complete_v2_reset_marker({**complete_marker, "pipeline_version": "old"})
+        require_complete_production_marker({**complete_marker, "pipeline_version": "old"})
     with pytest.raises(RuntimeError, match="incomplete"):
-        require_complete_v2_reset_marker({**complete_marker, "cleaned": {"graph": True, "retrieval": False}})
+        require_complete_production_marker({**complete_marker, "cleaned": {"graph": True, "retrieval": False}})
     with pytest.raises(RuntimeError, match="incomplete"):
-        require_complete_v2_reset_marker({**adopted_marker, "validated": {"graph": True, "retrieval": False}})
+        require_complete_production_marker({**adopted_marker, "validated": {"graph": True, "retrieval": False}})
 
 
 def test_stage4_prompt_uses_reset_contract_module() -> None:

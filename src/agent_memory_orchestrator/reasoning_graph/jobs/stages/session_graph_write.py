@@ -17,11 +17,11 @@ from ..runner import _should_write_artifact_kuzu
 from ..runner import _stage_output
 from ..runner import _versioned_items
 from ..runner import _write_curated_session_graph_to_central
-from ..runner import require_complete_v2_reset_marker
+from ..runner import require_complete_production_marker
 
 
 def run_session_graph_write_stage(runner: Any, job: dict[str, Any], artifact_dir: Path, stage_dir: Path) -> StageResult:
-    require_complete_v2_reset_marker(runner.job_store.marker(RESET_MARKER_KEY))
+    require_complete_production_marker(runner.job_store.marker(RESET_MARKER_KEY))
     packets = _versioned_items(_read_json(_stage_output(artifact_dir, "work_packets")), job)
     reasoning_nodes = _versioned_items(_read_json(_stage_output(artifact_dir, "reasoning_review")), job)
     hunk_nodes = _versioned_items(_read_json(_stage_output(artifact_dir, "git_hunks")), job)
