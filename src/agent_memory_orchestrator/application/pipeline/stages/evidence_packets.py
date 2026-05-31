@@ -9,7 +9,7 @@ from ....reasoning_graph.evidence_view import build_reasoning_evidence_view
 from ....reasoning_graph.evidence_view import git_commit_truth
 from ....reasoning_graph.evidence_view import write_reasoning_evidence_view_artifacts
 from ....reasoning_graph.repo_resolution import resolve_session_repo_root
-from ....reasoning_graph.work_packets import build_reasoning_work_packets_from_view
+from ....domain.reasoning import build_reasoning_work_packets_from_view
 from ..job_runner import StageFailed
 from ..job_runner import StageResult
 from ..job_runner import _first_transcript_path
@@ -146,4 +146,3 @@ def repair_unresolved_commit_truth(
         job["repo_path"] = str(repo_root)
         job["repo_id"] = repo_identity.repo_id
     return repaired, resolution_payload
-
