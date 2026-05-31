@@ -84,6 +84,7 @@ def test_stage1_production_code_does_not_depend_on_legacy_reasoning_graph_facade
         "agent_memory_orchestrator.reasoning_graph.decision_packets",
         "agent_memory_orchestrator.reasoning_graph.embedding_store",
         "agent_memory_orchestrator.reasoning_graph.retrieval",
+        "agent_memory_orchestrator.reasoning_graph.reasoning_extraction",
         "agent_memory_orchestrator.reasoning_graph.session_runtime",
         "agent_memory_orchestrator.reasoning_graph.stage4_contract",
         "agent_memory_orchestrator.reasoning_graph.work_packets",
