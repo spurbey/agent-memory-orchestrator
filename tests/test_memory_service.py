@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from agent_memory_orchestrator.runtime.cli.main import _rebuild_clean_db
-from agent_memory_orchestrator.config import Settings
+from agent_memory_orchestrator.core.config import Settings
 from agent_memory_orchestrator.memory import MemoryService
 from agent_memory_orchestrator.retrieval import build_context_pack_payload
 
@@ -1214,13 +1214,3 @@ def test_rebuild_clean_db_refuses_overwrite_and_rebuilds_from_codex_rollout(tmp_
         svc.close()
 
 
-def test_legacy_memory_service_module_keeps_public_exports() -> None:
-    from agent_memory_orchestrator import memory_service as legacy_memory_service
-
-    assert legacy_memory_service.MemoryService is MemoryService
-
-
-def test_context_pack_compat_module_keeps_public_exports() -> None:
-    from agent_memory_orchestrator import context_pack as compat_context_pack
-
-    assert compat_context_pack.build_context_pack_payload is build_context_pack_payload

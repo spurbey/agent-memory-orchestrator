@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from agent_memory_orchestrator.config import Settings
+from agent_memory_orchestrator.core.config import Settings
 from agent_memory_orchestrator.evidence.drain import EvidenceDrain
 from agent_memory_orchestrator.evidence.drain import _read_jsonl_from
 from agent_memory_orchestrator.graph.store import InMemoryGraphStore

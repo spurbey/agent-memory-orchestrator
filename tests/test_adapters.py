@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 
 from agent_memory_orchestrator.integrations.adapters import infer_codex_session, normalize_adapter_event
-from agent_memory_orchestrator.config import Settings
+from agent_memory_orchestrator.core.config import Settings
 from agent_memory_orchestrator.memory import MemoryService
 
 

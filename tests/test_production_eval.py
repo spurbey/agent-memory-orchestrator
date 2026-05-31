@@ -5,7 +5,7 @@ from dataclasses import replace
 from pathlib import Path
 from types import MethodType
 
-from agent_memory_orchestrator.config import Settings
+from agent_memory_orchestrator.core.config import Settings
 from agent_memory_orchestrator.core.db import connect
 from agent_memory_orchestrator.reasoning_graph.central_merge.production_eval import _cases
 from agent_memory_orchestrator.reasoning_graph.central_merge.production_eval import _faiss_state

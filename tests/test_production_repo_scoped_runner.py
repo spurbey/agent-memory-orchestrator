@@ -4,7 +4,7 @@ import json
 import subprocess
 from pathlib import Path
 
-from agent_memory_orchestrator.config import Settings
+from agent_memory_orchestrator.core.config import Settings
 from agent_memory_orchestrator.reasoning_graph.evidence_view import build_reasoning_evidence_view
 from agent_memory_orchestrator.reasoning_graph.evidence_view import write_reasoning_evidence_view_artifacts
 from agent_memory_orchestrator.reasoning_graph.jobs import ProductionSessionJobStore

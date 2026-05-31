@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from agent_memory_orchestrator.config import Settings
+from agent_memory_orchestrator.core.config import Settings
 from agent_memory_orchestrator.runtime.daemon import auto_drain as auto_drain_module
 from agent_memory_orchestrator.runtime.daemon import server as daemon_module
 from agent_memory_orchestrator.core.db import connect
