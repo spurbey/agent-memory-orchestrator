@@ -160,7 +160,7 @@ def test_kuzu_store_upsert_supports_compact_production_schema(tmp_path: Path) ->
 
 
 def test_real_stage5_artifacts_build_expected_compact_graph_manifest() -> None:
-    root = Path(__file__).resolve().parents[1]
+    root = Path(__file__).resolve().parents[3]
     stage_root = root / ".tmp" / "reasoning-graph-production-2026-05-14"
     required = {
         "packets": stage_root / "03b_reasoning_work_packets_strict_validation" / "reasoning_work_packets.json",
@@ -202,4 +202,5 @@ def test_real_stage5_artifacts_build_expected_compact_graph_manifest() -> None:
         "Symbol": 719,
         "CodeVersion": 1052,
     }
+
 
