@@ -1,5 +1,8 @@
 """Retrieval domain models and algorithms."""
 
+from .answer_trace import build_answer_trace
+from .answer_trace import build_central_answer_trace
+from .answer_trace import format_answer_trace
 from .classification import classify_query
 from .classification import query_has_code_locator
 from .fusion import candidate_raw_scores
@@ -36,11 +39,14 @@ __all__ = [
     "RetrievalResult",
     "SESSION_RETRIEVAL_NODE_KINDS",
     "TextEmbeddingProvider",
+    "build_answer_trace",
+    "build_central_answer_trace",
     "build_retrieval_documents_from_graph",
     "candidate_raw_scores",
     "classify_query",
     "exact_tokens",
     "expanded_query_terms",
+    "format_answer_trace",
     "fts_query",
     "normalize",
     "query_has_code_locator",

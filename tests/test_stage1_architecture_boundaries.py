@@ -41,3 +41,17 @@ def test_stage1_application_and_infrastructure_boundaries_are_importable() -> No
     assert RetrievalIndexStore.__name__ == "RetrievalIndexStore"
     assert KuzuGraphStore.__name__ == "KuzuGraphStore"
     assert GraphEmbeddingStore.__name__ == "GraphEmbeddingStore"
+
+
+def test_stage1_retrieval_boundary_exports_planned_module_names() -> None:
+    from agent_memory_orchestrator.domain.retrieval import build_answer_trace
+    from agent_memory_orchestrator.domain.retrieval import build_central_answer_trace
+    from agent_memory_orchestrator.domain.retrieval import classify_query
+    from agent_memory_orchestrator.domain.retrieval import format_answer_trace
+    from agent_memory_orchestrator.domain.retrieval.intent import query_has_code_locator
+
+    assert classify_query("why did graph_service.py change?") == "code_why"
+    assert query_has_code_locator("graph_service.py") is True
+    assert build_answer_trace.__name__ == "build_answer_trace"
+    assert build_central_answer_trace.__name__ == "build_central_answer_trace"
+    assert format_answer_trace.__name__ == "format_answer_trace"
