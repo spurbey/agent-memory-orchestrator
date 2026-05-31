@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from ..ports.central_merge_store import CentralMergeStorePort
 from ...core.config import Settings
 from ...domain.versioning.identity import atoms_by_canonical_key
 from ...domain.versioning.repo_identity import resolve_repo_identity
@@ -13,7 +14,6 @@ from ...graph.store import GraphStore
 from ...reasoning_graph.central_merge.applier import apply_merge_plan
 from ...reasoning_graph.central_merge.applier import repo_central_graph_path
 from ...reasoning_graph.central_merge.planner import build_dry_run_merge_plan
-from ...reasoning_graph.jobs import ProductionSessionJobStore
 
 GraphStoreFactory = Callable[[Path], GraphStore]
 
@@ -38,7 +38,7 @@ __all__ = [
 class CentralMergeService:
     """Application boundary for central graph planning and apply operations."""
 
-    def __init__(self, settings: Settings, *, store: ProductionSessionJobStore | None = None) -> None:
+    def __init__(self, settings: Settings, *, store: CentralMergeStorePort | None = None) -> None:
         self.settings = settings
         self.store = store
 

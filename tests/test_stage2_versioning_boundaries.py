@@ -3,6 +3,9 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 
+from agent_memory_orchestrator.application.ports import CentralMergeStorePort
+from agent_memory_orchestrator.infrastructure.sqlite import CentralMergeStore
+from agent_memory_orchestrator.infrastructure.sqlite import ProductionSessionJobStore
 from agent_memory_orchestrator.infrastructure.kuzu import repo_central_graph_path
 from agent_memory_orchestrator.reasoning_graph.central_merge.applier import repo_central_graph_path as legacy_repo_central_graph_path
 from agent_memory_orchestrator.domain.versioning import CONFLICTS_WITH
@@ -73,6 +76,12 @@ def test_stage2_central_graph_path_lives_at_infrastructure_boundary() -> None:
 
     assert path == Path("C:/amo-home/.graph/central/repo_stage2_main/central.kuzu")
     assert legacy_repo_central_graph_path(settings, "repo:stage2/main") == path
+
+
+def test_stage2_central_merge_store_port_uses_sqlite_adapter_alias() -> None:
+    assert CentralMergeStore.__name__ == "ProductionSessionJobStore"
+    assert CentralMergeStore is ProductionSessionJobStore
+    assert CentralMergeStorePort.__name__ == "CentralMergeStorePort"
 
 
 class _GraphViewStore:
