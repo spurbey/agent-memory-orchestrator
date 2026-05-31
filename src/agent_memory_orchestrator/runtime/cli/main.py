@@ -48,14 +48,14 @@ from ...reasoning_graph.central_merge.production_eval import DEFAULT_TARGET_JOB_
 from ...reasoning_graph.central_merge.production_eval import DEFAULT_TARGET_REPO_ID
 from ..daemon.client import DaemonClient, DaemonUnavailable
 from .commands.debug import handle_debug_command as _handle_debug_command
-from .commands.debug import rebuild_clean_db as _rebuild_clean_db
 from .commands.connectors import handle_connector_command as _handle_connector_command
 from .commands.install import add_model_selection_args as _add_model_selection_args
-from .commands.install import codex_hooks_snippet as _codex_hooks_snippet
 from .commands.install import confirm as _confirm
 from .commands.install import format_install_plan as _format_install_plan
 from .commands.install import format_install_result as _format_install_result
 from .commands.install import summarize_install_plan as _summarize_install_plan
+from .commands.memory import handle_memory_command as _handle_memory_command
+from .commands.memory import rebuild_clean_db
 from .commands.models import handle_models_command as _handle_models_command
 from .commands.orchestration import handle_orchestration_command as _handle_orchestration_command
 from .commands.pipeline import handle_pipeline_command as _handle_pipeline_command
@@ -71,6 +71,8 @@ from .commands.peer import with_relay_next_steps as _with_relay_next_steps
 from .commands.skill_checkpoint import DEFAULT_LOCAL_NUM_CTX
 from .commands.skill_checkpoint import DEFAULT_NUM_PREDICT
 from .commands.skill_checkpoint import handle_skill_checkpoint_command as _handle_skill_checkpoint_command
+
+_rebuild_clean_db = rebuild_clean_db
 
 
 def _print(payload: object) -> None:
@@ -1163,92 +1165,9 @@ def main(argv: list[str] | None = None) -> int:
                 _print(svc.summarize(args.room_id))
                 return 0
 
-        if args.command in {
-            "ingest-transcript",
-            "ingest-hook",
-            "import-codex-sessions",
-            "rebuild-clean-db",
-            "search",
-            "context-pack",
-            "timeline",
-            "export",
-            "import",
-            "session-summary",
-            "metrics",
-            "rebuild-indexes",
-            "print-codex-hooks",
-        }:
-            if args.command == "rebuild-clean-db":
-                settings = Settings.load()
-                result = _rebuild_clean_db(settings, args.out, args.codex_root, args.limit, args.force)
-                _print({"ok": True, "result": result})
-                return 0
-
-            settings = Settings.load()
-            svc = MemoryService(settings)
-            try:
-                svc.init_db()
-                if args.command == "ingest-transcript":
-                    result = svc.ingest_transcript(
-                        agent=args.agent,
-                        file_path=args.file,
-                        session_id=args.session_id,
-                        session_title=args.session_title,
-                    )
-                    _print({"ok": True, **result})
-                elif args.command == "ingest-hook":
-                    payload = json.loads(args.file.read_text(encoding="utf-8"))
-                    result = svc.ingest_hook_payload(payload, default_agent=args.agent)
-                    _print({"ok": True, **result})
-                elif args.command == "import-codex-sessions":
-                    result = svc.import_codex_sessions(
-                        args.root,
-                        limit=args.limit,
-                        defer_vectors=args.defer_vectors,
-                        skip_existing=not args.include_existing,
-                    )
-                    _print({"ok": True, "result": result})
-                elif args.command == "print-codex-hooks":
-                    _print({"ok": True, "hooks": _codex_hooks_snippet()})
-                elif args.command == "search":
-                    results = svc.search_memories(
-                        args.query,
-                        session_id=args.session_id,
-                        limit=args.limit,
-                        include_historical=args.include_historical,
-                    )
-                    _print({"ok": True, "count": len(results), "results": results})
-                elif args.command == "context-pack":
-                    pack = svc.build_context_pack(
-                        args.query,
-                        session_id=args.session_id,
-                        budget_tokens=args.budget,
-                        limit=args.limit,
-                        include_historical=args.include_historical,
-                    )
-                    if args.format == "text":
-                        print(pack["text"])
-                    else:
-                        _print({"ok": True, "result": pack})
-                elif args.command == "timeline":
-                    events = svc.timeline(args.session_id, limit=args.limit)
-                    _print({"ok": True, "count": len(events), "events": events})
-                elif args.command == "export":
-                    rows = svc.export_snapshot(args.out, session_id=args.session_id)
-                    _print({"ok": True, "rows": rows, "out": str(args.out.resolve())})
-                elif args.command == "import":
-                    rows = svc.import_snapshot(args.file)
-                    _print({"ok": True, "rows": rows, "source": str(args.file.resolve())})
-                elif args.command == "session-summary":
-                    result = svc.generate_session_summary(args.session_id)
-                    _print({"ok": True, "result": result})
-                elif args.command == "metrics":
-                    _print({"ok": True, "result": svc.inspect_metrics()})
-                elif args.command == "rebuild-indexes":
-                    _print({"ok": True, "result": svc.rebuild_indexes(force_vectors=args.force_vectors)})
-            finally:
-                svc.close()
-            return 0
+        memory_status = _handle_memory_command(args, emit=_print, emit_text=print)
+        if memory_status is not None:
+            return memory_status
 
         if args.command == "graph-build-session":
             settings = Settings.load()
