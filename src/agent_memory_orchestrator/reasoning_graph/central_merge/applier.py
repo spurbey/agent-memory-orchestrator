@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import re
 import uuid
 from collections.abc import Callable
 from pathlib import Path
@@ -13,6 +12,7 @@ from ...graph.store import GraphEdge
 from ...graph.store import GraphNode
 from ...graph.store import GraphStore
 from ...graph.store import KuzuGraphStore
+from ...infrastructure.kuzu.central_graph import repo_central_graph_path as _repo_central_graph_path
 from ...domain.versioning.merge_relations import CONFLICTS_WITH
 from ...domain.versioning.merge_relations import DECISION_REVIEW_RELATIONS
 from ...domain.versioning.merge_relations import DERIVED_FROM_SESSION_NODE
@@ -223,15 +223,9 @@ def apply_merge_plan(
 
 
 def repo_central_graph_path(settings: Settings, repo_id: str) -> Path:
-    """Return the repo-scoped canonical graph path.
+    """Compatibility wrapper for the infrastructure Kuzu central graph path."""
 
-    Session/debug graphs can become large trace stores. Central merge writes
-    durable canonical atoms to a repo-scoped graph so legacy trace bloat cannot
-    prevent applying the active GraphView.
-    """
-
-    safe = re.sub(r"[^A-Za-z0-9_.-]+", "_", str(repo_id or "unknown")).strip("._-") or "unknown"
-    return settings.home / ".graph" / "central" / safe / "central.kuzu"
+    return _repo_central_graph_path(settings, repo_id)
 
 
 def _write_merge_result_artifact(*, store: ProductionSessionJobStore, plan: dict[str, Any], result: dict[str, Any]) -> str:

@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+from pathlib import Path
+from types import SimpleNamespace
+
+from agent_memory_orchestrator.infrastructure.kuzu import repo_central_graph_path
+from agent_memory_orchestrator.reasoning_graph.central_merge.applier import repo_central_graph_path as legacy_repo_central_graph_path
 from agent_memory_orchestrator.domain.versioning import CONFLICTS_WITH
 from agent_memory_orchestrator.domain.versioning import DECISION_REVIEW_RELATIONS
 from agent_memory_orchestrator.domain.versioning import DUPLICATE_OF
@@ -59,6 +64,15 @@ def test_stage2_graph_view_boundary_keeps_store_contract() -> None:
     assert ref.branch == "main"
     assert ref.mode == "active"
     assert ref.graph_commit_id == "gcommit:stage2"
+
+
+def test_stage2_central_graph_path_lives_at_infrastructure_boundary() -> None:
+    settings = SimpleNamespace(home=Path("C:/amo-home"))
+
+    path = repo_central_graph_path(settings, "repo:stage2/main")
+
+    assert path == Path("C:/amo-home/.graph/central/repo_stage2_main/central.kuzu")
+    assert legacy_repo_central_graph_path(settings, "repo:stage2/main") == path
 
 
 class _GraphViewStore:
