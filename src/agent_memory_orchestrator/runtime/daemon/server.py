@@ -8,14 +8,10 @@ from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 from ...core.config import Settings
-from ...graph.service import GraphRagService
 from ...graph.store import GraphBackendUnavailable
-from ...integrations.connectors.slack import SlackConnectorService
-from ...memory import MemoryService
 from ...llm.qwen import QwenUnavailable
 from . import auto_drain as _auto_drain
 from . import dashboard as _dashboard
-from .coordination import GRAPH_WRITE_LOCK as _GRAPH_WRITE_LOCK
 from .coordination import bounded_int as _bounded_int
 from .logging import daemon_log as _daemon_log
 from .owner_lock import DaemonAlreadyRunning
@@ -25,6 +21,10 @@ from .routes.jobs import handle_jobs_get as _handle_jobs_get
 from .routes.health import handle_health_get as _handle_health_get
 from .routes.graph import handle_graph_get as _handle_graph_get
 from .routes.graph import handle_graph_post as _handle_graph_post
+from .routes.connectors import handle_connectors_get as _handle_connectors_get
+from .routes.hooks import handle_hooks_post as _handle_hooks_post
+from .routes.memory import handle_memory_get as _handle_memory_get
+from .routes.memory import handle_memory_post as _handle_memory_post
 from .routes.retrieval import handle_graph_retrieval_post as _handle_graph_retrieval_post
 from .routes.web import graph_workbench_html as _graph_workbench_html
 from .routes.web import load_web_asset
@@ -137,92 +137,14 @@ class AmoHandler(BaseHTTPRequestHandler):
             limit = _bounded_int(raw_limit, default=200, minimum=1, maximum=1000)
             self._write_json(200, _list_repositories_fast(self.settings, limit=limit))
             return
-        if path == "/api/connectors/slack/status":
-            try:
-                svc = SlackConnectorService(self.settings)
-                self._write_json(
-                    200,
-                    {
-                        "ok": True,
-                        "slack": svc.status(),
-                        "run_command": "amo-cli slack run --reply-mode answer",
-                        "behavior": "Answers only when the AMO bot is tagged in a channel or thread.",
-                    },
-                )
-            except Exception as exc:
-                self._write_json(500, {"ok": False, "error": str(exc)})
+        if _handle_connectors_get(path=path, settings=self.settings, write_json=self._write_json):
             return
         if _handle_jobs_get(path=path, query=query, settings=self.settings, write_json=self._write_json):
             return
         if _handle_graph_get(path=path, query=query, settings=self.settings, write_json=self._write_json):
             return
-        if path.startswith("/api/"):
-            svc = MemoryService(self.settings)
-            try:
-                svc.init_db()
-                raw_limit = (query.get("limit") or ["25"])[0]
-                limit = _bounded_int(raw_limit, default=25, minimum=1, maximum=100)
-                session_id = (query.get("session_id") or [""])[0] or None
-                if path == "/api/dashboard":
-                    self._write_json(200, {"ok": True, "data": svc.dashboard_snapshot(limit=limit)})
-                    return
-                if path == "/api/graph":
-                    include_historical = (query.get("include_historical") or ["false"])[0].lower() == "true"
-                    graph_query = (query.get("query") or query.get("q") or [""])[0] or None
-                    min_confidence_raw = (query.get("min_confidence") or [""])[0]
-                    min_confidence = float(min_confidence_raw) if min_confidence_raw else None
-                    graph_limit = _bounded_int(raw_limit, default=100, minimum=10, maximum=500)
-                    self._write_json(
-                        200,
-                        {
-                            "ok": True,
-                            "graph": svc.graph_snapshot(
-                                query=graph_query,
-                                session_id=session_id,
-                                limit=graph_limit,
-                                include_historical=include_historical,
-                                relation=(query.get("relation") or [""])[0] or None,
-                                node_type=(query.get("node_type") or [""])[0] or None,
-                                memory_type=(query.get("memory_type") or [""])[0] or None,
-                                min_confidence=min_confidence,
-                            ),
-                        },
-                    )
-                    return
-                if path == "/api/sessions":
-                    self._write_json(200, {"ok": True, "sessions": svc.list_sessions(limit=limit)})
-                    return
-                if path == "/api/events":
-                    self._write_json(200, {"ok": True, "events": svc.list_events(session_id=session_id, limit=limit)})
-                    return
-                if path == "/api/memories":
-                    include_historical = (query.get("include_historical") or ["true"])[0].lower() != "false"
-                    self._write_json(
-                        200,
-                        {
-                            "ok": True,
-                            "memories": svc.list_memory_units(
-                                session_id=session_id,
-                                limit=limit,
-                                include_historical=include_historical,
-                            ),
-                        },
-                    )
-                    return
-                if path == "/api/retrieval-runs":
-                    self._write_json(200, {"ok": True, "retrieval_runs": svc.list_retrieval_runs(limit=limit)})
-                    return
-                if path.startswith("/api/retrieval-runs/"):
-                    run_id = path.rsplit("/", 1)[-1]
-                    self._write_json(200, {"ok": True, "detail": svc.retrieval_run_detail(run_id)})
-                    return
-            except _CLIENT_ABORT_ERRORS:
-                return
-            except Exception as exc:
-                self._write_json(500, {"ok": False, "error": str(exc)})
-                return
-            finally:
-                svc.close()
+        if _handle_memory_get(path=path, query=query, settings=self.settings, write_json=self._write_json):
+            return
         self._write_json(404, {"error": "not found"})
 
     def do_POST(self) -> None:  # noqa: N802
@@ -242,14 +164,12 @@ class AmoHandler(BaseHTTPRequestHandler):
                 write_json=self._write_json,
             ):
                 return
-            if self.path == "/hooks/ingest":
-                with _GRAPH_WRITE_LOCK:
-                    graph = GraphRagService(self.settings)
-                    try:
-                        result = graph.capture_hook(payload, default_agent=str(payload.get("agent") or "codex"))
-                        self._write_json(200, {"ok": True, **result})
-                    finally:
-                        graph.close()
+            if _handle_hooks_post(
+                path=self.path,
+                payload=payload,
+                settings=self.settings,
+                write_json=self._write_json,
+            ):
                 return
             if _handle_graph_post(
                 path=self.path,
@@ -265,20 +185,13 @@ class AmoHandler(BaseHTTPRequestHandler):
                 write_json=self._write_json,
             ):
                 return
-            svc = MemoryService(self.settings)
-            try:
-                svc.init_db()
-                if self.path == "/memory/search":
-                    limit = _bounded_int(str(payload.get("limit") or ""), default=10, minimum=1, maximum=50)
-                    result = svc.search_memories(
-                        query=str(payload.get("query") or ""),
-                        session_id=payload.get("session_id") or None,
-                        limit=limit,
-                    )
-                    self._write_json(200, {"ok": True, "results": result})
-                    return
-            finally:
-                svc.close()
+            if _handle_memory_post(
+                path=self.path,
+                payload=payload,
+                settings=self.settings,
+                write_json=self._write_json,
+            ):
+                return
             self._write_json(404, {"error": "not found"})
         except _CLIENT_ABORT_ERRORS:
             return
