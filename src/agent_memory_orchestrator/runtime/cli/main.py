@@ -39,7 +39,7 @@ from ...peer.netd_service import service_status as peer_netd_service_status
 from ...peer.netd_service import uninstall_service as uninstall_peer_netd_service
 from ...peer.server import main as peer_server_main
 from ...peer.store import PeerStore
-from ...llm.models import download_models, list_model_presets, model_status, preflight_models
+from ...llm.models import download_models
 from ...llm.qwen import QwenUnavailable
 from ...reasoning_graph.session_runtime import DEFAULT_CODE_EMBEDDING_MODEL
 from ...reasoning_graph.session_runtime import SessionGraphBuildOptions
@@ -67,6 +67,7 @@ from .commands.install import confirm as _confirm
 from .commands.install import format_install_plan as _format_install_plan
 from .commands.install import format_install_result as _format_install_result
 from .commands.install import summarize_install_plan as _summarize_install_plan
+from .commands.models import handle_models_command as _handle_models_command
 from .commands.pipeline import handle_pipeline_command as _handle_pipeline_command
 from .commands.peer import add_peer_netd_start_args as _add_peer_netd_start_args
 from .commands.peer import add_peer_netd_watch_service_args as _add_peer_netd_watch_service_args
@@ -803,45 +804,9 @@ def main(argv: list[str] | None = None) -> int:
         if pipeline_status is not None:
             return pipeline_status
 
-        if args.command == "models":
-            if args.models_command == "list":
-                _print({"ok": True, "presets": list_model_presets()})
-            elif args.models_command == "status":
-                _print(
-                    {
-                        "ok": True,
-                        "result": model_status(
-                            preset=args.preset,
-                            embedding_model=args.embedding_model,
-                            reranker_model=args.reranker_model,
-                            qwen_model=args.qwen_model,
-                            load_check=args.load_check,
-                        ),
-                    }
-                )
-            elif args.models_command == "download":
-                _print(
-                    {
-                        "ok": True,
-                        "result": download_models(
-                            preset=args.preset,
-                            embedding_model=args.embedding_model,
-                            reranker_model=args.reranker_model,
-                            qwen_model=args.qwen_model,
-                            cache_dir=args.cache_dir,
-                        ),
-                    }
-                )
-            elif args.models_command == "preflight":
-                result = preflight_models(
-                    preset=args.preset,
-                    embedding_model=args.embedding_model,
-                    reranker_model=args.reranker_model,
-                    qwen_model=args.qwen_model,
-                )
-                _print({"ok": result["ok"], "result": result})
-                return 0 if result["ok"] else 1
-            return 0
+        models_status = _handle_models_command(args, emit=_print)
+        if models_status is not None:
+            return models_status
 
         if args.command == "slack":
             if args.slack_command == "manifest":
