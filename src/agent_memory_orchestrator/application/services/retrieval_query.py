@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import json
 import re
@@ -18,7 +18,7 @@ from ...graph.store import GraphStore
 from ...infrastructure.sqlite.retrieval_store import RetrievalIndexStore
 from ...llm.rerankers import RerankCandidate
 from ...llm.rerankers import rerank_candidates as _default_rerank_candidates
-from ...reasoning_graph.embedding_store import GraphEmbeddingStore
+from ...infrastructure.faiss.embedding_store import GraphEmbeddingStore
 from .retrieval_embedding import RETRIEVAL_EMBEDDING_KIND
 from .retrieval_vector import vector_candidates as _vector_candidates
 
@@ -331,3 +331,4 @@ class RetrievalQueryService:
             rerank_max_chars=rerank_max_chars,
             include_graph_nodes=include_graph_nodes,
         )
+

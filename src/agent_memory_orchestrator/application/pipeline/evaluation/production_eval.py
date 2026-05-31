@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import hashlib
 import json
@@ -9,8 +9,8 @@ from pathlib import Path
 from typing import Any
 
 from ....core.config import Settings
-from ....reasoning_graph.embedding_store import GraphEmbeddingHit
-from ....reasoning_graph.embedding_store import cosine_similarity
+from ....infrastructure.faiss.embedding_store import GraphEmbeddingHit
+from ....infrastructure.faiss.embedding_store import cosine_similarity
 from ....reasoning_graph.retrieval import RETRIEVAL_EMBEDDING_KIND
 from ....reasoning_graph.retrieval import RetrievalCandidate
 from ....reasoning_graph.retrieval import RetrievalDocument
@@ -1082,4 +1082,5 @@ def _select(row: dict[str, Any], keys: tuple[str, ...]) -> dict[str, Any]:
 
 def stable_hash(payload: Any) -> str:
     return hashlib.sha256(json.dumps(payload, sort_keys=True, default=str).encode("utf-8")).hexdigest()
+
 

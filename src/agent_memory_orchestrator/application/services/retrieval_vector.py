@@ -1,10 +1,10 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from ...domain.retrieval.models import RetrievalCandidate
 from ...domain.retrieval.models import TextEmbeddingProvider
 from ...infrastructure.sqlite.retrieval_store import RetrievalIndexStore
-from ...reasoning_graph.embedding_store import GraphEmbeddingHit
-from ...reasoning_graph.embedding_store import GraphEmbeddingStore
+from ...infrastructure.faiss.embedding_store import GraphEmbeddingHit
+from ...infrastructure.faiss.embedding_store import GraphEmbeddingStore
 
 
 def vector_candidates(
@@ -60,3 +60,4 @@ def vector_candidates(
 
 
 __all__ = ["vector_candidates"]
+

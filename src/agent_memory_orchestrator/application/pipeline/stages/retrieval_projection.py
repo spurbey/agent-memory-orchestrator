@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import json
 from dataclasses import replace as dataclass_replace
@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from ....core.db import connect
-from ....reasoning_graph.embedding_store import GraphEmbeddingStore
+from ....infrastructure.faiss.embedding_store import GraphEmbeddingStore
 from ....reasoning_graph.retrieval import RETRIEVAL_EMBEDDING_KIND
 from ....reasoning_graph.retrieval import RetrievalDocument
 from ....reasoning_graph.retrieval import RetrievalIndexStore
@@ -238,4 +238,5 @@ def run_quality_eval_stage(runner: Any, job: dict[str, Any], artifact_dir: Path,
     if issues:
         raise StageFailed("quality_eval_product_readiness_failed", payload)
     return StageResult(output_path=output, diagnostics=payload)
+
 

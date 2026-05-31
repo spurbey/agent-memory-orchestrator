@@ -1,11 +1,11 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from ...domain.retrieval.models import EmbeddingRunResult
 from ...domain.retrieval.models import TextEmbeddingProvider
 from ...infrastructure.sqlite.retrieval_store import RetrievalIndexStore
-from ...reasoning_graph.embedding_store import GraphEmbeddingRecord
-from ...reasoning_graph.embedding_store import GraphEmbeddingStore
-from ...reasoning_graph.embedding_store import hash_content
+from ...infrastructure.faiss.embedding_store import GraphEmbeddingRecord
+from ...infrastructure.faiss.embedding_store import GraphEmbeddingStore
+from ...infrastructure.faiss.embedding_store import hash_content
 
 
 RETRIEVAL_EMBEDDING_KIND = "retrieval_text"
@@ -93,3 +93,4 @@ def embed_missing_retrieval_documents(
 
 
 __all__ = ["RETRIEVAL_EMBEDDING_KIND", "embed_missing_retrieval_documents"]
+
