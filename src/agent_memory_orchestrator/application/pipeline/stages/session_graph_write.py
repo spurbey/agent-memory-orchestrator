@@ -4,10 +4,9 @@ import json
 from pathlib import Path
 from typing import Any
 
-from ....reasoning_graph.promotion import build_curated_session_graph
-from ....reasoning_graph.session_graph_writer import build_compact_session_graph
-from ....reasoning_graph.session_graph_writer import write_compact_session_graph
 from ....domain.pipeline.constants import RESET_MARKER_KEY
+from ..graph_writer import build_compact_session_graph
+from ..graph_writer import write_compact_session_graph
 from ..job_runner import StageResult
 from ..job_runner import _commit_nodes
 from ..job_runner import _evidence_ref_nodes
@@ -18,6 +17,7 @@ from ..job_runner import _stage_output
 from ..job_runner import _versioned_items
 from ..job_runner import _write_curated_session_graph_to_central
 from ..job_runner import require_complete_production_marker
+from ..promotion import build_curated_session_graph
 
 
 def run_session_graph_write_stage(runner: Any, job: dict[str, Any], artifact_dir: Path, stage_dir: Path) -> StageResult:
