@@ -21,7 +21,6 @@ from ...install.service import build_install_plan
 from ...install.service import doctor as install_doctor
 from ...install.service import uninstall as uninstall_targets
 from ...memory import MemoryService
-from ...orchestration import OrchestratorService
 from ...peer import PeerService
 from ...peer.agent import PeerAgentService
 from ...peer.doctor import peer_doctor
@@ -58,6 +57,7 @@ from .commands.install import format_install_plan as _format_install_plan
 from .commands.install import format_install_result as _format_install_result
 from .commands.install import summarize_install_plan as _summarize_install_plan
 from .commands.models import handle_models_command as _handle_models_command
+from .commands.orchestration import handle_orchestration_command as _handle_orchestration_command
 from .commands.pipeline import handle_pipeline_command as _handle_pipeline_command
 from .commands.peer import add_peer_netd_start_args as _add_peer_netd_start_args
 from .commands.peer import add_peer_netd_watch_service_args as _add_peer_netd_watch_service_args
@@ -1470,36 +1470,12 @@ def main(argv: list[str] | None = None) -> int:
         if skill_checkpoint_status is not None:
             return skill_checkpoint_status
 
-        settings = Settings.load()
-        orch = OrchestratorService(settings)
-        try:
-            if args.command == "orchestrate-start":
-                payload = orch.start(session_id=args.session_id, title=args.title)
-            elif args.command == "orchestrate-submit":
-                payload = orch.submit(
-                    session_id=args.session_id,
-                    agent=args.agent,
-                    summary=args.summary,
-                    confidence=args.confidence,
-                    artifact_uri=args.artifact_uri,
-                    blocking_issues=args.blocking_issue,
-                )
-            elif args.command == "orchestrate-status":
-                payload = orch.status(session_id=args.session_id)
-            elif args.command == "orchestrate-decision":
-                payload = orch.user_decision(
-                    session_id=args.session_id,
-                    decision=args.decision,
-                    notes=args.notes,
-                    decided_by=args.decided_by,
-                )
-            else:
-                parser.error(f"unknown command: {args.command}")
-                return 2
-            _print({"ok": True, "result": payload})
-        finally:
-            orch.close()
-        return 0
+        orchestration_status = _handle_orchestration_command(args, emit=_print)
+        if orchestration_status is not None:
+            return orchestration_status
+
+        parser.error(f"unknown command: {args.command}")
+        return 2
     except (DaemonUnavailable, GraphBackendUnavailable, QwenUnavailable) as exc:
         print(json.dumps({"ok": False, "error": str(exc)}), file=sys.stderr)
         return 1
