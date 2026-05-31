@@ -7,7 +7,7 @@ from typing import Any
 from urllib.parse import unquote
 
 from ....core.config import Settings
-from ....reasoning_graph.jobs import ProductionSessionJobStore
+from ....infrastructure.sqlite.production_job_store import ProductionSessionJobStore
 from ..coordination import bounded_int
 
 JOB_ROUTES = ("/api/jobs", "/api/jobs/{job_id}", "/api/jobs/{job_id}/retry")

@@ -7,7 +7,7 @@ from typing import Any
 
 from ....core.config import Settings
 from ....memory import MemoryService
-from ....reasoning_graph.jobs import ProductionSessionJobStore
+from ....infrastructure.sqlite.production_job_store import ProductionSessionJobStore
 
 HEALTH_ROUTES = ("/health", "/metrics")
 

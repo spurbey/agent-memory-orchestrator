@@ -25,7 +25,7 @@ from ..llm.embeddings import embed_text
 from ..llm.qwen import DeterministicPlanner, OllamaQwenClient, QueryPlan, QwenPlanner, QwenUnavailable
 from ..reasoning_graph.embedding_store import GraphEmbeddingStore
 from ..domain.versioning.repo_identity import resolve_repo_identity
-from ..reasoning_graph.jobs import ProductionSessionJobStore
+from ..infrastructure.sqlite.production_job_store import ProductionSessionJobStore
 from ..infrastructure.sqlite.retrieval_store import RetrievalIndexStore
 from ..reasoning_graph.retrieval import RETRIEVAL_EMBEDDING_KIND
 from ..reasoning_graph.retrieval import build_retrieval_documents_from_graph
