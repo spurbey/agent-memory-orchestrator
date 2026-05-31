@@ -1,1 +1,44 @@
 """Production application service boundaries."""
+
+from __future__ import annotations
+
+__all__ = [
+    "CentralMergeRunResult",
+    "CentralMergeService",
+    "ProductionPipelineService",
+    "RETRIEVAL_EMBEDDING_KIND",
+    "RetrievalQueryService",
+    "embed_missing_retrieval_documents",
+    "retrieve_session_graph",
+    "vector_candidates",
+]
+
+
+def __getattr__(name: str):
+    if name in {"CentralMergeRunResult", "CentralMergeService"}:
+        from .central_merge import CentralMergeRunResult
+        from .central_merge import CentralMergeService
+
+        return {"CentralMergeRunResult": CentralMergeRunResult, "CentralMergeService": CentralMergeService}[name]
+    if name == "ProductionPipelineService":
+        from .production_pipeline import ProductionPipelineService
+
+        return ProductionPipelineService
+    if name in {"RETRIEVAL_EMBEDDING_KIND", "embed_missing_retrieval_documents"}:
+        from .retrieval_embedding import RETRIEVAL_EMBEDDING_KIND
+        from .retrieval_embedding import embed_missing_retrieval_documents
+
+        return {
+            "RETRIEVAL_EMBEDDING_KIND": RETRIEVAL_EMBEDDING_KIND,
+            "embed_missing_retrieval_documents": embed_missing_retrieval_documents,
+        }[name]
+    if name in {"RetrievalQueryService", "retrieve_session_graph"}:
+        from .retrieval_query import RetrievalQueryService
+        from .retrieval_query import retrieve_session_graph
+
+        return {"RetrievalQueryService": RetrievalQueryService, "retrieve_session_graph": retrieve_session_graph}[name]
+    if name == "vector_candidates":
+        from .retrieval_vector import vector_candidates
+
+        return vector_candidates
+    raise AttributeError(name)
