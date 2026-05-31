@@ -47,12 +47,6 @@ from ...reasoning_graph.retrieval import retrieve_session_graph as retrieve_inde
 from ...reasoning_graph.jobs.reset import initialize_fresh_production_storage
 from ...reasoning_graph.central_merge.production_eval import DEFAULT_TARGET_JOB_ID
 from ...reasoning_graph.central_merge.production_eval import DEFAULT_TARGET_REPO_ID
-from ...skill_checkpoint import DEFAULT_LOCAL_NUM_CTX
-from ...skill_checkpoint import DEFAULT_NUM_PREDICT
-from ...skill_checkpoint import list_skill_checkpoints
-from ...skill_checkpoint import mark_skill_checkpoint
-from ...skill_checkpoint import run_local_skill_checkpoint_extraction
-from ...skill_checkpoint import write_skill_checkpoint_outputs
 from ..daemon.client import DaemonClient, DaemonUnavailable
 from .commands.debug import handle_debug_command as _handle_debug_command
 from .commands.debug import rebuild_clean_db as _rebuild_clean_db
@@ -74,6 +68,9 @@ from .commands.peer import peer_relay_options_from_args as _peer_relay_options_f
 from .commands.peer import peer_setup_next_commands as _peer_setup_next_commands
 from .commands.peer import relay_values_from_args as _relay_values_from_args
 from .commands.peer import with_relay_next_steps as _with_relay_next_steps
+from .commands.skill_checkpoint import DEFAULT_LOCAL_NUM_CTX
+from .commands.skill_checkpoint import DEFAULT_NUM_PREDICT
+from .commands.skill_checkpoint import handle_skill_checkpoint_command as _handle_skill_checkpoint_command
 
 
 def _print(payload: object) -> None:
@@ -1469,49 +1466,9 @@ def main(argv: list[str] | None = None) -> int:
         if debug_status is not None:
             return debug_status
 
-        if args.command == "skill-checkpoint":
-            if getattr(args, "amo_home", None):
-                os.environ["AMO_HOME"] = str(args.amo_home.expanduser().resolve())
-            if args.skill_checkpoint_command == "extract":
-                settings = Settings.load()
-                packet = json.loads(args.packet.read_text(encoding="utf-8"))
-                report = run_local_skill_checkpoint_extraction(
-                    packet=packet,
-                    settings=settings,
-                    out_dir=args.out_dir,
-                    num_ctx=args.num_ctx,
-                    num_predict=args.num_predict,
-                    timeout_seconds=args.timeout_seconds,
-                    auto_repair_validation_refs=not args.no_auto_repair_validation_refs,
-                )
-            elif args.skill_checkpoint_command == "mark":
-                settings = Settings.load()
-                report = mark_skill_checkpoint(
-                    settings=settings,
-                    agent=args.agent,
-                    session_id=args.session_id,
-                    note=args.note,
-                    mode=args.mode,
-                    cwd=args.cwd,
-                )
-            elif args.skill_checkpoint_command == "status":
-                settings = Settings.load()
-                report = list_skill_checkpoints(settings, limit=args.limit)
-            elif args.skill_checkpoint_command == "finalize":
-                packet = json.loads(args.packet.read_text(encoding="utf-8"))
-                result = json.loads(args.result.read_text(encoding="utf-8"))
-                report = write_skill_checkpoint_outputs(
-                    result=result,
-                    packet=packet,
-                    out_dir=args.out_dir,
-                    auto_repair_validation_refs=not args.no_auto_repair_validation_refs,
-                )
-            else:
-                parser.error(f"unknown skill-checkpoint command: {args.skill_checkpoint_command}")
-                return 2
-            ok = bool(report.get("ok", report.get("status") == "accepted"))
-            _print({"ok": ok, "result": report})
-            return 0 if ok else 1
+        skill_checkpoint_status = _handle_skill_checkpoint_command(args, emit=_print)
+        if skill_checkpoint_status is not None:
+            return skill_checkpoint_status
 
         settings = Settings.load()
         orch = OrchestratorService(settings)
