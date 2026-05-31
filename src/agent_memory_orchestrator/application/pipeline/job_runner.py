@@ -18,7 +18,7 @@ from ...graph.store import KuzuGraphStore
 from ...llm.qwen import OllamaQwenClient as OllamaQwenClient  # noqa: F401
 from ...llm.qwen import QwenUnavailable as QwenUnavailable  # noqa: F401
 from ...domain.versioning.repo_identity import resolve_repo_identity
-from ...reasoning_graph.retrieval import RetrievalDocument
+from ...domain.retrieval.models import RetrievalDocument
 from ...reasoning_graph.stage4_contract import stage4_contract_hash
 from ...reasoning_graph.stage4_contract import stage4_output_schema
 from ...domain.pipeline.constants import CENTRAL_MERGE_PLANNER_VERSION
@@ -1419,5 +1419,3 @@ def _write_curated_session_graph_to_central(
         }
     finally:
         central.close()
-
-

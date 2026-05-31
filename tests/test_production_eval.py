@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import json
 from dataclasses import replace
@@ -23,8 +23,8 @@ from agent_memory_orchestrator.application.pipeline.storage_lifecycle import ini
 from agent_memory_orchestrator.reasoning_graph import GraphEmbeddingRecord
 from agent_memory_orchestrator.reasoning_graph import GraphEmbeddingStore
 from agent_memory_orchestrator.infrastructure.sqlite.production_job_store import ProductionSessionJobStore
-from agent_memory_orchestrator.reasoning_graph.retrieval import RetrievalDocument
-from agent_memory_orchestrator.reasoning_graph.retrieval import RetrievalIndexStore
+from agent_memory_orchestrator.domain.retrieval.models import RetrievalDocument
+from agent_memory_orchestrator.infrastructure.sqlite.retrieval_store import RetrievalIndexStore
 from agent_memory_orchestrator.infrastructure.llm.text_embedder import StrictTextEmbedder
 
 
@@ -629,4 +629,3 @@ def test_quality_readiness_reports_partial_vector_state() -> None:
         "answer_trace_ready": True,
         "product_ready": False,
     }
-

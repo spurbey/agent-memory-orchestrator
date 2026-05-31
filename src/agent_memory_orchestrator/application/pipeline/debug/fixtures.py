@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import hashlib
 import json
@@ -9,7 +9,7 @@ from typing import Any
 from ....core.config import Settings
 from ....core.db import connect
 from ....infrastructure.faiss.embedding_store import GraphEmbeddingStore
-from ....reasoning_graph.retrieval import RetrievalIndexStore
+from ....infrastructure.sqlite.retrieval_store import RetrievalIndexStore
 from ....infrastructure.sqlite.production_job_store import ProductionSessionJobStore
 
 
@@ -342,5 +342,3 @@ def _path_hash(path: Path) -> str:
 
 def safe_name(value: str) -> str:
     return "".join(ch if ch.isalnum() or ch in {"-", "_", "."} else "_" for ch in value)[:120] or "item"
-
-

@@ -12,7 +12,7 @@ from ....graph.service import GraphRagService
 from ....graph.store import KuzuGraphStore
 from ....infrastructure.sqlite.retrieval_store import RetrievalIndexStore
 from ....infrastructure.kuzu.central_graph import repo_central_graph_path
-from ....reasoning_graph.retrieval import retrieve_session_graph as retrieve_indexed_docs
+from ....application.services.retrieval_query import retrieve_session_graph as retrieve_indexed_docs
 from ....reasoning_graph.session_runtime import DEFAULT_CODE_EMBEDDING_MODEL
 from ....reasoning_graph.session_runtime import SessionGraphBuildOptions
 from ....reasoning_graph.session_runtime import SessionGraphQueryOptions

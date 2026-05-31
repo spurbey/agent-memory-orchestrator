@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import hashlib
 import json
@@ -11,10 +11,10 @@ from typing import Any
 from ....core.config import Settings
 from ....infrastructure.faiss.embedding_store import GraphEmbeddingHit
 from ....infrastructure.faiss.embedding_store import cosine_similarity
-from ....reasoning_graph.retrieval import RETRIEVAL_EMBEDDING_KIND
-from ....reasoning_graph.retrieval import RetrievalCandidate
-from ....reasoning_graph.retrieval import RetrievalDocument
-from ....reasoning_graph.retrieval import retrieve_session_graph
+from ....application.services.retrieval_embedding import RETRIEVAL_EMBEDDING_KIND
+from ....domain.retrieval.models import RetrievalCandidate
+from ....domain.retrieval.models import RetrievalDocument
+from ....application.services.retrieval_query import retrieve_session_graph
 from ....infrastructure.llm.text_embedder import StrictTextEmbedder
 
 
@@ -1082,6 +1082,3 @@ def _select(row: dict[str, Any], keys: tuple[str, ...]) -> dict[str, Any]:
 
 def stable_hash(payload: Any) -> str:
     return hashlib.sha256(json.dumps(payload, sort_keys=True, default=str).encode("utf-8")).hexdigest()
-
-
-
