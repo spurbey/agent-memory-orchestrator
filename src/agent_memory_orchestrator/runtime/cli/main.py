@@ -11,7 +11,6 @@ from typing import Any
 
 from ...core.config import Settings
 from ...core.db import connect
-from ...graph.diagnostics import debug_hooks, debug_qwen
 from ...graph.service import GraphRagService
 from ...graph.store import KuzuGraphStore
 from ...reasoning_graph.central_merge.applier import repo_central_graph_path
@@ -55,6 +54,7 @@ from ...skill_checkpoint import mark_skill_checkpoint
 from ...skill_checkpoint import run_local_skill_checkpoint_extraction
 from ...skill_checkpoint import write_skill_checkpoint_outputs
 from ..daemon.client import DaemonClient, DaemonUnavailable
+from .commands.debug import handle_debug_command as _handle_debug_command
 from .commands.debug import rebuild_clean_db as _rebuild_clean_db
 from .commands.connectors import handle_connector_command as _handle_connector_command
 from .commands.install import add_model_selection_args as _add_model_selection_args
@@ -1465,27 +1465,9 @@ def main(argv: list[str] | None = None) -> int:
                 _print(result)
             return 0
 
-        if args.command == "debug":
-            settings = Settings.load()
-            if args.debug_command == "hooks":
-                _print(debug_hooks(settings))
-                return 0
-            if args.debug_command == "qwen":
-                _print(debug_qwen(settings, sample=args.sample))
-                return 0
-            if args.debug_command in {"drain", "retrieval", "graph"}:
-                client = DaemonClient.from_settings(settings, timeout_seconds=30)
-                try:
-                    if args.debug_command == "drain":
-                        _print(client.get("/api/debug/drain", {"session_id": args.session_id}))
-                    elif args.debug_command == "graph":
-                        _print(client.get("/api/debug/graph", {"session_id": args.session_id}))
-                    else:
-                        _print(client.post("/graph/search", {"query": args.query, "limit": args.limit, "debug": True}))
-                except DaemonUnavailable as exc:
-                    _print({"ok": False, "requires_daemon": True, "error": str(exc)})
-                    return 1
-                return 0
+        debug_status = _handle_debug_command(args, emit=_print)
+        if debug_status is not None:
+            return debug_status
 
         if args.command == "skill-checkpoint":
             if getattr(args, "amo_home", None):
