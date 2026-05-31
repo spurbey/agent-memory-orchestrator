@@ -43,3 +43,12 @@ def test_mcp_tool_boundary_groups_are_importable() -> None:
     assert "amo_graph_search" in RETRIEVAL_TOOL_NAMES
     assert "peer_memory_ask" in PEER_TOOL_NAMES
     assert "orchestrator_start" in ORCHESTRATION_TOOL_NAMES
+
+
+def test_runtime_web_boundary_delegates_to_existing_asset_loader() -> None:
+    from agent_memory_orchestrator.runtime.daemon import web_assets as daemon_assets
+    from agent_memory_orchestrator.runtime.web import assets as runtime_assets
+
+    assert runtime_assets.load_web_asset is daemon_assets.load_web_asset
+    assert runtime_assets.web_asset_bytes is daemon_assets.web_asset_bytes
+    assert "AMO Control Room" in runtime_assets.session_cockpit_html()
