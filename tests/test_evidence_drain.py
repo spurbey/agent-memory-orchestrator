@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import json
 from pathlib import Path
@@ -7,7 +7,7 @@ from agent_memory_orchestrator.core.config import Settings
 from agent_memory_orchestrator.evidence.drain import EvidenceDrain
 from agent_memory_orchestrator.evidence.drain import _read_jsonl_from
 from agent_memory_orchestrator.evidence.raw_store import RawEvidenceStore
-from agent_memory_orchestrator.reasoning_graph.jobs import ProductionSessionJobStore
+from agent_memory_orchestrator.infrastructure.sqlite.production_job_store import ProductionSessionJobStore
 
 
 def make_settings(tmp_path: Path) -> Settings:

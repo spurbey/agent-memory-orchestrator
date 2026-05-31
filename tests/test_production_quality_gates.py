@@ -3,8 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from agent_memory_orchestrator.reasoning_graph.jobs.runner import _central_merge_quality_result
-from agent_memory_orchestrator.reasoning_graph.jobs.runner import _quality_issues
+from agent_memory_orchestrator.application.pipeline.job_runner import _central_merge_quality_result
+from agent_memory_orchestrator.application.pipeline.job_runner import _quality_issues
 
 
 def test_quality_issues_block_dry_run_central_merge_and_partial_vectors() -> None:
