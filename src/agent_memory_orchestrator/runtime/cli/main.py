@@ -20,6 +20,7 @@ from .commands.install import add_model_selection_args as _add_model_selection_a
 from .commands.install import handle_install_command as _handle_install_command
 from .commands.memory import handle_memory_command as _handle_memory_command
 from .commands.memory import rebuild_clean_db
+from .commands.models import add_models_subcommands as _add_models_subcommands
 from .commands.models import handle_models_command as _handle_models_command
 from .commands.orchestration import handle_orchestration_command as _handle_orchestration_command
 from .commands.pipeline import handle_pipeline_command as _handle_pipeline_command
@@ -241,17 +242,7 @@ def _build_parser() -> argparse.ArgumentParser:
     rebuild = sub.add_parser("rebuild-indexes", help="Rebuild FTS/vector index rows from canonical memory_units")
     rebuild.add_argument("--force-vectors", action="store_true")
 
-    models = sub.add_parser("models", help="Manage local embedding/reranker models")
-    model_sub = models.add_subparsers(dest="models_command", required=True)
-    model_sub.add_parser("list", help="List hardware-aware model presets")
-    model_status_cmd = model_sub.add_parser("status", help="Check whether selected models are cached locally")
-    _add_model_selection_args(model_status_cmd)
-    model_status_cmd.add_argument("--load-check", action="store_true", help="Also try loading models with local_files_only")
-    model_download = model_sub.add_parser("download", help="Intentionally download/cache selected models once")
-    _add_model_selection_args(model_download)
-    model_download.add_argument("--cache-dir", type=Path)
-    model_preflight = model_sub.add_parser("preflight", help="Require selected models to load from local cache")
-    _add_model_selection_args(model_preflight)
+    _add_models_subcommands(sub)
 
     orch_start = sub.add_parser("orchestrate-start", help="Start orchestrator session")
     orch_start.add_argument("--session-id", required=True)
