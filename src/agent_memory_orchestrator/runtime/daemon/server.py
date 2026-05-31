@@ -31,33 +31,18 @@ from .owner_lock import DaemonAlreadyRunning
 from .owner_lock import DaemonOwnerLock
 from .payloads import optional_payload_path as _payload_optional_path
 from .payloads import settings_with_payload_paths as _payload_settings_with_paths
-from .web_assets import graph_workbench_html
-from .web_assets import load_web_asset
-from .web_assets import session_cockpit_html
-from .web_assets import web_asset_bytes
+from .routes.web import graph_workbench_html as _graph_workbench_html
+from .routes.web import load_web_asset
+from .routes.web import session_cockpit_html as _session_cockpit_html
+from .routes.web import web_asset_bytes as _web_asset_bytes
 
 _DaemonOwnerLock = DaemonOwnerLock
 _CLIENT_ABORT_ERRORS = (BrokenPipeError, ConnectionAbortedError, ConnectionResetError)
+_load_web_asset = load_web_asset
 
 
 def _read_graph_service(settings: Settings, *, repo_id: str = "") -> GraphRagService:
     return _graph_access.read_graph_service(settings, repo_id=repo_id)
-
-
-def _load_web_asset(name: str) -> str:
-    return load_web_asset(name)
-
-
-def _web_asset_bytes(name: str) -> tuple[bytes, str]:
-    return web_asset_bytes(name)
-
-
-def _session_cockpit_html() -> str:
-    return session_cockpit_html()
-
-
-def _graph_workbench_html() -> str:
-    return graph_workbench_html()
 
 
 def _v2_stage_requires_graph_write_lock(stage: str) -> bool:
