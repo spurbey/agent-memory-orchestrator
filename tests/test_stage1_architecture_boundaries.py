@@ -50,6 +50,9 @@ def test_stage1_application_and_infrastructure_boundaries_are_importable() -> No
     from agent_memory_orchestrator.application.pipeline import build_compact_session_graph
     from agent_memory_orchestrator.application.pipeline import build_curated_session_graph
     from agent_memory_orchestrator.domain.evidence import build_reasoning_evidence_view
+    from agent_memory_orchestrator.domain.reasoning import TimelineGraph
+    from agent_memory_orchestrator.domain.reasoning import build_decision_threads
+    from agent_memory_orchestrator.domain.reasoning import extract_decisions
     from agent_memory_orchestrator.domain.versioning import resolve_session_repo_root
     from agent_memory_orchestrator.infrastructure.faiss import GraphEmbeddingStore
     from agent_memory_orchestrator.infrastructure.kuzu import KuzuGraphStore
@@ -66,6 +69,9 @@ def test_stage1_application_and_infrastructure_boundaries_are_importable() -> No
     assert build_compact_session_graph.__name__ == "build_compact_session_graph"
     assert build_curated_session_graph.__name__ == "build_curated_session_graph"
     assert build_reasoning_evidence_view.__name__ == "build_reasoning_evidence_view"
+    assert TimelineGraph.__name__ == "TimelineGraph"
+    assert build_decision_threads.__name__ == "build_decision_threads"
+    assert extract_decisions.__name__ == "extract_decisions"
     assert resolve_session_repo_root.__name__ == "resolve_session_repo_root"
 
 
@@ -88,18 +94,24 @@ def test_stage1_production_code_does_not_depend_on_legacy_reasoning_graph_facade
     forbidden = (
         "agent_memory_orchestrator.reasoning_graph.jobs",
         "agent_memory_orchestrator.reasoning_graph.central_merge",
+        "agent_memory_orchestrator.reasoning_graph.chunking",
         "agent_memory_orchestrator.reasoning_graph.code_analysis",
         "agent_memory_orchestrator.reasoning_graph.code_versioning",
+        "agent_memory_orchestrator.reasoning_graph.decision_extraction",
+        "agent_memory_orchestrator.reasoning_graph.decision_quality",
         "agent_memory_orchestrator.reasoning_graph.decision_packets",
         "agent_memory_orchestrator.reasoning_graph.embedding_store",
         "agent_memory_orchestrator.reasoning_graph.evidence_view",
         "agent_memory_orchestrator.reasoning_graph.promotion",
         "agent_memory_orchestrator.reasoning_graph.retrieval",
         "agent_memory_orchestrator.reasoning_graph.reasoning_extraction",
+        "agent_memory_orchestrator.reasoning_graph.relationships",
         "agent_memory_orchestrator.reasoning_graph.repo_resolution",
         "agent_memory_orchestrator.reasoning_graph.session_graph_writer",
         "agent_memory_orchestrator.reasoning_graph.session_runtime",
         "agent_memory_orchestrator.reasoning_graph.stage4_contract",
+        "agent_memory_orchestrator.reasoning_graph.timeline",
+        "agent_memory_orchestrator.reasoning_graph.validation",
         "agent_memory_orchestrator.reasoning_graph.work_packets",
     )
     offenders: list[str] = []

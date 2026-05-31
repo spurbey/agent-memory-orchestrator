@@ -11,13 +11,15 @@ from typing import Any, Iterable
 from ...graph.store import GraphEdge, GraphNode, KuzuGraphStore
 from ...infrastructure.llm.text_embedder import StrictTextEmbedder
 from ...infrastructure.llm.text_embedder import _model_embedding_dimension as _infra_model_embedding_dimension
-from ...reasoning_graph.chunking import build_decision_threads
 from ...domain.code import default_ast_expander, extract_code_nodes_from_commit
 from ...domain.code.models import CodeNode
-from ...reasoning_graph.decision_extraction import extract_decisions
-from ...domain.reasoning.models import ExtractionRun, TimelineEvent
-from ...reasoning_graph.relationships import code_node_provenance_edges, produced_change_edges
-from ...reasoning_graph.timeline import TimelineGraph, build_timeline
+from ...domain.reasoning import ExtractionRun, TimelineEvent
+from ...domain.reasoning import TimelineGraph
+from ...domain.reasoning import build_decision_threads
+from ...domain.reasoning import build_timeline
+from ...domain.reasoning import code_node_provenance_edges
+from ...domain.reasoning import extract_decisions
+from ...domain.reasoning import produced_change_edges
 
 
 DEFAULT_CODE_EMBEDDING_MODEL = "microsoft/codebert-base"
