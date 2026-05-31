@@ -52,9 +52,9 @@ from ...reasoning_graph.session_runtime import default_session_graph_path
 from ...reasoning_graph.session_runtime import query_session_graph
 from ...infrastructure.sqlite.retrieval_store import RetrievalIndexStore
 from ...reasoning_graph.retrieval import retrieve_session_graph as retrieve_indexed_docs
-from ...reasoning_graph.jobs.reset import adopt_existing_v2_production_storage
-from ...reasoning_graph.jobs.reset import initialize_fresh_v2_production_storage
-from ...reasoning_graph.jobs.reset import reset_production_v2_storage
+from ...reasoning_graph.jobs.reset import adopt_existing_production_storage
+from ...reasoning_graph.jobs.reset import initialize_fresh_production_storage
+from ...reasoning_graph.jobs.reset import reset_production_storage
 from ...reasoning_graph.jobs.store import ProductionSessionJobStore
 from ...reasoning_graph.central_merge.applier import apply_merge_plan
 from ...reasoning_graph.central_merge.backfill import backfill_central_merge_plan
@@ -831,7 +831,7 @@ def main(argv: list[str] | None = None) -> int:
                     init_graph = {"ok": False, "error": str(exc)}
                 if init_graph.get("ok"):
                     try:
-                        init_v2 = initialize_fresh_v2_production_storage(init_settings)
+                        init_v2 = initialize_fresh_production_storage(init_settings)
                     except Exception as exc:
                         init_v2 = {
                             "ok": False,
@@ -886,12 +886,12 @@ def main(argv: list[str] | None = None) -> int:
 
         if args.command in {"init-production", "v2-init-production"}:
             settings = Settings.load()
-            _print(initialize_fresh_v2_production_storage(settings))
+            _print(initialize_fresh_production_storage(settings))
             return 0
 
         if args.command in {"reset-production", "v2-reset-production"}:
             settings = Settings.load()
-            result = reset_production_v2_storage(
+            result = reset_production_storage(
                 settings,
                 backup=args.backup,
                 clean_graph=args.clean_graph,
@@ -903,7 +903,7 @@ def main(argv: list[str] | None = None) -> int:
 
         if args.command in {"adopt-production", "v2-adopt-production"}:
             settings = Settings.load()
-            result = adopt_existing_v2_production_storage(
+            result = adopt_existing_production_storage(
                 settings,
                 backup=args.backup,
                 validate_graph=args.validate_graph,

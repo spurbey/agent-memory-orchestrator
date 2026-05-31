@@ -15,7 +15,7 @@ from agent_memory_orchestrator.reasoning_graph.central_merge import production_e
 from agent_memory_orchestrator.reasoning_graph import GraphEmbeddingRecord
 from agent_memory_orchestrator.reasoning_graph import GraphEmbeddingStore
 from agent_memory_orchestrator.reasoning_graph.jobs import ProductionSessionJobStore
-from agent_memory_orchestrator.reasoning_graph.jobs.reset import initialize_fresh_v2_production_storage
+from agent_memory_orchestrator.reasoning_graph.jobs.reset import initialize_fresh_production_storage
 from agent_memory_orchestrator.reasoning_graph.jobs.runner import StageResult
 from agent_memory_orchestrator.reasoning_graph.jobs.runner import StageFailed
 from agent_memory_orchestrator.reasoning_graph.jobs.runner import ProductionSessionJobRunner
@@ -435,7 +435,7 @@ def test_central_merge_requires_curated_manifest(tmp_path: Path) -> None:
 
 def test_retrieval_docs_read_curated_manifest_directly(tmp_path: Path) -> None:
     settings = make_settings(tmp_path)
-    initialize_fresh_v2_production_storage(settings)
+    initialize_fresh_production_storage(settings)
     store = ProductionSessionJobStore(settings)
     try:
         repo_id = "repo:remote:curated"
@@ -502,7 +502,7 @@ def test_retrieval_docs_read_curated_manifest_directly(tmp_path: Path) -> None:
 
 def test_retrieval_projection_carries_forward_prior_curated_docs(tmp_path: Path) -> None:
     settings = make_settings(tmp_path)
-    initialize_fresh_v2_production_storage(settings)
+    initialize_fresh_production_storage(settings)
     store = ProductionSessionJobStore(settings)
     try:
         repo_id = "repo:remote:cumulative"
@@ -550,7 +550,7 @@ def test_retrieval_projection_carries_forward_prior_curated_docs(tmp_path: Path)
 
 def test_retrieval_projection_is_not_active_until_activation_gate_passes(tmp_path: Path) -> None:
     settings = make_settings(tmp_path)
-    initialize_fresh_v2_production_storage(settings)
+    initialize_fresh_production_storage(settings)
     store = ProductionSessionJobStore(settings)
     try:
         repo_id = "repo:remote:raw-curated"
