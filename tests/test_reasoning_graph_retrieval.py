@@ -24,16 +24,16 @@ from agent_memory_orchestrator.runtime.cli import main as cli_module
 from agent_memory_orchestrator.runtime.cli.commands import graph as graph_cli_module
 from agent_memory_orchestrator.runtime.cli.main import _retrieve_index_only
 from agent_memory_orchestrator.llm.qwen import DeterministicPlanner
-from agent_memory_orchestrator.reasoning_graph.central_merge.applier import repo_central_graph_path
+from agent_memory_orchestrator.infrastructure.kuzu import repo_central_graph_path
 from agent_memory_orchestrator.domain.pipeline.constants import GRAPH_SCHEMA_VERSION
 from agent_memory_orchestrator.domain.pipeline.constants import PIPELINE_VERSION
-from agent_memory_orchestrator.reasoning_graph import GraphEmbeddingStore
-from agent_memory_orchestrator.reasoning_graph import RetrievalDocument
-from agent_memory_orchestrator.reasoning_graph import RetrievalIndexStore
-from agent_memory_orchestrator.reasoning_graph import build_retrieval_documents_from_graph
-from agent_memory_orchestrator.reasoning_graph import classify_query
-from agent_memory_orchestrator.reasoning_graph import embed_missing_retrieval_documents
-from agent_memory_orchestrator.reasoning_graph import retrieve_session_graph
+from agent_memory_orchestrator.application.services import embed_missing_retrieval_documents
+from agent_memory_orchestrator.application.services import retrieve_session_graph
+from agent_memory_orchestrator.domain.retrieval import RetrievalDocument
+from agent_memory_orchestrator.domain.retrieval import build_retrieval_documents_from_graph
+from agent_memory_orchestrator.domain.retrieval import classify_query
+from agent_memory_orchestrator.infrastructure.faiss import GraphEmbeddingStore
+from agent_memory_orchestrator.infrastructure.sqlite import RetrievalIndexStore
 
 
 class _KeywordEmbedder:
@@ -1019,7 +1019,7 @@ def test_retrieve_session_graph_applies_cross_encoder_rerank(tmp_path: Path, mon
         )
 
     monkeypatch.setattr(
-        "agent_memory_orchestrator.reasoning_graph.retrieval.rerank_candidates",
+        "agent_memory_orchestrator.application.services.retrieval_query.rerank_candidates",
         fake_rerank_candidates,
     )
 
@@ -1125,7 +1125,7 @@ def test_decision_history_query_prefers_primary_topic_over_metadata_noise(
         )
 
     monkeypatch.setattr(
-        "agent_memory_orchestrator.reasoning_graph.retrieval.rerank_candidates",
+        "agent_memory_orchestrator.application.services.retrieval_query.rerank_candidates",
         misleading_cross_encoder,
     )
 

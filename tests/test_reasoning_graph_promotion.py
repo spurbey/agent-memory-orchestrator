@@ -1,9 +1,9 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import json
 
-from agent_memory_orchestrator.reasoning_graph.central_merge import build_dry_run_merge_plan
-from agent_memory_orchestrator.reasoning_graph.promotion import build_curated_session_graph
+from agent_memory_orchestrator.domain.versioning.central_merge import build_dry_run_merge_plan
+from agent_memory_orchestrator.application.pipeline.promotion import build_curated_session_graph
 
 
 def test_curated_graph_promotes_code_impact_and_keeps_trace_noise_out() -> None:
@@ -268,3 +268,4 @@ def test_central_merge_keeps_low_signal_symbol_refs_as_support_only() -> None:
     assert "symbol" not in atom_kinds
     assert "code_region" not in atom_kinds
     assert all(version["status"] == "review" for version in plan.new_versions if version["atom_kind"] == "decision")
+

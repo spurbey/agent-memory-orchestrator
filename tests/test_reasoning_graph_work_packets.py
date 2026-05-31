@@ -3,9 +3,9 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from agent_memory_orchestrator.reasoning_graph import build_reasoning_work_packets_from_view
-from agent_memory_orchestrator.reasoning_graph import is_strict_validation_fact
-from agent_memory_orchestrator.reasoning_graph import packet_json_contains_raw_internal_ids
+from agent_memory_orchestrator.domain.reasoning import build_reasoning_work_packets_from_view
+from agent_memory_orchestrator.domain.reasoning import is_strict_validation_fact
+from agent_memory_orchestrator.domain.reasoning import packet_json_contains_raw_internal_ids
 
 
 def _view() -> dict:

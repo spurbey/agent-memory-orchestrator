@@ -2,7 +2,6 @@
 
 import json
 import re
-import sys
 from typing import Any
 
 from ...domain.retrieval.classification import classify_query
@@ -21,6 +20,8 @@ from ...llm.rerankers import rerank_candidates as _default_rerank_candidates
 from ...infrastructure.faiss.embedding_store import GraphEmbeddingStore
 from .retrieval_embedding import RETRIEVAL_EMBEDDING_KIND
 from .retrieval_vector import vector_candidates as _vector_candidates
+
+rerank_candidates = _default_rerank_candidates
 
 
 def retrieve_session_graph(
@@ -232,11 +233,7 @@ def _safe_reranker_prefix(value: str) -> str:
 
 
 def _call_rerank_candidates(**kwargs: Any) -> Any:
-    compat_module = sys.modules.get("agent_memory_orchestrator.reasoning_graph.retrieval")
-    compat_reranker = getattr(compat_module, "rerank_candidates", None) if compat_module is not None else None
-    if callable(compat_reranker) and compat_reranker is not _default_rerank_candidates:
-        return compat_reranker(**kwargs)
-    return _default_rerank_candidates(**kwargs)
+    return rerank_candidates(**kwargs)
 
 
 def _compact_output_node(node: dict[str, Any]) -> dict[str, Any]:

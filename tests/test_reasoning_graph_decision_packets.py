@@ -1,15 +1,15 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import json
 from pathlib import Path
 
-from agent_memory_orchestrator.reasoning_graph.decision_packets import DECISION_PACKET_SCHEMA_VERSION
-from agent_memory_orchestrator.reasoning_graph.decision_packets import DEFAULT_CHUNK_TEXT_LIMIT
-from agent_memory_orchestrator.reasoning_graph.decision_packets import DEFAULT_MAX_ALLOWED_EVENT_IDS
-from agent_memory_orchestrator.reasoning_graph.decision_packets import DEFAULT_MAX_CHUNK_FIELD_EVENT_IDS
-from agent_memory_orchestrator.reasoning_graph.decision_packets import DEFAULT_MAX_PACKET_CHUNKS
-from agent_memory_orchestrator.reasoning_graph.decision_packets import build_decision_packet
-from agent_memory_orchestrator.reasoning_graph.decision_packets import build_decision_packets
+from agent_memory_orchestrator.domain.reasoning.decision_packets import DECISION_PACKET_SCHEMA_VERSION
+from agent_memory_orchestrator.domain.reasoning.decision_packets import DEFAULT_CHUNK_TEXT_LIMIT
+from agent_memory_orchestrator.domain.reasoning.decision_packets import DEFAULT_MAX_ALLOWED_EVENT_IDS
+from agent_memory_orchestrator.domain.reasoning.decision_packets import DEFAULT_MAX_CHUNK_FIELD_EVENT_IDS
+from agent_memory_orchestrator.domain.reasoning.decision_packets import DEFAULT_MAX_PACKET_CHUNKS
+from agent_memory_orchestrator.domain.reasoning.decision_packets import build_decision_packet
+from agent_memory_orchestrator.domain.reasoning.decision_packets import build_decision_packets
 
 
 def _window(commit_id: str = "abc123") -> dict:
@@ -149,3 +149,4 @@ def test_real_stage5c_artifacts_can_build_commit_decision_packet() -> None:
     assert first["work_change"]["kind"] == "WorkChange"
     assert first["allowed_evidence_event_ids"]
     assert all(chunk["embedding_text_excerpt"] for chunk in first["chunks"])
+

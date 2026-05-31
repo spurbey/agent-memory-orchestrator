@@ -1,10 +1,10 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
-from agent_memory_orchestrator.reasoning_graph.extraction_window import build_cleaned_evidence_window
-from agent_memory_orchestrator.reasoning_graph.models import TimelineEvent
-from agent_memory_orchestrator.reasoning_graph.timeline import TimelineGraph
-from agent_memory_orchestrator.reasoning_graph.tool_facts import tool_fact_from_event
-from agent_memory_orchestrator.reasoning_graph.tool_facts import tool_facts_from_events
+from agent_memory_orchestrator.domain.reasoning.extraction_window import build_cleaned_evidence_window
+from agent_memory_orchestrator.domain.reasoning.models import TimelineEvent
+from agent_memory_orchestrator.domain.reasoning.timeline import TimelineGraph
+from agent_memory_orchestrator.domain.reasoning.tool_facts import tool_fact_from_event
+from agent_memory_orchestrator.domain.reasoning.tool_facts import tool_facts_from_events
 
 
 def _event(
@@ -335,3 +335,4 @@ def test_cleaned_window_uses_first_target_cluster_only() -> None:
     kept_ids = {event.event_id for event in window.window_events}
     assert "1" in kept_ids
     assert "130" not in kept_ids
+

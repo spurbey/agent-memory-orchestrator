@@ -18,6 +18,7 @@ __all__ = [
     "git_file_at_commit",
     "git_unified_zero_diff",
     "parse_unified_zero_hunks",
+    "python_ast_expander",
     "resolve_code_node_version",
     "should_accept_ast_parent",
     "symbol_key",
@@ -37,6 +38,7 @@ def __getattr__(name: str):
         "code_nodes_from_hunks",
         "default_ast_expander",
         "extract_code_nodes_from_commit",
+        "python_ast_expander",
         "should_accept_ast_parent",
     }:
         from .ast import AstExpander
@@ -45,6 +47,7 @@ def __getattr__(name: str):
         from .ast import code_nodes_from_hunks
         from .ast import default_ast_expander
         from .ast import extract_code_nodes_from_commit
+        from .ast import python_ast_expander
         from .ast import should_accept_ast_parent
 
         return {
@@ -54,6 +57,7 @@ def __getattr__(name: str):
             "code_nodes_from_hunks": code_nodes_from_hunks,
             "default_ast_expander": default_ast_expander,
             "extract_code_nodes_from_commit": extract_code_nodes_from_commit,
+            "python_ast_expander": python_ast_expander,
             "should_accept_ast_parent": should_accept_ast_parent,
         }[name]
     if name in {"git_file_at_commit", "git_unified_zero_diff", "parse_unified_zero_hunks"}:
