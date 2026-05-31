@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from ..core.config import Settings
-from ..reasoning_graph.jobs import ProductionSessionJobStore
+from ..infrastructure.sqlite.production_job_store import ProductionSessionJobStore
 from .triggers import detect_trigger
 from .triggers import is_session_start
 from .triggers import record_session_id

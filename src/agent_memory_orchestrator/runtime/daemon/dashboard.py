@@ -4,7 +4,7 @@ import json
 from typing import Any
 
 from ...core.config import Settings
-from ...reasoning_graph.jobs import ProductionSessionJobStore
+from ...infrastructure.sqlite.production_job_store import ProductionSessionJobStore
 
 
 def list_repositories_fast(settings: Settings, *, limit: int = 200) -> dict[str, Any]:
