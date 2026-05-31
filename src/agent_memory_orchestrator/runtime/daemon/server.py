@@ -3,7 +3,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-from dataclasses import replace
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 from urllib.parse import parse_qs, unquote, urlparse
@@ -12,14 +11,14 @@ from ...core.config import Settings
 from ...graph.diagnostics import debug_drain, debug_graph, debug_hooks, debug_qwen
 from ...graph.service import GraphRagService
 from ...graph.service import build_session_detail_fallback
-from ...graph.store import GraphBackendUnavailable, KuzuGraphStore
+from ...graph.store import GraphBackendUnavailable
 from ...integrations.connectors.slack import SlackConnectorService
 from ...memory import MemoryService
 from ...llm.qwen import QwenUnavailable
 from ...reasoning_graph.jobs import ProductionSessionJobStore
-from ...reasoning_graph.central_merge.applier import repo_central_graph_path
 from . import auto_drain as _auto_drain
 from . import dashboard as _dashboard
+from . import graph_access as _graph_access
 from .coordination import DRAIN_LOCK as _DRAIN_LOCK
 from .coordination import GRAPH_WRITE_LOCK as _GRAPH_WRITE_LOCK
 from .coordination import READ_ONLY_GET_GRAPH_PATHS as _READ_ONLY_GET_GRAPH_PATHS
@@ -42,16 +41,7 @@ _CLIENT_ABORT_ERRORS = (BrokenPipeError, ConnectionAbortedError, ConnectionReset
 
 
 def _read_graph_service(settings: Settings, *, repo_id: str = "") -> GraphRagService:
-    safe_repo_id = str(repo_id or "").strip()
-    if safe_repo_id:
-        central_graph_path = repo_central_graph_path(settings, safe_repo_id)
-        graph_settings = replace(settings, graph_path=central_graph_path)
-        return GraphRagService(
-            graph_settings,
-            store=KuzuGraphStore(central_graph_path, read_only=True),
-            read_only=True,
-        )
-    return GraphRagService(settings, read_only=True)
+    return _graph_access.read_graph_service(settings, repo_id=repo_id)
 
 
 def _load_web_asset(name: str) -> str:

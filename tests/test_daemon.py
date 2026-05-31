@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from agent_memory_orchestrator.runtime.daemon import server as daemon_module
+from agent_memory_orchestrator.runtime.daemon import graph_access as graph_access_module
 from agent_memory_orchestrator.runtime.daemon.server import (
     DaemonAlreadyRunning,
     _DaemonOwnerLock,
@@ -98,12 +98,12 @@ def test_read_graph_service_uses_repo_central_graph_read_only(tmp_path, monkeypa
         def close(self) -> None:
             return None
 
-    monkeypatch.setattr(daemon_module, "KuzuGraphStore", FakeStore)
-    monkeypatch.setattr(daemon_module, "GraphRagService", FakeGraph)
+    monkeypatch.setattr(graph_access_module, "KuzuGraphStore", FakeStore)
+    monkeypatch.setattr(graph_access_module, "GraphRagService", FakeGraph)
 
     graph = _read_graph_service(settings, repo_id="repo:amo")
 
-    expected_path = daemon_module.repo_central_graph_path(settings, "repo:amo")
+    expected_path = graph_access_module.repo_central_graph_path(settings, "repo:amo")
     assert graph is not None
     assert opened_stores == [(expected_path, True)]
     service_path, service_store, service_read_only = opened_services[0]
