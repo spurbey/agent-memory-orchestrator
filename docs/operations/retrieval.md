@@ -198,8 +198,8 @@ same selector. Use `All repositories` only for operator/debug scans; use a
 specific repo for product retrieval so similarly named files or symbols in
 different projects do not compete.
 
-The dashboard no longer exposes the older `/graph/search` path. `/graph/search`
-remains only as a compatibility/smoke route for old tooling. Product retrieval
+The dashboard does not expose `/graph/search`. That endpoint remains only for
+operator/debug graph inspection and explicit raw-evidence lookup. Product retrieval
 must use the production document index, embedding ledger, FAISS cache, reranker, graph
 neighborhood expansion, and answer-trace renderer.
 

@@ -31,7 +31,7 @@ task_complete(turn_id)
 
 This prevents resumed Codex rollout files from leaking older sessions into a new
 production job. Full transcript import is allowed only when raw evidence has no turn ids
-or when an explicit legacy/debug path asks for whole-transcript reset behavior.
+or when an explicit debug path asks for whole-transcript reset behavior.
 
 ## Outputs
 

@@ -339,7 +339,7 @@ function renderJobCard(job) {
 function renderMarker(marker) {
   if (!marker) return `<span class="pill warn">Production marker missing</span><span class="pill">run reset or adopt before session graph writes</span>`;
   if (marker.fresh_install) {
-    return `<span class="pill good">Fresh production stores ready</span><span class="pill blue">${escapeHtml(marker.pipeline_version || "production")}</span><span class="pill">no legacy graph cleanup needed</span>`;
+    return `<span class="pill good">Fresh production stores ready</span><span class="pill blue">${escapeHtml(marker.pipeline_version || "production")}</span><span class="pill">no graph cleanup needed</span>`;
   }
   if (marker.adopted_existing_production) {
     const docs = marker.validation?.retrieval?.retrieval_document_count;
