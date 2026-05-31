@@ -38,7 +38,7 @@ def make_settings(tmp_path: Path) -> Settings:
     )
 
 
-def test_v2_runner_uses_nested_repo_that_owns_session_commits(tmp_path: Path) -> None:
+def test_production_runner_uses_nested_repo_that_owns_session_commits(tmp_path: Path) -> None:
     settings, parent, nested, full_sha = _nested_repo_session(tmp_path, session_id="s-nested")
 
     store = ProductionSessionJobStore(settings)
@@ -76,7 +76,7 @@ def test_v2_runner_uses_nested_repo_that_owns_session_commits(tmp_path: Path) ->
         store.close()
 
 
-def test_v2_work_packets_repairs_existing_bad_evidence_view_repo_scope(tmp_path: Path) -> None:
+def test_production_work_packets_repairs_existing_bad_evidence_view_repo_scope(tmp_path: Path) -> None:
     settings, parent, nested, full_sha = _nested_repo_session(tmp_path, session_id="s-existing")
     raw_records = list(_read_evidence_records(settings.evidence_dir / "2026-05-24.jsonl"))
     transcript = Path(raw_records[0]["payload"]["transcript_path"])
