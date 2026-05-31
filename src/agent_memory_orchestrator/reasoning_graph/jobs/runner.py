@@ -15,13 +15,11 @@ from ...graph.store import GraphEdge
 from ...graph.store import GraphNode
 from ...graph.store import GraphStore
 from ...graph.store import KuzuGraphStore
-from ...llm.qwen import OllamaQwenClient
-from ...llm.qwen import QwenUnavailable
+from ...llm.qwen import OllamaQwenClient as OllamaQwenClient  # noqa: F401
+from ...llm.qwen import QwenUnavailable as QwenUnavailable  # noqa: F401
 from ..code_analysis import extract_code_nodes_from_commit
-from ..reasoning_extraction import review_reasoning_extraction_results
 from ...domain.versioning.repo_identity import resolve_repo_identity
 from ..retrieval import RetrievalDocument
-from ..stage4_contract import build_stage4_packet_prompt
 from ..stage4_contract import stage4_contract_hash
 from ..stage4_contract import stage4_output_schema
 from .constants import CENTRAL_MERGE_PLANNER_VERSION
@@ -191,92 +189,14 @@ class ProductionSessionJobRunner:
         return run_work_packets_stage(self, job, artifact_dir, stage_dir)
 
     def _stage_qwen_reasoning(self, job: dict[str, Any], artifact_dir: Path, stage_dir: Path) -> StageResult:
-        packets = _read_json(self._stage_input_artifact(job, "qwen_reasoning", artifact_dir))
-        if not isinstance(packets, list):
-            raise RuntimeError("work_packets_output_must_be_list")
-        output = stage_dir / "stage4_packet_reasoning_results.json"
-        manifest = stage_dir / "stage4_packet_reasoning_manifest.json"
-        qwen_contract = _qwen_contract(self.settings)
-        packet_keys = [_qwen_packet_key(packet, contract=qwen_contract) for packet in packets if isinstance(packet, dict)]
-        existing_results = _qwen_existing_results(output)
-        existing_manifest = _qwen_existing_manifest(manifest)
-        reusable = _qwen_reusable_results(
-            existing_results,
-            existing_manifest=existing_manifest,
-            packet_keys=packet_keys,
-        )
-        client = OllamaQwenClient(
-            endpoint=self.settings.qwen_endpoint,
-            model=self.settings.qwen_model,
-            timeout_seconds=self.settings.qwen_extract_timeout_seconds,
-            num_ctx=self.settings.qwen_num_ctx,
-        )
-        results: list[dict[str, Any]] = []
-        reused_count = 0
-        for packet in packets:
-            if not isinstance(packet, dict):
-                continue
-            key = _qwen_packet_key(packet, contract=qwen_contract)
-            cached = reusable.get(_qwen_packet_cache_key(key))
-            if cached is not None:
-                results.append(cached)
-                reused_count += 1
-                continue
-            prompt = build_stage4_packet_prompt(packet)
-            try:
-                parsed = client.generate_json(
-                    prompt,
-                    num_predict=900,
-                    timeout_seconds=self.settings.qwen_extract_timeout_seconds,
-                    schema=stage4_output_schema(),
-                )
-            except QwenUnavailable as exc:
-                raise PendingModel("qwen_unavailable", {"packet_id": packet.get("packet_id"), "error": str(exc)}) from exc
-            results.append(
-                {
-                    "packet_id": packet.get("packet_id"),
-                    "commit_sha": _packet_commit_sha(packet),
-                    "model": self.settings.qwen_model,
-                    "runtime": self.settings.qwen_runtime,
-                    "contract_hash": qwen_contract["contract_hash"],
-                    "parsed_output": parsed,
-                }
-            )
-            _write_qwen_checkpoint(output, manifest, results, packet_keys, contract=qwen_contract, complete=False)
-        _write_qwen_checkpoint(output, manifest, results, packet_keys, contract=qwen_contract, complete=len(results) == len(packet_keys))
-        return StageResult(
-            output_path=output,
-            diagnostics={
-                "packet_count": len(packet_keys),
-                "result_count": len(results),
-                "reused_result_count": reused_count,
-                "generated_result_count": len(results) - reused_count,
-                "checkpoint_manifest": str(manifest),
-            },
-        )
+        from .stages.qwen_reasoning import run_qwen_reasoning_stage
+
+        return run_qwen_reasoning_stage(self, job, artifact_dir, stage_dir)
 
     def _stage_reasoning_review(self, job: dict[str, Any], artifact_dir: Path, stage_dir: Path) -> StageResult:
-        packets = _read_json(_stage_output(artifact_dir, "work_packets"))
-        results = _read_json(self._stage_input_artifact(job, "reasoning_review", artifact_dir))
-        review = review_reasoning_extraction_results(
-            packets=packets if isinstance(packets, list) else [],
-            results=results if isinstance(results, list) else [],
-            source_name="v2_session_job",
-        )
-        (stage_dir / "stage4_reasoning_review.json").write_text(json.dumps(review.as_dict(), indent=2, ensure_ascii=False), encoding="utf-8")
-        output = stage_dir / "accepted_reasoning_nodes.json"
-        output.write_text(json.dumps(list(review.accepted_nodes), indent=2, ensure_ascii=False), encoding="utf-8")
-        if review.summary.get("stage_acceptance") == "FAIL":
-            raise StageFailed(
-                "reasoning_review_acceptance_failed",
-                {
-                    "summary": review.summary,
-                    "review_artifact": str(stage_dir / "stage4_reasoning_review.json"),
-                    "accepted_nodes_artifact": str(output),
-                    "note": "Curated graph promotion is blocked only when Qwen reasoning has structural errors. Review-only output can still produce deterministic commit/file memory.",
-                },
-            )
-        return StageResult(output_path=output, diagnostics={"summary": review.summary})
+        from .stages.reasoning_review import run_reasoning_review_stage
+
+        return run_reasoning_review_stage(self, job, artifact_dir, stage_dir)
 
     def _stage_git_hunks(self, job: dict[str, Any], artifact_dir: Path, stage_dir: Path) -> StageResult:
         packets = _read_json(_stage_output(artifact_dir, "work_packets"))
