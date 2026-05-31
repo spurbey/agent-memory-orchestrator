@@ -16,6 +16,29 @@ ORCHESTRATION_COMMANDS = (
 )
 
 
+def add_orchestration_subcommands(sub: Any) -> None:
+    orch_start = sub.add_parser("orchestrate-start", help="Start orchestrator session")
+    orch_start.add_argument("--session-id", required=True)
+    orch_start.add_argument("--title")
+
+    orch_submit = sub.add_parser("orchestrate-submit", help="Submit orchestrator round")
+    orch_submit.add_argument("--session-id", required=True)
+    orch_submit.add_argument("--agent", required=True, choices=["claude", "codex"])
+    orch_submit.add_argument("--summary", required=True)
+    orch_submit.add_argument("--confidence", required=True, type=float)
+    orch_submit.add_argument("--artifact-uri", default="")
+    orch_submit.add_argument("--blocking-issue", action="append", default=[])
+
+    orch_status = sub.add_parser("orchestrate-status", help="Get orchestrator status")
+    orch_status.add_argument("--session-id", required=True)
+
+    orch_decide = sub.add_parser("orchestrate-decision", help="Apply user decision")
+    orch_decide.add_argument("--session-id", required=True)
+    orch_decide.add_argument("--decision", required=True, choices=["approved", "rejected"])
+    orch_decide.add_argument("--notes", default="")
+    orch_decide.add_argument("--decided-by", default="user")
+
+
 def handle_orchestration_command(args: Any, *, emit: Callable[[object], None]) -> int | None:
     """Run local orchestration commands."""
     if args.command not in ORCHESTRATION_COMMANDS:
@@ -52,4 +75,4 @@ def handle_orchestration_command(args: Any, *, emit: Callable[[object], None]) -
     return 0
 
 
-__all__ = ["ORCHESTRATION_COMMANDS", "handle_orchestration_command"]
+__all__ = ["ORCHESTRATION_COMMANDS", "add_orchestration_subcommands", "handle_orchestration_command"]

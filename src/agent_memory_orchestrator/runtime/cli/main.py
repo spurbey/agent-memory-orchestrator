@@ -23,6 +23,7 @@ from .commands.memory import handle_memory_command as _handle_memory_command
 from .commands.memory import rebuild_clean_db
 from .commands.models import add_models_subcommands as _add_models_subcommands
 from .commands.models import handle_models_command as _handle_models_command
+from .commands.orchestration import add_orchestration_subcommands as _add_orchestration_subcommands
 from .commands.orchestration import handle_orchestration_command as _handle_orchestration_command
 from .commands.pipeline import handle_pipeline_command as _handle_pipeline_command
 from .commands.peer import add_peer_subcommands as _add_peer_subcommands
@@ -234,26 +235,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     _add_models_subcommands(sub)
 
-    orch_start = sub.add_parser("orchestrate-start", help="Start orchestrator session")
-    orch_start.add_argument("--session-id", required=True)
-    orch_start.add_argument("--title")
-
-    orch_submit = sub.add_parser("orchestrate-submit", help="Submit orchestrator round")
-    orch_submit.add_argument("--session-id", required=True)
-    orch_submit.add_argument("--agent", required=True, choices=["claude", "codex"])
-    orch_submit.add_argument("--summary", required=True)
-    orch_submit.add_argument("--confidence", required=True, type=float)
-    orch_submit.add_argument("--artifact-uri", default="")
-    orch_submit.add_argument("--blocking-issue", action="append", default=[])
-
-    orch_status = sub.add_parser("orchestrate-status", help="Get orchestrator status")
-    orch_status.add_argument("--session-id", required=True)
-
-    orch_decide = sub.add_parser("orchestrate-decision", help="Apply user decision")
-    orch_decide.add_argument("--session-id", required=True)
-    orch_decide.add_argument("--decision", required=True, choices=["approved", "rejected"])
-    orch_decide.add_argument("--notes", default="")
-    orch_decide.add_argument("--decided-by", default="user")
+    _add_orchestration_subcommands(sub)
 
     return parser
 
