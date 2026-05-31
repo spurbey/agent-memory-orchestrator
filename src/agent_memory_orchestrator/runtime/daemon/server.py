@@ -23,7 +23,6 @@ from .coordination import DRAIN_LOCK as _DRAIN_LOCK
 from .coordination import GRAPH_WRITE_LOCK as _GRAPH_WRITE_LOCK
 from .coordination import READ_ONLY_GET_GRAPH_PATHS as _READ_ONLY_GET_GRAPH_PATHS
 from .coordination import bounded_int as _bounded_int
-from .coordination import graph_write_lock_if as _graph_write_lock_if
 from .logging import daemon_log as _daemon_log
 from .owner_lock import DaemonAlreadyRunning
 from .owner_lock import DaemonOwnerLock
@@ -322,27 +321,6 @@ class AmoHandler(BaseHTTPRequestHandler):
                     if path == "/api/debug/graph":
                         self._write_json(200, debug_graph(graph, session_id=session_id))
                         return
-                    if path == "/api/debug/cleanup-noisy":
-                        apply = (query.get("apply") or ["false"])[0].lower() == "true"
-                        if apply:
-                            with _GRAPH_WRITE_LOCK:
-                                result = graph.cleanup_noisy_drafts(limit=limit, apply=True)
-                        else:
-                            result = graph.cleanup_noisy_drafts(limit=limit, apply=False)
-                        self._write_json(200, result)
-                        return
-                    if path == "/api/debug/consolidate":
-                        apply = (query.get("apply") or ["false"])[0].lower() == "true"
-                        if apply:
-                            with _GRAPH_WRITE_LOCK:
-                                result = graph.consolidate_graph(limit=limit, apply=True)
-                        else:
-                            result = graph.consolidate_graph(limit=limit, apply=False)
-                        self._write_json(200, result)
-                        return
-                    if path == "/api/debug/graph-cache":
-                        self._write_json(200, graph.graph_cache_status())
-                        return
                 finally:
                     graph.close()
             except _CLIENT_ABORT_ERRORS:
@@ -541,35 +519,6 @@ class AmoHandler(BaseHTTPRequestHandler):
                 finally:
                     graph.close()
                 return
-            if self.path == "/graph/cleanup-noisy":
-                with _graph_write_lock_if(bool(payload.get("apply"))):
-                    graph = GraphRagService(self.settings)
-                    try:
-                        limit = _bounded_int(str(payload.get("limit") or ""), default=500, minimum=1, maximum=5000)
-                        result = graph.cleanup_noisy_drafts(limit=limit, apply=bool(payload.get("apply")))
-                        self._write_json(200, result)
-                    finally:
-                        graph.close()
-                return
-            if self.path == "/graph/consolidate":
-                with _graph_write_lock_if(bool(payload.get("apply"))):
-                    graph = GraphRagService(self.settings)
-                    try:
-                        limit = _bounded_int(str(payload.get("limit") or ""), default=500, minimum=1, maximum=5000)
-                        result = graph.consolidate_graph(limit=limit, apply=bool(payload.get("apply")))
-                        self._write_json(200, result)
-                    finally:
-                        graph.close()
-                return
-            if self.path == "/graph/rebuild-cache":
-                graph = GraphRagService(self.settings)
-                try:
-                    limit = _bounded_int(str(payload.get("limit") or ""), default=5000, minimum=1, maximum=20000)
-                    result = graph.rebuild_graph_cache(limit=limit)
-                    self._write_json(200, result)
-                finally:
-                    graph.close()
-                return
             if self.path == "/graph/retrieval-build":
                 graph_settings = _settings_with_payload_paths(self.settings, payload, prefer_retrieval=True)
                 graph = _read_graph_service(graph_settings)
@@ -639,43 +588,6 @@ class AmoHandler(BaseHTTPRequestHandler):
                     self._write_json(200, result)
                 finally:
                     graph.close()
-                return
-            if self.path == "/graph/finalize-session":
-                with _graph_write_lock_if(bool(payload.get("apply"))):
-                    graph = GraphRagService(self.settings)
-                    try:
-                        limit = _bounded_int(str(payload.get("limit") or ""), default=500, minimum=1, maximum=5000)
-                        result = graph.finalize_session(
-                            session_id=str(payload.get("session_id") or ""),
-                            commit=str(payload.get("commit") or "HEAD"),
-                            apply=bool(payload.get("apply")),
-                            limit=limit,
-                            cwd=payload.get("cwd") or None,
-                        )
-                        self._write_json(200, result)
-                    finally:
-                        graph.close()
-                return
-            if self.path == "/graph/rebuild-central":
-                with _graph_write_lock_if(bool(payload.get("apply"))):
-                    graph = GraphRagService(self.settings)
-                    try:
-                        limit = _bounded_int(str(payload.get("limit") or ""), default=100000, minimum=1, maximum=500000)
-                        max_windows = payload.get("max_windows")
-                        bounded_windows = (
-                            _bounded_int(str(max_windows), default=self.settings.drain_max_windows_per_run, minimum=1, maximum=1000)
-                            if max_windows
-                            else None
-                        )
-                        result = graph.rebuild_central_from_evidence(
-                            apply=bool(payload.get("apply")),
-                            backup_current=bool(payload.get("backup_current")) or bool(payload.get("apply")),
-                            limit=limit,
-                            max_windows=bounded_windows,
-                        )
-                        self._write_json(200, result)
-                    finally:
-                        graph.close()
                 return
             if self.path == "/graph/version-flow":
                 repo_id = str(payload.get("repo_id") or "")

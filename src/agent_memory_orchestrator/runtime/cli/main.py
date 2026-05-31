@@ -292,23 +292,6 @@ def _build_parser() -> argparse.ArgumentParser:
     graph_drain.add_argument("--max-windows", type=int, default=None, help="Maximum Qwen trigger windows to process in one request.")
     graph_drain.add_argument("--offline", action="store_true", help="Open Kuzu directly for single-process maintenance.")
 
-    graph_cleanup = sub.add_parser("graph-cleanup-noisy", help="Find or abandon noisy draft graph answer nodes")
-    graph_cleanup.add_argument("--limit", type=int, default=500)
-    graph_cleanup.add_argument("--apply", action="store_true", help="Mark noisy nodes abandoned.")
-    graph_cleanup.add_argument("--offline", action="store_true", help="Open Kuzu directly for single-process maintenance.")
-
-    graph_consolidate = sub.add_parser("graph-consolidate", help="Classify duplicate/refine/supersede/contradict graph edges")
-    graph_consolidate.add_argument("--limit", type=int, default=500)
-    graph_consolidate.add_argument("--apply", action="store_true", help="Write consolidation edges and topic cluster nodes.")
-    graph_consolidate.add_argument("--offline", action="store_true", help="Open Kuzu directly for single-process maintenance.")
-
-    graph_cache_status = sub.add_parser("graph-cache-status", help="Inspect derived GraphRAG retrieval cache status")
-    graph_cache_status.add_argument("--offline", action="store_true", help="Open Kuzu directly for single-process maintenance.")
-
-    graph_rebuild_cache = sub.add_parser("graph-rebuild-cache", help="Rebuild derived GraphRAG retrieval cache")
-    graph_rebuild_cache.add_argument("--limit", type=int, default=5000)
-    graph_rebuild_cache.add_argument("--offline", action="store_true", help="Open Kuzu directly for single-process maintenance.")
-
     graph_retrieval_build = sub.add_parser("graph-retrieval-build", help="Build SQLite/FTS retrieval docs from the graph")
     graph_retrieval_build.add_argument("--session-id", default="")
     graph_retrieval_build.add_argument("--repo-id", default="", help="Limit retrieval docs to one canonical repo id.")
@@ -342,22 +325,6 @@ def _build_parser() -> argparse.ArgumentParser:
     graph_retrieve.add_argument("--require-vector", action="store_true", help="Fail instead of falling back if vector retrieval returns no candidates.")
     graph_retrieve.add_argument("--no-answer", action="store_true")
     graph_retrieve.add_argument("--offline", action="store_true", help="Open Kuzu directly for single-process maintenance.")
-
-    graph_finalize = sub.add_parser("graph-finalize-session", help="Promote one session's draft graph work into central graph")
-    graph_finalize.add_argument("--session-id", required=True)
-    graph_finalize.add_argument("--commit", default="HEAD")
-    graph_finalize.add_argument("--cwd", default="")
-    graph_finalize.add_argument("--limit", type=int, default=500)
-    graph_finalize.add_argument("--apply", action="store_true", help="Apply the merge plan. Omit for dry-run preview.")
-    graph_finalize.add_argument("--offline", action="store_true", help="Open Kuzu directly for single-process maintenance.")
-
-    graph_rebuild_central = sub.add_parser("graph-rebuild-central", help="Rebuild central graph from raw evidence")
-    graph_rebuild_central.add_argument("--from-evidence", action="store_true", help="Replay raw evidence into a fresh graph")
-    graph_rebuild_central.add_argument("--backup-current", action="store_true", help="Back up current active graph before swap")
-    graph_rebuild_central.add_argument("--apply", action="store_true", help="Apply backup/rebuild/swap. Omit for dry-run preview.")
-    graph_rebuild_central.add_argument("--limit", type=int, default=100000)
-    graph_rebuild_central.add_argument("--max-windows", type=int, default=None)
-    graph_rebuild_central.add_argument("--offline", action="store_true", help="Open Kuzu directly for single-process maintenance.")
 
     graph_version_flow = sub.add_parser("graph-version-flow", help="Show commit-centric graph versioning flow")
     graph_version_flow.add_argument("--commit", default="", help="Commit SHA/prefix to inspect. Omit to list recent flows.")
@@ -1533,15 +1500,9 @@ def main(argv: list[str] | None = None) -> int:
             "graph-search",
             "graph-status",
             "graph-drain",
-            "graph-cleanup-noisy",
-            "graph-consolidate",
-            "graph-cache-status",
-            "graph-rebuild-cache",
             "graph-retrieval-build",
             "graph-retrieval-embed",
             "graph-retrieve",
-            "graph-finalize-session",
-            "graph-rebuild-central",
             "graph-version-flow",
         }:
             settings = _settings_with_path_overrides(Settings.load(), args)
@@ -1553,7 +1514,6 @@ def main(argv: list[str] | None = None) -> int:
                 graph_store = None
                 read_only_graph = args.command in {
                     "graph-search",
-                    "graph-cache-status",
                     "graph-retrieval-build",
                     "graph-retrieval-embed",
                     "graph-retrieve",
@@ -1574,14 +1534,6 @@ def main(argv: list[str] | None = None) -> int:
                         )
                     elif args.command == "graph-drain":
                         result = graph.drain_evidence(limit=args.limit, session_id=args.session_id, max_windows=args.max_windows)
-                    elif args.command == "graph-cleanup-noisy":
-                        result = graph.cleanup_noisy_drafts(limit=args.limit, apply=args.apply)
-                    elif args.command == "graph-consolidate":
-                        result = graph.consolidate_graph(limit=args.limit, apply=args.apply)
-                    elif args.command == "graph-cache-status":
-                        result = graph.graph_cache_status()
-                    elif args.command == "graph-rebuild-cache":
-                        result = graph.rebuild_graph_cache(limit=args.limit)
                     elif args.command == "graph-retrieval-build":
                         result = graph.rebuild_retrieval_index(
                             db_path=args.db_path,
@@ -1613,21 +1565,6 @@ def main(argv: list[str] | None = None) -> int:
                             require_vector=args.require_vector,
                             include_answer=not args.no_answer,
                         )
-                    elif args.command == "graph-finalize-session":
-                        result = graph.finalize_session(
-                            session_id=args.session_id,
-                            commit=args.commit,
-                            apply=args.apply,
-                            limit=args.limit,
-                            cwd=args.cwd or None,
-                        )
-                    elif args.command == "graph-rebuild-central":
-                        result = graph.rebuild_central_from_evidence(
-                            apply=args.apply,
-                            backup_current=args.backup_current or args.apply,
-                            limit=args.limit,
-                            max_windows=args.max_windows,
-                        )
                     elif args.command == "graph-version-flow":
                         result = graph.version_flow(commit=args.commit, session_id=args.session_id, repo_id=args.repo_id, limit=args.limit)
                     else:
@@ -1641,12 +1578,8 @@ def main(argv: list[str] | None = None) -> int:
                     if args.command
                     in {
                         "graph-drain",
-                        "graph-consolidate",
-                        "graph-rebuild-cache",
                         "graph-retrieval-build",
                         "graph-retrieval-embed",
-                        "graph-finalize-session",
-                        "graph-rebuild-central",
                         "graph-version-flow",
                     }
                     else 60
@@ -1668,14 +1601,6 @@ def main(argv: list[str] | None = None) -> int:
                             "/graph/drain",
                             {"session_id": args.session_id, "limit": args.limit, "max_windows": args.max_windows},
                         )
-                    elif args.command == "graph-cleanup-noisy":
-                        result = client.post("/graph/cleanup-noisy", {"limit": args.limit, "apply": args.apply})
-                    elif args.command == "graph-consolidate":
-                        result = client.post("/graph/consolidate", {"limit": args.limit, "apply": args.apply})
-                    elif args.command == "graph-cache-status":
-                        result = client.get("/api/debug/graph-cache")
-                    elif args.command == "graph-rebuild-cache":
-                        result = client.post("/graph/rebuild-cache", {"limit": args.limit})
                     elif args.command == "graph-retrieval-build":
                         result = client.post(
                             "/graph/retrieval-build",
@@ -1717,28 +1642,6 @@ def main(argv: list[str] | None = None) -> int:
                                 "use_vector": not args.no_vector,
                                 "require_vector": args.require_vector,
                                 "include_answer": not args.no_answer,
-                            },
-                        )
-                    elif args.command == "graph-finalize-session":
-                        result = client.post(
-                            "/graph/finalize-session",
-                            {
-                                "session_id": args.session_id,
-                                "commit": args.commit,
-                                "cwd": args.cwd or None,
-                                "limit": args.limit,
-                                "apply": args.apply,
-                            },
-                        )
-                    elif args.command == "graph-rebuild-central":
-                        result = client.post(
-                            "/graph/rebuild-central",
-                            {
-                                "from_evidence": args.from_evidence,
-                                "backup_current": args.backup_current or args.apply,
-                                "limit": args.limit,
-                                "max_windows": args.max_windows,
-                                "apply": args.apply,
                             },
                         )
                     elif args.command == "graph-version-flow":

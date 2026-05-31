@@ -30,7 +30,7 @@ hook evidence
 ```
 
 Hooks never perform graph work directly. Drain does not run Qwen, Kuzu writes,
-retrieval rebuild, embeddings, or old `GraphDelta` processing. It reads raw
+retrieval rebuild, embeddings, or legacy session-graph extraction. It reads raw
 evidence, tracks cursors/session boundaries, and idempotently enqueues the
 previous session when a new `session_start` appears.
 

@@ -75,10 +75,10 @@ def test_central_graph_snapshot_lists_committed_nodes_and_edges(tmp_path: Path) 
     )
     store.upsert_node(
         GraphNode(
-            id="delta:s1:raw1",
-            kind="GraphDelta",
-            label="session graph delta",
-            summary="Created work from cleaned evidence.",
+            id="reason:s1:raw1",
+            kind="ReasoningNode",
+            label="session reasoning",
+            summary="Created reasoning from cleaned evidence.",
             status="draft",
             scope="session",
             session_id="s1",
@@ -109,16 +109,16 @@ def test_central_graph_snapshot_lists_committed_nodes_and_edges(tmp_path: Path) 
     )
     store.upsert_edge(
         GraphEdge(
-            id="edge:window-delta",
+            id="edge:window-reason",
             source_id="window:s1:raw1",
-            target_id="delta:s1:raw1",
+            target_id="reason:s1:raw1",
             kind="EXTRACTED_AS",
         )
     )
     store.upsert_edge(
         GraphEdge(
-            id="edge:delta-work",
-            source_id="delta:s1:raw1",
+            id="edge:reason-work",
+            source_id="reason:s1:raw1",
             target_id="work:s1:one",
             kind="CREATED",
         )
@@ -145,7 +145,7 @@ def test_central_graph_snapshot_lists_committed_nodes_and_edges(tmp_path: Path) 
     assert [node["id"] for node in central["nodes"]] == [
         "commit:abc123",
         "work:s1:one",
-        "delta:s1:raw1",
+        "reason:s1:raw1",
         "window:s1:raw1",
     ]
     assert {edge["kind"] for edge in central["edges"]} >= {"COMMITTED_AS", "CREATED", "EXTRACTED_AS"}

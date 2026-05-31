@@ -211,7 +211,7 @@ class SlackConnectorService:
             "session_id": session_id,
             "event_type": connector_event.event_type,
             "evidence": evidence.as_dict(),
-            "next_step": "Run graph-drain for this session to create the cleaned window and GraphDelta.",
+            "next_step": "Run graph-drain for this session to enqueue the closed-session production pipeline.",
         }
 
     def post_ack_reply(self, *, channel: str, thread_ts: str = "") -> dict[str, Any]:
