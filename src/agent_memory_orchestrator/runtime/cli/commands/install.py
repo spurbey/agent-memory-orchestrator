@@ -19,7 +19,7 @@ from ....install.service import doctor as install_doctor
 from ....install.service import uninstall as uninstall_targets
 from ....llm.models import download_models
 from ....memory import MemoryService
-from ....reasoning_graph.jobs.reset import initialize_fresh_production_storage
+from ....application.pipeline.storage_lifecycle import initialize_fresh_production_storage
 
 INSTALL_COMMANDS = ("install", "doctor", "uninstall")
 
