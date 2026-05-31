@@ -79,7 +79,7 @@ def _product_plan(plan):
     }
 
 
-def test_v2_enqueue_is_idempotent_and_atomic_lock_skips_locked_failed_and_pending_model(tmp_path: Path) -> None:
+def test_production_enqueue_is_idempotent_and_atomic_lock_skips_locked_failed_and_pending_model(tmp_path: Path) -> None:
     settings = make_settings(tmp_path)
     store = ProductionSessionJobStore(settings)
     try:
@@ -125,7 +125,7 @@ def test_v2_enqueue_is_idempotent_and_atomic_lock_skips_locked_failed_and_pendin
         store.close()
 
 
-def test_v2_stage_rows_track_hashes_and_config_hash(tmp_path: Path) -> None:
+def test_production_stage_rows_track_hashes_and_config_hash(tmp_path: Path) -> None:
     settings = make_settings(tmp_path)
     store = ProductionSessionJobStore(settings)
     try:
@@ -161,7 +161,7 @@ def test_v2_stage_rows_track_hashes_and_config_hash(tmp_path: Path) -> None:
         store.close()
 
 
-def test_v2_qwen_reasoning_reuses_existing_matching_checkpoint(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_production_qwen_reasoning_reuses_existing_matching_checkpoint(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     settings = make_settings(tmp_path)
     store = ProductionSessionJobStore(settings)
     try:
@@ -245,7 +245,7 @@ def test_v2_qwen_reasoning_reuses_existing_matching_checkpoint(tmp_path: Path, m
         store.close()
 
 
-def test_v2_schema_adds_central_merge_control_tables(tmp_path: Path) -> None:
+def test_production_schema_adds_central_merge_control_tables(tmp_path: Path) -> None:
     settings = make_settings(tmp_path)
     store = ProductionSessionJobStore(settings)
     try:
@@ -266,7 +266,7 @@ def test_v2_schema_adds_central_merge_control_tables(tmp_path: Path) -> None:
     }.issubset(names)
 
 
-def test_v2_jobs_and_repository_list_are_repo_scoped(tmp_path: Path) -> None:
+def test_production_jobs_and_repository_list_are_repo_scoped(tmp_path: Path) -> None:
     settings = make_settings(tmp_path)
     repo_a = tmp_path / "repo-a"
     repo_b = tmp_path / "repo-b"
@@ -296,7 +296,7 @@ def test_v2_jobs_and_repository_list_are_repo_scoped(tmp_path: Path) -> None:
     assert {row["repo_id"] for row in repos} >= {job_a["repo_id"], job_b["repo_id"]}
 
 
-def test_v2_central_merge_stage_writes_plan_and_applies_exact_atoms(tmp_path: Path) -> None:
+def test_production_central_merge_stage_writes_plan_and_applies_exact_atoms(tmp_path: Path) -> None:
     settings = make_settings(tmp_path)
     store = ProductionSessionJobStore(settings)
     try:
@@ -372,7 +372,7 @@ def test_v2_central_merge_stage_writes_plan_and_applies_exact_atoms(tmp_path: Pa
         store.close()
 
 
-def test_v2_central_merge_input_hash_tracks_active_graph_view_head(tmp_path: Path) -> None:
+def test_production_central_merge_input_hash_tracks_active_graph_view_head(tmp_path: Path) -> None:
     settings = make_settings(tmp_path)
     store = ProductionSessionJobStore(settings)
     try:
@@ -396,7 +396,7 @@ def test_v2_central_merge_input_hash_tracks_active_graph_view_head(tmp_path: Pat
         store.close()
 
 
-def test_v2_central_merge_apply_writes_exact_atoms_graph_commit_and_view(tmp_path: Path) -> None:
+def test_production_central_merge_apply_writes_exact_atoms_graph_commit_and_view(tmp_path: Path) -> None:
     settings = make_settings(tmp_path)
     graph = InMemoryGraphStore()
     store = ProductionSessionJobStore(settings)
@@ -481,7 +481,7 @@ def test_v2_central_merge_apply_writes_exact_atoms_graph_commit_and_view(tmp_pat
         store.close()
 
 
-def test_v2_central_merge_apply_defaults_to_repo_scoped_central_graph(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_production_central_merge_apply_defaults_to_repo_scoped_central_graph(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     settings = make_settings(tmp_path)
     opened_paths: list[Path] = []
 
@@ -515,7 +515,7 @@ def test_v2_central_merge_apply_defaults_to_repo_scoped_central_graph(tmp_path: 
         store.close()
 
 
-def test_v2_central_merge_apply_requires_matching_graph_view_head(tmp_path: Path) -> None:
+def test_production_central_merge_apply_requires_matching_graph_view_head(tmp_path: Path) -> None:
     settings = make_settings(tmp_path)
     graph = InMemoryGraphStore()
     store = ProductionSessionJobStore(settings)
@@ -542,7 +542,7 @@ def test_v2_central_merge_apply_requires_matching_graph_view_head(tmp_path: Path
         store.close()
 
 
-def test_v2_central_merge_apply_rejects_non_curated_plan_input(tmp_path: Path) -> None:
+def test_production_central_merge_apply_rejects_non_curated_plan_input(tmp_path: Path) -> None:
     settings = make_settings(tmp_path)
     graph = InMemoryGraphStore()
     store = ProductionSessionJobStore(settings)
@@ -562,7 +562,7 @@ def test_v2_central_merge_apply_rejects_non_curated_plan_input(tmp_path: Path) -
         store.close()
 
 
-def test_v2_central_merge_planner_reports_matched_exact_atoms(tmp_path: Path) -> None:
+def test_production_central_merge_planner_reports_matched_exact_atoms(tmp_path: Path) -> None:
     settings = make_settings(tmp_path)
     store = ProductionSessionJobStore(settings)
     try:
@@ -589,7 +589,7 @@ def test_v2_central_merge_planner_reports_matched_exact_atoms(tmp_path: Path) ->
         store.close()
 
 
-def test_v2_central_merge_file_version_key_includes_producing_commit(tmp_path: Path) -> None:
+def test_production_central_merge_file_version_key_includes_producing_commit(tmp_path: Path) -> None:
     settings = make_settings(tmp_path)
     store = ProductionSessionJobStore(settings)
     try:
@@ -618,7 +618,7 @@ def test_v2_central_merge_file_version_key_includes_producing_commit(tmp_path: P
         store.close()
 
 
-def test_v2_central_merge_apply_attaches_versions_to_matched_atoms(tmp_path: Path) -> None:
+def test_production_central_merge_apply_attaches_versions_to_matched_atoms(tmp_path: Path) -> None:
     settings = make_settings(tmp_path)
     graph = InMemoryGraphStore()
     store = ProductionSessionJobStore(settings)
@@ -665,7 +665,7 @@ def test_v2_central_merge_apply_attaches_versions_to_matched_atoms(tmp_path: Pat
         store.close()
 
 
-def test_v2_central_merge_apply_writes_review_decision_versions_and_relation_edges(tmp_path: Path) -> None:
+def test_production_central_merge_apply_writes_review_decision_versions_and_relation_edges(tmp_path: Path) -> None:
     settings = make_settings(tmp_path)
     graph = InMemoryGraphStore()
     store = ProductionSessionJobStore(settings)
@@ -717,7 +717,7 @@ def test_v2_central_merge_apply_writes_review_decision_versions_and_relation_edg
         store.close()
 
 
-def test_v2_central_merge_apply_status_changes_for_safe_supersedes(tmp_path: Path) -> None:
+def test_production_central_merge_apply_status_changes_for_safe_supersedes(tmp_path: Path) -> None:
     settings = make_settings(tmp_path)
     graph = InMemoryGraphStore()
     store = ProductionSessionJobStore(settings)
@@ -784,7 +784,7 @@ def test_v2_central_merge_apply_status_changes_for_safe_supersedes(tmp_path: Pat
         store.close()
 
 
-def test_v2_central_merge_keeps_same_session_refinement_in_review(tmp_path: Path) -> None:
+def test_production_central_merge_keeps_same_session_refinement_in_review(tmp_path: Path) -> None:
     settings = make_settings(tmp_path)
     graph = InMemoryGraphStore()
     store = ProductionSessionJobStore(settings)
@@ -831,12 +831,12 @@ def test_v2_central_merge_keeps_same_session_refinement_in_review(tmp_path: Path
         store.close()
 
 
-def test_v2_repo_identity_normalizes_remote_urls() -> None:
+def test_production_repo_identity_normalizes_remote_urls() -> None:
     assert normalize_remote_url("git@github.com:Spurbey/Agent-Memory-Orchestrator.git") == "https://github.com/Spurbey/Agent-Memory-Orchestrator"
     assert normalize_remote_url("https://github.com/spurbey/agent-memory-orchestrator.git/") == "https://github.com/spurbey/agent-memory-orchestrator"
 
 
-def test_v2_central_merge_backfill_does_not_reopen_completed_job(tmp_path: Path) -> None:
+def test_production_central_merge_backfill_does_not_reopen_completed_job(tmp_path: Path) -> None:
     settings = make_settings(tmp_path)
     store = ProductionSessionJobStore(settings)
     try:
@@ -879,7 +879,7 @@ def test_v2_central_merge_backfill_does_not_reopen_completed_job(tmp_path: Path)
     assert any(event["event_type"] == "central_merge_backfilled" for event in events)
 
 
-def test_v2_central_merge_persists_decision_frames_for_cross_session_dry_run(tmp_path: Path) -> None:
+def test_production_central_merge_persists_decision_frames_for_cross_session_dry_run(tmp_path: Path) -> None:
     settings = make_settings(tmp_path)
     store = ProductionSessionJobStore(settings)
     try:
@@ -984,7 +984,7 @@ def test_v2_central_merge_persists_decision_frames_for_cross_session_dry_run(tmp
         store.close()
 
 
-def test_v2_fixture_embedding_coverage_counts_only_current_retrieval_docs(tmp_path: Path) -> None:
+def test_production_fixture_embedding_coverage_counts_only_current_retrieval_docs(tmp_path: Path) -> None:
     settings = make_settings(tmp_path)
     settings.retrieval_db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = connect(settings.retrieval_db_path)
@@ -1079,7 +1079,7 @@ def test_semantic_judge_checks_mentions_citations_and_forbidden_claims() -> None
     assert failed["blocking_failures"]
 
 
-def test_v2_runner_fails_instead_of_completing_empty_graph_when_no_work_packets(tmp_path: Path) -> None:
+def test_production_runner_fails_instead_of_completing_empty_graph_when_no_work_packets(tmp_path: Path) -> None:
     settings = make_settings(tmp_path)
     settings.evidence_dir.mkdir(parents=True, exist_ok=True)
     transcript_path = tmp_path / "transcript.jsonl"
@@ -1149,7 +1149,7 @@ def test_v2_runner_fails_instead_of_completing_empty_graph_when_no_work_packets(
         store.close()
 
 
-def test_v2_reset_requires_backup_and_preserves_raw_config_and_job_tables(tmp_path: Path) -> None:
+def test_production_reset_requires_backup_and_preserves_raw_config_and_job_tables(tmp_path: Path) -> None:
     settings = make_settings(tmp_path)
     settings.evidence_dir.mkdir(parents=True)
     raw_path = settings.evidence_dir / "2026-05-20.jsonl"
@@ -1260,7 +1260,7 @@ def test_v2_reset_requires_backup_and_preserves_raw_config_and_job_tables(tmp_pa
     assert marker["cleaned"] == {"graph": True, "retrieval": True, "faiss": True}
 
 
-def test_v2_fresh_init_marks_empty_new_install_without_reset(tmp_path: Path) -> None:
+def test_production_fresh_init_marks_empty_new_install_without_reset(tmp_path: Path) -> None:
     settings = make_settings(tmp_path)
     settings.home.mkdir(parents=True, exist_ok=True)
 
@@ -1281,7 +1281,7 @@ def test_v2_fresh_init_marks_empty_new_install_without_reset(tmp_path: Path) -> 
     assert again["reason"] == "marker_exists"
 
 
-def test_v2_fresh_init_refuses_non_empty_retrieval_store(tmp_path: Path) -> None:
+def test_production_fresh_init_refuses_non_empty_retrieval_store(tmp_path: Path) -> None:
     settings = make_settings(tmp_path)
     settings.home.mkdir(parents=True, exist_ok=True)
     settings.retrieval_db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1308,7 +1308,7 @@ def test_v2_fresh_init_refuses_non_empty_retrieval_store(tmp_path: Path) -> None
         initialize_fresh_v2_production_storage(settings)
 
 
-def test_v2_adopt_production_backs_up_and_preserves_existing_v2_stores(tmp_path: Path) -> None:
+def test_production_adopt_production_backs_up_and_preserves_existing_v2_stores(tmp_path: Path) -> None:
     settings = make_settings(tmp_path)
     settings.home.mkdir(parents=True, exist_ok=True)
     settings.graph_path.mkdir(parents=True)
@@ -1385,7 +1385,7 @@ def test_v2_adopt_production_backs_up_and_preserves_existing_v2_stores(tmp_path:
     assert require_complete_v2_reset_marker(marker) == marker
 
 
-def test_v2_runner_rejects_missing_incomplete_or_wrong_reset_marker() -> None:
+def test_production_runner_rejects_missing_incomplete_or_wrong_reset_marker() -> None:
     complete_marker = {
         "pipeline_version": PIPELINE_VERSION,
         "graph_schema_version": GRAPH_SCHEMA_VERSION,
