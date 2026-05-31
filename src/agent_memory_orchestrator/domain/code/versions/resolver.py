@@ -3,10 +3,11 @@ from __future__ import annotations
 import math
 import re
 from dataclasses import dataclass, replace
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
 
-from ...reasoning.models import DecisionThread
-from ..models import CodeNode
+if TYPE_CHECKING:
+    from ...reasoning.models import DecisionThread
+    from ..models import CodeNode
 
 
 REVERT_SIGNAL_RE = re.compile(r"\b(revert|reverting|undo|roll back|rollback|restore|back out)\b", re.IGNORECASE)
