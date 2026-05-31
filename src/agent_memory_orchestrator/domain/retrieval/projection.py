@@ -381,7 +381,16 @@ def _central_version_body(node: dict[str, Any], metadata: dict[str, Any]) -> str
             ]
         )
     else:
-        fields.append(f"summary: {node.get('summary') or ''}")
+        fields.extend(
+            [
+                f"summary: {node.get('summary') or ''}",
+                f"canonical_key: {metadata.get('canonical_key') or version_metadata.get('canonical_key') or ''}",
+                f"file_path: {version_metadata.get('file_path') or ''}",
+                f"qualified_name: {version_metadata.get('qualified_name') or version_metadata.get('symbol') or ''}",
+                "version_metadata: " + json.dumps(version_metadata, sort_keys=True),
+                "source: active central code history",
+            ]
+        )
     return "\n".join(field for field in fields if field and not field.endswith(": "))
 
 
