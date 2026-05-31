@@ -151,7 +151,7 @@ def test_central_graph_snapshot_lists_committed_nodes_and_edges(tmp_path: Path) 
     assert {edge["kind"] for edge in central["edges"]} >= {"COMMITTED_AS", "CREATED", "EXTRACTED_AS"}
 
 
-def test_central_graph_snapshot_falls_back_to_isolated_v2_session_graph(tmp_path: Path) -> None:
+def test_central_graph_snapshot_falls_back_to_isolated_production_session_graph(tmp_path: Path) -> None:
     store = InMemoryGraphStore()
     store.upsert_node(
         GraphNode(
