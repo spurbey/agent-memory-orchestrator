@@ -9,11 +9,11 @@ from typing import Any
 from ..ports.central_merge_store import CentralMergeStorePort
 from ...core.config import Settings
 from ...domain.versioning.identity import atoms_by_canonical_key
+from ...domain.versioning.central_merge.planner import build_dry_run_merge_plan
 from ...domain.versioning.repo_identity import resolve_repo_identity
 from ...graph.store import GraphStore
-from ...reasoning_graph.central_merge.applier import apply_merge_plan
-from ...reasoning_graph.central_merge.applier import repo_central_graph_path
-from ...reasoning_graph.central_merge.planner import build_dry_run_merge_plan
+from ...infrastructure.kuzu.central_graph import repo_central_graph_path
+from .central_merge_apply import apply_merge_plan
 
 GraphStoreFactory = Callable[[Path], GraphStore]
 
@@ -84,6 +84,8 @@ class CentralMergeService:
             existing_atoms_by_canonical_key=existing_atoms,
             active_central_versions=active_central_versions,
             historical_decision_frames=historical_decision_frames,
+            pipeline_version=str(job.get("pipeline_version") or ""),
+            graph_schema_version=str(job.get("graph_schema_version") or ""),
         )
         plan_payload = plan.as_dict()
         plan_payload["session_graph_write"] = session_graph_result

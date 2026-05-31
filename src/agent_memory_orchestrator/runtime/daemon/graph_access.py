@@ -5,7 +5,7 @@ from dataclasses import replace
 from ...core.config import Settings
 from ...graph.service import GraphRagService
 from ...graph.store import KuzuGraphStore
-from ...reasoning_graph.central_merge.applier import repo_central_graph_path
+from ...infrastructure.kuzu.central_graph import repo_central_graph_path
 
 
 def read_graph_service(settings: Settings, *, repo_id: str = "") -> GraphRagService:
