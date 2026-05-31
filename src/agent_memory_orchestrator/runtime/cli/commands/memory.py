@@ -27,6 +27,68 @@ MEMORY_COMMANDS = {
 }
 
 
+def add_memory_subcommands(sub: Any) -> None:
+    ingest = sub.add_parser("ingest-transcript", help="Ingest JSONL transcript")
+    ingest.add_argument("--agent", required=True, choices=["claude", "codex", "user", "system"])
+    ingest.add_argument("--file", required=True, type=Path)
+    ingest.add_argument("--session-id", required=True)
+    ingest.add_argument("--session-title")
+
+    hook = sub.add_parser("ingest-hook", help="Ingest one Claude/Codex hook JSON payload")
+    hook.add_argument("--agent", default="codex", choices=["claude", "codex", "user", "system"])
+    hook.add_argument("--file", required=True, type=Path)
+
+    codex_import = sub.add_parser("import-codex-sessions", help="Import Codex rollout JSONL sessions")
+    codex_import.add_argument("--root", type=Path, default=Path.home() / ".codex" / "sessions")
+    codex_import.add_argument("--limit", type=int, default=30)
+    codex_import.add_argument("--defer-vectors", action="store_true", help="Skip embeddings during import; run rebuild-indexes later.")
+    codex_import.add_argument(
+        "--include-existing",
+        action="store_true",
+        help="Reprocess sessions that already have imported events. Default skips them to avoid duplicates.",
+    )
+
+    clean = sub.add_parser("rebuild-clean-db", help="Create a fresh DB from raw Codex sessions")
+    clean.add_argument("--out", required=True, type=Path)
+    clean.add_argument("--codex-root", type=Path, default=Path.home() / ".codex" / "sessions")
+    clean.add_argument("--limit", type=int, default=30)
+    clean.add_argument("--force", action="store_true")
+
+    sub.add_parser("print-codex-hooks", help="Print a Codex config.toml snippet for AMO capture-only hooks")
+
+    search = sub.add_parser("search", help="Search memories")
+    search.add_argument("--query", required=True)
+    search.add_argument("--session-id")
+    search.add_argument("--limit", type=int, default=10)
+    search.add_argument("--include-historical", action="store_true")
+
+    context = sub.add_parser("context-pack", help="Build an agent-ready memory context pack")
+    context.add_argument("--query", required=True)
+    context.add_argument("--session-id")
+    context.add_argument("--budget", type=int, default=None)
+    context.add_argument("--limit", type=int, default=12)
+    context.add_argument("--include-historical", action="store_true")
+    context.add_argument("--format", choices=["json", "text"], default="json")
+
+    timeline = sub.add_parser("timeline", help="View session timeline")
+    timeline.add_argument("--session-id", required=True)
+    timeline.add_argument("--limit", type=int, default=50)
+
+    export_cmd = sub.add_parser("export", help="Export snapshot to JSONL")
+    export_cmd.add_argument("--out", required=True, type=Path)
+    export_cmd.add_argument("--session-id")
+
+    import_cmd = sub.add_parser("import", help="Import snapshot JSONL")
+    import_cmd.add_argument("--file", required=True, type=Path)
+
+    summary = sub.add_parser("session-summary", help="Generate deterministic session summary")
+    summary.add_argument("--session-id", required=True)
+
+    sub.add_parser("metrics", help="Inspect pipeline/retrieval row counts and latest retrieval")
+    rebuild = sub.add_parser("rebuild-indexes", help="Rebuild FTS/vector index rows from canonical memory_units")
+    rebuild.add_argument("--force-vectors", action="store_true")
+
+
 def rebuild_clean_db(settings: Settings, out_path: Path, codex_root: Path, limit: int, force: bool) -> dict:
     target = out_path.resolve()
     if target.exists() and not force:
@@ -135,4 +197,4 @@ def handle_memory_command(
     return 0
 
 
-__all__ = ["MEMORY_COMMANDS", "handle_memory_command", "rebuild_clean_db"]
+__all__ = ["MEMORY_COMMANDS", "add_memory_subcommands", "handle_memory_command", "rebuild_clean_db"]
