@@ -3,12 +3,28 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 from ....llm.models import download_models, list_model_presets, model_status, preflight_models
+from .install import add_model_selection_args
 
 MODEL_COMMANDS = ("models",)
 MODEL_SUBCOMMANDS = ("list", "status", "download", "preflight")
+
+
+def add_models_subcommands(sub: Any) -> None:
+    models = sub.add_parser("models", help="Manage local embedding/reranker models")
+    model_sub = models.add_subparsers(dest="models_command", required=True)
+    model_sub.add_parser("list", help="List hardware-aware model presets")
+    model_status_cmd = model_sub.add_parser("status", help="Check whether selected models are cached locally")
+    add_model_selection_args(model_status_cmd)
+    model_status_cmd.add_argument("--load-check", action="store_true", help="Also try loading models with local_files_only")
+    model_download = model_sub.add_parser("download", help="Intentionally download/cache selected models once")
+    add_model_selection_args(model_download)
+    model_download.add_argument("--cache-dir", type=Path)
+    model_preflight = model_sub.add_parser("preflight", help="Require selected models to load from local cache")
+    add_model_selection_args(model_preflight)
 
 
 def handle_models_command(args: Any, *, emit: Callable[[object], None]) -> int | None:
@@ -56,4 +72,4 @@ def handle_models_command(args: Any, *, emit: Callable[[object], None]) -> int |
     return 0
 
 
-__all__ = ["MODEL_COMMANDS", "MODEL_SUBCOMMANDS", "handle_models_command"]
+__all__ = ["MODEL_COMMANDS", "MODEL_SUBCOMMANDS", "add_models_subcommands", "handle_models_command"]
