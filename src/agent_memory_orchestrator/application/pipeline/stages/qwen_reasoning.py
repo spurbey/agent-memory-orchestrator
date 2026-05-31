@@ -3,8 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from ....reasoning_graph.stage4_contract import build_stage4_packet_prompt
-from ....reasoning_graph.stage4_contract import stage4_output_schema
+from ....domain.reasoning import build_stage4_packet_prompt
+from ....domain.reasoning import stage4_output_schema
 from ..job_runner import OllamaQwenClient
 from ..job_runner import PendingModel
 from ..job_runner import QwenUnavailable
@@ -84,4 +84,3 @@ def run_qwen_reasoning_stage(runner: Any, job: dict[str, Any], artifact_dir: Pat
             "checkpoint_manifest": str(manifest),
         },
     )
-

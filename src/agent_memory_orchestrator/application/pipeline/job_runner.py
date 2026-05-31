@@ -19,8 +19,8 @@ from ...llm.qwen import OllamaQwenClient as OllamaQwenClient  # noqa: F401
 from ...llm.qwen import QwenUnavailable as QwenUnavailable  # noqa: F401
 from ...domain.versioning.repo_identity import resolve_repo_identity
 from ...domain.retrieval.models import RetrievalDocument
-from ...reasoning_graph.stage4_contract import stage4_contract_hash
-from ...reasoning_graph.stage4_contract import stage4_output_schema
+from ...domain.reasoning import stage4_contract_hash
+from ...domain.reasoning import stage4_output_schema
 from ...domain.pipeline.constants import CENTRAL_MERGE_PLANNER_VERSION
 from ...domain.pipeline.constants import CODE_PARSER_POLICY_VERSION
 from ...domain.pipeline.constants import CURATED_GRAPH_SCHEMA_VERSION
