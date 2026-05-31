@@ -10,7 +10,6 @@ from agent_memory_orchestrator.runtime.daemon.server import (
     _bounded_int,
     _graph_workbench_html,
     _load_web_asset,
-    _read_graph_service,
     _session_cockpit_html,
     _web_asset_bytes,
 )
@@ -95,7 +94,7 @@ def test_read_graph_service_uses_repo_central_graph_read_only(tmp_path, monkeypa
     monkeypatch.setattr(graph_access_module, "KuzuGraphStore", FakeStore)
     monkeypatch.setattr(graph_access_module, "GraphRagService", FakeGraph)
 
-    graph = _read_graph_service(settings, repo_id="repo:amo")
+    graph = graph_access_module.read_graph_service(settings, repo_id="repo:amo")
 
     expected_path = graph_access_module.repo_central_graph_path(settings, "repo:amo")
     assert graph is not None
