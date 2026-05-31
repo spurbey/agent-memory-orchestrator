@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 from pathlib import Path
 
 
@@ -76,15 +77,40 @@ def test_stage1_retrieval_boundary_exports_planned_module_names() -> None:
 
 def test_stage1_production_code_does_not_depend_on_legacy_reasoning_graph_facades() -> None:
     src_root = Path(__file__).resolve().parents[1] / "src" / "agent_memory_orchestrator"
-    forbidden = ("reasoning_graph.jobs", "reasoning_graph.central_merge")
+    forbidden = (
+        "agent_memory_orchestrator.reasoning_graph.jobs",
+        "agent_memory_orchestrator.reasoning_graph.central_merge",
+        "agent_memory_orchestrator.reasoning_graph.embedding_store",
+        "agent_memory_orchestrator.reasoning_graph.retrieval",
+        "agent_memory_orchestrator.reasoning_graph.session_runtime",
+    )
     offenders: list[str] = []
 
     for path in src_root.rglob("*.py"):
         relative = path.relative_to(src_root).as_posix()
-        if relative.startswith(("reasoning_graph/jobs/", "reasoning_graph/central_merge/")):
+        if relative.startswith("reasoning_graph/"):
             continue
-        text = path.read_text(encoding="utf-8")
-        if any(pattern in text for pattern in forbidden):
-            offenders.append(relative)
+        text = path.read_text(encoding="utf-8-sig")
+        tree = ast.parse(text)
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                modules = [alias.name for alias in node.names]
+            elif isinstance(node, ast.ImportFrom):
+                modules = [_absolute_or_suffix_module(node.module or "")]
+            else:
+                continue
+            if any(_is_forbidden_legacy_import(module, forbidden) for module in modules):
+                offenders.append(relative)
+                break
 
     assert offenders == []
+
+
+def _absolute_or_suffix_module(module: str) -> str:
+    if module.startswith("agent_memory_orchestrator."):
+        return module
+    return f"agent_memory_orchestrator.{module}"
+
+
+def _is_forbidden_legacy_import(module: str, forbidden: tuple[str, ...]) -> bool:
+    return any(module == blocked or module.startswith(f"{blocked}.") for blocked in forbidden)
