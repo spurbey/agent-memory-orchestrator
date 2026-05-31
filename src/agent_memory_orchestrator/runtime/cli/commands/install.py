@@ -79,6 +79,40 @@ def add_model_selection_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--qwen-model", help="Override preset Ollama Qwen model.")
 
 
+def add_install_subcommands(sub: Any) -> None:
+    install = sub.add_parser("install", help="Configure Claude/Codex hooks, MCP, and local AMO runtime config")
+    install.add_argument("--target", choices=["codex", "claude", "all"], default="all")
+    install.add_argument("--user-home", type=Path, default=Path.home(), help="Home directory containing .codex/.claude")
+    install.add_argument(
+        "--amo-home",
+        type=Path,
+        default=Path.home() / ".agent-memory-orchestrator",
+        help="AMO data/config home used by hooks and MCP.",
+    )
+    add_model_selection_args(install)
+    install.add_argument(
+        "--python-command",
+        default=sys.executable or "python",
+        help="Python executable visible to Claude/Codex hooks.",
+    )
+    install.add_argument("--download-models", action="store_true", help="Download selected local models during install.")
+    install.add_argument("--skip-init-db", action="store_true", help="Do not initialize the AMO SQLite database.")
+    install.add_argument("--dry-run", action="store_true", help="Show planned changes without writing files.")
+    install.add_argument("--yes", action="store_true", help="Apply without interactive confirmation.")
+    install.add_argument("--json", action="store_true", help="Print machine-readable install details.")
+    install.add_argument("--force", action="store_true", help="Overwrite existing AMO target entries when safe.")
+
+    doctor_cmd = sub.add_parser("doctor", help="Check AMO install/config status")
+    doctor_cmd.add_argument("--target", choices=["codex", "claude", "all"], default="all")
+    doctor_cmd.add_argument("--user-home", type=Path, default=Path.home())
+    doctor_cmd.add_argument("--amo-home", type=Path, default=Path.home() / ".agent-memory-orchestrator")
+
+    uninstall_cmd = sub.add_parser("uninstall", help="Remove AMO-managed Claude/Codex config entries")
+    uninstall_cmd.add_argument("--target", choices=["codex", "claude", "all"], default="all")
+    uninstall_cmd.add_argument("--user-home", type=Path, default=Path.home())
+    uninstall_cmd.add_argument("--yes", action="store_true", help="Apply without interactive confirmation.")
+
+
 def confirm(prompt: str) -> bool:
     if not sys.stdin.isatty():
         return False
@@ -327,6 +361,7 @@ def handle_install_command(
 
 __all__ = [
     "INSTALL_COMMANDS",
+    "add_install_subcommands",
     "add_model_selection_args",
     "codex_hooks_snippet",
     "confirm",

@@ -3,7 +3,6 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from pathlib import Path
 
 from ...graph.store import GraphBackendUnavailable
 from ...llm.qwen import QwenUnavailable
@@ -16,7 +15,7 @@ from .commands.connectors import handle_connector_command as _handle_connector_c
 from .commands.graph import _retrieve_index_only as _graph_retrieve_index_only
 from .commands.graph import add_graph_subcommands as _add_graph_subcommands
 from .commands.graph import handle_graph_command as _handle_graph_command
-from .commands.install import add_model_selection_args as _add_model_selection_args
+from .commands.install import add_install_subcommands as _add_install_subcommands
 from .commands.install import handle_install_command as _handle_install_command
 from .commands.memory import add_memory_subcommands as _add_memory_subcommands
 from .commands.memory import handle_memory_command as _handle_memory_command
@@ -52,37 +51,7 @@ def _build_parser() -> argparse.ArgumentParser:
     sub.add_parser("init-graph", help="Initialize local Kuzu GraphRAG schema")
     _add_pipeline_subcommands(sub)
 
-    install = sub.add_parser("install", help="Configure Claude/Codex hooks, MCP, and local AMO runtime config")
-    install.add_argument("--target", choices=["codex", "claude", "all"], default="all")
-    install.add_argument("--user-home", type=Path, default=Path.home(), help="Home directory containing .codex/.claude")
-    install.add_argument(
-        "--amo-home",
-        type=Path,
-        default=Path.home() / ".agent-memory-orchestrator",
-        help="AMO data/config home used by hooks and MCP.",
-    )
-    _add_model_selection_args(install)
-    install.add_argument(
-        "--python-command",
-        default=sys.executable or "python",
-        help="Python executable visible to Claude/Codex hooks.",
-    )
-    install.add_argument("--download-models", action="store_true", help="Download selected local models during install.")
-    install.add_argument("--skip-init-db", action="store_true", help="Do not initialize the AMO SQLite database.")
-    install.add_argument("--dry-run", action="store_true", help="Show planned changes without writing files.")
-    install.add_argument("--yes", action="store_true", help="Apply without interactive confirmation.")
-    install.add_argument("--json", action="store_true", help="Print machine-readable install details.")
-    install.add_argument("--force", action="store_true", help="Overwrite existing AMO target entries when safe.")
-
-    doctor_cmd = sub.add_parser("doctor", help="Check AMO install/config status")
-    doctor_cmd.add_argument("--target", choices=["codex", "claude", "all"], default="all")
-    doctor_cmd.add_argument("--user-home", type=Path, default=Path.home())
-    doctor_cmd.add_argument("--amo-home", type=Path, default=Path.home() / ".agent-memory-orchestrator")
-
-    uninstall_cmd = sub.add_parser("uninstall", help="Remove AMO-managed Claude/Codex config entries")
-    uninstall_cmd.add_argument("--target", choices=["codex", "claude", "all"], default="all")
-    uninstall_cmd.add_argument("--user-home", type=Path, default=Path.home())
-    uninstall_cmd.add_argument("--yes", action="store_true", help="Apply without interactive confirmation.")
+    _add_install_subcommands(sub)
 
     _add_memory_subcommands(sub)
 
