@@ -30,13 +30,13 @@ from ..runner import _retrieval_documents_from_manifest
 from ..runner import _retrieval_projection_activation_gate
 from ..runner import _retrieval_projection_id
 from ..runner import _stage_output
-from ..runner import require_complete_v2_reset_marker
+from ..runner import require_complete_production_marker
 from ...central_merge.applier import repo_central_graph_path
 
 
 def run_retrieval_docs_stage(runner: Any, job: dict[str, Any], artifact_dir: Path, stage_dir: Path) -> StageResult:
     del artifact_dir
-    require_complete_v2_reset_marker(runner.job_store.marker(RESET_MARKER_KEY))
+    require_complete_production_marker(runner.job_store.marker(RESET_MARKER_KEY))
     repo_id = _job_repo_id(job)
     manifest_info = _optional_product_manifest_info(Path(str(job["artifact_dir"])))
     conn = connect(runner.settings.retrieval_db_path)
