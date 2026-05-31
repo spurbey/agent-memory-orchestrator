@@ -139,7 +139,7 @@ def test_drain_session_boundary_persists_pending_window_across_runs(tmp_path: Pa
     assert second["windows_processed"] == 1
     assert second["triggered"][0]["session_id"] == "s1"
     assert second["triggered"][0]["trigger"]["trigger_type"] == "session_boundary"
-    assert second["triggered"][0]["result"]["mode"] == "v2_job_enqueue"
+    assert second["triggered"][0]["result"]["mode"] == "production_job_enqueue"
     assert second["triggered"][0]["result"]["created"] is True
     assert second["pending_sessions"] == 1
     job_store = ProductionSessionJobStore(settings)

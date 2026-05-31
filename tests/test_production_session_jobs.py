@@ -1069,7 +1069,7 @@ def test_semantic_judge_checks_mentions_citations_and_forbidden_claims() -> None
         "must_not_claim": ["unsupported final decision"],
     }
     good = {
-        "answer": "The reasoning changed after a commit connected graph_service.py to V2 retrieval.",
+        "answer": "The reasoning changed after a commit connected graph_service.py to production retrieval.",
         "citations": [{"type": "packet", "id": "WP0001"}, {"type": "evidence", "id": "raw_1"}],
     }
     bad = {"answer": "Unsupported final decision.", "citations": []}
@@ -1380,7 +1380,7 @@ def test_production_adopt_production_backs_up_and_preserves_existing_stores(tmp_
     finally:
         store.close()
     assert marker is not None
-    assert marker["adopted_existing_v2"] is True
+    assert marker["adopted_existing_production"] is True
     assert marker["validated"] == {"graph": True, "retrieval": True}
     assert marker["cleaned"] == {"graph": False, "retrieval": False, "faiss": False}
     assert require_complete_production_marker(marker) == marker
@@ -1395,7 +1395,7 @@ def test_production_runner_rejects_missing_incomplete_or_wrong_reset_marker() ->
     adopted_marker = {
         "pipeline_version": PIPELINE_VERSION,
         "graph_schema_version": GRAPH_SCHEMA_VERSION,
-        "adopted_existing_v2": True,
+        "adopted_existing_production": True,
         "validated": {"graph": True, "retrieval": True},
         "cleaned": {"graph": False, "retrieval": False, "faiss": False},
     }
@@ -1603,9 +1603,9 @@ def test_session_detail_prefers_production_raw_artifact_and_skips_pending_scan(t
     pending = _session_pending_summary(settings, session_id=session_id)
     fallback = build_session_detail_fallback(settings, session_id=session_id, limit=10, error=RuntimeError("locked"))
 
-    assert source == "v2_session_raw_evidence_artifact"
+    assert source == "production_session_raw_evidence_artifact"
     assert [record["id"] for record in records] == ["raw-1", "raw-2"]
-    assert pending["source"] == "v2_job_state"
+    assert pending["source"] == "production_job_state"
     assert pending["count"] == 0
     assert fallback["degraded"] is True
     assert len(fallback["timeline"]) == 2

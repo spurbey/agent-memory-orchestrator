@@ -110,7 +110,7 @@ def test_reasoning_review_demotes_commit_mismatched_node_to_review() -> None:
                         {
                             "node_type": "Decision",
                             "subject": "Retrieval default",
-                            "statement": "The dashboard exclusively uses the V2 retrieval path.",
+                            "statement": "The dashboard exclusively uses the production retrieval path.",
                             "reason": "Legacy retrieval fallbacks were removed.",
                             "confidence": 0.9,
                             "evidence_refs": ["E0002"],

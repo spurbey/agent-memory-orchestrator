@@ -50,7 +50,7 @@ def resolve_session_repo_root(
     max_candidates: int = 80,
     max_commits: int = 250,
 ) -> SessionRepoResolution:
-    """Resolve the Git root that owns a closed V2 session.
+    """Resolve the Git root that owns a closed production session.
 
     Hook cwd can be a parent workspace while tool calls operate inside a nested
     repository. We therefore score all candidate Git roots by actual commit

@@ -21,7 +21,7 @@ def initialize_fresh_production_storage(settings: Settings) -> dict[str, Any]:
     """Mark a fresh, empty production install as production-ready.
 
     This is intentionally non-destructive. It exists for new devices: they have
-    no pre-V2 graph/retrieval data to clean, so forcing the operator through a
+    no legacy graph/retrieval data to clean, so forcing the operator through a
     reset command is wrong. Existing non-empty stores still require explicit
     backup-first reset/adoption.
     """
@@ -37,12 +37,12 @@ def initialize_fresh_production_storage(settings: Settings) -> dict[str, Any]:
     retrieval = _validate_empty_retrieval_store(settings)
     if not graph.get("empty") or not retrieval.get("empty"):
         raise RuntimeError(
-            "v2_fresh_init_refused_non_empty_stores:"
+            "production_fresh_init_refused_non_empty_stores:"
             + json.dumps({"graph": graph, "retrieval": retrieval}, sort_keys=True)
         )
 
     marker = {
-        "production_v2_initialized_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "production_initialized_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "pipeline_version": PIPELINE_VERSION,
         "graph_schema_version": GRAPH_SCHEMA_VERSION,
         "fresh_install": True,
@@ -72,7 +72,7 @@ def reset_production_storage(
         raise RuntimeError("daemon_running: stop amo-daemon or pass --force-if-daemon-running")
 
     timestamp = time.strftime("%Y%m%d-%H%M%S")
-    backup_dir = settings.home / "backups" / f"v2-reset-production-{timestamp}"
+    backup_dir = settings.home / "backups" / f"reset-production-{timestamp}"
     backup_dir.mkdir(parents=True, exist_ok=False)
     manifest: dict[str, Any] = {
         "created_at": timestamp,
@@ -92,7 +92,7 @@ def reset_production_storage(
     _backup_path(settings.retrieval_db_path, backup_dir / "retrieval_db", manifest)
     _backup_path(settings.db_path, backup_dir / "main_db", manifest)
     _backup_path(settings.home / "config.json", backup_dir / "config.json", manifest)
-    _backup_path(settings.home / ".state" / "production_v2_reset.json", backup_dir / "production_v2_reset.json", manifest)
+    _backup_path(settings.home / ".state" / "production_marker.json", backup_dir / "production_marker.json", manifest)
     _backup_path(_faiss_index_dir(settings), backup_dir / "faiss_indexes", manifest)
     _write_manifest(backup_dir, manifest)
     _verify_manifest(backup_dir)
@@ -110,7 +110,7 @@ def reset_production_storage(
         cleaned["faiss"] = True
 
     marker = {
-        "production_v2_reset_applied_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "production_reset_applied_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "pipeline_version": PIPELINE_VERSION,
         "graph_schema_version": GRAPH_SCHEMA_VERSION,
         "backup_path": str(backup_dir.resolve()),
@@ -122,7 +122,7 @@ def reset_production_storage(
     finally:
         store.close()
     (settings.home / ".state").mkdir(parents=True, exist_ok=True)
-    (settings.home / ".state" / "production_v2_reset.json").write_text(
+    (settings.home / ".state" / "production_marker.json").write_text(
         json.dumps(marker, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
@@ -152,7 +152,7 @@ def adopt_existing_production_storage(
         raise RuntimeError("daemon_running: stop amo-daemon or pass --force-if-daemon-running")
 
     timestamp = time.strftime("%Y%m%d-%H%M%S")
-    backup_dir, manifest = _backup_production_paths(settings, label=f"v2-adopt-production-{timestamp}", timestamp=timestamp)
+    backup_dir, manifest = _backup_production_paths(settings, label=f"adopt-production-{timestamp}", timestamp=timestamp)
 
     validation = {
         "graph": _validate_existing_graph_store(settings),
@@ -163,11 +163,11 @@ def adopt_existing_production_storage(
     _verify_manifest(backup_dir)
 
     marker = {
-        "production_v2_reset_applied_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "production_adopted_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "pipeline_version": PIPELINE_VERSION,
         "graph_schema_version": GRAPH_SCHEMA_VERSION,
         "backup_path": str(backup_dir.resolve()),
-        "adopted_existing_v2": True,
+        "adopted_existing_production": True,
         "validated": {"graph": True, "retrieval": True},
         "validation": validation,
         "cleaned": {"graph": False, "retrieval": False, "faiss": False},
@@ -205,7 +205,7 @@ def _backup_production_paths(settings: Settings, *, label: str, timestamp: str) 
     _backup_path(settings.retrieval_db_path, backup_dir / "retrieval_db", manifest)
     _backup_path(settings.db_path, backup_dir / "main_db", manifest)
     _backup_path(settings.home / "config.json", backup_dir / "config.json", manifest)
-    _backup_path(settings.home / ".state" / "production_v2_reset.json", backup_dir / "production_v2_reset.json", manifest)
+    _backup_path(settings.home / ".state" / "production_marker.json", backup_dir / "production_marker.json", manifest)
     _backup_path(_faiss_index_dir(settings), backup_dir / "faiss_indexes", manifest)
     return backup_dir, manifest
 
@@ -261,11 +261,6 @@ def _clean_retrieval_tables(db_path: Path) -> None:
         conn.close()
 
 
-initialize_fresh_v2_production_storage = initialize_fresh_production_storage
-reset_production_v2_storage = reset_production_storage
-adopt_existing_v2_production_storage = adopt_existing_production_storage
-
-
 def _faiss_index_dir(settings: Settings) -> Path:
     return settings.retrieval_db_path.parent / "indexes" / settings.retrieval_db_path.stem
 
@@ -277,7 +272,7 @@ def _write_marker(settings: Settings, marker: dict[str, Any]) -> None:
     finally:
         store.close()
     (settings.home / ".state").mkdir(parents=True, exist_ok=True)
-    (settings.home / ".state" / "production_v2_reset.json").write_text(
+    (settings.home / ".state" / "production_marker.json").write_text(
         json.dumps(marker, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
@@ -295,7 +290,7 @@ def _validate_existing_graph_store(settings: Settings) -> dict[str, Any]:
         "check": "filesystem_non_empty",
     }
     if not result["ok"]:
-        raise RuntimeError(f"v2_adopt_graph_validation_failed:{json.dumps(result, sort_keys=True)}")
+        raise RuntimeError(f"production_adopt_graph_validation_failed:{json.dumps(result, sort_keys=True)}")
     return result
 
 
@@ -323,7 +318,7 @@ def _validate_existing_retrieval_store(settings: Settings) -> dict[str, Any]:
     path = settings.retrieval_db_path
     if not path.exists():
         result = {"ok": False, "path": str(path), "exists": False}
-        raise RuntimeError(f"v2_adopt_retrieval_validation_failed:{json.dumps(result, sort_keys=True)}")
+        raise RuntimeError(f"production_adopt_retrieval_validation_failed:{json.dumps(result, sort_keys=True)}")
     conn = connect(path)
     try:
         table_row = conn.execute(
@@ -342,7 +337,7 @@ def _validate_existing_retrieval_store(settings: Settings) -> dict[str, Any]:
         "check": "retrieval_documents_non_empty",
     }
     if not result["ok"]:
-        raise RuntimeError(f"v2_adopt_retrieval_validation_failed:{json.dumps(result, sort_keys=True)}")
+        raise RuntimeError(f"production_adopt_retrieval_validation_failed:{json.dumps(result, sort_keys=True)}")
     return result
 
 

@@ -1,4 +1,4 @@
-import { PIPELINE_GROUPS, PRODUCTION_STAGES } from "./state.js";
+import { PIPELINE_GROUPS, PRODUCTION_GRAPH_SCHEMA_VERSION, PRODUCTION_STAGES } from "./state.js";
 import { text } from "./utils.js";
 
 const REASONING_KINDS = new Set(["ReasoningNode", "Problem", "Decision", "Cause", "Fix", "Constraint", "OpenQuestion"]);
@@ -30,7 +30,7 @@ export function pipelineItems(counts) {
 export function globalPipelineCounts({ sessions, jobs, nodes }) {
   const rawEvents = (sessions || []).reduce((sum, row) => sum + Number(row.raw_events || 0), 0);
   const jobRows = jobs || [];
-  const productionNodes = (nodes || []).filter(node => node?.metadata?.graph_schema_version === "v2");
+  const productionNodes = (nodes || []).filter(node => node?.metadata?.graph_schema_version === PRODUCTION_GRAPH_SCHEMA_VERSION);
   return {
     raw: rawEvents,
     queue: jobRows.length,
@@ -61,7 +61,7 @@ export function sessionPipelineCounts({ timeline, job, stages }) {
 
 export function graphNodeCounts(nodes) {
   const list = nodes || [];
-  const production = list.filter(node => node?.metadata?.graph_schema_version === "v2");
+  const production = list.filter(node => node?.metadata?.graph_schema_version === PRODUCTION_GRAPH_SCHEMA_VERSION);
   return {
     total: list.length,
     production: production.length,

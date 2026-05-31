@@ -2839,7 +2839,7 @@ def build_session_detail_fallback(
     """Return selected-session detail without opening Kuzu.
 
     This is the dashboard fallback path when the graph file is temporarily
-    unavailable. It still shows immutable raw/V2 artifacts so the operator can
+    unavailable. It still shows immutable raw production artifacts so the operator can
     inspect the session while graph reads recover.
     """
 
@@ -2874,13 +2874,13 @@ def build_session_detail_fallback(
 
 
 def _load_session_evidence_records(settings: Settings, *, session_id: str, limit: int = 500) -> tuple[list[dict[str, Any]], str]:
-    artifact_records = _load_v2_session_raw_evidence_artifact(settings, session_id=session_id, limit=limit)
+    artifact_records = _load_production_session_raw_evidence_artifact(settings, session_id=session_id, limit=limit)
     if artifact_records is not None:
-        return artifact_records, "v2_session_raw_evidence_artifact"
+        return artifact_records, "production_session_raw_evidence_artifact"
     return _load_evidence_records(_evidence_roots(settings), session_id=session_id, limit=limit), "raw_evidence_scan"
 
 
-def _load_v2_session_raw_evidence_artifact(settings: Settings, *, session_id: str, limit: int = 500) -> list[dict[str, Any]] | None:
+def _load_production_session_raw_evidence_artifact(settings: Settings, *, session_id: str, limit: int = 500) -> list[dict[str, Any]] | None:
     job_store = ProductionSessionJobStore(settings)
     try:
         job = job_store.get_job_by_session(session_id=session_id)
@@ -2918,7 +2918,7 @@ def _session_pending_summary(settings: Settings, *, session_id: str) -> dict[str
             "count": 0,
             "pending": [],
             "cursor_path": "",
-            "source": "v2_job_state",
+            "source": "production_job_state",
             "job_status": job.get("status"),
             "current_stage": job.get("current_stage"),
         }
@@ -2927,7 +2927,7 @@ def _session_pending_summary(settings: Settings, *, session_id: str) -> dict[str
         "count": 0,
         "pending": [],
         "cursor_path": "",
-        "source": "not_loaded_no_v2_job",
+        "source": "not_loaded_no_production_job",
     }
 
 

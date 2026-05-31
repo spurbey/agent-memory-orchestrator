@@ -33,7 +33,7 @@ from .constants import REASONING_REVIEW_POLICY_VERSION
 from .constants import RETRIEVAL_PROJECTION_VERSION
 from .constants import SESSION_GRAPH_WRITER_VERSION
 from .constants import SYMBOL_VERSION_POLICY_VERSION
-from .constants import V2_STAGES
+from .constants import PRODUCTION_STAGES
 from .store import ProductionSessionJobStore
 
 
@@ -64,7 +64,7 @@ class ProductionSessionJobRunner:
         self.job_store.close()
 
     def run_next(self, *, lease_seconds: int = 300) -> dict[str, Any]:
-        owner = f"v2-runner:{uuid.uuid4().hex}"
+        owner = f"production-runner:{uuid.uuid4().hex}"
         job = self.job_store.acquire_next(owner=owner, lease_seconds=lease_seconds)
         if job is None:
             return {"ok": True, "ran": False, "reason": "no_pending_job"}
@@ -165,9 +165,9 @@ class ProductionSessionJobRunner:
         return hashlib.sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()
 
     def _stage_input_artifact(self, job: dict[str, Any], stage: str, artifact_dir: Path) -> Path:
-        if stage == V2_STAGES[0]:
+        if stage == PRODUCTION_STAGES[0]:
             return self.settings.evidence_dir
-        previous = V2_STAGES[V2_STAGES.index(stage) - 1]
+        previous = PRODUCTION_STAGES[PRODUCTION_STAGES.index(stage) - 1]
         row = self.job_store.stage_row(job_id=str(job["job_id"]), stage=previous)
         if (row is None or not row.get("output_artifact")) and stage == "retrieval_docs" and previous == "central_version_merge":
             legacy = self.job_store.stage_row(job_id=str(job["job_id"]), stage="kuzu_write")
@@ -267,28 +267,22 @@ class StageFailed(RuntimeError):
         self.diagnostics = diagnostics or {}
 
 
-V2SessionJobRunner = ProductionSessionJobRunner
-
-
 def require_complete_production_marker(marker: dict[str, Any] | None) -> dict[str, Any]:
     if marker is None:
-        raise RuntimeError("production_v2_reset_marker_missing")
+        raise RuntimeError("production_marker_missing")
     cleaned = marker.get("cleaned") if isinstance(marker.get("cleaned"), dict) else {}
     validated = marker.get("validated") if isinstance(marker.get("validated"), dict) else {}
     if marker.get("pipeline_version") != PIPELINE_VERSION or marker.get("graph_schema_version") != GRAPH_SCHEMA_VERSION:
-        raise RuntimeError("production_v2_reset_marker_version_mismatch")
+        raise RuntimeError("production_marker_version_mismatch")
     cleaned_ok = cleaned.get("graph") is True and cleaned.get("retrieval") is True
     adopted_ok = (
-        marker.get("adopted_existing_v2") is True
+        marker.get("adopted_existing_production") is True
         and validated.get("graph") is True
         and validated.get("retrieval") is True
     )
     if not cleaned_ok and not adopted_ok:
-        raise RuntimeError("production_v2_reset_marker_incomplete")
+        raise RuntimeError("production_marker_incomplete")
     return marker
-
-
-require_complete_v2_reset_marker = require_complete_production_marker
 
 
 def file_sha256(path: Path) -> str:
@@ -420,9 +414,9 @@ def _superseded_stage_metadata(
 
 def _current_stage(job: dict[str, Any]) -> str:
     stage = str(job.get("current_stage") or "")
-    if stage in V2_STAGES:
+    if stage in PRODUCTION_STAGES:
         return stage
-    return V2_STAGES[0]
+    return PRODUCTION_STAGES[0]
 
 
 def _stage_output(artifact_dir: Path, stage: str) -> Path:

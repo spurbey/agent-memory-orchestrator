@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 
 from agent_memory_orchestrator.runtime.daemon import graph_access as graph_access_module
+from agent_memory_orchestrator.runtime.daemon.coordination import production_stage_requires_graph_write_lock
 from agent_memory_orchestrator.runtime.daemon.server import (
     DaemonAlreadyRunning,
     _DaemonOwnerLock,
@@ -11,7 +12,6 @@ from agent_memory_orchestrator.runtime.daemon.server import (
     _load_web_asset,
     _read_graph_service,
     _session_cockpit_html,
-    _production_stage_requires_graph_write_lock,
     _web_asset_bytes,
 )
 from agent_memory_orchestrator.core.config import Settings
@@ -54,11 +54,11 @@ def test_web_asset_loader_blocks_path_traversal() -> None:
 
 
 def test_daemon_production_lock_scope_keeps_long_stages_unlocked() -> None:
-    assert _production_stage_requires_graph_write_lock("kuzu_write") is True
-    assert _production_stage_requires_graph_write_lock("central_version_merge") is True
-    assert _production_stage_requires_graph_write_lock("qwen_reasoning") is False
-    assert _production_stage_requires_graph_write_lock("ast_code_nodes") is False
-    assert _production_stage_requires_graph_write_lock("embeddings") is False
+    assert production_stage_requires_graph_write_lock("kuzu_write") is True
+    assert production_stage_requires_graph_write_lock("central_version_merge") is True
+    assert production_stage_requires_graph_write_lock("qwen_reasoning") is False
+    assert production_stage_requires_graph_write_lock("ast_code_nodes") is False
+    assert production_stage_requires_graph_write_lock("embeddings") is False
 
 
 def test_daemon_owner_lock_blocks_second_process_owner(tmp_path) -> None:

@@ -167,7 +167,7 @@ def _nested_repo_session(tmp_path: Path, *, session_id: str) -> tuple[Settings, 
                     "payload": {
                         "type": "message",
                         "role": "assistant",
-                        "content": [{"text": "I will fix the repo scoping because commit-backed V2 graph creation needs the actual Git root."}],
+                        "content": [{"text": "I will fix the repo scoping because commit-backed production graph creation needs the actual Git root."}],
                     },
                 },
                 {

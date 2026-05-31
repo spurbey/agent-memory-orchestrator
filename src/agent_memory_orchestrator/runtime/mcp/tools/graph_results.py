@@ -15,7 +15,7 @@ def _indexed_graph_retrieval_ready(payload: dict[str, Any]) -> bool:
 def _indexed_unavailable_context(payload: dict[str, Any]) -> str:
     reason = str(payload.get("error") or "active_projection_missing")
     return (
-        "AMO V2 central retrieval is unavailable for this repository. "
+        "AMO active central retrieval is unavailable for this repository. "
         f"Reason: {reason}. Build/apply the active retrieval projection before using repository memory."
     )
 
@@ -44,14 +44,14 @@ def _mcp_graph_result_from_indexed(
         "ok": True,
         "tool": tool,
         "query": query,
-        "retrieval_mode": "v2_active_repository_memory",
+        "retrieval_mode": "active_repository_memory",
         "repo": {"id": repo_id},
         "context_for_synthesis": context,
         "hits": public_hits,
         "version_history": version_history,
         "retrieval_status": {
             "vector": str(retrieval.get("vector_status") or ""),
-            "source": "v2_active_projection",
+            "source": "active_projection",
             "repo_id": repo_id,
         },
         "answer_trace": payload.get("central_answer_trace") or {},

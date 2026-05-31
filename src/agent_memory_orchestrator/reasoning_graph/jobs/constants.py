@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-PIPELINE_VERSION = "v2-reset-2026-05"
-GRAPH_SCHEMA_VERSION = "v2"
-REASONING_REVIEW_POLICY_VERSION = "reasoning-review-v2-sha-equivalence"
-CODE_PARSER_POLICY_VERSION = "code-parser-v2-polyglot-guards"
+PIPELINE_VERSION = "production-2026-05"
+GRAPH_SCHEMA_VERSION = "production-graph-v1"
+REASONING_REVIEW_POLICY_VERSION = "reasoning-review-production-sha-equivalence"
+CODE_PARSER_POLICY_VERSION = "code-parser-production-polyglot-guards"
 SYMBOL_VERSION_POLICY_VERSION = "symbol-version-v1"
 REASONING_CODE_LINK_POLICY_VERSION = "reasoning-code-link-v1"
 PROMOTION_POLICY_VERSION = "curated-promotion-v1"
@@ -13,7 +13,7 @@ CENTRAL_MERGE_PLANNER_VERSION = "central-version-merge-planner-v1"
 RETRIEVAL_PROJECTION_VERSION = "curated-retrieval-projection-v1"
 QUALITY_EVAL_POLICY_VERSION = "product-quality-eval-v1"
 
-V2_STAGES: tuple[str, ...] = (
+PRODUCTION_STAGES: tuple[str, ...] = (
     "evidence_view",
     "work_packets",
     "qwen_reasoning",
@@ -29,8 +29,6 @@ V2_STAGES: tuple[str, ...] = (
     "faiss",
     "quality_eval",
 )
-
-PRODUCTION_STAGES = V2_STAGES
 
 STAGE_DISPLAY_NAMES: dict[str, str] = {
     "evidence_view": "Evidence View",
@@ -49,4 +47,4 @@ STAGE_DISPLAY_NAMES: dict[str, str] = {
     "quality_eval": "Quality Eval",
 }
 
-RESET_MARKER_KEY = "production_v2_reset"
+RESET_MARKER_KEY = "production_marker"

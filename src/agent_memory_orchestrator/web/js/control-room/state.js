@@ -30,6 +30,8 @@ export const PRODUCTION_STAGES = [
   "quality_eval",
 ];
 
+export const PRODUCTION_GRAPH_SCHEMA_VERSION = "production-graph-v1";
+
 export const PRODUCTION_STAGE_LABELS = {
   evidence_view: "Evidence View",
   work_packets: "Work Packets",

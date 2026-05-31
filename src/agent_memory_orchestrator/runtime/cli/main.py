@@ -155,7 +155,6 @@ def _build_parser() -> argparse.ArgumentParser:
         "init-production",
         help="Non-destructively mark empty fresh graph/retrieval stores as production-ready",
     )
-    sub.add_parser("v2-init-production", help=argparse.SUPPRESS)
 
     prod_reset = sub.add_parser("reset-production", help="Explicitly back up and reset production graph/retrieval stores")
     prod_reset.add_argument("--backup", action="store_true", help="Required. Create a timestamped backup before cleaning.")
@@ -166,12 +165,6 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Allow reset even if the daemon health endpoint is reachable.",
     )
-    v2_reset = sub.add_parser("v2-reset-production", help=argparse.SUPPRESS)
-    v2_reset.add_argument("--backup", action="store_true")
-    v2_reset.add_argument("--clean-graph", action="store_true")
-    v2_reset.add_argument("--clean-retrieval", action="store_true")
-    v2_reset.add_argument("--force-if-daemon-running", action="store_true")
-
     prod_adopt = sub.add_parser(
         "adopt-production",
         help="Back up and mark existing production graph/retrieval stores as runner-ready without deleting them",
@@ -184,33 +177,6 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Allow adoption even if the daemon health endpoint is reachable.",
     )
-    v2_adopt = sub.add_parser("v2-adopt-production", help=argparse.SUPPRESS)
-    v2_adopt.add_argument("--backup", action="store_true")
-    v2_adopt.add_argument("--validate-graph", action="store_true")
-    v2_adopt.add_argument("--validate-retrieval", action="store_true")
-    v2_adopt.add_argument("--force-if-daemon-running", action="store_true")
-
-    v2_export = sub.add_parser("v2-export-fixture", help=argparse.SUPPRESS)
-    v2_export.add_argument("--job-id", required=True)
-    v2_export.add_argument("--out", type=Path, help="Output directory for fixture.json")
-    v2_export.add_argument("--copy-artifacts", action="store_true", help="Copy stage output artifacts into the fixture directory")
-    v2_eval = sub.add_parser("v2-semantic-eval", help=argparse.SUPPRESS)
-    v2_eval.add_argument("--fixture", type=Path, required=True)
-    v2_eval.add_argument("--case-set", default="baseline")
-    v2_eval.add_argument("--out", type=Path, help="Write semantic eval result JSON")
-    v2_prod_eval = sub.add_parser("v2-production-eval", help=argparse.SUPPRESS)
-    v2_prod_eval.add_argument("--job-id", default=DEFAULT_TARGET_JOB_ID)
-    v2_prod_eval.add_argument("--repo-id", default=DEFAULT_TARGET_REPO_ID)
-    v2_prod_eval.add_argument("--mode", default="baseline", choices=["baseline", "pre_apply", "post_apply"])
-    v2_prod_eval.add_argument("--out", type=Path, help="Write production semantic eval JSON")
-    v2_plan = sub.add_parser("v2-merge-plan", help=argparse.SUPPRESS)
-    v2_plan.add_argument("--job-id", required=True)
-    v2_plan.add_argument("--backfill", action="store_true", help="Create a dry-run merge plan for an old completed job if missing")
-    v2_plan.add_argument("--forced-by", default="manual-backfill")
-    v2_apply = sub.add_parser("v2-merge-apply", help=argparse.SUPPRESS)
-    v2_apply.add_argument("--plan-id", required=True)
-    v2_apply.add_argument("--branch", default="main")
-    v2_apply.add_argument("--view", default="active")
     production = sub.add_parser("production", help="Production job, fixture, semantic eval, and central merge commands")
     production_sub = production.add_subparsers(dest="production_command", required=True)
     prod_export_nested = production_sub.add_parser("export-fixture", help="Export a production job fixture for semantic evaluation")
@@ -234,30 +200,6 @@ def _build_parser() -> argparse.ArgumentParser:
     prod_apply_nested.add_argument("--plan-id", required=True)
     prod_apply_nested.add_argument("--branch", default="main")
     prod_apply_nested.add_argument("--view", default="active")
-
-    v2 = sub.add_parser("v2", help=argparse.SUPPRESS)
-    v2_sub = v2.add_subparsers(dest="v2_command", required=True)
-    v2_export_nested = v2_sub.add_parser("export-fixture", help=argparse.SUPPRESS)
-    v2_export_nested.add_argument("--job-id", required=True)
-    v2_export_nested.add_argument("--out", type=Path, help="Output directory for fixture.json")
-    v2_export_nested.add_argument("--copy-artifacts", action="store_true", help="Copy stage output artifacts into the fixture directory")
-    v2_eval_nested = v2_sub.add_parser("semantic-eval", help=argparse.SUPPRESS)
-    v2_eval_nested.add_argument("--fixture", type=Path, required=True)
-    v2_eval_nested.add_argument("--case-set", default="baseline")
-    v2_eval_nested.add_argument("--out", type=Path, help="Write semantic eval result JSON")
-    v2_prod_eval_nested = v2_sub.add_parser("production-eval", help=argparse.SUPPRESS)
-    v2_prod_eval_nested.add_argument("--job-id", default=DEFAULT_TARGET_JOB_ID)
-    v2_prod_eval_nested.add_argument("--repo-id", default=DEFAULT_TARGET_REPO_ID)
-    v2_prod_eval_nested.add_argument("--mode", default="baseline", choices=["baseline", "pre_apply", "post_apply"])
-    v2_prod_eval_nested.add_argument("--out", type=Path, help="Write production semantic eval JSON")
-    v2_plan_nested = v2_sub.add_parser("merge-plan", help=argparse.SUPPRESS)
-    v2_plan_nested.add_argument("--job-id", required=True)
-    v2_plan_nested.add_argument("--backfill", action="store_true", help="Create a dry-run merge plan for an old completed job if missing")
-    v2_plan_nested.add_argument("--forced-by", default="manual-backfill")
-    v2_apply_nested = v2_sub.add_parser("merge-apply", help=argparse.SUPPRESS)
-    v2_apply_nested.add_argument("--plan-id", required=True)
-    v2_apply_nested.add_argument("--branch", default="main")
-    v2_apply_nested.add_argument("--view", default="active")
 
     install = sub.add_parser("install", help="Configure Claude/Codex hooks, MCP, and local AMO runtime config")
     install.add_argument("--target", choices=["codex", "claude", "all"], default="all")
@@ -827,7 +769,7 @@ def main(argv: list[str] | None = None) -> int:
                 )
             init_result = None
             init_graph = None
-            init_v2 = None
+            init_production = None
             if not args.skip_init_db:
                 os.environ["AMO_HOME"] = plan["amo_home"]
                 init_settings = Settings.load()
@@ -845,9 +787,9 @@ def main(argv: list[str] | None = None) -> int:
                     init_graph = {"ok": False, "error": str(exc)}
                 if init_graph.get("ok"):
                     try:
-                        init_v2 = initialize_fresh_production_storage(init_settings)
+                        init_production = initialize_fresh_production_storage(init_settings)
                     except Exception as exc:
-                        init_v2 = {
+                        init_production = {
                             "ok": False,
                             "error": str(exc),
                             "note": "Existing non-empty graph/retrieval stores need explicit reset-production or adopt-production.",
@@ -859,7 +801,7 @@ def main(argv: list[str] | None = None) -> int:
                 "models": model_result,
                 "init_db": init_result,
                 "init_graph": init_graph,
-                "init_v2_production": init_v2,
+                "init_production": init_production,
             }
             if args.json:
                 _print(payload)
@@ -898,12 +840,12 @@ def main(argv: list[str] | None = None) -> int:
                 graph.close()
             return 0
 
-        if args.command in {"init-production", "v2-init-production"}:
+        if args.command == "init-production":
             settings = Settings.load()
             _print(initialize_fresh_production_storage(settings))
             return 0
 
-        if args.command in {"reset-production", "v2-reset-production"}:
+        if args.command == "reset-production":
             settings = Settings.load()
             result = reset_production_storage(
                 settings,
@@ -915,7 +857,7 @@ def main(argv: list[str] | None = None) -> int:
             _print(result)
             return 0
 
-        if args.command in {"adopt-production", "v2-adopt-production"}:
+        if args.command == "adopt-production":
             settings = Settings.load()
             result = adopt_existing_production_storage(
                 settings,
@@ -927,19 +869,13 @@ def main(argv: list[str] | None = None) -> int:
             _print(result)
             return 0
 
-        if args.command == "v2-export-fixture" or (
-            args.command in {"v2", "production"}
-            and getattr(args, f"{args.command}_command") == "export-fixture"
-        ):
+        if args.command == "production" and args.production_command == "export-fixture":
             settings = Settings.load()
             result = export_job_fixture(settings, job_id=args.job_id, out_dir=args.out, copy_artifacts=args.copy_artifacts)
             _print({"ok": result["ok"], "path": result["path"], "fixture": result["fixture"]})
             return 0
 
-        if args.command == "v2-semantic-eval" or (
-            args.command in {"v2", "production"}
-            and getattr(args, f"{args.command}_command") == "semantic-eval"
-        ):
+        if args.command == "production" and args.production_command == "semantic-eval":
             settings = Settings.load()
             result = run_semantic_eval_fixture(fixture_path=args.fixture, case_set=args.case_set)
             if args.out:
@@ -949,7 +885,7 @@ def main(argv: list[str] | None = None) -> int:
             store = ProductionSessionJobStore(settings)
             try:
                 store.record_semantic_eval_run(
-                    run_id=f"v2eval:{int(time.time() * 1000)}",
+                    run_id=f"production-eval:{int(time.time() * 1000)}",
                     case_set=args.case_set,
                     fixture_path=str(args.fixture),
                     status=str(result.get("status") or "invalid"),
@@ -961,12 +897,7 @@ def main(argv: list[str] | None = None) -> int:
             _print(result)
             return 0 if result.get("status") == "passed" else 1
 
-        if args.command == "v2-production-eval" or (
-            args.command == "v2"
-            and args.v2_command == "production-eval"
-            or args.command == "production"
-            and args.production_command == "eval"
-        ):
+        if args.command == "production" and args.production_command == "eval":
             settings = Settings.load()
             out_path = args.out or default_production_eval_path(Path.cwd())
             result = run_production_semantic_eval(
@@ -979,10 +910,7 @@ def main(argv: list[str] | None = None) -> int:
             _print(result)
             return 0
 
-        if args.command == "v2-merge-plan" or (
-            args.command in {"v2", "production"}
-            and getattr(args, f"{args.command}_command") == "merge-plan"
-        ):
+        if args.command == "production" and args.production_command == "merge-plan":
             settings = Settings.load()
             if args.backfill:
                 result = backfill_central_merge_plan(settings, job_id=args.job_id, forced_by=args.forced_by)
@@ -997,10 +925,7 @@ def main(argv: list[str] | None = None) -> int:
             _print({"ok": plan is not None, "plan": plan, "review_candidates": candidates})
             return 0 if plan is not None else 1
 
-        if args.command == "v2-merge-apply" or (
-            args.command in {"v2", "production"}
-            and getattr(args, f"{args.command}_command") == "merge-apply"
-        ):
+        if args.command == "production" and args.production_command == "merge-apply":
             settings = Settings.load()
             result = apply_merge_plan(settings=settings, plan_id=args.plan_id, branch=args.branch, mode=args.view)
             _print(result)

@@ -31,7 +31,7 @@ def export_job_fixture(settings: Settings, *, job_id: str, out_dir: Path | None 
     finally:
         store.close()
 
-    target = out_dir or (settings.export_dir / "v2-fixtures" / safe_name(job_id))
+    target = out_dir or (settings.export_dir / "production-fixtures" / safe_name(job_id))
     target.mkdir(parents=True, exist_ok=True)
     artifact_inventory = _artifact_inventory(stages)
     if copy_artifacts:
@@ -47,7 +47,7 @@ def export_job_fixture(settings: Settings, *, job_id: str, out_dir: Path | None 
     )
     payload = {
         "ok": True,
-        "fixture_version": "v2-semantic-fixture-v1",
+        "fixture_version": "production-semantic-fixture-v1",
         "job": job,
         "stages": stages,
         "events": events,

@@ -33,7 +33,7 @@ def _auto_drain_loop(settings: Settings) -> None:
         time.sleep(settings.auto_drain_interval_seconds)
         try:
             result = run_auto_drain_once(settings)
-            production_job_run = result.get("production_job_run") or result.get("v2_job_run") or {}
+            production_job_run = result.get("production_job_run") or {}
             if result.get("windows_processed") or result.get("records_ingested") or production_job_run.get("ran"):
                 daemon_log(settings, "auto_drain_cycle", **result)
         except Exception as exc:
@@ -62,5 +62,4 @@ def run_auto_drain_once(settings: Settings) -> dict[str, Any]:
         "stopped_reason": drain.get("stopped_reason"),
         "pending_sessions": drain.get("pending_sessions"),
         "production_job_run": job_run,
-        "v2_job_run": job_run,
     }
