@@ -5,7 +5,7 @@ import json
 import os
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
-from urllib.parse import parse_qs, unquote, urlparse
+from urllib.parse import parse_qs, urlparse
 
 from ...core.config import Settings
 from ...graph.diagnostics import debug_drain, debug_graph, debug_hooks, debug_qwen
@@ -28,6 +28,8 @@ from .owner_lock import DaemonAlreadyRunning
 from .owner_lock import DaemonOwnerLock
 from .payloads import optional_payload_path as _payload_optional_path
 from .payloads import settings_with_payload_paths as _payload_settings_with_paths
+from .routes.jobs import handle_job_retry_post as _handle_job_retry_post
+from .routes.jobs import handle_jobs_get as _handle_jobs_get
 from .routes.web import graph_workbench_html as _graph_workbench_html
 from .routes.web import load_web_asset
 from .routes.web import session_cockpit_html as _session_cockpit_html
@@ -205,40 +207,7 @@ class AmoHandler(BaseHTTPRequestHandler):
             except Exception as exc:
                 self._write_json(500, {"ok": False, "error": str(exc)})
             return
-        if path == "/api/jobs" or path.startswith("/api/jobs/"):
-            raw_limit = (query.get("limit") or ["100"])[0]
-            limit = _bounded_int(raw_limit, default=100, minimum=1, maximum=500)
-            job_store = ProductionSessionJobStore(self.settings)
-            try:
-                if path == "/api/jobs":
-                    repo_id = (query.get("repo_id") or [""])[0]
-                    self._write_json(
-                        200,
-                        {
-                            "ok": True,
-                            "repo_id": repo_id,
-                            "jobs": job_store.list_jobs(limit=limit, repo_id=repo_id),
-                            "reset_marker": job_store.marker(),
-                        },
-                    )
-                    return
-                job_id = unquote(path.removeprefix("/api/jobs/").strip("/"))
-                job = job_store.get_job(job_id)
-                if job is None:
-                    self._write_json(404, {"ok": False, "error": "job not found"})
-                    return
-                self._write_json(
-                    200,
-                    {
-                        "ok": True,
-                        "job": job,
-                        "stages": job_store.list_stages(job_id),
-                        "events": job_store.list_events(job_id, limit=limit),
-                        "reset_marker": job_store.marker(),
-                    },
-                )
-            finally:
-                job_store.close()
+        if _handle_jobs_get(path=path, query=query, settings=self.settings, write_json=self._write_json):
             return
         if path == "/api/graph/sessions":
             raw_limit = (query.get("limit") or ["80"])[0]
@@ -456,14 +425,12 @@ class AmoHandler(BaseHTTPRequestHandler):
             return
 
         try:
-            if self.path.startswith("/api/jobs/") and self.path.endswith("/retry"):
-                job_id = unquote(self.path.removeprefix("/api/jobs/").removesuffix("/retry").strip("/"))
-                job_store = ProductionSessionJobStore(self.settings)
-                try:
-                    job = job_store.retry_job(job_id, forced_by=str(payload.get("forced_by") or "daemon-api"))
-                    self._write_json(200, {"ok": True, "job": job})
-                finally:
-                    job_store.close()
+            if _handle_job_retry_post(
+                path=self.path,
+                payload=payload,
+                settings=self.settings,
+                write_json=self._write_json,
+            ):
                 return
             if self.path == "/hooks/ingest":
                 with _GRAPH_WRITE_LOCK:
