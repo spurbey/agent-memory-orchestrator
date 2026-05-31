@@ -4,12 +4,12 @@ import json
 from pathlib import Path
 from typing import Any
 
-from ....domain.versioning.repo_identity import resolve_repo_identity
-from ....reasoning_graph.evidence_view import build_reasoning_evidence_view
-from ....reasoning_graph.evidence_view import git_commit_truth
-from ....reasoning_graph.evidence_view import write_reasoning_evidence_view_artifacts
-from ....reasoning_graph.repo_resolution import resolve_session_repo_root
+from ....domain.evidence import build_reasoning_evidence_view
+from ....domain.evidence import git_commit_truth
+from ....domain.evidence import write_reasoning_evidence_view_artifacts
 from ....domain.reasoning import build_reasoning_work_packets_from_view
+from ....domain.versioning import resolve_repo_identity
+from ....domain.versioning import resolve_session_repo_root
 from ..job_runner import StageFailed
 from ..job_runner import StageResult
 from ..job_runner import _first_transcript_path
