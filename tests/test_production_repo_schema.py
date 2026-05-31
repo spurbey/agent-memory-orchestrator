@@ -3,7 +3,7 @@ from __future__ import annotations
 import sqlite3
 
 from agent_memory_orchestrator.core.db import init_schema
-from agent_memory_orchestrator.reasoning_graph.retrieval import RetrievalIndexStore
+from agent_memory_orchestrator.infrastructure.sqlite.retrieval_store import RetrievalIndexStore
 
 
 def test_init_schema_migrates_old_v2_repo_columns_before_indexes() -> None:

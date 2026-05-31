@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import json
 from dataclasses import replace as dataclass_replace
@@ -7,11 +7,11 @@ from typing import Any
 
 from ....core.db import connect
 from ....infrastructure.faiss.embedding_store import GraphEmbeddingStore
-from ....reasoning_graph.retrieval import RETRIEVAL_EMBEDDING_KIND
-from ....reasoning_graph.retrieval import RetrievalDocument
-from ....reasoning_graph.retrieval import RetrievalIndexStore
-from ....reasoning_graph.retrieval import build_retrieval_documents_from_graph
-from ....reasoning_graph.retrieval import embed_missing_retrieval_documents
+from ....application.services.retrieval_embedding import RETRIEVAL_EMBEDDING_KIND
+from ....domain.retrieval.models import RetrievalDocument
+from ....infrastructure.sqlite.retrieval_store import RetrievalIndexStore
+from ....domain.retrieval.projection import build_retrieval_documents_from_graph
+from ....application.services.retrieval_embedding import embed_missing_retrieval_documents
 from ....infrastructure.llm.text_embedder import StrictTextEmbedder
 from ....domain.pipeline.constants import RESET_MARKER_KEY
 from ....domain.pipeline.constants import RETRIEVAL_PROJECTION_VERSION
@@ -238,6 +238,3 @@ def run_quality_eval_stage(runner: Any, job: dict[str, Any], artifact_dir: Path,
     if issues:
         raise StageFailed("quality_eval_product_readiness_failed", payload)
     return StageResult(output_path=output, diagnostics=payload)
-
-
-
