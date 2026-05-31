@@ -10,6 +10,11 @@ from ....memory import MemoryService
 BOOTSTRAP_COMMANDS = ("init-db", "init-graph")
 
 
+def add_bootstrap_subcommands(sub: Any) -> None:
+    sub.add_parser("init-db", help="Initialize local database schema")
+    sub.add_parser("init-graph", help="Initialize local Kuzu GraphRAG schema")
+
+
 def handle_bootstrap_command(args: Any, *, emit: Callable[[object], None]) -> int | None:
     """Run local store initialization commands."""
     if args.command == "init-db":
@@ -34,4 +39,4 @@ def handle_bootstrap_command(args: Any, *, emit: Callable[[object], None]) -> in
     return None
 
 
-__all__ = ["BOOTSTRAP_COMMANDS", "handle_bootstrap_command"]
+__all__ = ["BOOTSTRAP_COMMANDS", "add_bootstrap_subcommands", "handle_bootstrap_command"]
