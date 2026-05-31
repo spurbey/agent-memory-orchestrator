@@ -12,9 +12,10 @@ from ...graph.store import GraphEdge, GraphNode, KuzuGraphStore
 from ...infrastructure.llm.text_embedder import StrictTextEmbedder
 from ...infrastructure.llm.text_embedder import _model_embedding_dimension as _infra_model_embedding_dimension
 from ...reasoning_graph.chunking import build_decision_threads
-from ...reasoning_graph.code_analysis import CodeNode, default_ast_expander, extract_code_nodes_from_commit
+from ...domain.code.models import CodeNode
+from ...reasoning_graph.code_analysis import default_ast_expander, extract_code_nodes_from_commit
 from ...reasoning_graph.decision_extraction import extract_decisions
-from ...reasoning_graph.models import ExtractionRun, TimelineEvent
+from ...domain.reasoning.models import ExtractionRun, TimelineEvent
 from ...reasoning_graph.relationships import code_node_provenance_edges, produced_change_edges
 from ...reasoning_graph.timeline import TimelineGraph, build_timeline
 
