@@ -17,8 +17,8 @@ from .constants import RESET_MARKER_KEY
 from .store import ProductionSessionJobStore
 
 
-def initialize_fresh_v2_production_storage(settings: Settings) -> dict[str, Any]:
-    """Mark a fresh, empty production install as V2-ready.
+def initialize_fresh_production_storage(settings: Settings) -> dict[str, Any]:
+    """Mark a fresh, empty production install as production-ready.
 
     This is intentionally non-destructive. It exists for new devices: they have
     no pre-V2 graph/retrieval data to clean, so forcing the operator through a
@@ -55,7 +55,7 @@ def initialize_fresh_v2_production_storage(settings: Settings) -> dict[str, Any]
     return {"ok": True, "created": True, "reason": "fresh_empty_stores", "marker": marker}
 
 
-def reset_production_v2_storage(
+def reset_production_storage(
     settings: Settings,
     *,
     backup: bool,
@@ -64,9 +64,9 @@ def reset_production_v2_storage(
     force_if_daemon_running: bool = False,
 ) -> dict[str, Any]:
     if not backup:
-        raise ValueError("--backup is required for v2-reset-production")
+        raise ValueError("--backup is required for reset-production")
     if not clean_graph or not clean_retrieval:
-        raise ValueError("--clean-graph and --clean-retrieval are required to apply production V2 reset")
+        raise ValueError("--clean-graph and --clean-retrieval are required to apply production reset")
     daemon = _daemon_status(settings)
     if daemon.get("running") and not force_if_daemon_running:
         raise RuntimeError("daemon_running: stop amo-daemon or pass --force-if-daemon-running")
@@ -129,7 +129,7 @@ def reset_production_v2_storage(
     return {"ok": True, "backup_path": str(backup_dir), "marker": marker}
 
 
-def adopt_existing_v2_production_storage(
+def adopt_existing_production_storage(
     settings: Settings,
     *,
     backup: bool,
@@ -137,16 +137,16 @@ def adopt_existing_v2_production_storage(
     validate_retrieval: bool,
     force_if_daemon_running: bool = False,
 ) -> dict[str, Any]:
-    """Mark existing production stores as V2-ready without deleting them.
+    """Mark existing production stores as production-ready without deleting them.
 
     This is intentionally explicit and backup-first. It is for the case where
-    production already contains the validated V2 reset graph/retrieval output
-    and the operator wants the V2 job runner to resume without wiping it.
+    production already contains validated graph/retrieval output and the
+    operator wants the production job runner to resume without wiping it.
     """
     if not backup:
-        raise ValueError("--backup is required for v2-adopt-production")
+        raise ValueError("--backup is required for adopt-production")
     if not validate_graph or not validate_retrieval:
-        raise ValueError("--validate-graph and --validate-retrieval are required to adopt existing V2 production stores")
+        raise ValueError("--validate-graph and --validate-retrieval are required to adopt existing production stores")
     daemon = _daemon_status(settings)
     if daemon.get("running") and not force_if_daemon_running:
         raise RuntimeError("daemon_running: stop amo-daemon or pass --force-if-daemon-running")
@@ -259,6 +259,11 @@ def _clean_retrieval_tables(db_path: Path) -> None:
         conn.commit()
     finally:
         conn.close()
+
+
+initialize_fresh_v2_production_storage = initialize_fresh_production_storage
+reset_production_v2_storage = reset_production_storage
+adopt_existing_v2_production_storage = adopt_existing_production_storage
 
 
 def _faiss_index_dir(settings: Settings) -> Path:
