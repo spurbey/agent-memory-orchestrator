@@ -25,8 +25,7 @@ from .commands.orchestration import handle_orchestration_command as _handle_orch
 from .commands.pipeline import handle_pipeline_command as _handle_pipeline_command
 from .commands.peer import add_peer_subcommands as _add_peer_subcommands
 from .commands.peer import handle_peer_command as _handle_peer_command
-from .commands.skill_checkpoint import DEFAULT_LOCAL_NUM_CTX
-from .commands.skill_checkpoint import DEFAULT_NUM_PREDICT
+from .commands.skill_checkpoint import add_skill_checkpoint_subcommands as _add_skill_checkpoint_subcommands
 from .commands.skill_checkpoint import handle_skill_checkpoint_command as _handle_skill_checkpoint_command
 
 _rebuild_clean_db = rebuild_clean_db
@@ -222,50 +221,7 @@ def _build_parser() -> argparse.ArgumentParser:
     debug_retrieval.add_argument("--query", required=True)
     debug_retrieval.add_argument("--limit", type=int, default=8)
 
-    skill_checkpoint = sub.add_parser(
-        "skill-checkpoint",
-        help="Build or finalize a reusable skill from a compact checkpoint packet",
-    )
-    skill_checkpoint_sub = skill_checkpoint.add_subparsers(dest="skill_checkpoint_command", required=True)
-    skill_checkpoint_extract = skill_checkpoint_sub.add_parser(
-        "extract",
-        help="Run local Ollama/Qwen over a compact checkpoint packet and write validated skill outputs",
-    )
-    skill_checkpoint_extract.add_argument("--packet", required=True, type=Path)
-    skill_checkpoint_extract.add_argument("--out-dir", required=True, type=Path)
-    skill_checkpoint_extract.add_argument("--amo-home", type=Path)
-    skill_checkpoint_extract.add_argument("--num-ctx", type=int, default=DEFAULT_LOCAL_NUM_CTX)
-    skill_checkpoint_extract.add_argument("--num-predict", type=int, default=DEFAULT_NUM_PREDICT)
-    skill_checkpoint_extract.add_argument("--timeout-seconds", type=float)
-    skill_checkpoint_extract.add_argument("--no-auto-repair-validation-refs", action="store_true")
-
-    skill_checkpoint_mark = skill_checkpoint_sub.add_parser(
-        "mark",
-        help="Mark the current agent session as a pending skill checkpoint",
-    )
-    skill_checkpoint_mark.add_argument("--agent", choices=["codex", "claude"], default="codex")
-    skill_checkpoint_mark.add_argument("--session-id", default="", help="Optional explicit session id. Defaults to latest captured session for the agent.")
-    skill_checkpoint_mark.add_argument("--note", default="", help="Optional user intent or checkpoint note.")
-    skill_checkpoint_mark.add_argument("--mode", choices=["workflow", "single_commit"], default="workflow")
-    skill_checkpoint_mark.add_argument("--cwd", type=Path, default=Path.cwd())
-    skill_checkpoint_mark.add_argument("--amo-home", type=Path)
-
-    skill_checkpoint_status = skill_checkpoint_sub.add_parser(
-        "status",
-        help="List pending skill checkpoints",
-    )
-    skill_checkpoint_status.add_argument("--limit", type=int, default=20)
-    skill_checkpoint_status.add_argument("--amo-home", type=Path)
-
-    skill_checkpoint_finalize = skill_checkpoint_sub.add_parser(
-        "finalize",
-        help="Post-validate a Qwen skill-checkpoint result and render SKILL.md/provenance",
-    )
-    skill_checkpoint_finalize.add_argument("--result", required=True, type=Path)
-    skill_checkpoint_finalize.add_argument("--packet", required=True, type=Path)
-    skill_checkpoint_finalize.add_argument("--out-dir", required=True, type=Path)
-    skill_checkpoint_finalize.add_argument("--amo-home", type=Path)
-    skill_checkpoint_finalize.add_argument("--no-auto-repair-validation-refs", action="store_true")
+    _add_skill_checkpoint_subcommands(sub)
 
     timeline = sub.add_parser("timeline", help="View session timeline")
     timeline.add_argument("--session-id", required=True)
