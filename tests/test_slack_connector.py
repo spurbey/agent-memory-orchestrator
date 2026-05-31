@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from urllib.parse import parse_qs, urlparse
 
-from agent_memory_orchestrator.app.cli import main
+from agent_memory_orchestrator.runtime.cli.main import main
 from agent_memory_orchestrator.config import Settings
 from agent_memory_orchestrator.integrations.connectors.slack import SlackConfig, SlackConnectorService
 from agent_memory_orchestrator.integrations.connectors.slack.client import SlackApiClient

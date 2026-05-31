@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from agent_memory_orchestrator.app.cli import main
+from agent_memory_orchestrator.runtime.cli.main import main
 from agent_memory_orchestrator.core.config import Settings
 from agent_memory_orchestrator.peer import PeerService
 from agent_memory_orchestrator.peer.invites import build_peer_invite
@@ -428,7 +428,7 @@ def test_peer_setup_can_save_relay_from_invite_and_accept(tmp_path: Path, capsys
 
 
 def test_peer_setup_returns_nonzero_when_startup_install_fails(tmp_path: Path, capsys, monkeypatch) -> None:
-    from agent_memory_orchestrator.app import cli as cli_module
+    from agent_memory_orchestrator.runtime.cli import main as cli_module
 
     def fake_start(self: PeerNetdRuntime, options, *, build_if_missing: bool = True) -> dict:
         return {"ok": True, "api_url": "http://127.0.0.1:8788"}
@@ -456,7 +456,7 @@ def test_peer_setup_returns_nonzero_when_startup_install_fails(tmp_path: Path, c
 
 
 def test_peer_setup_with_startup_points_to_bot_level_repeated_use(tmp_path: Path, capsys, monkeypatch) -> None:
-    from agent_memory_orchestrator.app import cli as cli_module
+    from agent_memory_orchestrator.runtime.cli import main as cli_module
 
     def fake_start(self: PeerNetdRuntime, options, *, build_if_missing: bool = True) -> dict:
         return {"ok": True, "api_url": "http://127.0.0.1:8788"}

@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import pytest
 
-from agent_memory_orchestrator.app import daemon as daemon_module
-from agent_memory_orchestrator.app.daemon import (
+from agent_memory_orchestrator.runtime.daemon import server as daemon_module
+from agent_memory_orchestrator.runtime.daemon.server import (
     DaemonAlreadyRunning,
     _DaemonOwnerLock,
     _bounded_int,

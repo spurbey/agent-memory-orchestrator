@@ -7,8 +7,8 @@ from pathlib import Path
 from agent_memory_orchestrator.config import Settings
 from agent_memory_orchestrator.reasoning_graph.evidence_view import build_reasoning_evidence_view
 from agent_memory_orchestrator.reasoning_graph.evidence_view import write_reasoning_evidence_view_artifacts
-from agent_memory_orchestrator.reasoning_graph.jobs import V2SessionJobStore
-from agent_memory_orchestrator.reasoning_graph.jobs.runner import V2SessionJobRunner
+from agent_memory_orchestrator.reasoning_graph.jobs import ProductionSessionJobStore
+from agent_memory_orchestrator.reasoning_graph.jobs.runner import ProductionSessionJobRunner
 
 
 def make_settings(tmp_path: Path) -> Settings:
@@ -41,7 +41,7 @@ def make_settings(tmp_path: Path) -> Settings:
 def test_v2_runner_uses_nested_repo_that_owns_session_commits(tmp_path: Path) -> None:
     settings, parent, nested, full_sha = _nested_repo_session(tmp_path, session_id="s-nested")
 
-    store = V2SessionJobStore(settings)
+    store = ProductionSessionJobStore(settings)
     try:
         job = store.enqueue_session(
             session_id="s-nested",
@@ -50,7 +50,7 @@ def test_v2_runner_uses_nested_repo_that_owns_session_commits(tmp_path: Path) ->
             repo_path=str(parent),
             source_evidence_day="2026-05-24",
         ).job
-        runner = V2SessionJobRunner(settings, job_store=store)
+        runner = ProductionSessionJobRunner(settings, job_store=store)
 
         evidence = runner.run_next()
         packets = runner.run_next()
@@ -81,7 +81,7 @@ def test_v2_work_packets_repairs_existing_bad_evidence_view_repo_scope(tmp_path:
     raw_records = list(_read_evidence_records(settings.evidence_dir / "2026-05-24.jsonl"))
     transcript = Path(raw_records[0]["payload"]["transcript_path"])
 
-    store = V2SessionJobStore(settings)
+    store = ProductionSessionJobStore(settings)
     try:
         job = store.enqueue_session(
             session_id="s-existing",
@@ -114,7 +114,7 @@ def test_v2_work_packets_repairs_existing_bad_evidence_view_repo_scope(tmp_path:
             diagnostics={"quality": bad_build.quality},
         )
 
-        runner = V2SessionJobRunner(settings, job_store=store)
+        runner = ProductionSessionJobRunner(settings, job_store=store)
         packets = runner.run_next()
 
         assert packets["stage"] == "work_packets"

@@ -10,7 +10,7 @@ from agent_memory_orchestrator.graph.store import InMemoryGraphStore
 from agent_memory_orchestrator.evidence.raw_store import RawEvidenceStore
 from agent_memory_orchestrator.graph.session import DeterministicGraphExtractor, SessionGraphBuilder
 from agent_memory_orchestrator.versioning import GitSnapshot
-from agent_memory_orchestrator.reasoning_graph.jobs import V2SessionJobStore
+from agent_memory_orchestrator.reasoning_graph.jobs import ProductionSessionJobStore
 
 
 class _StaticGitBackend:
@@ -142,7 +142,7 @@ def test_drain_session_boundary_persists_pending_window_across_runs(tmp_path: Pa
     assert second["triggered"][0]["result"]["mode"] == "v2_job_enqueue"
     assert second["triggered"][0]["result"]["created"] is True
     assert second["pending_sessions"] == 1
-    job_store = V2SessionJobStore(settings)
+    job_store = ProductionSessionJobStore(settings)
     try:
         job = job_store.get_job_by_session(session_id="s1")
     finally:

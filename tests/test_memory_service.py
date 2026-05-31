@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from agent_memory_orchestrator.app.cli import _rebuild_clean_db
+from agent_memory_orchestrator.runtime.cli.main import _rebuild_clean_db
 from agent_memory_orchestrator.config import Settings
 from agent_memory_orchestrator.memory import MemoryService
 from agent_memory_orchestrator.retrieval import build_context_pack_payload

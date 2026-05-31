@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import json
 from pathlib import Path
@@ -6,11 +6,11 @@ from pathlib import Path
 import pytest
 
 from agent_memory_orchestrator.config import Settings
-from agent_memory_orchestrator.app import daemon as daemon_module
+from agent_memory_orchestrator.runtime.daemon import server as daemon_module
 from agent_memory_orchestrator.core.db import connect
 from agent_memory_orchestrator.reasoning_graph.embedding_store import GraphEmbeddingRecord
 from agent_memory_orchestrator.reasoning_graph.embedding_store import GraphEmbeddingStore
-from agent_memory_orchestrator.reasoning_graph.jobs import V2SessionJobStore
+from agent_memory_orchestrator.reasoning_graph.jobs import ProductionSessionJobStore
 from agent_memory_orchestrator.reasoning_graph.jobs import runner as runner_module
 from agent_memory_orchestrator.reasoning_graph.jobs.store import graph_view_id
 from agent_memory_orchestrator.reasoning_graph.jobs.constants import GRAPH_SCHEMA_VERSION
@@ -19,7 +19,7 @@ from agent_memory_orchestrator.reasoning_graph.jobs.reset import adopt_existing_
 from agent_memory_orchestrator.reasoning_graph.jobs.reset import initialize_fresh_v2_production_storage
 from agent_memory_orchestrator.reasoning_graph.jobs.reset import reset_production_v2_storage
 from agent_memory_orchestrator.reasoning_graph.jobs.runner import require_complete_v2_reset_marker
-from agent_memory_orchestrator.reasoning_graph.jobs.runner import V2SessionJobRunner
+from agent_memory_orchestrator.reasoning_graph.jobs.runner import ProductionSessionJobRunner
 from agent_memory_orchestrator.reasoning_graph.central_merge import applier as applier_module
 from agent_memory_orchestrator.reasoning_graph.central_merge.applier import apply_merge_plan
 from agent_memory_orchestrator.reasoning_graph.central_merge.applier import CentralMergeApplyError
@@ -81,7 +81,7 @@ def _product_plan(plan):
 
 def test_v2_enqueue_is_idempotent_and_atomic_lock_skips_locked_failed_and_pending_model(tmp_path: Path) -> None:
     settings = make_settings(tmp_path)
-    store = V2SessionJobStore(settings)
+    store = ProductionSessionJobStore(settings)
     try:
         first = store.enqueue_session(
             session_id="s1",
@@ -127,7 +127,7 @@ def test_v2_enqueue_is_idempotent_and_atomic_lock_skips_locked_failed_and_pendin
 
 def test_v2_stage_rows_track_hashes_and_config_hash(tmp_path: Path) -> None:
     settings = make_settings(tmp_path)
-    store = V2SessionJobStore(settings)
+    store = ProductionSessionJobStore(settings)
     try:
         job = store.enqueue_session(session_id="s1", boundary_event_id="raw_boundary").job
         store.start_stage(
@@ -163,7 +163,7 @@ def test_v2_stage_rows_track_hashes_and_config_hash(tmp_path: Path) -> None:
 
 def test_v2_qwen_reasoning_reuses_existing_matching_checkpoint(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     settings = make_settings(tmp_path)
-    store = V2SessionJobStore(settings)
+    store = ProductionSessionJobStore(settings)
     try:
         job = store.enqueue_session(session_id="s-qwen", boundary_event_id="raw_boundary", repo_path=str(tmp_path)).job
         artifact_dir = Path(job["artifact_dir"])
@@ -229,7 +229,7 @@ def test_v2_qwen_reasoning_reuses_existing_matching_checkpoint(tmp_path: Path, m
                 raise AssertionError("existing matching checkpoint should be reused")
 
         monkeypatch.setattr(runner_module, "OllamaQwenClient", FailingQwenClient)
-        runner = V2SessionJobRunner(settings, job_store=store)
+        runner = ProductionSessionJobRunner(settings, job_store=store)
 
         run = runner.run_next()
         stage = store.stage_row(job_id=job["job_id"], stage="qwen_reasoning")
@@ -247,7 +247,7 @@ def test_v2_qwen_reasoning_reuses_existing_matching_checkpoint(tmp_path: Path, m
 
 def test_v2_schema_adds_central_merge_control_tables(tmp_path: Path) -> None:
     settings = make_settings(tmp_path)
-    store = V2SessionJobStore(settings)
+    store = ProductionSessionJobStore(settings)
     try:
         rows = store.conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
     finally:
@@ -272,7 +272,7 @@ def test_v2_jobs_and_repository_list_are_repo_scoped(tmp_path: Path) -> None:
     repo_b = tmp_path / "repo-b"
     repo_a.mkdir()
     repo_b.mkdir()
-    store = V2SessionJobStore(settings)
+    store = ProductionSessionJobStore(settings)
     try:
         job_a = store.enqueue_session(
             session_id="s-repo-a",
@@ -298,7 +298,7 @@ def test_v2_jobs_and_repository_list_are_repo_scoped(tmp_path: Path) -> None:
 
 def test_v2_central_merge_stage_writes_plan_and_applies_exact_atoms(tmp_path: Path) -> None:
     settings = make_settings(tmp_path)
-    store = V2SessionJobStore(settings)
+    store = ProductionSessionJobStore(settings)
     try:
         job = store.enqueue_session(session_id="s-central", boundary_event_id="raw_boundary", repo_path=str(tmp_path)).job
         artifact_dir = Path(job["artifact_dir"])
@@ -335,7 +335,7 @@ def test_v2_central_merge_stage_writes_plan_and_applies_exact_atoms(tmp_path: Pa
             diagnostics=manifest["inventory"],
         )
 
-        runner = V2SessionJobRunner(settings, job_store=store)
+        runner = ProductionSessionJobRunner(settings, job_store=store)
         run = runner.run_next()
 
         assert run["stage"] == "central_version_merge"
@@ -374,12 +374,12 @@ def test_v2_central_merge_stage_writes_plan_and_applies_exact_atoms(tmp_path: Pa
 
 def test_v2_central_merge_input_hash_tracks_active_graph_view_head(tmp_path: Path) -> None:
     settings = make_settings(tmp_path)
-    store = V2SessionJobStore(settings)
+    store = ProductionSessionJobStore(settings)
     try:
         job = store.enqueue_session(session_id="s-head-hash", boundary_event_id="raw_boundary", repo_path=str(tmp_path)).job
         input_artifact = tmp_path / "kuzu_write_result.json"
         input_artifact.write_text(json.dumps({"ok": True}), encoding="utf-8")
-        runner = V2SessionJobRunner(settings, job_store=store)
+        runner = ProductionSessionJobRunner(settings, job_store=store)
 
         initial_hash = runner._stage_input_hash(job=job, stage="central_version_merge", input_artifact=input_artifact)
         unchanged_stage_hash = runner._stage_input_hash(job=job, stage="retrieval_docs", input_artifact=input_artifact)
@@ -399,7 +399,7 @@ def test_v2_central_merge_input_hash_tracks_active_graph_view_head(tmp_path: Pat
 def test_v2_central_merge_apply_writes_exact_atoms_graph_commit_and_view(tmp_path: Path) -> None:
     settings = make_settings(tmp_path)
     graph = InMemoryGraphStore()
-    store = V2SessionJobStore(settings)
+    store = ProductionSessionJobStore(settings)
     try:
         graph.upsert_node(GraphNode(id="jobprefix:commit:abc123", kind="Commit", label="abc123"))
         job = store.enqueue_session(session_id="s-apply", boundary_event_id="raw_boundary", repo_path=str(tmp_path)).job
@@ -491,7 +491,7 @@ def test_v2_central_merge_apply_defaults_to_repo_scoped_central_graph(tmp_path: 
             opened_paths.append(graph_path)
 
     monkeypatch.setattr(applier_module, "KuzuGraphStore", CapturingGraphStore)
-    store = V2SessionJobStore(settings)
+    store = ProductionSessionJobStore(settings)
     try:
         job = store.enqueue_session(session_id="s-repo-central-graph", boundary_event_id="raw_boundary", repo_path=str(tmp_path)).job
         compact_graph = {
@@ -518,7 +518,7 @@ def test_v2_central_merge_apply_defaults_to_repo_scoped_central_graph(tmp_path: 
 def test_v2_central_merge_apply_requires_matching_graph_view_head(tmp_path: Path) -> None:
     settings = make_settings(tmp_path)
     graph = InMemoryGraphStore()
-    store = V2SessionJobStore(settings)
+    store = ProductionSessionJobStore(settings)
     try:
         first_job = store.enqueue_session(session_id="s-apply-a", boundary_event_id="raw_boundary_a", repo_path=str(tmp_path)).job
         second_job = store.enqueue_session(session_id="s-apply-b", boundary_event_id="raw_boundary_b", repo_path=str(tmp_path)).job
@@ -545,7 +545,7 @@ def test_v2_central_merge_apply_requires_matching_graph_view_head(tmp_path: Path
 def test_v2_central_merge_apply_rejects_non_curated_plan_input(tmp_path: Path) -> None:
     settings = make_settings(tmp_path)
     graph = InMemoryGraphStore()
-    store = V2SessionJobStore(settings)
+    store = ProductionSessionJobStore(settings)
     try:
         job = store.enqueue_session(session_id="s-apply-input", boundary_event_id="raw_boundary", repo_path=str(tmp_path)).job
         compact_graph = {"nodes": [{"id": "commit:abc123", "kind": "Commit", "properties": {"full_sha": "abc123"}}], "edges": []}
@@ -564,7 +564,7 @@ def test_v2_central_merge_apply_rejects_non_curated_plan_input(tmp_path: Path) -
 
 def test_v2_central_merge_planner_reports_matched_exact_atoms(tmp_path: Path) -> None:
     settings = make_settings(tmp_path)
-    store = V2SessionJobStore(settings)
+    store = ProductionSessionJobStore(settings)
     try:
         first_job = store.enqueue_session(session_id="s-match-a", boundary_event_id="raw_boundary_a", repo_path=str(tmp_path)).job
         second_job = store.enqueue_session(session_id="s-match-b", boundary_event_id="raw_boundary_b", repo_path=str(tmp_path)).job
@@ -591,7 +591,7 @@ def test_v2_central_merge_planner_reports_matched_exact_atoms(tmp_path: Path) ->
 
 def test_v2_central_merge_file_version_key_includes_producing_commit(tmp_path: Path) -> None:
     settings = make_settings(tmp_path)
-    store = V2SessionJobStore(settings)
+    store = ProductionSessionJobStore(settings)
     try:
         job = store.enqueue_session(session_id="s-file-version-key", boundary_event_id="raw_boundary", repo_path=str(tmp_path)).job
         compact_graph = {
@@ -621,7 +621,7 @@ def test_v2_central_merge_file_version_key_includes_producing_commit(tmp_path: P
 def test_v2_central_merge_apply_attaches_versions_to_matched_atoms(tmp_path: Path) -> None:
     settings = make_settings(tmp_path)
     graph = InMemoryGraphStore()
-    store = V2SessionJobStore(settings)
+    store = ProductionSessionJobStore(settings)
     try:
         first_job = store.enqueue_session(session_id="s-match-apply-a", boundary_event_id="raw_boundary_a", repo_path=str(tmp_path)).job
         second_job = store.enqueue_session(session_id="s-match-apply-b", boundary_event_id="raw_boundary_b", repo_path=str(tmp_path)).job
@@ -668,7 +668,7 @@ def test_v2_central_merge_apply_attaches_versions_to_matched_atoms(tmp_path: Pat
 def test_v2_central_merge_apply_writes_review_decision_versions_and_relation_edges(tmp_path: Path) -> None:
     settings = make_settings(tmp_path)
     graph = InMemoryGraphStore()
-    store = V2SessionJobStore(settings)
+    store = ProductionSessionJobStore(settings)
     try:
         job = store.enqueue_session(session_id="s-decision-apply", boundary_event_id="raw_boundary", repo_path=str(tmp_path)).job
         compact_graph = {
@@ -720,7 +720,7 @@ def test_v2_central_merge_apply_writes_review_decision_versions_and_relation_edg
 def test_v2_central_merge_apply_status_changes_for_safe_supersedes(tmp_path: Path) -> None:
     settings = make_settings(tmp_path)
     graph = InMemoryGraphStore()
-    store = V2SessionJobStore(settings)
+    store = ProductionSessionJobStore(settings)
     try:
         job = store.enqueue_session(session_id="s-decision-supersedes", boundary_event_id="raw_boundary", repo_path=str(tmp_path)).job
         repo_id = str(job["repo_id"])
@@ -787,7 +787,7 @@ def test_v2_central_merge_apply_status_changes_for_safe_supersedes(tmp_path: Pat
 def test_v2_central_merge_keeps_same_session_refinement_in_review(tmp_path: Path) -> None:
     settings = make_settings(tmp_path)
     graph = InMemoryGraphStore()
-    store = V2SessionJobStore(settings)
+    store = ProductionSessionJobStore(settings)
     try:
         job = store.enqueue_session(session_id="s-decision-same-session-refines", boundary_event_id="raw_boundary", repo_path=str(tmp_path)).job
         compact_graph = {
@@ -838,7 +838,7 @@ def test_v2_repo_identity_normalizes_remote_urls() -> None:
 
 def test_v2_central_merge_backfill_does_not_reopen_completed_job(tmp_path: Path) -> None:
     settings = make_settings(tmp_path)
-    store = V2SessionJobStore(settings)
+    store = ProductionSessionJobStore(settings)
     try:
         job = store.enqueue_session(session_id="s-old-complete", boundary_event_id="raw_boundary", repo_path=str(tmp_path)).job
         artifact_dir = Path(job["artifact_dir"])
@@ -861,7 +861,7 @@ def test_v2_central_merge_backfill_does_not_reopen_completed_job(tmp_path: Path)
 
     result = backfill_central_merge_plan(settings, job_id=job["job_id"], forced_by="test")
 
-    store = V2SessionJobStore(settings)
+    store = ProductionSessionJobStore(settings)
     try:
         updated = store.get_job(job["job_id"])
         stage = store.stage_row(job_id=job["job_id"], stage="central_version_merge")
@@ -881,7 +881,7 @@ def test_v2_central_merge_backfill_does_not_reopen_completed_job(tmp_path: Path)
 
 def test_v2_central_merge_persists_decision_frames_for_cross_session_dry_run(tmp_path: Path) -> None:
     settings = make_settings(tmp_path)
-    store = V2SessionJobStore(settings)
+    store = ProductionSessionJobStore(settings)
     try:
         first_job = store.enqueue_session(session_id="s-decision-a", boundary_event_id="raw_boundary_a", repo_path=str(tmp_path)).job
         first_graph = {
@@ -1047,7 +1047,7 @@ def test_v2_fixture_embedding_coverage_counts_only_current_retrieval_docs(tmp_pa
     finally:
         conn.close()
 
-    store = V2SessionJobStore(settings)
+    store = ProductionSessionJobStore(settings)
     try:
         job = store.enqueue_session(session_id="s-coverage", boundary_event_id="raw_boundary").job
     finally:
@@ -1114,7 +1114,7 @@ def test_v2_runner_fails_instead_of_completing_empty_graph_when_no_work_packets(
         encoding="utf-8",
     )
 
-    store = V2SessionJobStore(settings)
+    store = ProductionSessionJobStore(settings)
     try:
         job = store.enqueue_session(
             session_id="s-no-commit",
@@ -1123,7 +1123,7 @@ def test_v2_runner_fails_instead_of_completing_empty_graph_when_no_work_packets(
             repo_path=str(tmp_path),
             source_evidence_day="2026-05-21",
         ).job
-        runner = V2SessionJobRunner(settings, job_store=store)
+        runner = ProductionSessionJobRunner(settings, job_store=store)
 
         first = runner.run_next()
         second = runner.run_next()
@@ -1197,7 +1197,7 @@ def test_v2_reset_requires_backup_and_preserves_raw_config_and_job_tables(tmp_pa
     finally:
         conn.close()
 
-    store = V2SessionJobStore(settings)
+    store = ProductionSessionJobStore(settings)
     try:
         job = store.enqueue_session(session_id="s1", boundary_event_id="raw_boundary").job
     finally:
@@ -1248,7 +1248,7 @@ def test_v2_reset_requires_backup_and_preserves_raw_config_and_job_tables(tmp_pa
     assert doc_count == 0
     assert embedding_count == 0
 
-    store = V2SessionJobStore(settings)
+    store = ProductionSessionJobStore(settings)
     try:
         assert store.get_job(job["job_id"]) is not None
         marker = store.marker()
@@ -1373,7 +1373,7 @@ def test_v2_adopt_production_backs_up_and_preserves_existing_v2_stores(tmp_path:
         conn.close()
     assert doc_count == 1
 
-    store = V2SessionJobStore(settings)
+    store = ProductionSessionJobStore(settings)
     try:
         marker = store.marker()
     finally:
@@ -1556,7 +1556,7 @@ def test_auto_drain_closes_graph_before_v2_runner_opens(
 
 def test_session_detail_prefers_v2_raw_artifact_and_skips_pending_scan(tmp_path: Path) -> None:
     settings = make_settings(tmp_path)
-    store = V2SessionJobStore(settings)
+    store = ProductionSessionJobStore(settings)
     try:
         session_id = "session-fast-detail"
         job = store.enqueue_session(
