@@ -21,6 +21,7 @@ from agent_memory_orchestrator.graph.store import GraphEdge
 from agent_memory_orchestrator.graph.store import GraphNode
 from agent_memory_orchestrator.graph.store import InMemoryGraphStore
 from agent_memory_orchestrator.runtime.cli import main as cli_module
+from agent_memory_orchestrator.runtime.cli.commands import graph as graph_cli_module
 from agent_memory_orchestrator.runtime.cli.main import _retrieve_index_only
 from agent_memory_orchestrator.llm.qwen import DeterministicPlanner
 from agent_memory_orchestrator.reasoning_graph.central_merge.applier import repo_central_graph_path
@@ -463,9 +464,9 @@ def test_offline_graph_retrieve_with_repo_id_uses_repo_central_graph(
         def close(self) -> None:
             return None
 
-    monkeypatch.setattr(cli_module.Settings, "load", staticmethod(lambda: settings))
-    monkeypatch.setattr(cli_module, "KuzuGraphStore", CapturingStore)
-    monkeypatch.setattr(cli_module, "GraphRagService", CapturingService)
+    monkeypatch.setattr(graph_cli_module.Settings, "load", staticmethod(lambda: settings))
+    monkeypatch.setattr(graph_cli_module, "KuzuGraphStore", CapturingStore)
+    monkeypatch.setattr(graph_cli_module, "GraphRagService", CapturingService)
 
     exit_code = cli_module.main(
         [
