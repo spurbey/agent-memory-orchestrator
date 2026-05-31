@@ -14,11 +14,11 @@ from agent_memory_orchestrator.reasoning_graph.central_merge.production_eval imp
 from agent_memory_orchestrator.reasoning_graph.central_merge import production_eval
 from agent_memory_orchestrator.reasoning_graph import GraphEmbeddingRecord
 from agent_memory_orchestrator.reasoning_graph import GraphEmbeddingStore
-from agent_memory_orchestrator.reasoning_graph.jobs import V2SessionJobStore
+from agent_memory_orchestrator.reasoning_graph.jobs import ProductionSessionJobStore
 from agent_memory_orchestrator.reasoning_graph.jobs.reset import initialize_fresh_v2_production_storage
 from agent_memory_orchestrator.reasoning_graph.jobs.runner import StageResult
 from agent_memory_orchestrator.reasoning_graph.jobs.runner import StageFailed
-from agent_memory_orchestrator.reasoning_graph.jobs.runner import V2SessionJobRunner
+from agent_memory_orchestrator.reasoning_graph.jobs.runner import ProductionSessionJobRunner
 from agent_memory_orchestrator.reasoning_graph.jobs.runner import _quality_issues
 from agent_memory_orchestrator.reasoning_graph.jobs.runner import _quality_readiness
 from agent_memory_orchestrator.reasoning_graph.jobs.runner import stage_config_hash
@@ -58,7 +58,7 @@ def make_settings(tmp_path: Path) -> Settings:
 def test_production_semantic_eval_reports_stale_full_trace_state(tmp_path: Path) -> None:
     settings = make_settings(tmp_path)
     repo_id = "repo:remote:test"
-    store = V2SessionJobStore(settings)
+    store = ProductionSessionJobStore(settings)
     try:
         job = store.enqueue_session(
             session_id="s-prod",
@@ -361,7 +361,7 @@ def test_stage_config_hashes_are_stage_specific(tmp_path: Path) -> None:
 
 def test_superseded_stage_validity_is_audited_without_new_status(tmp_path: Path) -> None:
     settings = make_settings(tmp_path)
-    store = V2SessionJobStore(settings)
+    store = ProductionSessionJobStore(settings)
     try:
         job = store.enqueue_session(session_id="s-rerun", boundary_event_id="raw_boundary").job
         artifact_dir = Path(str(job["artifact_dir"]))
@@ -383,9 +383,9 @@ def test_superseded_stage_validity_is_audited_without_new_status(tmp_path: Path)
             diagnostics={"ok": True},
         )
 
-        runner = V2SessionJobRunner(settings, job_store=store)
+        runner = ProductionSessionJobRunner(settings, job_store=store)
 
-        def fake_stage(self: V2SessionJobRunner, job_row: dict[str, object], artifacts: Path, stage_dir: Path) -> StageResult:
+        def fake_stage(self: ProductionSessionJobRunner, job_row: dict[str, object], artifacts: Path, stage_dir: Path) -> StageResult:
             del self, job_row, artifacts
             output = stage_dir / "new.json"
             output.write_text("{}", encoding="utf-8")
@@ -414,14 +414,14 @@ def test_superseded_stage_validity_is_audited_without_new_status(tmp_path: Path)
 
 def test_central_merge_requires_curated_manifest(tmp_path: Path) -> None:
     settings = make_settings(tmp_path)
-    store = V2SessionJobStore(settings)
+    store = ProductionSessionJobStore(settings)
     try:
         job = store.enqueue_session(session_id="s-missing-curated", boundary_event_id="raw_boundary", repo_path=str(tmp_path)).job
         kuzu_dir = Path(str(job["artifact_dir"])) / "kuzu_write"
         kuzu_dir.mkdir(parents=True, exist_ok=True)
         (kuzu_dir / "compact_graph_manifest.json").write_text(json.dumps({"nodes": [], "edges": []}), encoding="utf-8")
         (kuzu_dir / "kuzu_write_result.json").write_text(json.dumps({"ok": True}), encoding="utf-8")
-        runner = V2SessionJobRunner(settings, job_store=store)
+        runner = ProductionSessionJobRunner(settings, job_store=store)
 
         try:
             runner._stage_central_version_merge(job, Path(str(job["artifact_dir"])), Path(str(job["artifact_dir"])) / "central_version_merge")
@@ -436,7 +436,7 @@ def test_central_merge_requires_curated_manifest(tmp_path: Path) -> None:
 def test_retrieval_docs_read_curated_manifest_directly(tmp_path: Path) -> None:
     settings = make_settings(tmp_path)
     initialize_fresh_v2_production_storage(settings)
-    store = V2SessionJobStore(settings)
+    store = ProductionSessionJobStore(settings)
     try:
         repo_id = "repo:remote:curated"
         job = store.enqueue_session(session_id="s-curated-retrieval", boundary_event_id="raw_boundary", repo_path=str(tmp_path)).job
@@ -464,7 +464,7 @@ def test_retrieval_docs_read_curated_manifest_directly(tmp_path: Path) -> None:
         }
         (kuzu_dir / "compact_graph_manifest.json").write_text(json.dumps(compact_manifest), encoding="utf-8")
         (kuzu_dir / "curated_graph_manifest.json").write_text(json.dumps(curated_manifest), encoding="utf-8")
-        runner = V2SessionJobRunner(settings, job_store=store)
+        runner = ProductionSessionJobRunner(settings, job_store=store)
         retrieval_dir = Path(str(job["artifact_dir"])) / "retrieval_docs"
         retrieval_dir.mkdir(parents=True, exist_ok=True)
 
@@ -503,10 +503,10 @@ def test_retrieval_docs_read_curated_manifest_directly(tmp_path: Path) -> None:
 def test_retrieval_projection_carries_forward_prior_curated_docs(tmp_path: Path) -> None:
     settings = make_settings(tmp_path)
     initialize_fresh_v2_production_storage(settings)
-    store = V2SessionJobStore(settings)
+    store = ProductionSessionJobStore(settings)
     try:
         repo_id = "repo:remote:cumulative"
-        runner = V2SessionJobRunner(settings, job_store=store)
+        runner = ProductionSessionJobRunner(settings, job_store=store)
 
         def run_projection(session_id: str, node_id: str, title: str) -> dict[str, object]:
             job = store.enqueue_session(session_id=session_id, boundary_event_id=f"raw-{session_id}", repo_path=str(tmp_path)).job
@@ -551,7 +551,7 @@ def test_retrieval_projection_carries_forward_prior_curated_docs(tmp_path: Path)
 def test_retrieval_projection_is_not_active_until_activation_gate_passes(tmp_path: Path) -> None:
     settings = make_settings(tmp_path)
     initialize_fresh_v2_production_storage(settings)
-    store = V2SessionJobStore(settings)
+    store = ProductionSessionJobStore(settings)
     try:
         repo_id = "repo:remote:raw-curated"
         job = store.enqueue_session(session_id="s-raw-projection", boundary_event_id="raw_boundary", repo_path=str(tmp_path)).job
@@ -573,7 +573,7 @@ def test_retrieval_projection_is_not_active_until_activation_gate_passes(tmp_pat
         }
         (kuzu_dir / "compact_graph_manifest.json").write_text(json.dumps(raw_manifest), encoding="utf-8")
         (kuzu_dir / "curated_graph_manifest.json").write_text(json.dumps(raw_manifest), encoding="utf-8")
-        runner = V2SessionJobRunner(settings, job_store=store)
+        runner = ProductionSessionJobRunner(settings, job_store=store)
         retrieval_dir = Path(str(job["artifact_dir"])) / "retrieval_docs"
         retrieval_dir.mkdir(parents=True, exist_ok=True)
 

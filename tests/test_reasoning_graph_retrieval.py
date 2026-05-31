@@ -20,8 +20,8 @@ from agent_memory_orchestrator.graph.answer_trace import format_answer_trace
 from agent_memory_orchestrator.graph.store import GraphEdge
 from agent_memory_orchestrator.graph.store import GraphNode
 from agent_memory_orchestrator.graph.store import InMemoryGraphStore
-from agent_memory_orchestrator.app import cli as cli_module
-from agent_memory_orchestrator.app.cli import _retrieve_index_only
+from agent_memory_orchestrator.runtime.cli import main as cli_module
+from agent_memory_orchestrator.runtime.cli.main import _retrieve_index_only
 from agent_memory_orchestrator.llm.qwen import DeterministicPlanner
 from agent_memory_orchestrator.reasoning_graph.central_merge.applier import repo_central_graph_path
 from agent_memory_orchestrator.reasoning_graph.jobs.constants import GRAPH_SCHEMA_VERSION
