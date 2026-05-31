@@ -7,6 +7,10 @@ from .extraction import STAGE4_CONTRACT_VERSION
 from .extraction import build_stage4_packet_prompt
 from .extraction import stage4_contract_hash
 from .extraction import stage4_output_schema
+from .decision_packets import DECISION_PACKET_SCHEMA_VERSION
+from .decision_packets import DecisionPacket
+from .decision_packets import build_decision_packet
+from .decision_packets import build_decision_packets
 from .models import DecisionThread
 from .models import DecisionUnit
 from .models import ExtractionRun
@@ -26,12 +30,16 @@ __all__ = [
     "STAGE4_CONTRACT_VERSION",
     "DecisionThread",
     "DecisionUnit",
+    "DECISION_PACKET_SCHEMA_VERSION",
+    "DecisionPacket",
     "ExtractionRun",
     "ReasoningExtractionReview",
     "ReasoningWorkPacketBuild",
     "TestRun",
     "TimelineEvent",
     "build_reasoning_work_packets_from_view",
+    "build_decision_packet",
+    "build_decision_packets",
     "build_stage4_packet_prompt",
     "is_strict_validation_fact",
     "packet_json_contains_raw_internal_ids",
