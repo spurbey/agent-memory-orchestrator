@@ -79,7 +79,7 @@ def test_cli_models_preflight_fails_when_local_models_missing(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     monkeypatch.setattr(
-        "agent_memory_orchestrator.runtime.cli.main.preflight_models",
+        "agent_memory_orchestrator.runtime.cli.commands.models.preflight_models",
         lambda **kwargs: {"ok": False, "models": {}, "env": {}, "preset": kwargs["preset"]},
     )
     exit_code = main(["models", "preflight", "--preset", "cpu-balanced"])
