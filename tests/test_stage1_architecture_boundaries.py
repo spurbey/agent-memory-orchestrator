@@ -80,9 +80,11 @@ def test_stage1_production_code_does_not_depend_on_legacy_reasoning_graph_facade
     forbidden = (
         "agent_memory_orchestrator.reasoning_graph.jobs",
         "agent_memory_orchestrator.reasoning_graph.central_merge",
+        "agent_memory_orchestrator.reasoning_graph.code_versioning",
         "agent_memory_orchestrator.reasoning_graph.embedding_store",
         "agent_memory_orchestrator.reasoning_graph.retrieval",
         "agent_memory_orchestrator.reasoning_graph.session_runtime",
+        "agent_memory_orchestrator.reasoning_graph.stage4_contract",
     )
     offenders: list[str] = []
 
