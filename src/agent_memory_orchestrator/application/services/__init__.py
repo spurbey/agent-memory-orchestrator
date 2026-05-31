@@ -5,6 +5,7 @@ from __future__ import annotations
 __all__ = [
     "CentralMergeRunResult",
     "CentralMergeService",
+    "ConnectorRuntimeService",
     "PeerAgentService",
     "ProductionPipelineService",
     "RETRIEVAL_EMBEDDING_KIND",
@@ -21,6 +22,10 @@ def __getattr__(name: str):
         from .central_merge import CentralMergeService
 
         return {"CentralMergeRunResult": CentralMergeRunResult, "CentralMergeService": CentralMergeService}[name]
+    if name == "ConnectorRuntimeService":
+        from .connector_runtime import ConnectorRuntimeService
+
+        return ConnectorRuntimeService
     if name == "ProductionPipelineService":
         from .production_pipeline import ProductionPipelineService
 
