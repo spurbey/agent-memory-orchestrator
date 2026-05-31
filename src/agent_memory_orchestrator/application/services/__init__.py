@@ -5,6 +5,7 @@ from __future__ import annotations
 __all__ = [
     "CentralMergeRunResult",
     "CentralMergeService",
+    "PeerAgentService",
     "ProductionPipelineService",
     "RETRIEVAL_EMBEDDING_KIND",
     "RetrievalQueryService",
@@ -24,6 +25,10 @@ def __getattr__(name: str):
         from .production_pipeline import ProductionPipelineService
 
         return ProductionPipelineService
+    if name == "PeerAgentService":
+        from .peer_agent import PeerAgentService
+
+        return PeerAgentService
     if name in {"RETRIEVAL_EMBEDDING_KIND", "embed_missing_retrieval_documents"}:
         from .retrieval_embedding import RETRIEVAL_EMBEDDING_KIND
         from .retrieval_embedding import embed_missing_retrieval_documents
