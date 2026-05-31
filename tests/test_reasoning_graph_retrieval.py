@@ -213,7 +213,7 @@ def test_retrieval_document_build_can_filter_to_production_graph_schema() -> Non
             id="reason:legacy",
             kind="ReasoningNode",
             label="legacy graph delta node",
-            summary="Old pre-V2 graph output should not enter V2 retrieval docs.",
+            summary="Old legacy graph output should not enter production retrieval docs.",
             session_id="s1",
         )
     )
@@ -222,7 +222,7 @@ def test_retrieval_document_build_can_filter_to_production_graph_schema() -> Non
             id="reason:v2",
             kind="ReasoningNode",
             label="v2 reasoning node",
-            summary="V2 answer-grade reasoning node.",
+            summary="Production answer-grade reasoning node.",
             session_id="s1",
             metadata={
                 "pipeline_version": PIPELINE_VERSION,

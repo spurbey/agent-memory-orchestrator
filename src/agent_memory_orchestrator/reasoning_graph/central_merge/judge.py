@@ -87,8 +87,8 @@ def _default_cases(case_set: str) -> list[dict[str, Any]]:
         return []
     return [
         {
-            "case_id": "fixture-has-traceable-v2-job",
-            "query": "does this fixture contain traceable V2 job output?",
+            "case_id": "fixture-has-traceable-production-job",
+            "query": "does this fixture contain traceable production job output?",
             "must_mention": ["job", "stage"],
             "must_cite": ["stage"],
             "must_not_claim": ["unsupported final decision"],

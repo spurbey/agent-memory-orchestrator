@@ -496,7 +496,7 @@ def _upsert_node_status(graph_store: GraphStore, *, node: dict[str, Any], status
             scope=str(node.get("scope") or "central"),
             session_id=str(node.get("session_id") or ""),
             project_id=str(node.get("project_id") or "default"),
-            source_app=str(node.get("source_app") or "v2-central-merge"),
+            source_app=str(node.get("source_app") or "production-central-merge"),
             evidence_id=str(node.get("evidence_id") or ""),
             commit_id=str(node.get("commit_id") or ""),
             created_at=str(node.get("created_at") or ""),
@@ -557,7 +557,7 @@ def _write_exact_atoms(
                 status=STATUS_REVIEW if atom_kind in REVIEW_APPLY_ATOM_KINDS else STATUS_ACTIVE,
                 scope="central",
                 session_id=str(plan.get("session_id") or ""),
-                source_app="v2-central-merge",
+                source_app="production-central-merge",
                 created_at=now,
                 metadata={
                     **base,
@@ -587,7 +587,7 @@ def _write_exact_atoms(
                 status=str(version.get("status") or STATUS_ACTIVE),
                 scope="central",
                 session_id=str(version.get("session_id") or plan.get("session_id") or ""),
-                source_app="v2-central-merge",
+                source_app="production-central-merge",
                 created_at=now,
                 metadata={
                     **base,
@@ -683,7 +683,7 @@ def _write_exact_atoms(
             status=STATUS_APPLIED,
             scope="central",
             session_id=str(plan.get("session_id") or ""),
-            source_app="v2-central-merge",
+            source_app="production-central-merge",
             created_at=now,
             metadata={
                 **base,
@@ -721,7 +721,7 @@ def _write_graph_view_node(
             status=STATUS_ACTIVE,
             scope="central",
             session_id=str(plan.get("session_id") or ""),
-            source_app="v2-central-merge",
+            source_app="production-central-merge",
             created_at=now,
             metadata={
                 **base,

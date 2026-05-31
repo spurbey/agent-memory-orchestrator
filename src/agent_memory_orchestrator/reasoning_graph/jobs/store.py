@@ -15,8 +15,8 @@ from ...core.db import init_schema
 from ...domain.versioning.repo_identity import resolve_repo_identity
 from .constants import GRAPH_SCHEMA_VERSION
 from .constants import PIPELINE_VERSION
+from .constants import PRODUCTION_STAGES
 from .constants import RESET_MARKER_KEY
-from .constants import V2_STAGES
 
 
 JOB_STATUSES = frozenset({"pending", "running", "pending_model", "failed", "complete"})
@@ -86,7 +86,7 @@ class ProductionSessionJobStore:
                     safe_session,
                     pipeline_version,
                     graph_schema_version,
-                    V2_STAGES[0],
+                    PRODUCTION_STAGES[0],
                     artifact_dir,
                     source_app,
                     safe_repo_path,
@@ -131,7 +131,7 @@ class ProductionSessionJobStore:
             WHERE job_id=?
             """,
             (
-                V2_STAGES[0],
+                PRODUCTION_STAGES[0],
                 source_app or str(existing.get("source_app") or ""),
                 safe_repo_path or str(existing.get("repo_path") or ""),
                 safe_repo_id or str(existing.get("repo_id") or ""),
@@ -148,7 +148,7 @@ class ProductionSessionJobStore:
             job_id=str(existing["job_id"]),
             event_type="reenqueued",
             stage="",
-            message="closed session boundary changed; invalidated V2 stages",
+            message="closed session boundary changed; invalidated production stages",
             metadata={"boundary_event_id": boundary_event_id},
         )
         return EnqueueResult(self.get_job(str(existing["job_id"])) or {}, created=False, updated=True, reason="boundary_changed")
@@ -989,7 +989,7 @@ def stable_job_id(session_id: str, pipeline_version: str = PIPELINE_VERSION) -> 
 
 
 def default_artifact_dir(home: Path, pipeline_version: str, session_id: str, job_id: str) -> Path:
-    return home / ".state" / "v2-jobs" / safe_part(pipeline_version) / f"{safe_part(session_id)[:80]}-{job_id.rsplit(':', 1)[-1][:8]}" / job_id.rsplit(":", 1)[-1]
+    return home / ".state" / "production-jobs" / safe_part(pipeline_version) / f"{safe_part(session_id)[:80]}-{job_id.rsplit(':', 1)[-1][:8]}" / job_id.rsplit(":", 1)[-1]
 
 
 def safe_part(value: str) -> str:
@@ -1026,15 +1026,12 @@ def _row(row: sqlite3.Row) -> dict[str, Any]:
 
 def _next_stage(stage: str) -> str:
     try:
-        index = V2_STAGES.index(stage)
+        index = PRODUCTION_STAGES.index(stage)
     except ValueError:
         return ""
-    if index + 1 >= len(V2_STAGES):
+    if index + 1 >= len(PRODUCTION_STAGES):
         return ""
-    return V2_STAGES[index + 1]
-
-
-V2SessionJobStore = ProductionSessionJobStore
+    return PRODUCTION_STAGES[index + 1]
 
 
 def _dedupe(values: list[str]) -> list[str]:

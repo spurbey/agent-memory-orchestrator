@@ -159,8 +159,8 @@ def format_install_result(payload: dict) -> str:
 
     init_db = payload.get("init_db")
     init_graph = payload.get("init_graph")
-    init_v2 = payload.get("init_v2_production")
-    if init_db or init_graph or init_v2:
+    init_production = payload.get("init_production")
+    if init_db or init_graph or init_production:
         lines.append("")
         lines.append("Initialized:")
         if init_db:
@@ -168,12 +168,12 @@ def format_install_result(payload: dict) -> str:
         if init_graph:
             status = "ready" if init_graph.get("ok") else f"skipped: {init_graph.get('error', '')}"
             lines.append(f"- Kuzu graph: {status}")
-        if init_v2:
-            if init_v2.get("ok"):
-                reason = init_v2.get("reason", "ready")
+        if init_production:
+            if init_production.get("ok"):
+                reason = init_production.get("reason", "ready")
                 lines.append(f"- Production marker: {reason}")
             else:
-                lines.append(f"- Production marker: skipped: {init_v2.get('error', '')}")
+                lines.append(f"- Production marker: skipped: {init_production.get('error', '')}")
 
     model_result = payload.get("models")
     if model_result:

@@ -85,7 +85,7 @@ def run_work_packets_stage(runner: Any, job: dict[str, Any], artifact_dir: Path,
                 "packet_artifact": str(output),
                 "quarantined_commit_count": len(build.quarantined_commits),
                 "repo_resolution": repo_resolution or {},
-                "note": "V2 answer-grade graph output requires at least one resolved Git commit-backed work packet.",
+                "note": "Production answer-grade graph output requires at least one resolved Git commit-backed work packet.",
             },
         )
     diagnostics = {"quality": build.quality}

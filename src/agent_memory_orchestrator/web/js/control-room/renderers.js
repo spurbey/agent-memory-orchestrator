@@ -40,7 +40,7 @@ export function setDaemon(ok, label) {
 
 export function renderHealth(state) {
   const h = state.health || {};
-  const marker = h.v2_reset_marker || {};
+  const marker = h.production_marker || {};
   const rows = [
     ["daemon", h.ok ? "online" : "unknown"],
     ["graph backend", h.graph_backend],
@@ -48,8 +48,8 @@ export function renderHealth(state) {
     ["qwen model", h.qwen_model],
     ["qwen extract", `${h.qwen_extract_timeout_seconds || "?"}s`],
     ["auto drain", h.auto_drain_enabled ? "enabled" : "off"],
-    ["production marker", marker.adopted_existing_v2 ? "adopted existing stores" : marker.cleaned?.graph ? "clean reset applied" : "missing"],
-    ["pipeline", marker.pipeline_version || "v2-reset-2026-05"],
+    ["production marker", marker.adopted_existing_production ? "adopted existing stores" : marker.cleaned?.graph ? "clean reset applied" : "missing"],
+    ["pipeline", marker.pipeline_version || "production"],
   ];
   $("healthPanel").innerHTML = rows.map(([k, v]) => `<div class="health-item"><strong>${escapeHtml(v || "unknown")}</strong><span>${escapeHtml(k)}</span></div>`).join("");
 }
@@ -341,7 +341,7 @@ function renderMarker(marker) {
   if (marker.fresh_install) {
     return `<span class="pill good">Fresh production stores ready</span><span class="pill blue">${escapeHtml(marker.pipeline_version || "production")}</span><span class="pill">no legacy graph cleanup needed</span>`;
   }
-  if (marker.adopted_existing_v2) {
+  if (marker.adopted_existing_production) {
     const docs = marker.validation?.retrieval?.retrieval_document_count;
     return `<span class="pill good">Production adopted existing stores</span><span class="pill blue">${escapeHtml(marker.pipeline_version || "production")}</span>${docs ? `<span class="pill">${escapeHtml(docs)} retrieval docs at adoption</span>` : ""}`;
   }

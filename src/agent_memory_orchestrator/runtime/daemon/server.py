@@ -24,8 +24,6 @@ from .coordination import GRAPH_WRITE_LOCK as _GRAPH_WRITE_LOCK
 from .coordination import READ_ONLY_GET_GRAPH_PATHS as _READ_ONLY_GET_GRAPH_PATHS
 from .coordination import bounded_int as _bounded_int
 from .coordination import graph_write_lock_if as _graph_write_lock_if
-from .coordination import production_stage_lock as _production_stage_lock
-from .coordination import production_stage_requires_graph_write_lock as _production_stage_requires_graph_write_lock
 from .logging import daemon_log as _daemon_log
 from .owner_lock import DaemonAlreadyRunning
 from .owner_lock import DaemonOwnerLock
@@ -43,14 +41,6 @@ _load_web_asset = load_web_asset
 
 def _read_graph_service(settings: Settings, *, repo_id: str = "") -> GraphRagService:
     return _graph_access.read_graph_service(settings, repo_id=repo_id)
-
-
-def _v2_stage_requires_graph_write_lock(stage: str) -> bool:
-    return _production_stage_requires_graph_write_lock(stage)
-
-
-def _v2_stage_lock(stage: str) -> Any:
-    return _production_stage_lock(stage)
 
 
 def _start_auto_drain_worker(settings: Settings) -> Any:
@@ -184,7 +174,7 @@ class AmoHandler(BaseHTTPRequestHandler):
                     "auto_drain_interval_seconds": self.settings.auto_drain_interval_seconds,
                     "auto_drain_record_limit": self.settings.auto_drain_record_limit,
                     "auto_embedding_batch_size": self.settings.auto_embedding_batch_size,
-                    "v2_reset_marker": reset_marker,
+                    "production_marker": reset_marker,
                 },
             )
             return

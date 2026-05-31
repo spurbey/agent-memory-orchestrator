@@ -4,7 +4,6 @@ from .constants import GRAPH_SCHEMA_VERSION
 from .constants import PIPELINE_VERSION
 from .constants import PRODUCTION_STAGES
 from .constants import STAGE_DISPLAY_NAMES
-from .constants import V2_STAGES
 
 __all__ = [
     "GRAPH_SCHEMA_VERSION",
@@ -13,9 +12,6 @@ __all__ = [
     "ProductionSessionJobRunner",
     "ProductionSessionJobStore",
     "STAGE_DISPLAY_NAMES",
-    "V2SessionJobRunner",
-    "V2SessionJobStore",
-    "V2_STAGES",
     "stage_display_name",
 ]
 
@@ -35,12 +31,4 @@ def __getattr__(name: str):
         from .store import ProductionSessionJobStore
 
         return ProductionSessionJobStore
-    if name == "V2SessionJobRunner":
-        from .runner import V2SessionJobRunner
-
-        return V2SessionJobRunner
-    if name == "V2SessionJobStore":
-        from .store import V2SessionJobStore
-
-        return V2SessionJobStore
     raise AttributeError(name)

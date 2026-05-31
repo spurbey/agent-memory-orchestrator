@@ -17,7 +17,7 @@ def run_reasoning_review_stage(runner: Any, job: dict[str, Any], artifact_dir: P
     review = review_reasoning_extraction_results(
         packets=packets if isinstance(packets, list) else [],
         results=results if isinstance(results, list) else [],
-        source_name="v2_session_job",
+        source_name="production_session_job",
     )
     (stage_dir / "stage4_reasoning_review.json").write_text(json.dumps(review.as_dict(), indent=2, ensure_ascii=False), encoding="utf-8")
     output = stage_dir / "accepted_reasoning_nodes.json"

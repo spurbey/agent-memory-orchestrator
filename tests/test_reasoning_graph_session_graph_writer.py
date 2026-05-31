@@ -131,13 +131,13 @@ def test_kuzu_store_upsert_supports_compact_production_schema(tmp_path: Path) ->
             GraphNode(
                 id="v2job:node",
                 kind="ReasoningNode",
-                label="V2 node",
-                summary="Compact central V2 node",
+                label="Production node",
+                summary="Compact central production node",
                 status="active",
                 scope="central",
                 session_id="session-1",
                 commit_id="abc1234",
-                metadata={"pipeline_version": "v2-reset-2026-05", "graph_schema_version": "v2", "packet_id": "WP0001"},
+                metadata={"pipeline_version": "production-2026-05", "graph_schema_version": "production-graph-v1", "packet_id": "WP0001"},
             )
         )
         store.upsert_edge(
@@ -146,7 +146,7 @@ def test_kuzu_store_upsert_supports_compact_production_schema(tmp_path: Path) ->
                 source_id="v2job:node",
                 target_id="WP0001",
                 kind="REASON_NODE_IN_PACKET",
-                metadata={"pipeline_version": "v2-reset-2026-05", "graph_schema_version": "v2"},
+                metadata={"pipeline_version": "production-2026-05", "graph_schema_version": "production-graph-v1"},
             )
         )
         status = store.merge_status()
@@ -161,7 +161,7 @@ def test_kuzu_store_upsert_supports_compact_production_schema(tmp_path: Path) ->
 
 def test_real_stage5_artifacts_build_expected_compact_graph_manifest() -> None:
     root = Path(__file__).resolve().parents[1]
-    stage_root = root / ".tmp" / "reasoning-graph-v2-reset-2026-05-14"
+    stage_root = root / ".tmp" / "reasoning-graph-production-2026-05-14"
     required = {
         "packets": stage_root / "03b_reasoning_work_packets_strict_validation" / "reasoning_work_packets.json",
         "reasoning_nodes": stage_root / "05d_reasoning_code_links" / "reasoning_nodes_with_ids.json",

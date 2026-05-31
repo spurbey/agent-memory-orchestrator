@@ -249,7 +249,7 @@ class MemoryMcpToolService:
                     limit=safe_limit,
                 )
             indexed.setdefault("tool", "amo_graph_search")
-            indexed.setdefault("retrieval_source", "v2_active_projection")
+            indexed.setdefault("retrieval_source", "active_projection")
             indexed.setdefault("context_for_synthesis", _indexed_unavailable_context(indexed))
             indexed.setdefault("hits", [])
             indexed.setdefault("version_history", [])
@@ -257,7 +257,7 @@ class MemoryMcpToolService:
                 "plan",
                 {
                     "intent": "semantic_search",
-                    "source": "v2_active_projection",
+                    "source": "active_projection",
                     "repo_id": safe_repo_id,
                 },
             )

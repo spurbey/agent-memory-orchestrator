@@ -189,7 +189,7 @@ def test_mcp_graph_search_uses_active_repo_projection_when_repo_id_is_provided(t
     assert graph.calls[0]["repo_id"] == "repo:amo"
     assert graph.calls[0]["require_vector"] is True
     assert result["ok"] is True
-    assert result["retrieval_mode"] == "v2_active_repository_memory"
+    assert result["retrieval_mode"] == "active_repository_memory"
     assert "retrieval context" in result["context_for_synthesis"]
     assert result["retrieval_status"]["vector"] == "faiss:completed"
     assert result["hits"][0]["kind"] == "file_impact"

@@ -49,7 +49,7 @@ The returned payload always includes the resolved canonical repo id:
     "id": "repo:remote:311ebb9cda1fb40f"
   },
   "retrieval_status": {
-    "source": "v2_active_projection",
+    "source": "active_projection",
     "repo_id_inferred": true
   }
 }
@@ -64,7 +64,7 @@ and exposes stable, useful context:
 {
   "ok": true,
   "query": "why was demo_greet.py created",
-  "retrieval_mode": "v2_active_repository_memory",
+  "retrieval_mode": "active_repository_memory",
   "context_for_synthesis": "Use these retrieved memory hits to answer the user. Do not treat this as final prose.",
   "hits": [
     {

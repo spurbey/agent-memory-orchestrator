@@ -323,7 +323,7 @@ class EvidenceDrain:
         if self.builder is not None:
             return self.builder.process_window(session_id=session_id, records=state.pending_records, trigger=trigger)
         if self.job_store is None:
-            raise RuntimeError("V2 session job store is required for enqueue-only drain")
+            raise RuntimeError("production session job store is required for enqueue-only drain")
         enqueue = self.job_store.enqueue_session(
             session_id=session_id,
             boundary_event_id=boundary_event_id,
@@ -333,7 +333,7 @@ class EvidenceDrain:
             source_evidence_days=sorted(state.evidence_days),
         )
         return {
-            "mode": "v2_job_enqueue",
+            "mode": "production_job_enqueue",
             "job_id": enqueue.job.get("job_id"),
             "created": enqueue.created,
             "updated": enqueue.updated,
