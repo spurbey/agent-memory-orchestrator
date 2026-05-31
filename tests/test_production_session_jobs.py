@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from agent_memory_orchestrator.config import Settings
+from agent_memory_orchestrator.runtime.daemon import auto_drain as auto_drain_module
 from agent_memory_orchestrator.runtime.daemon import server as daemon_module
 from agent_memory_orchestrator.core.db import connect
 from agent_memory_orchestrator.reasoning_graph.embedding_store import GraphEmbeddingRecord
@@ -1535,7 +1536,7 @@ def test_auto_drain_closes_graph_before_v2_runner_opens(
     class FakeRunner:
         def __init__(self, settings: Settings, stage_lock_factory: object | None = None) -> None:
             del settings
-            assert stage_lock_factory is daemon_module._production_stage_lock
+            assert stage_lock_factory is auto_drain_module.production_stage_lock
             events.append("runner_open")
 
         def run_next(self) -> dict[str, object]:
@@ -1545,8 +1546,8 @@ def test_auto_drain_closes_graph_before_v2_runner_opens(
         def close(self) -> None:
             events.append("runner_close")
 
-    monkeypatch.setattr(daemon_module, "GraphRagService", FakeGraph)
-    monkeypatch.setattr(daemon_module, "ProductionSessionJobRunner", FakeRunner)
+    monkeypatch.setattr(auto_drain_module, "GraphRagService", FakeGraph)
+    monkeypatch.setattr(auto_drain_module, "ProductionSessionJobRunner", FakeRunner)
 
     result = daemon_module._run_auto_drain_once(settings)
 
