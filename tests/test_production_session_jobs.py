@@ -39,8 +39,8 @@ from agent_memory_orchestrator.infrastructure.sqlite.retrieval_store import Retr
 from agent_memory_orchestrator.graph.service import build_session_detail_fallback
 from agent_memory_orchestrator.graph.service import _load_session_evidence_records
 from agent_memory_orchestrator.graph.service import _session_pending_summary
-from agent_memory_orchestrator.graph.store import GraphNode
-from agent_memory_orchestrator.graph.store import InMemoryGraphStore
+from agent_memory_orchestrator.infrastructure.kuzu import GraphNode
+from agent_memory_orchestrator.infrastructure.kuzu import InMemoryGraphStore
 
 
 def make_settings(tmp_path: Path) -> Settings:

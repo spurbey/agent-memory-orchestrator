@@ -54,7 +54,7 @@ from ..application.services.session_detail import _load_session_evidence_records
 from ..application.services.session_detail import _reconstruct_clean_windows
 from ..application.services.session_detail import _session_pending_summary as _session_pending_summary
 from ..application.services.session_detail import _timeline_row
-from .store import GraphEdge, GraphNode, GraphStore, KuzuGraphStore
+from ..infrastructure.kuzu import GraphEdge, GraphNode, GraphStore, KuzuGraphStore
 
 
 class GraphRagService:

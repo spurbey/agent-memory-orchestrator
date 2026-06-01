@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
-from ...graph.store import GraphEdge, GraphNode, KuzuGraphStore
+from ...infrastructure.kuzu import GraphEdge, GraphNode, KuzuGraphStore
 from ...infrastructure.llm.text_embedder import StrictTextEmbedder
 from ...infrastructure.llm.text_embedder import _model_embedding_dimension as _infra_model_embedding_dimension
 from ...domain.code import default_ast_expander, extract_code_nodes_from_commit

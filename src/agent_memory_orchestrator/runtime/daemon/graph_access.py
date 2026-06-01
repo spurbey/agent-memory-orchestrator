@@ -4,7 +4,7 @@ from dataclasses import replace
 
 from ...core.config import Settings
 from ...graph.service import GraphRagService
-from ...graph.store import KuzuGraphStore
+from ...infrastructure.kuzu import KuzuGraphStore
 from ...infrastructure.kuzu.central_graph import repo_central_graph_path
 
 

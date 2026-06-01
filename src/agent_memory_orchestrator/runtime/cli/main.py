@@ -4,7 +4,7 @@ import argparse
 import json
 import sys
 
-from ...graph.store import GraphBackendUnavailable
+from ...infrastructure.kuzu import GraphBackendUnavailable
 from ...llm.qwen import QwenUnavailable
 from ..daemon.client import DaemonUnavailable
 from .commands.bootstrap import add_bootstrap_subcommands as _add_bootstrap_subcommands

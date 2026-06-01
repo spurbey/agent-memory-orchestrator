@@ -1,13 +1,13 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import json
 from pathlib import Path
 
 import pytest
 
-from agent_memory_orchestrator.graph.store import GraphEdge
-from agent_memory_orchestrator.graph.store import GraphNode
-from agent_memory_orchestrator.graph.store import KuzuGraphStore
+from agent_memory_orchestrator.infrastructure.kuzu import GraphEdge
+from agent_memory_orchestrator.infrastructure.kuzu import GraphNode
+from agent_memory_orchestrator.infrastructure.kuzu import KuzuGraphStore
 from agent_memory_orchestrator.application.pipeline import build_compact_session_graph
 from agent_memory_orchestrator.application.pipeline import write_compact_session_graph
 
@@ -202,5 +202,3 @@ def test_real_stage5_artifacts_build_expected_compact_graph_manifest() -> None:
         "Symbol": 719,
         "CodeVersion": 1052,
     }
-
-

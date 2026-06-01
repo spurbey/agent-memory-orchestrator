@@ -10,7 +10,7 @@ from ...runtime.daemon.client import DaemonClient
 from ...runtime.daemon.client import DaemonUnavailable
 from ...core.config import Settings
 from ...core.db import connect
-from ...graph.store import KuzuGraphStore
+from ...infrastructure.kuzu import KuzuGraphStore
 from ...domain.pipeline.constants import GRAPH_SCHEMA_VERSION
 from ...domain.pipeline.constants import PIPELINE_VERSION
 from ...domain.pipeline.constants import RESET_MARKER_KEY

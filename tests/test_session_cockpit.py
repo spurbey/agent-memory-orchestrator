@@ -5,7 +5,7 @@ from pathlib import Path
 from agent_memory_orchestrator.core.config import Settings
 from agent_memory_orchestrator.runtime.daemon.server import GRAPH3D_HTML, SESSION_COCKPIT_HTML
 from agent_memory_orchestrator.graph.service import GraphRagService
-from agent_memory_orchestrator.graph.store import GraphEdge, GraphNode, InMemoryGraphStore
+from agent_memory_orchestrator.infrastructure.kuzu import GraphEdge, GraphNode, InMemoryGraphStore
 from agent_memory_orchestrator.llm.qwen import DeterministicPlanner
 from agent_memory_orchestrator.versioning import GitSnapshot
 
