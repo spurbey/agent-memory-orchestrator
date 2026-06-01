@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from ....core.config import Settings
-from ....application.services.central_merge_apply import apply_merge_plan
+from ....application.services.central_merge.apply import apply_merge_plan
 from ....application.pipeline.debug.backfill import backfill_central_merge_plan
 from ....application.pipeline.debug.fixtures import export_job_fixture
 from ....application.pipeline.evaluation.production_eval import default_production_eval_path
