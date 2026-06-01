@@ -31,13 +31,13 @@ from .retrieval.answer_trace import _active_central_versions_for_support as _act
 from .retrieval.runtime import embed_retrieval_index as _embed_retrieval_index
 from .retrieval.runtime import rebuild_retrieval_index as _rebuild_retrieval_index
 from .retrieval.runtime import retrieve_indexed_graph as _retrieve_indexed_graph
-from .session_detail import _evidence_roots
-from .session_detail import _load_evidence_records
-from .session_detail import _load_session_evidence_records as _load_session_evidence_records
-from .session_detail import _reconstruct_clean_windows
-from .session_detail import _session_pending_summary as _session_pending_summary
-from .session_detail import _timeline_row
-from .session_detail import build_session_detail_fallback as build_session_detail_fallback
+from .session.detail import _evidence_roots
+from .session.detail import _load_evidence_records
+from .session.detail import _load_session_evidence_records as _load_session_evidence_records
+from .session.detail import _reconstruct_clean_windows
+from .session.detail import _session_pending_summary as _session_pending_summary
+from .session.detail import _timeline_row
+from .session.detail import build_session_detail_fallback as build_session_detail_fallback
 from .version_flow import _build_central_version_flows
 from .version_flow import _build_version_flow
 from .version_flow import _is_central_graph_seed

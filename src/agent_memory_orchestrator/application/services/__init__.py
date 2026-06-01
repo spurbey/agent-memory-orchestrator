@@ -47,11 +47,11 @@ def __getattr__(name: str):
 
         return PeerAgentService
     if name == "SessionBoundaryService":
-        from .session_boundary import SessionBoundaryService
+        from .session.boundary import SessionBoundaryService
 
         return SessionBoundaryService
     if name == "build_session_detail_fallback":
-        from .session_detail import build_session_detail_fallback
+        from .session.detail import build_session_detail_fallback
 
         return build_session_detail_fallback
     if name in {"RETRIEVAL_EMBEDDING_KIND", "embed_missing_retrieval_documents"}:
