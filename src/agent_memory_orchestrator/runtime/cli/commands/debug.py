@@ -4,7 +4,7 @@ from collections.abc import Callable
 from typing import Any
 
 from ....core.config import Settings
-from ....graph.diagnostics import debug_hooks, debug_qwen
+from ...diagnostics import debug_hooks, debug_qwen
 from ...daemon.client import DaemonClient, DaemonUnavailable
 from .memory import rebuild_clean_db
 
