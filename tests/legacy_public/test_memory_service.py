@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import json
 from dataclasses import replace
@@ -1002,7 +1002,7 @@ def test_structured_mcp_tool_json_becomes_reference_without_raw_payload(tmp_path
 
 
 def test_codex_hooks_retrieval_eval_fixture(tmp_path) -> None:
-    fixture = json.loads((Path(__file__).parent / "fixtures" / "retrieval_eval_codex_hooks.json").read_text())
+    fixture = json.loads((Path(__file__).resolve().parents[1] / "fixtures" / "retrieval_eval_codex_hooks.json").read_text())
     case = fixture["cases"][0]
     settings = make_settings(tmp_path)
     svc = MemoryService(settings)
@@ -1052,7 +1052,7 @@ def test_codex_hooks_retrieval_eval_fixture(tmp_path) -> None:
 
 
 def test_phase1_hardening_retrieval_eval_fixture(tmp_path) -> None:
-    fixture = json.loads((Path(__file__).parent / "fixtures" / "retrieval_eval_phase1_hardening.json").read_text())
+    fixture = json.loads((Path(__file__).resolve().parents[1] / "fixtures" / "retrieval_eval_phase1_hardening.json").read_text())
     case = fixture["cases"][0]
     settings = make_settings(tmp_path)
     svc = MemoryService(settings)
