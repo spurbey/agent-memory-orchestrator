@@ -1,6 +1,8 @@
 # AMO Repository Layout
 
-AMO is being migrated toward a layered, local-first architecture. The migration is staged so production imports, persisted stores, CLI/MCP wiring, and user installs keep working while the source tree becomes modular.
+AMO uses a layered, local-first architecture. Structural changes should keep
+production imports, persisted stores, CLI/MCP wiring, and user installs working
+while preserving clear source ownership.
 
 ## Target Shape
 
@@ -59,17 +61,17 @@ agent_memory_orchestrator/
 - Legacy session-extraction paths are removed; do not add new production dependencies on obsolete node kinds.
 - Run `python -m ruff check src tests` and focused pytest suites after each structural move.
 
-## Staged Migration
+## Product Boundary Map
 
 ```text
-Stage 1: production pipeline + retrieval boundaries
-Stage 2: central merge/versioning boundaries
-Stage 3: daemon/CLI/MCP runtime split
-Stage 4: peer-agent + peer-netd split
-Stage 5: connector ingestion/responding split
-Stage 6: active-session local agent review/blast-radius workflows
-Stage 7: plugin contracts and private extension loader
-Stage 8: obsolete legacy tests/code removal
+production pipeline + retrieval boundaries
+central merge/versioning boundaries
+daemon/CLI/MCP runtime split
+peer-agent + peer-netd split
+connector ingestion/responding split
+active-session local agent review/blast-radius workflows
+plugin contracts and private extension loader
+legacy-public API isolation
 ```
 
 ## Import Rule
