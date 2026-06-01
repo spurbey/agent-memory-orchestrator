@@ -13,6 +13,7 @@ __all__ = [
     "RETRIEVAL_EMBEDDING_KIND",
     "RetrievalQueryService",
     "SessionBoundaryService",
+    "build_session_detail_fallback",
     "embed_missing_retrieval_documents",
     "retrieve_session_graph",
     "vector_candidates",
@@ -49,6 +50,10 @@ def __getattr__(name: str):
         from .session_boundary import SessionBoundaryService
 
         return SessionBoundaryService
+    if name == "build_session_detail_fallback":
+        from .session_detail import build_session_detail_fallback
+
+        return build_session_detail_fallback
     if name in {"RETRIEVAL_EMBEDDING_KIND", "embed_missing_retrieval_documents"}:
         from .retrieval_embedding import RETRIEVAL_EMBEDDING_KIND
         from .retrieval_embedding import embed_missing_retrieval_documents
