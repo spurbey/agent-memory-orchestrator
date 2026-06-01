@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from agent_memory_orchestrator.llm import models as model_manager
+from agent_memory_orchestrator.infrastructure.llm import models as model_manager
 from agent_memory_orchestrator.runtime.cli.main import main
 
 

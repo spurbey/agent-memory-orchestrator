@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import argparse
 import json
@@ -17,7 +17,7 @@ from ....install.service import apply_install_plan
 from ....install.service import build_install_plan
 from ....install.service import doctor as install_doctor
 from ....install.service import uninstall as uninstall_targets
-from ....llm.models import download_models
+from ....infrastructure.llm import download_models
 from ....memory import MemoryService
 from ....application.pipeline.storage_lifecycle import initialize_fresh_production_storage
 

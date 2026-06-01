@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import argparse
 import json
@@ -9,7 +9,7 @@ from urllib.parse import parse_qs, urlparse
 
 from ...core.config import Settings
 from ...infrastructure.kuzu import GraphBackendUnavailable
-from ...llm.qwen import QwenUnavailable
+from ...infrastructure.llm import QwenUnavailable
 from . import auto_drain as _auto_drain
 from . import dashboard as _dashboard
 from .coordination import bounded_int as _bounded_int

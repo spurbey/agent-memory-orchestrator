@@ -1,11 +1,11 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import math
 import re
+import hashlib
 from dataclasses import dataclass, replace
 from typing import Protocol
 
-from ...llm.embeddings import embed_text
 from .models import DecisionThread
 from .models import ExtractionRun
 from .models import TimelineEvent
@@ -30,7 +30,7 @@ class HashEmbeddingProvider:
     dims: int = 64
 
     def embed(self, text: str) -> list[float]:
-        return embed_text(text, self.dims)
+        return _hash_embed_text(text, self.dims)
 
 
 @dataclass(slots=True, frozen=True)
@@ -126,6 +126,27 @@ def cosine_similarity(left: list[float], right: list[float]) -> float:
     if left_norm == 0 or right_norm == 0:
         return 0.0
     return dot / (left_norm * right_norm)
+
+
+def _hash_embed_text(text: str, dims: int) -> list[float]:
+    if dims <= 0:
+        raise ValueError("dims must be > 0")
+
+    vector = [0.0] * dims
+    tokens = [tok for tok in text.lower().split() if tok]
+    if not tokens:
+        return vector
+
+    for token in tokens:
+        digest = hashlib.sha256(token.encode("utf-8")).digest()
+        bucket = int.from_bytes(digest[:4], "big") % dims
+        sign = -1.0 if digest[4] % 2 else 1.0
+        vector[bucket] += sign
+
+    norm = math.sqrt(sum(value * value for value in vector))
+    if norm == 0.0:
+        return vector
+    return [value / norm for value in vector]
 
 
 def _build_chunks(

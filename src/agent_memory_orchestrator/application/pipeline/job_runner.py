@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import hashlib
 import json
@@ -14,8 +14,8 @@ from ...infrastructure.kuzu import GraphEdge
 from ...infrastructure.kuzu import GraphNode
 from ...infrastructure.kuzu import GraphStore
 from ...infrastructure.kuzu import KuzuGraphStore
-from ...llm.qwen import OllamaQwenClient as OllamaQwenClient  # noqa: F401
-from ...llm.qwen import QwenUnavailable as QwenUnavailable  # noqa: F401
+from ...infrastructure.llm import OllamaQwenClient as OllamaQwenClient  # noqa: F401
+from ...infrastructure.llm import QwenUnavailable as QwenUnavailable  # noqa: F401
 from ...domain.versioning.repo_identity import resolve_repo_identity
 from ...domain.retrieval.models import RetrievalDocument
 from ...domain.pipeline.constants import GRAPH_SCHEMA_VERSION

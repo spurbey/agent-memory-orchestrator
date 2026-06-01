@@ -26,6 +26,28 @@ def test_llm_infrastructure_exports_existing_model_contracts() -> None:
     assert embed_text("hello", 4)
 
 
+def test_llm_root_is_compatibility_over_infrastructure() -> None:
+    from agent_memory_orchestrator.infrastructure.llm.models import resolve_models
+    from agent_memory_orchestrator.infrastructure.llm.qwen import OllamaQwenClient
+    from agent_memory_orchestrator.llm.models import resolve_models as legacy_resolve_models
+    from agent_memory_orchestrator.llm.qwen import OllamaQwenClient as LegacyOllamaQwenClient
+
+    assert LegacyOllamaQwenClient is OllamaQwenClient
+    assert legacy_resolve_models is resolve_models
+
+
+def test_llm_root_modules_are_export_only() -> None:
+    llm_root = Path(__file__).resolve().parents[1] / "src" / "agent_memory_orchestrator" / "llm"
+
+    for path in llm_root.glob("*.py"):
+        tree = ast.parse(path.read_text(encoding="utf-8-sig"))
+        class_names = [node.name for node in ast.walk(tree) if isinstance(node, ast.ClassDef)]
+        function_names = [node.name for node in ast.walk(tree) if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef)]
+
+        assert class_names == [], path.name
+        assert function_names == [], path.name
+
+
 def test_filesystem_infrastructure_helpers_are_deterministic(tmp_path) -> None:
     from agent_memory_orchestrator.infrastructure.filesystem import file_sha256
     from agent_memory_orchestrator.infrastructure.filesystem import path_hash

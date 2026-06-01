@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import json
 import re
@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from ..llm.models import resolve_models
+from ..infrastructure.llm import resolve_models
 
 
 MANAGED_BEGIN = "# BEGIN AMO MANAGED BLOCK"

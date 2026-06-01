@@ -1,4 +1,4 @@
-"""CLI command group handling for local model operations."""
+﻿"""CLI command group handling for local model operations."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from ....llm.models import download_models, list_model_presets, model_status, preflight_models
+from ....infrastructure.llm import download_models, list_model_presets, model_status, preflight_models
 from .install import add_model_selection_args
 
 MODEL_COMMANDS = ("models",)

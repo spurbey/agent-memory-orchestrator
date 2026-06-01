@@ -1,12 +1,12 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import json
 import re
 import sqlite3
 
 from .processing.extraction import extract_tags, make_topic_key
-from ..llm.embeddings import cosine_similarity, embed_text_with_model
-from ..llm.vector_cache import VectorRow, build_faiss_cache
+from ..infrastructure.llm import cosine_similarity, embed_text_with_model
+from ..infrastructure.llm import VectorRow, build_faiss_cache
 from ..core.models import Memory, MemoryUnit
 from ..retrieval import lexical_rerank_score
 from .common import new_id as _id

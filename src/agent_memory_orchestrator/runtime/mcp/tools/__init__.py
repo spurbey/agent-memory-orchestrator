@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from pathlib import Path
 from typing import Any
@@ -7,7 +7,7 @@ from ...daemon.client import DaemonClient, DaemonUnavailable
 from ....core.config import Settings
 from ....application.services.memory_graph.service import GraphRagService
 from ....infrastructure.kuzu import GraphBackendUnavailable
-from ....llm.qwen import QwenUnavailable
+from ....infrastructure.llm import QwenUnavailable
 from ....memory import MemoryService
 from ....peer.agent import PeerAgentService
 from .contracts import MCP_MEMORY_TOOL_CONTRACTS

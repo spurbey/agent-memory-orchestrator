@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import json
 import re
@@ -15,8 +15,8 @@ from ....domain.retrieval.projection import retrieval_metadata as _retrieval_met
 from ....domain.retrieval.ranking import rerank_document as _rerank_document
 from ....infrastructure.kuzu import GraphStore
 from ....infrastructure.sqlite.retrieval_store import RetrievalIndexStore
-from ....llm.rerankers import RerankCandidate
-from ....llm.rerankers import rerank_candidates as _default_rerank_candidates
+from ....infrastructure.llm import RerankCandidate
+from ....infrastructure.llm import rerank_candidates as _default_rerank_candidates
 from ....infrastructure.faiss.embedding_store import GraphEmbeddingStore
 from .embedding import RETRIEVAL_EMBEDDING_KIND
 from .vector import vector_candidates as _vector_candidates
