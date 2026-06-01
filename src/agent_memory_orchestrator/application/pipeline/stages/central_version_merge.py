@@ -7,8 +7,8 @@ from ....application.services.central_merge import CentralMergeService
 from ..job_runner import StageFailed
 from ..job_runner import StageResult
 from ..job_runner import _product_manifest_info
-from ..job_runner import _read_json
-from ..job_runner import _stage_output
+from ..stage_artifacts import _read_json
+from ..stage_artifacts import _stage_output
 
 
 def run_central_version_merge_stage(runner: Any, job: dict[str, Any], artifact_dir: Path, stage_dir: Path) -> StageResult:
