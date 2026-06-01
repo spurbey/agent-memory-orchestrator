@@ -45,3 +45,4 @@ src/agent_memory_orchestrator/extensions/experimental/
 .DS_Store
 Thumbs.db
 .vscode/
+.codex/
