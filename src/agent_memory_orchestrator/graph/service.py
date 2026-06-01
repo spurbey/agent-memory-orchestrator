@@ -24,8 +24,8 @@ from ..application.services.retrieval_embedding import embed_missing_retrieval_d
 from ..application.services.retrieval_query import retrieve_session_graph as retrieve_indexed_session_graph
 from ..infrastructure.llm.text_embedder import StrictTextEmbedder
 from ..versioning import LocalGitBackend, VersionBackend, WorkLedger
-from .answer_context import _answer_from_retrieval_result
-from .answer_context import _unique_nonempty as _unique_nonempty
+from ..domain.retrieval.answer import _answer_from_retrieval_result
+from ..domain.retrieval.answer import _unique_nonempty as _unique_nonempty
 from .version_flow import _build_central_version_flows
 from .version_flow import _build_version_flow
 from .version_flow import _is_central_graph_seed
