@@ -13,13 +13,13 @@ from ....infrastructure.kuzu import KuzuGraphStore
 from ....infrastructure.sqlite.retrieval_store import RetrievalIndexStore
 from ....infrastructure.kuzu.central_graph import repo_central_graph_path
 from ....application.services.retrieval.query import retrieve_session_graph as retrieve_indexed_docs
-from ....application.services.session_graph_runtime import DEFAULT_CODE_EMBEDDING_MODEL
-from ....application.services.session_graph_runtime import SessionGraphBuildOptions
-from ....application.services.session_graph_runtime import SessionGraphQueryOptions
-from ....application.services.session_graph_runtime import build_and_query_session_graph
-from ....application.services.session_graph_runtime import build_session_graph
-from ....application.services.session_graph_runtime import default_session_graph_path
-from ....application.services.session_graph_runtime import query_session_graph
+from ....application.services.session.graph_runtime import DEFAULT_CODE_EMBEDDING_MODEL
+from ....application.services.session.graph_runtime import SessionGraphBuildOptions
+from ....application.services.session.graph_runtime import SessionGraphQueryOptions
+from ....application.services.session.graph_runtime import build_and_query_session_graph
+from ....application.services.session.graph_runtime import build_session_graph
+from ....application.services.session.graph_runtime import default_session_graph_path
+from ....application.services.session.graph_runtime import query_session_graph
 from ...daemon.client import DaemonClient, DaemonUnavailable
 
 GRAPH_COMMANDS = (

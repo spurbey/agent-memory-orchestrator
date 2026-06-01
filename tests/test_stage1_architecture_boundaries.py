@@ -48,7 +48,7 @@ def test_stage1_application_and_infrastructure_boundaries_are_importable() -> No
     from agent_memory_orchestrator.application.services.graph_rag import GraphRagService
     from agent_memory_orchestrator.application.pipeline import build_compact_session_graph
     from agent_memory_orchestrator.application.pipeline import build_curated_session_graph
-    from agent_memory_orchestrator.application.services.session_detail import build_session_detail_fallback
+    from agent_memory_orchestrator.application.services.session.detail import build_session_detail_fallback
     from agent_memory_orchestrator.domain.evidence.events import HOOK_CONTEXT_EVENTS
     from agent_memory_orchestrator.domain.evidence import build_reasoning_evidence_view
     from agent_memory_orchestrator.domain.reasoning import TimelineGraph
