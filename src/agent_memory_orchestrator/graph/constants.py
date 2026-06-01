@@ -1,25 +1,12 @@
 from __future__ import annotations
 
+from ..domain.retrieval.constants import ANSWER_SEED_KINDS as ANSWER_SEED_KINDS
+from ..domain.retrieval.constants import EVIDENCE_ONLY_KINDS as EVIDENCE_ONLY_KINDS
+from ..domain.retrieval.constants import RETRIEVAL_STOPWORDS as RETRIEVAL_STOPWORDS
+from ..domain.retrieval.constants import SUPPORT_ONLY_KINDS as SUPPORT_ONLY_KINDS
+
 HOOK_CONTEXT_EVENTS = {"session_start"}
 CAPTURE_ONLY_EVENTS = {"user_prompt_submit", "prompt", "post_tool_use", "tool_result", "stop", "session_stop"}
-EVIDENCE_ONLY_KINDS = {"RawEvidenceRef", "Prompt", "ToolUse", "ToolResult", "Turn", "Session", "App", "Repo", "Branch"}
-SUPPORT_ONLY_KINDS = {"File", "Symbol", "Topic", "CleanedEvidenceWindow"}
-ANSWER_SEED_KINDS = [
-    "ReasoningNode",
-    "DecisionUnit",
-    "Decision",
-    "WorkChange",
-    "Fix",
-    "Bug",
-    "Blocker",
-    "TestRun",
-    "GitCommit",
-    "Commit",
-    "KnowledgeAtom",
-    "KnowledgeVersion",
-    "CodeNode",
-    "Symbol",
-]
 ISOLATED_GRAPH_VISUAL_KINDS = {
     "ReasoningNode",
     "DecisionUnit",
@@ -63,51 +50,4 @@ VERSION_FLOW_EDGE_KINDS = {
     "HAS_WINDOW",
 }
 VERSION_RELATION_EDGE_KINDS = {"REFINES", "SUPERSEDES", "DUPLICATE_OF", "CONTRADICTS"}
-RETRIEVAL_STOPWORDS = {
-    "about",
-    "after",
-    "again",
-    "also",
-    "and",
-    "are",
-    "because",
-    "been",
-    "before",
-    "being",
-    "between",
-    "but",
-    "can",
-    "could",
-    "did",
-    "does",
-    "for",
-    "from",
-    "has",
-    "have",
-    "how",
-    "into",
-    "its",
-    "not",
-    "now",
-    "only",
-    "should",
-    "that",
-    "the",
-    "then",
-    "this",
-    "use",
-    "used",
-    "using",
-    "via",
-    "was",
-    "were",
-    "what",
-    "when",
-    "where",
-    "which",
-    "why",
-    "will",
-    "with",
-    "would",
-}
 
