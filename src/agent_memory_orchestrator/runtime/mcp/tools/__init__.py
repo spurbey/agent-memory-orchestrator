@@ -16,6 +16,7 @@ from .graph_results import (
     _indexed_unavailable_context,
     _mcp_graph_result_from_indexed,
 )
+from .repository_resolution import resolve_active_repo_id
 from .validation import bounded_limit as _bounded_limit
 from .validation import normalize_agent as _normalize_agent
 from .validation import parse_metadata as _parse_metadata
@@ -230,7 +231,8 @@ class MemoryMcpToolService:
     ) -> dict[str, Any]:
         safe_query = _require_text(query, "query")
         safe_limit = _bounded_limit(limit, default=8, maximum=50)
-        safe_repo_id = str(repo_id or "").strip()
+        requested_repo_id = str(repo_id or "").strip()
+        safe_repo_id = resolve_active_repo_id(self.settings, requested_repo_id)
         if safe_repo_id:
             indexed = self._indexed_graph_call(
                 tool="amo_graph_search",
@@ -262,23 +264,19 @@ class MemoryMcpToolService:
                 },
             )
             return indexed
-        return self._graph_call(
-            "amo_graph_search",
-            lambda graph: graph.graph_search(
-                query=safe_query,
-                limit=safe_limit,
-                include_raw=include_raw,
-                include_historical=include_historical,
+        del include_raw, include_historical, requested_repo_id
+        return {
+            "ok": False,
+            "tool": "amo_graph_search",
+            "error": "active_repo_projection_missing",
+            "retrieval_source": "active_projection",
+            "context_for_synthesis": (
+                "No active repository memory projection is available. "
+                "Run the V2 production pipeline and retrieval projection before using AMO MCP graph search."
             ),
-            daemon_path="/graph/search",
-            daemon_method="POST",
-            daemon_payload={
-                "query": safe_query,
-                "limit": safe_limit,
-                "include_raw": include_raw,
-                "include_historical": include_historical,
-            },
-        )
+            "hits": [],
+            "version_history": [],
+        }
 
     def amo_current_context(self, *, session_id: str = "", limit: int = 8) -> dict[str, Any]:
         safe_limit = _bounded_limit(limit, default=8, maximum=50)
