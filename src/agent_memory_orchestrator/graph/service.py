@@ -34,8 +34,8 @@ from ..application.services.version_flow import _isolated_graph_seed_pool
 from ..application.services.version_flow import _matches_commit
 from ..application.services.version_flow import _matches_version_flow_filter
 from ..application.services.version_flow import _version_flow_warnings
-from .central_trace import _active_central_versions_for_support as _active_central_versions_for_support
-from .central_trace import _central_answer_trace_from_retrieval
+from ..application.services.central_trace import _active_central_versions_for_support as _active_central_versions_for_support
+from ..application.services.central_trace import _central_answer_trace_from_retrieval
 from .constants import CAPTURE_ONLY_EVENTS
 from .constants import HOOK_CONTEXT_EVENTS
 from ..domain.retrieval.constants import ANSWER_SEED_KINDS
