@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from ...core.config import Settings
+from .owner_lock import read_daemon_owner_metadata
 
 
 class DaemonUnavailable(RuntimeError):
@@ -21,7 +22,13 @@ class DaemonClient:
 
     @classmethod
     def from_settings(cls, settings: Settings, *, timeout_seconds: float = 5.0) -> "DaemonClient":
-        return cls(f"http://{settings.mcp_host}:{settings.mcp_port}", timeout_seconds=timeout_seconds)
+        metadata = read_daemon_owner_metadata(settings)
+        host = str(metadata.get("host") or settings.mcp_host).strip()
+        try:
+            port = int(metadata.get("port") or settings.mcp_port)
+        except (TypeError, ValueError):
+            port = int(settings.mcp_port)
+        return cls(f"http://{host}:{port}", timeout_seconds=timeout_seconds)
 
     def health(self) -> dict[str, Any]:
         return self.get("/health")
