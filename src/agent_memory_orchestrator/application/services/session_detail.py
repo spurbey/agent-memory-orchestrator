@@ -13,6 +13,7 @@ from ...evidence.triggers import record_session_id
 from ...evidence.triggers import session_boundary_trigger
 from ...evidence.window import clean_evidence_window
 from ...infrastructure.sqlite.production_job_store import ProductionSessionJobStore
+from ...domain.retrieval.text import clip_text as _clip
 
 
 def _load_evidence_records(
@@ -241,11 +242,4 @@ def _evidence_roots(settings: Settings) -> list[Path]:
     except OSError:
         pass
     return roots
-
-
-def _clip(value: object, limit: int) -> str:
-    text = str(value or "").strip()
-    if len(text) <= limit:
-        return text
-    return text[: max(0, limit - 14)].rstrip() + " ...<clipped>"
 

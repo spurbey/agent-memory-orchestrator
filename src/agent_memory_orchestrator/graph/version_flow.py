@@ -8,7 +8,7 @@ from .constants import ISOLATED_GRAPH_VISUAL_STATUSES
 from .constants import VERSION_FLOW_EDGE_KINDS
 from .constants import VERSION_RELATION_EDGE_KINDS
 from .store import GraphStore
-from .text_utils import _clip
+from ..domain.retrieval.text import clip_text as _clip
 
 
 def _matches_version_flow_filter(node: dict[str, Any], *, commit: str, session_id: str) -> bool:
