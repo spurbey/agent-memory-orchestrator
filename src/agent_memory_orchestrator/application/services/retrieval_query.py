@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import json
 import re
@@ -13,7 +13,7 @@ from ...domain.retrieval.models import RetrievalResult
 from ...domain.retrieval.models import TextEmbeddingProvider
 from ...domain.retrieval.projection import retrieval_metadata as _retrieval_metadata
 from ...domain.retrieval.ranking import rerank_document as _rerank_document
-from ...graph.store import GraphStore
+from ...infrastructure.kuzu import GraphStore
 from ...infrastructure.sqlite.retrieval_store import RetrievalIndexStore
 from ...llm.rerankers import RerankCandidate
 from ...llm.rerankers import rerank_candidates as _default_rerank_candidates
@@ -328,4 +328,3 @@ class RetrievalQueryService:
             rerank_max_chars=rerank_max_chars,
             include_graph_nodes=include_graph_nodes,
         )
-

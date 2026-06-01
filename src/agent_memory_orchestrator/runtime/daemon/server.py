@@ -8,7 +8,7 @@ from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 from ...core.config import Settings
-from ...graph.store import GraphBackendUnavailable
+from ...infrastructure.kuzu import GraphBackendUnavailable
 from ...llm.qwen import QwenUnavailable
 from . import auto_drain as _auto_drain
 from . import dashboard as _dashboard
@@ -248,5 +248,3 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
-

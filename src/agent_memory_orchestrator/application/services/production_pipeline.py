@@ -6,8 +6,8 @@ from pathlib import Path
 from typing import Any, ContextManager
 
 from ...core.config import Settings
-from ...graph.store import GraphStore
-from ...graph.store import KuzuGraphStore
+from ...infrastructure.kuzu import GraphStore
+from ...infrastructure.kuzu import KuzuGraphStore
 from ...infrastructure.sqlite.production_job_store import ProductionSessionJobStore
 from ..pipeline.job_runner import ProductionSessionJobRunner
 from ...domain.pipeline.constants import PRODUCTION_STAGES

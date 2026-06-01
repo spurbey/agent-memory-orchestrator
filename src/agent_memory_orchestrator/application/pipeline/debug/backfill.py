@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from ....core.config import Settings
-from ....graph.store import KuzuGraphStore
+from ....infrastructure.kuzu import KuzuGraphStore
 from ....infrastructure.sqlite.production_job_store import ProductionSessionJobStore
 from ....infrastructure.sqlite.production_job_store import utc_now
 from ....domain.versioning.identity import atoms_by_canonical_key
@@ -131,4 +131,3 @@ def _file_hash(path: Path) -> str:
     if not path.exists() or not path.is_file():
         return ""
     return hashlib.sha256(path.read_bytes()).hexdigest()
-

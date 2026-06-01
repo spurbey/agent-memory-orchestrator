@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import json
 import sqlite3
@@ -17,9 +17,9 @@ from agent_memory_orchestrator.graph.service import _unique_nonempty
 from agent_memory_orchestrator.graph.answer_trace import build_answer_trace
 from agent_memory_orchestrator.graph.answer_trace import build_central_answer_trace
 from agent_memory_orchestrator.graph.answer_trace import format_answer_trace
-from agent_memory_orchestrator.graph.store import GraphEdge
-from agent_memory_orchestrator.graph.store import GraphNode
-from agent_memory_orchestrator.graph.store import InMemoryGraphStore
+from agent_memory_orchestrator.infrastructure.kuzu import GraphEdge
+from agent_memory_orchestrator.infrastructure.kuzu import GraphNode
+from agent_memory_orchestrator.infrastructure.kuzu import InMemoryGraphStore
 from agent_memory_orchestrator.runtime.cli import main as cli_module
 from agent_memory_orchestrator.runtime.cli.commands import graph as graph_cli_module
 from agent_memory_orchestrator.runtime.cli.main import _retrieve_index_only
@@ -2045,4 +2045,3 @@ def test_unique_nonempty_dedupes_nested_citation_values() -> None:
         "E0002",
         "E0003",
     ]
-

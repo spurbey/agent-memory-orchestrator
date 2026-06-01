@@ -7,7 +7,7 @@ from .constants import ISOLATED_GRAPH_VISUAL_STATUSES
 from .constants import VERSION_FLOW_EDGE_KINDS
 from .constants import VERSION_RELATION_EDGE_KINDS
 from ..domain.retrieval.constants import ANSWER_SEED_KINDS
-from .store import GraphStore
+from ..infrastructure.kuzu import GraphStore
 from ..domain.retrieval.text import clip_text as _clip
 
 
@@ -383,4 +383,3 @@ def _version_flow_warnings(flows: list[dict[str, Any]]) -> list[str]:
     if not any(flow.get("counts", {}).get("version_edges") for flow in flows):
         warnings.append("version_flows_have_no_refine_supersede_duplicate_edges")
     return warnings
-

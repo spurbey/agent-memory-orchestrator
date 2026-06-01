@@ -10,10 +10,10 @@ from pathlib import Path
 from typing import Any, Callable, ContextManager
 
 from ...core.config import Settings
-from ...graph.store import GraphEdge
-from ...graph.store import GraphNode
-from ...graph.store import GraphStore
-from ...graph.store import KuzuGraphStore
+from ...infrastructure.kuzu import GraphEdge
+from ...infrastructure.kuzu import GraphNode
+from ...infrastructure.kuzu import GraphStore
+from ...infrastructure.kuzu import KuzuGraphStore
 from ...llm.qwen import OllamaQwenClient as OllamaQwenClient  # noqa: F401
 from ...llm.qwen import QwenUnavailable as QwenUnavailable  # noqa: F401
 from ...domain.versioning.repo_identity import resolve_repo_identity

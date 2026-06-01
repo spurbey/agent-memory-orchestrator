@@ -8,7 +8,7 @@ from typing import Iterable
 from ..core.config import Settings
 from ..core.db import connect
 from ..domain.retrieval.answer_trace import build_central_answer_trace
-from .store import GraphStore
+from ..infrastructure.kuzu import GraphStore
 
 
 def _central_answer_trace_from_retrieval(
@@ -175,4 +175,3 @@ def _graph_commit_row(db_path: Path, *, graph_commit_id: str) -> dict[str, Any]:
             return dict(row) if row is not None else {}
     except sqlite3.OperationalError:
         return {}
-

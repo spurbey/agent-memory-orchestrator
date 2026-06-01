@@ -8,10 +8,10 @@ from pathlib import Path
 from typing import Any
 
 from ...core.config import Settings
-from ...graph.store import GraphEdge
-from ...graph.store import GraphNode
-from ...graph.store import GraphStore
-from ...graph.store import KuzuGraphStore
+from ...infrastructure.kuzu import GraphEdge
+from ...infrastructure.kuzu import GraphNode
+from ...infrastructure.kuzu import GraphStore
+from ...infrastructure.kuzu import KuzuGraphStore
 from ...infrastructure.kuzu.central_graph import repo_central_graph_path as _repo_central_graph_path
 from ...infrastructure.sqlite.production_job_store import ProductionSessionJobStore
 from ...domain.versioning.merge_relations import CONFLICTS_WITH
