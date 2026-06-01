@@ -2,11 +2,11 @@ from __future__ import annotations
 
 from typing import Any
 
-from .constants import ANSWER_SEED_KINDS
 from .constants import ISOLATED_GRAPH_VISUAL_KINDS
 from .constants import ISOLATED_GRAPH_VISUAL_STATUSES
 from .constants import VERSION_FLOW_EDGE_KINDS
 from .constants import VERSION_RELATION_EDGE_KINDS
+from ..domain.retrieval.constants import ANSWER_SEED_KINDS
 from .store import GraphStore
 from ..domain.retrieval.text import clip_text as _clip
 

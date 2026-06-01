@@ -80,13 +80,17 @@ def test_stage1_retrieval_boundary_exports_planned_module_names() -> None:
     from agent_memory_orchestrator.domain.retrieval import build_central_answer_trace
     from agent_memory_orchestrator.domain.retrieval import classify_query
     from agent_memory_orchestrator.domain.retrieval import format_answer_trace
+    from agent_memory_orchestrator.domain.retrieval.constants import ANSWER_SEED_KINDS
     from agent_memory_orchestrator.domain.retrieval.intent import query_has_code_locator
+    from agent_memory_orchestrator.domain.retrieval.policy import _rank_nodes
 
     assert classify_query("why did graph_service.py change?") == "code_why"
     assert query_has_code_locator("graph_service.py") is True
     assert build_answer_trace.__name__ == "build_answer_trace"
     assert build_central_answer_trace.__name__ == "build_central_answer_trace"
     assert format_answer_trace.__name__ == "format_answer_trace"
+    assert "KnowledgeVersion" in ANSWER_SEED_KINDS
+    assert _rank_nodes.__name__ == "_rank_nodes"
 
 
 def test_stage1_production_code_does_not_depend_on_legacy_reasoning_graph_facades() -> None:
