@@ -51,9 +51,8 @@ retrieval is an active graph view plus provenance trace
 
 - `infrastructure/`: concrete adapters for SQLite, Kuzu, FAISS, LLM/model
   providers, filesystem, Git, and related persistence/runtime dependencies.
-- `llm/`: local model and reranker helpers that are still shared across
-  application services. Keep model-provider ownership here until moved behind
-  infrastructure ports.
+- `llm/`: compatibility exports for model-provider helpers. New code should use
+  `infrastructure/llm`.
 - `integrations/`: external integration adapters that are not core domain.
 - `install/`: installer and local setup orchestration.
 - `bin/`: packaged native helper binaries and runtime assets.

@@ -263,7 +263,7 @@ Expected high-level result:
 - `vector_status = faiss:completed`
 - `reranker = deterministic+bi_encoder+cross_encoder`
 - `what decisions were made about Codex hooks?` ranks `Fix: Hook behavior change to capture-only` first.
-- `which code changes are connected to Qwen extraction?` ranks Stage 4 decision-extraction reasoning first.
+- `which code changes are connected to Qwen extraction?` ranks Qwen reasoning extraction first.
 - `why did we add focused evidence windows?` ranks the focused evidence window reasoning and code nodes.
 
 Latest trace validation:
