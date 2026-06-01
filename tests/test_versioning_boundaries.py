@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from pathlib import Path
 from types import SimpleNamespace
@@ -23,11 +23,11 @@ from agent_memory_orchestrator.domain.versioning import graph_commit_id_for_plan
 from agent_memory_orchestrator.domain.versioning.graph_views import resolve_graph_view
 
 
-def test_stage2_graph_commit_id_contract_matches_merge_plan_preview() -> None:
+def test_versioning_graph_commit_id_contract_matches_merge_plan_preview() -> None:
     plan = MergePlan.build(
-        job_id="job:stage2",
-        session_id="session:stage2",
-        repo_id="repo:stage2",
+        job_id="job:versioning",
+        session_id="session:versioning",
+        repo_id="repo:versioning",
         repo_path=".",
         parent_graph_commit_id="",
         input_graph_hash="input-hash",
@@ -41,7 +41,7 @@ def test_stage2_graph_commit_id_contract_matches_merge_plan_preview() -> None:
     )
 
 
-def test_stage2_status_priority_contract_preserves_applier_policy() -> None:
+def test_versioning_status_priority_contract_preserves_applier_policy() -> None:
     current = choose_preferred_status(None, STATUS_ACTIVE, "new_decision_no_conflict")
 
     assert current == (STATUS_ACTIVE, "new_decision_no_conflict")
@@ -52,31 +52,31 @@ def test_stage2_status_priority_contract_preserves_applier_policy() -> None:
     )
 
 
-def test_stage2_merge_relation_contract_names_are_centralized() -> None:
+def test_versioning_merge_relation_contract_names_are_centralized() -> None:
     assert VERSION_OF == "VERSION_OF"
     assert GRAPH_VIEW_AT == "GRAPH_VIEW_AT"
     assert {DUPLICATE_OF, REFINES, SUPERSEDES, CONFLICTS_WITH}.issubset(DECISION_REVIEW_RELATIONS)
 
 
-def test_stage2_graph_view_boundary_keeps_store_contract() -> None:
-    ref = resolve_graph_view(_GraphViewStore(), repo_id="repo:stage2", branch="main", mode="active")
+def test_versioning_graph_view_boundary_keeps_store_contract() -> None:
+    ref = resolve_graph_view(_GraphViewStore(), repo_id="repo:versioning", branch="main", mode="active")
 
-    assert ref.view_id == "view:stage2"
-    assert ref.repo_id == "repo:stage2"
+    assert ref.view_id == "view:versioning"
+    assert ref.repo_id == "repo:versioning"
     assert ref.branch == "main"
     assert ref.mode == "active"
-    assert ref.graph_commit_id == "gcommit:stage2"
+    assert ref.graph_commit_id == "gcommit:versioning"
 
 
-def test_stage2_central_graph_path_lives_at_infrastructure_boundary() -> None:
+def test_versioning_central_graph_path_lives_at_infrastructure_boundary() -> None:
     settings = SimpleNamespace(home=Path("C:/amo-home"))
 
-    path = repo_central_graph_path(settings, "repo:stage2/main")
+    path = repo_central_graph_path(settings, "repo:versioning/main")
 
-    assert path == Path("C:/amo-home/.graph/central/repo_stage2_main/central.kuzu")
+    assert path == Path("C:/amo-home/.graph/central/repo_versioning_main/central.kuzu")
 
 
-def test_stage2_central_merge_store_port_uses_sqlite_adapter_alias() -> None:
+def test_versioning_central_merge_store_port_uses_sqlite_adapter_alias() -> None:
     assert CentralMergeStore.__name__ == "ProductionSessionJobStore"
     assert CentralMergeStore is ProductionSessionJobStore
     assert CentralMergeStorePort.__name__ == "CentralMergeStorePort"
@@ -85,10 +85,10 @@ def test_stage2_central_merge_store_port_uses_sqlite_adapter_alias() -> None:
 class _GraphViewStore:
     def ensure_graph_view(self, *, repo_id: str = "", branch: str = "main", mode: str = "active") -> dict[str, object]:
         return {
-            "view_id": "view:stage2",
+            "view_id": "view:versioning",
             "repo_id": repo_id,
             "branch": branch,
             "mode": mode,
-            "graph_commit_id": "gcommit:stage2",
+            "graph_commit_id": "gcommit:versioning",
             "status": "active",
         }

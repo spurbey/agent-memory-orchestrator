@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from agent_memory_orchestrator.evidence import EvidenceDrain as LegacyEvidenceDrain
 from agent_memory_orchestrator.evidence import RawEvidenceRef as LegacyRawEvidenceRef
@@ -24,12 +24,12 @@ def test_application_evidence_services_delegate_without_new_behavior(tmp_path) -
 
     ref = EvidenceIngestService(tmp_path).append(
         {"hello": "world"},
-        session_id="session:stage6",
+        session_id="session:evidence",
         source_app="codex",
         event_name="user_prompt",
     )
 
-    assert ref.session_id == "session:stage6"
+    assert ref.session_id == "session:evidence"
     assert ref.event_name == "user_prompt"
     assert (tmp_path / f"{ref.created_at[:10]}.jsonl").exists()
 
