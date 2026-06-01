@@ -13,6 +13,8 @@ from agent_memory_orchestrator.runtime.daemon.server import (
     _session_cockpit_html,
     _web_asset_bytes,
 )
+from agent_memory_orchestrator.runtime.daemon.client import DaemonClient
+from agent_memory_orchestrator.runtime.daemon.owner_lock import read_daemon_owner_metadata
 from agent_memory_orchestrator.core.config import Settings
 
 
@@ -71,6 +73,19 @@ def test_daemon_owner_lock_blocks_second_process_owner(tmp_path) -> None:
 
     second = _DaemonOwnerLock.acquire(settings)
     second.release()
+
+
+def test_daemon_client_uses_owner_lock_endpoint_metadata(tmp_path) -> None:
+    settings = _settings_for_daemon_lock(tmp_path)
+    owner = _DaemonOwnerLock.acquire(settings, host="127.0.0.1", port=8777)
+    try:
+        metadata = read_daemon_owner_metadata(settings)
+        client = DaemonClient.from_settings(settings)
+    finally:
+        owner.release()
+
+    assert metadata["port"] == 8777
+    assert client.base_url == "http://127.0.0.1:8777"
 
 
 def test_read_graph_service_uses_repo_central_graph_read_only(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:

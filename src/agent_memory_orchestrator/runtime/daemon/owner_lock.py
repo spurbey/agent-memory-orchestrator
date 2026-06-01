@@ -5,7 +5,7 @@ import os
 import time
 from pathlib import Path
 from types import TracebackType
-from typing import BinaryIO
+from typing import Any, BinaryIO
 
 from ...core.config import Settings
 
@@ -22,21 +22,25 @@ class DaemonOwnerLock:
     auto-drain or graph writes can start.
     """
 
-    def __init__(self, lock_path: Path, handle: BinaryIO) -> None:
+    def __init__(self, lock_path: Path, handle: BinaryIO, metadata_path: Path | None = None) -> None:
         self.lock_path = lock_path
         self.handle = handle
+        self.metadata_path = metadata_path
         self.acquired = True
 
     @classmethod
-    def acquire(cls, settings: Settings) -> "DaemonOwnerLock":
+    def acquire(cls, settings: Settings, *, host: str = "", port: int | None = None) -> "DaemonOwnerLock":
         lock_path = _daemon_owner_lock_path(settings)
         lock_path.parent.mkdir(parents=True, exist_ok=True)
-        handle = lock_path.open("a+b")
+        lock_path.touch(exist_ok=True)
+        handle = lock_path.open("r+b")
         try:
             _ensure_lock_byte(handle)
             _try_lock_byte(handle)
-            _write_daemon_owner_metadata(handle)
-            return cls(lock_path, handle)
+            _write_daemon_owner_metadata(handle, host=host, port=port)
+            metadata_path = _daemon_owner_metadata_path(settings)
+            _write_daemon_owner_metadata_file(metadata_path, host=host, port=port)
+            return cls(lock_path, handle, metadata_path)
         except Exception:
             handle.close()
             raise
@@ -49,6 +53,11 @@ class DaemonOwnerLock:
         finally:
             self.acquired = False
             self.handle.close()
+            if self.metadata_path is not None:
+                try:
+                    self.metadata_path.unlink()
+                except OSError:
+                    pass
 
     def __enter__(self) -> "DaemonOwnerLock":
         return self
@@ -67,6 +76,10 @@ def _daemon_owner_lock_path(settings: Settings) -> Path:
     return settings.home / ".state" / "daemon-owner.lock"
 
 
+def _daemon_owner_metadata_path(settings: Settings) -> Path:
+    return settings.home / ".state" / "daemon-owner.json"
+
+
 def _ensure_lock_byte(handle: BinaryIO) -> None:
     handle.seek(0, os.SEEK_END)
     if handle.tell() == 0:
@@ -75,16 +88,44 @@ def _ensure_lock_byte(handle: BinaryIO) -> None:
     handle.seek(0)
 
 
-def _write_daemon_owner_metadata(handle: BinaryIO) -> None:
-    payload = {
-        "pid": os.getpid(),
-        "started_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-    }
+def read_daemon_owner_metadata(settings: Settings) -> dict[str, Any]:
+    metadata_path = _daemon_owner_metadata_path(settings)
+    try:
+        data = metadata_path.read_bytes()
+    except OSError:
+        return {}
+    try:
+        payload = json.loads(data.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _write_daemon_owner_metadata(handle: BinaryIO, *, host: str = "", port: int | None = None) -> None:
+    payload = _daemon_owner_payload(host=host, port=port)
     data = json.dumps(payload, sort_keys=True).encode("utf-8")
     handle.seek(1)
     handle.truncate(1)
     handle.write(data)
     handle.flush()
+
+
+def _write_daemon_owner_metadata_file(path: Path, *, host: str = "", port: int | None = None) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = _daemon_owner_payload(host=host, port=port)
+    path.write_text(json.dumps(payload, sort_keys=True), encoding="utf-8")
+
+
+def _daemon_owner_payload(*, host: str = "", port: int | None = None) -> dict[str, object]:
+    payload = {
+        "pid": os.getpid(),
+        "started_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    }
+    if host:
+        payload["host"] = host
+    if port:
+        payload["port"] = int(port)
+    return payload
 
 
 def _try_lock_byte(handle: BinaryIO) -> None:

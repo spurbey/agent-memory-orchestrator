@@ -226,7 +226,7 @@ def main(argv: list[str] | None = None) -> int:
         raise ValueError("AMO_LOCAL_ONLY=true requires daemon host to be localhost")
 
     try:
-        owner_lock = DaemonOwnerLock.acquire(settings)
+        owner_lock = DaemonOwnerLock.acquire(settings, host=host, port=port)
     except DaemonAlreadyRunning as exc:
         _daemon_log(settings, "daemon_start_rejected", reason="daemon_already_running", error=str(exc))
         print(f"amo-daemon already running for AMO home: {settings.home}")
