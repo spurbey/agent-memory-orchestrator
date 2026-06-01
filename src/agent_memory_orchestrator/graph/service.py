@@ -36,119 +36,17 @@ from .answer_context import _unique_nonempty as _unique_nonempty
 from .text_utils import _clip
 from .central_trace import _active_central_versions_for_support as _active_central_versions_for_support
 from .central_trace import _central_answer_trace_from_retrieval
+from .constants import ANSWER_SEED_KINDS
+from .constants import CAPTURE_ONLY_EVENTS
+from .constants import EVIDENCE_ONLY_KINDS
+from .constants import HOOK_CONTEXT_EVENTS
+from .constants import ISOLATED_GRAPH_VISUAL_KINDS
+from .constants import ISOLATED_GRAPH_VISUAL_STATUSES
+from .constants import RETRIEVAL_STOPWORDS
+from .constants import SUPPORT_ONLY_KINDS
+from .constants import VERSION_FLOW_EDGE_KINDS
+from .constants import VERSION_RELATION_EDGE_KINDS
 from .store import GraphEdge, GraphNode, GraphStore, KuzuGraphStore
-
-
-HOOK_CONTEXT_EVENTS = {"session_start"}
-CAPTURE_ONLY_EVENTS = {"user_prompt_submit", "prompt", "post_tool_use", "tool_result", "stop", "session_stop"}
-EVIDENCE_ONLY_KINDS = {"RawEvidenceRef", "Prompt", "ToolUse", "ToolResult", "Turn", "Session", "App", "Repo", "Branch"}
-SUPPORT_ONLY_KINDS = {"File", "Symbol", "Topic", "CleanedEvidenceWindow"}
-ANSWER_SEED_KINDS = [
-    "ReasoningNode",
-    "DecisionUnit",
-    "Decision",
-    "WorkChange",
-    "Fix",
-    "Bug",
-    "Blocker",
-    "TestRun",
-    "GitCommit",
-    "Commit",
-    "KnowledgeAtom",
-    "KnowledgeVersion",
-    "CodeNode",
-    "Symbol",
-]
-ISOLATED_GRAPH_VISUAL_KINDS = {
-    "ReasoningNode",
-    "DecisionUnit",
-    "Problem",
-    "Decision",
-    "Cause",
-    "Fix",
-    "Constraint",
-    "OpenQuestion",
-    "WorkChange",
-    "Commit",
-    "GitCommit",
-    "Packet",
-    "CodeNode",
-    "CodeVersion",
-    "CodeHunk",
-    "Symbol",
-    "EvidenceRef",
-}
-ISOLATED_GRAPH_VISUAL_STATUSES = {
-    "session_final",
-    "candidate_reasoning_packet",
-    "accepted",
-    "active",
-    "committed",
-}
-VERSION_FLOW_EDGE_KINDS = {
-    "COMMITTED_AS",
-    "REFINES",
-    "SUPERSEDES",
-    "DUPLICATE_OF",
-    "CONTRADICTS",
-    "VALIDATED_BY",
-    "MODIFIES",
-    "MERGED_INTO",
-    "EVIDENCED_BY",
-    "CLEANED_INTO",
-    "EXTRACTED_AS",
-    "CREATED",
-    "PRODUCED",
-    "HAS_WINDOW",
-}
-VERSION_RELATION_EDGE_KINDS = {"REFINES", "SUPERSEDES", "DUPLICATE_OF", "CONTRADICTS"}
-RETRIEVAL_STOPWORDS = {
-    "about",
-    "after",
-    "again",
-    "also",
-    "and",
-    "are",
-    "because",
-    "been",
-    "before",
-    "being",
-    "between",
-    "but",
-    "can",
-    "could",
-    "did",
-    "does",
-    "for",
-    "from",
-    "has",
-    "have",
-    "how",
-    "into",
-    "its",
-    "not",
-    "now",
-    "only",
-    "should",
-    "that",
-    "the",
-    "then",
-    "this",
-    "use",
-    "used",
-    "using",
-    "via",
-    "was",
-    "were",
-    "what",
-    "when",
-    "where",
-    "which",
-    "why",
-    "will",
-    "with",
-    "would",
-}
 
 
 class GraphRagService:
