@@ -1,7 +1,7 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 
-def test_stage5_domain_connector_boundary_exports_existing_contracts() -> None:
+def test_connector_domain_connector_boundary_exports_existing_contracts() -> None:
     from agent_memory_orchestrator.domain.connectors import ConnectorEvent
     from agent_memory_orchestrator.domain.connectors import ConnectorResponse
     from agent_memory_orchestrator.domain.connectors import SlackMessage
@@ -20,7 +20,7 @@ def test_stage5_domain_connector_boundary_exports_existing_contracts() -> None:
     assert should_reply_message is integration_should_reply
 
 
-def test_stage5_application_and_slack_infrastructure_boundaries_are_importable() -> None:
+def test_connector_application_and_slack_infrastructure_boundaries_are_importable() -> None:
     from agent_memory_orchestrator.application.services import ConnectorRuntimeService
     from agent_memory_orchestrator.infrastructure.slack import SlackApiClient
     from agent_memory_orchestrator.infrastructure.slack import SlackApiError

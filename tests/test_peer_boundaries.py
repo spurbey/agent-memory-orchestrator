@@ -1,7 +1,7 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 
-def test_stage4_domain_peer_boundary_exports_existing_peer_contracts() -> None:
+def test_peer_domain_peer_boundary_exports_existing_peer_contracts() -> None:
     from agent_memory_orchestrator.domain.peer import PeerConfig
     from agent_memory_orchestrator.domain.peer import PeerContextPack
     from agent_memory_orchestrator.domain.peer import PeerMessage
@@ -22,7 +22,7 @@ def test_stage4_domain_peer_boundary_exports_existing_peer_contracts() -> None:
     assert normalize_recipients(["peer-a", "", "peer-b"]) == ("peer-a", "peer-b")
 
 
-def test_stage4_application_and_infrastructure_peer_boundaries_are_importable() -> None:
+def test_peer_application_and_infrastructure_peer_boundaries_are_importable() -> None:
     from agent_memory_orchestrator.application.services import PeerAgentService
     from agent_memory_orchestrator.infrastructure.peer_netd import PeerNetdClient
     from agent_memory_orchestrator.infrastructure.peer_netd import PeerNetdLaunchOptions

@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 
 def test_closed_session_pipeline_workflow_delegates() -> None:

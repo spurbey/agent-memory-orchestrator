@@ -1,10 +1,10 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import ast
 from pathlib import Path
 
 
-def test_stage1_domain_code_boundary_exports_existing_code_contracts() -> None:
+def test_architecture_domain_code_boundary_exports_existing_code_contracts() -> None:
     from agent_memory_orchestrator.domain.code import AstExpansion
     from agent_memory_orchestrator.domain.code import CodeHunk
     from agent_memory_orchestrator.domain.code import CodeNode
@@ -29,7 +29,7 @@ def test_stage1_domain_code_boundary_exports_existing_code_contracts() -> None:
     assert symbol_key("a.py", "f") == "a.py::f"
 
 
-def test_stage1_domain_reasoning_boundary_exports_existing_reasoning_contracts() -> None:
+def test_architecture_domain_reasoning_boundary_exports_existing_reasoning_contracts() -> None:
     from agent_memory_orchestrator.domain.reasoning import ReasoningExtractionReview
     from agent_memory_orchestrator.domain.reasoning import ReasoningWorkPacketBuild
     from agent_memory_orchestrator.domain.reasoning import build_stage4_packet_prompt
@@ -41,7 +41,7 @@ def test_stage1_domain_reasoning_boundary_exports_existing_reasoning_contracts()
     assert is_strict_validation_fact({"command": "python -m pytest -q"}) is True
 
 
-def test_stage1_domain_code_analysis_is_compatibility_only() -> None:
+def test_architecture_domain_code_analysis_is_compatibility_only() -> None:
     analysis_path = (
         Path(__file__).resolve().parents[1] / "src" / "agent_memory_orchestrator" / "domain" / "code" / "analysis.py"
     )
@@ -59,7 +59,7 @@ def test_stage1_domain_code_analysis_is_compatibility_only() -> None:
         assert _is_all_assignment(node)
 
 
-def test_stage1_domain_code_package_roots_are_export_only() -> None:
+def test_architecture_domain_code_package_roots_are_export_only() -> None:
     code_root = Path(__file__).resolve().parents[1] / "src" / "agent_memory_orchestrator" / "domain" / "code"
     package_roots = [
         code_root / "ast" / "__init__.py",
@@ -81,7 +81,7 @@ def test_stage1_domain_code_package_roots_are_export_only() -> None:
             assert _is_all_assignment(node), path
 
 
-def test_stage1_application_and_infrastructure_boundaries_are_importable() -> None:
+def test_architecture_application_and_infrastructure_boundaries_are_importable() -> None:
     from agent_memory_orchestrator.application.services import CentralMergeService as RootCentralMergeService
     from agent_memory_orchestrator.application.services import ProductionPipelineService as RootProductionPipelineService
     from agent_memory_orchestrator.application.services import RetrievalQueryService as RootRetrievalQueryService
@@ -137,7 +137,7 @@ def test_stage1_application_and_infrastructure_boundaries_are_importable() -> No
     assert "COMMITTED_AS" in VERSION_FLOW_EDGE_KINDS
 
 
-def test_stage1_retrieval_boundary_exports_planned_module_names() -> None:
+def test_architecture_retrieval_boundary_exports_planned_module_names() -> None:
     from agent_memory_orchestrator.domain.retrieval import build_answer_trace
     from agent_memory_orchestrator.domain.retrieval import build_central_answer_trace
     from agent_memory_orchestrator.domain.retrieval import classify_query
@@ -155,7 +155,7 @@ def test_stage1_retrieval_boundary_exports_planned_module_names() -> None:
     assert _rank_nodes.__name__ == "_rank_nodes"
 
 
-def test_stage1_production_code_does_not_depend_on_legacy_reasoning_graph_facades() -> None:
+def test_architecture_production_code_does_not_depend_on_legacy_reasoning_graph_facades() -> None:
     src_root = Path(__file__).resolve().parents[1] / "src" / "agent_memory_orchestrator"
     forbidden = (
         "agent_memory_orchestrator.reasoning_graph.jobs",
@@ -202,7 +202,7 @@ def test_stage1_production_code_does_not_depend_on_legacy_reasoning_graph_facade
     assert offenders == []
 
 
-def test_stage1_graph_root_is_compatibility_only() -> None:
+def test_architecture_graph_root_is_compatibility_only() -> None:
     src_root = Path(__file__).resolve().parents[1] / "src" / "agent_memory_orchestrator"
     graph_root = src_root / "graph"
     allowed_functions = {
@@ -237,7 +237,7 @@ def test_stage1_graph_root_is_compatibility_only() -> None:
     assert offenders == []
 
 
-def test_stage1_source_roots_have_explicit_product_ownership() -> None:
+def test_architecture_source_roots_have_explicit_product_ownership() -> None:
     repo_root = Path(__file__).resolve().parents[1]
     src_root = repo_root / "src" / "agent_memory_orchestrator"
     actual_roots = {path.name for path in src_root.iterdir() if path.is_dir() and path.name != "__pycache__"}
@@ -264,7 +264,7 @@ def test_stage1_source_roots_have_explicit_product_ownership() -> None:
         assert f"`{root}/`" in architecture_tree
 
 
-def test_stage1_application_services_root_is_compatibility_only() -> None:
+def test_architecture_application_services_root_is_compatibility_only() -> None:
     services_root = Path(__file__).resolve().parents[1] / "src" / "agent_memory_orchestrator" / "application" / "services"
     implementation_packages = {
         "capture",
@@ -299,7 +299,7 @@ def test_stage1_application_services_root_is_compatibility_only() -> None:
             assert _is_all_assignment(node), path.name
 
 
-def test_stage1_central_merge_apply_is_orchestration_only() -> None:
+def test_architecture_central_merge_apply_is_orchestration_only() -> None:
     apply_path = (
         Path(__file__).resolve().parents[1]
         / "src"
@@ -317,7 +317,7 @@ def test_stage1_central_merge_apply_is_orchestration_only() -> None:
     assert set(function_names) == {"apply_merge_plan"}
 
 
-def test_stage1_session_graph_runtime_is_compatibility_only() -> None:
+def test_architecture_session_graph_runtime_is_compatibility_only() -> None:
     runtime_path = (
         Path(__file__).resolve().parents[1]
         / "src"
