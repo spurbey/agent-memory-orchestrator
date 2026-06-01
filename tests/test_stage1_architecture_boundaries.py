@@ -59,6 +59,28 @@ def test_stage1_domain_code_analysis_is_compatibility_only() -> None:
         assert _is_all_assignment(node)
 
 
+def test_stage1_domain_code_package_roots_are_export_only() -> None:
+    code_root = Path(__file__).resolve().parents[1] / "src" / "agent_memory_orchestrator" / "domain" / "code"
+    package_roots = [
+        code_root / "ast" / "__init__.py",
+        code_root / "diff" / "__init__.py",
+        code_root / "hunks" / "__init__.py",
+    ]
+
+    for path in package_roots:
+        tree = ast.parse(path.read_text(encoding="utf-8-sig"))
+        class_names = [node.name for node in ast.walk(tree) if isinstance(node, ast.ClassDef)]
+        function_names = [node.name for node in ast.walk(tree) if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef)]
+        assert class_names == [], path
+        assert function_names == [], path
+        for node in tree.body:
+            if _is_module_docstring(node) or _is_future_annotations_import(node):
+                continue
+            if isinstance(node, ast.ImportFrom):
+                continue
+            assert _is_all_assignment(node), path
+
+
 def test_stage1_application_and_infrastructure_boundaries_are_importable() -> None:
     from agent_memory_orchestrator.application.services import CentralMergeService as RootCentralMergeService
     from agent_memory_orchestrator.application.services import ProductionPipelineService as RootProductionPipelineService
