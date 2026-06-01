@@ -9,14 +9,14 @@ from ..job_runner import OllamaQwenClient
 from ..job_runner import PendingModel
 from ..job_runner import QwenUnavailable
 from ..job_runner import StageResult
-from ..job_runner import _packet_commit_sha
-from ..job_runner import _qwen_contract
-from ..job_runner import _qwen_existing_manifest
-from ..job_runner import _qwen_existing_results
-from ..job_runner import _qwen_packet_cache_key
-from ..job_runner import _qwen_packet_key
-from ..job_runner import _qwen_reusable_results
-from ..job_runner import _write_qwen_checkpoint
+from ..packet_helpers import _packet_commit_sha
+from ..qwen_checkpoint import _qwen_contract
+from ..qwen_checkpoint import _qwen_existing_manifest
+from ..qwen_checkpoint import _qwen_existing_results
+from ..qwen_checkpoint import _qwen_packet_cache_key
+from ..qwen_checkpoint import _qwen_packet_key
+from ..qwen_checkpoint import _qwen_reusable_results
+from ..qwen_checkpoint import _write_qwen_checkpoint
 from ..stage_artifacts import _read_json
 
 

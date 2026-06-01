@@ -8,8 +8,8 @@ from ....domain.code import extract_code_nodes_from_commit
 from ..job_runner import StageResult
 from ..job_runner import _code_node_record
 from ..job_runner import _hunk_record
-from ..job_runner import _packet_evidence_refs
-from ..job_runner import _packet_full_sha
+from ..packet_helpers import _packet_evidence_refs
+from ..packet_helpers import _packet_full_sha
 from ..job_runner import _relationship_edges
 from ..job_runner import _symbol_versions
 from ..stage_artifacts import _read_json
