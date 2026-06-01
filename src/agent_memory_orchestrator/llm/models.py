@@ -37,7 +37,7 @@ MODEL_PRESETS: dict[str, ModelPreset] = {
         qwen_model=DEFAULT_QWEN_MODEL,
         vector_backend="faiss",
         recommended_for="Default production profile for local workstations with about 16 GB GPU VRAM.",
-        notes="Runs Stage 4/GraphRAG reasoning through Ollama using Qwen3.5 9B; constrained machines should choose cpu-light.",
+        notes="Runs production Qwen reasoning through Ollama using Qwen3.5 9B; constrained machines should choose cpu-light.",
     ),
     "gpu-quality": ModelPreset(
         name="gpu-quality",

@@ -8,8 +8,8 @@ from typing import Any
 from ...core.config import Settings
 from ...domain.pipeline.constants import GRAPH_SCHEMA_VERSION
 from ...domain.pipeline.constants import PIPELINE_VERSION
-from ...domain.reasoning import stage4_contract_hash
-from ...domain.reasoning import stage4_output_schema
+from ...domain.reasoning import qwen_reasoning_contract_hash
+from ...domain.reasoning import qwen_reasoning_output_schema
 from .packet_helpers import _packet_commit_sha
 from .stage_artifacts import _read_json
 
@@ -19,8 +19,8 @@ def _qwen_contract(settings: Settings) -> dict[str, str]:
         "model": settings.qwen_model,
         "runtime": settings.qwen_runtime,
         "num_ctx": settings.qwen_num_ctx,
-        "stage4_contract_hash": stage4_contract_hash(),
-        "stage4_schema_hash": hashlib.sha256(json.dumps(stage4_output_schema(), sort_keys=True).encode("utf-8")).hexdigest(),
+        "stage4_contract_hash": qwen_reasoning_contract_hash(),
+        "stage4_schema_hash": hashlib.sha256(json.dumps(qwen_reasoning_output_schema(), sort_keys=True).encode("utf-8")).hexdigest(),
         "pipeline_version": PIPELINE_VERSION,
         "graph_schema_version": GRAPH_SCHEMA_VERSION,
     }

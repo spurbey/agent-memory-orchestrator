@@ -3,8 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from ....domain.reasoning import build_stage4_packet_prompt
-from ....domain.reasoning import stage4_output_schema
+from ....domain.reasoning import build_qwen_reasoning_packet_prompt
+from ....domain.reasoning import qwen_reasoning_output_schema
 from ..job_runner import OllamaQwenClient
 from ..job_runner import PendingModel
 from ..job_runner import QwenUnavailable
@@ -52,13 +52,13 @@ def run_qwen_reasoning_stage(runner: Any, job: dict[str, Any], artifact_dir: Pat
             results.append(cached)
             reused_count += 1
             continue
-        prompt = build_stage4_packet_prompt(packet)
+        prompt = build_qwen_reasoning_packet_prompt(packet)
         try:
             parsed = client.generate_json(
                 prompt,
                 num_predict=900,
                 timeout_seconds=runner.settings.qwen_extract_timeout_seconds,
-                schema=stage4_output_schema(),
+                schema=qwen_reasoning_output_schema(),
             )
         except QwenUnavailable as exc:
             raise PendingModel("qwen_unavailable", {"packet_id": packet.get("packet_id"), "error": str(exc)}) from exc

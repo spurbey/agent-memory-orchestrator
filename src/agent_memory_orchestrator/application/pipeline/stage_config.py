@@ -5,8 +5,8 @@ import json
 from typing import Any
 
 from ...core.config import Settings
-from ...domain.reasoning import stage4_contract_hash
-from ...domain.reasoning import stage4_output_schema
+from ...domain.reasoning import qwen_reasoning_contract_hash
+from ...domain.reasoning import qwen_reasoning_output_schema
 from ...domain.pipeline.constants import CENTRAL_MERGE_PLANNER_VERSION
 from ...domain.pipeline.constants import CODE_PARSER_POLICY_VERSION
 from ...domain.pipeline.constants import CURATED_GRAPH_SCHEMA_VERSION
@@ -33,16 +33,16 @@ def stage_config_payload(settings: Settings, *, stage: str) -> dict[str, Any]:
                 "qwen_model": settings.qwen_model,
                 "qwen_runtime": settings.qwen_runtime,
                 "qwen_num_ctx": settings.qwen_num_ctx,
-                "qwen_prompt_contract_hash": stage4_contract_hash(),
-                "stage4_contract_hash": stage4_contract_hash(),
-                "stage4_schema_hash": hashlib.sha256(json.dumps(stage4_output_schema(), sort_keys=True).encode("utf-8")).hexdigest(),
+                "qwen_prompt_contract_hash": qwen_reasoning_contract_hash(),
+                "stage4_contract_hash": qwen_reasoning_contract_hash(),
+                "stage4_schema_hash": hashlib.sha256(json.dumps(qwen_reasoning_output_schema(), sort_keys=True).encode("utf-8")).hexdigest(),
             }
         )
     elif stage == "reasoning_review":
         payload.update(
             {
                 "reasoning_review_policy_version": REASONING_REVIEW_POLICY_VERSION,
-                "stage4_contract_hash": stage4_contract_hash(),
+                "stage4_contract_hash": qwen_reasoning_contract_hash(),
             }
         )
     elif stage == "ast_code_nodes":

@@ -2,9 +2,14 @@
 
 from __future__ import annotations
 
+from .extraction import QWEN_REASONING_CONTRACT
+from .extraction import QWEN_REASONING_CONTRACT_VERSION
 from .extraction import STAGE4_CONTRACT
 from .extraction import STAGE4_CONTRACT_VERSION
+from .extraction import build_qwen_reasoning_packet_prompt
 from .extraction import build_stage4_packet_prompt
+from .extraction import qwen_reasoning_contract_hash
+from .extraction import qwen_reasoning_output_schema
 from .extraction import stage4_contract_hash
 from .extraction import stage4_output_schema
 from .chunking import Chunk
@@ -61,6 +66,8 @@ from .tool_facts import tool_facts_from_events
 from .work_changes import work_changes_from_commit_windows
 
 __all__ = [
+    "QWEN_REASONING_CONTRACT",
+    "QWEN_REASONING_CONTRACT_VERSION",
     "REASONING_WORK_PACKET_SCHEMA_VERSION",
     "STAGE4_CONTRACT",
     "STAGE4_CONTRACT_VERSION",
@@ -98,6 +105,7 @@ __all__ = [
     "build_reasoning_work_packets_from_view",
     "build_decision_packet",
     "build_decision_packets",
+    "build_qwen_reasoning_packet_prompt",
     "build_stage4_packet_prompt",
     "build_timeline",
     "code_node_commit_edges",
@@ -109,6 +117,8 @@ __all__ = [
     "packet_json_contains_raw_internal_ids",
     "produced_change_edges",
     "review_reasoning_extraction_results",
+    "qwen_reasoning_contract_hash",
+    "qwen_reasoning_output_schema",
     "stage4_contract_hash",
     "stage4_output_schema",
     "tool_fact_from_event",
