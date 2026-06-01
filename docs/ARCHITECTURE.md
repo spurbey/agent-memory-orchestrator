@@ -72,3 +72,5 @@ query
 - Runtime state, evidence, graph stores, logs, and exports stay out of Git.
 
 See [Reasoning Graph](./reasoning_graph/README.md) for graph model details.
+See [Codebase Architecture Tree](./ARCHITECTURE_TREE.md) for source-root
+ownership and refactor boundaries.
