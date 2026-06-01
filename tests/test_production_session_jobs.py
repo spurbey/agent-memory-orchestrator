@@ -31,9 +31,9 @@ from agent_memory_orchestrator.application.services.central_merge.apply import C
 from agent_memory_orchestrator.application.services.central_merge.apply import repo_central_graph_path
 from agent_memory_orchestrator.domain.versioning.central_merge.planner import build_dry_run_merge_plan
 from agent_memory_orchestrator.domain.versioning.repo_identity import normalize_remote_url
-from agent_memory_orchestrator.domain.reasoning.extraction import STAGE4_CONTRACT_VERSION
-from agent_memory_orchestrator.domain.reasoning.extraction import build_stage4_packet_prompt
-from agent_memory_orchestrator.domain.reasoning.extraction import stage4_contract_hash
+from agent_memory_orchestrator.domain.reasoning.extraction import QWEN_REASONING_CONTRACT_VERSION
+from agent_memory_orchestrator.domain.reasoning.extraction import build_qwen_reasoning_packet_prompt
+from agent_memory_orchestrator.domain.reasoning.extraction import qwen_reasoning_contract_hash
 from agent_memory_orchestrator.domain.retrieval.models import RetrievalDocument
 from agent_memory_orchestrator.infrastructure.sqlite.retrieval_store import RetrievalIndexStore
 from agent_memory_orchestrator.application.services.session.detail import build_session_detail_fallback
@@ -1412,8 +1412,8 @@ def test_production_runner_rejects_missing_incomplete_or_wrong_reset_marker() ->
         require_complete_production_marker({**adopted_marker, "validated": {"graph": True, "retrieval": False}})
 
 
-def test_stage4_prompt_uses_reset_contract_module() -> None:
-    prompt = build_stage4_packet_prompt(
+def test_qwen_reasoning_prompt_uses_production_contract_module() -> None:
+    prompt = build_qwen_reasoning_packet_prompt(
         {
             "packet_id": "WP0001",
             "commit": {"short_sha": "abc1234"},
@@ -1423,8 +1423,8 @@ def test_stage4_prompt_uses_reset_contract_module() -> None:
         }
     )
 
-    assert STAGE4_CONTRACT_VERSION == "stage4-reset-2026-05-14"
-    assert len(stage4_contract_hash()) == 64
+    assert QWEN_REASONING_CONTRACT_VERSION == "stage4-reset-2026-05-14"
+    assert len(qwen_reasoning_contract_hash()) == 64
     assert "Support refs are provenance only" in prompt
     assert "Input packet:" in prompt
 

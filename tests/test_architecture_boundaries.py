@@ -32,12 +32,12 @@ def test_architecture_domain_code_boundary_exports_existing_code_contracts() -> 
 def test_architecture_domain_reasoning_boundary_exports_existing_reasoning_contracts() -> None:
     from agent_memory_orchestrator.domain.reasoning import ReasoningExtractionReview
     from agent_memory_orchestrator.domain.reasoning import ReasoningWorkPacketBuild
-    from agent_memory_orchestrator.domain.reasoning import build_stage4_packet_prompt
+    from agent_memory_orchestrator.domain.reasoning import build_qwen_reasoning_packet_prompt
     from agent_memory_orchestrator.domain.reasoning import is_strict_validation_fact
 
     assert ReasoningExtractionReview.__name__ == "ReasoningExtractionReview"
     assert ReasoningWorkPacketBuild.__name__ == "ReasoningWorkPacketBuild"
-    assert build_stage4_packet_prompt.__name__ == "build_stage4_packet_prompt"
+    assert build_qwen_reasoning_packet_prompt.__name__ == "build_qwen_reasoning_packet_prompt"
     assert is_strict_validation_fact({"command": "python -m pytest -q"}) is True
 
 
