@@ -26,14 +26,14 @@ from ..infrastructure.llm.text_embedder import StrictTextEmbedder
 from ..versioning import LocalGitBackend, VersionBackend, WorkLedger
 from ..domain.retrieval.answer import _answer_from_retrieval_result
 from ..domain.retrieval.answer import _unique_nonempty as _unique_nonempty
-from .version_flow import _build_central_version_flows
-from .version_flow import _build_version_flow
-from .version_flow import _is_central_graph_seed
-from .version_flow import _is_isolated_graph_seed
-from .version_flow import _isolated_graph_seed_pool
-from .version_flow import _matches_commit
-from .version_flow import _matches_version_flow_filter
-from .version_flow import _version_flow_warnings
+from ..application.services.version_flow import _build_central_version_flows
+from ..application.services.version_flow import _build_version_flow
+from ..application.services.version_flow import _is_central_graph_seed
+from ..application.services.version_flow import _is_isolated_graph_seed
+from ..application.services.version_flow import _isolated_graph_seed_pool
+from ..application.services.version_flow import _matches_commit
+from ..application.services.version_flow import _matches_version_flow_filter
+from ..application.services.version_flow import _version_flow_warnings
 from .central_trace import _active_central_versions_for_support as _active_central_versions_for_support
 from .central_trace import _central_answer_trace_from_retrieval
 from .constants import CAPTURE_ONLY_EVENTS
