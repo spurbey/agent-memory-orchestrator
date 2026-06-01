@@ -24,12 +24,14 @@ def run_qwen_reasoning_stage(runner: Any, job: dict[str, Any], artifact_dir: Pat
     packets = _read_json(runner._stage_input_artifact(job, "qwen_reasoning", artifact_dir))
     if not isinstance(packets, list):
         raise RuntimeError("work_packets_output_must_be_list")
-    output = stage_dir / "stage4_packet_reasoning_results.json"
-    manifest = stage_dir / "stage4_packet_reasoning_manifest.json"
+    output = stage_dir / "results.json"
+    manifest = stage_dir / "manifest.json"
+    legacy_output = stage_dir / "stage4_packet_reasoning_results.json"
+    legacy_manifest = stage_dir / "stage4_packet_reasoning_manifest.json"
     qwen_contract = _qwen_contract(runner.settings)
     packet_keys = [_qwen_packet_key(packet, contract=qwen_contract) for packet in packets if isinstance(packet, dict)]
-    existing_results = _qwen_existing_results(output)
-    existing_manifest = _qwen_existing_manifest(manifest)
+    existing_results = _qwen_existing_results(output) or _qwen_existing_results(legacy_output)
+    existing_manifest = _qwen_existing_manifest(manifest) or _qwen_existing_manifest(legacy_manifest)
     reusable = _qwen_reusable_results(
         existing_results,
         existing_manifest=existing_manifest,
