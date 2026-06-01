@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import ast
+from pathlib import Path
+
 
 def test_git_infrastructure_exports_existing_backend_contracts() -> None:
     from agent_memory_orchestrator.infrastructure.git import LocalGitBackend
@@ -37,3 +40,28 @@ def test_filesystem_infrastructure_helpers_are_deterministic(tmp_path) -> None:
     assert file_sha256(path) == file_sha256(path)
     assert path_hash(tmp_path) == path_hash(tmp_path)
     assert timestamped_backup_path(path, timestamp="20260531T000000Z").name == "events.jsonl.backup-20260531T000000Z"
+
+
+def test_sqlite_production_job_store_is_facade_over_concern_modules() -> None:
+    from agent_memory_orchestrator.infrastructure.sqlite.production_job_store import ProductionSessionJobStore
+    from agent_memory_orchestrator.infrastructure.sqlite.production_jobs import CentralMergeStoreMixin
+    from agent_memory_orchestrator.infrastructure.sqlite.production_jobs import SemanticEvalStoreMixin
+    from agent_memory_orchestrator.infrastructure.sqlite.production_jobs import SessionJobStoreMixin
+
+    path = (
+        Path(__file__).resolve().parents[1]
+        / "src"
+        / "agent_memory_orchestrator"
+        / "infrastructure"
+        / "sqlite"
+        / "production_job_store.py"
+    )
+    tree = ast.parse(path.read_text(encoding="utf-8-sig"))
+    class_defs = [node for node in tree.body if isinstance(node, ast.ClassDef)]
+    store_class = next(node for node in class_defs if node.name == "ProductionSessionJobStore")
+    method_names = [node.name for node in store_class.body if isinstance(node, ast.FunctionDef)]
+
+    assert issubclass(ProductionSessionJobStore, SessionJobStoreMixin)
+    assert issubclass(ProductionSessionJobStore, CentralMergeStoreMixin)
+    assert issubclass(ProductionSessionJobStore, SemanticEvalStoreMixin)
+    assert method_names == ["__init__", "close"]
