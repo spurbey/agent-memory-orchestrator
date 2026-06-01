@@ -10,7 +10,7 @@ from typing import Any
 
 from ....core.config import Settings
 from ....core.privacy import redact_secrets
-from ....application.services.graph_rag import GraphRagService
+from ....application.services.memory_graph.service import GraphRagService
 from ....infrastructure.kuzu import GraphBackendUnavailable
 from ....install.service import InstallOptions
 from ....install.service import apply_install_plan
