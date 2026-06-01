@@ -2,7 +2,7 @@
 
 from typing import Any, Iterable
 
-from ...llm.embeddings import embed_text
+from .embeddings import embed_text
 
 
 class StrictTextEmbedder:

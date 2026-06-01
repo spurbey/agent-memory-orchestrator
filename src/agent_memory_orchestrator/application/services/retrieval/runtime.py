@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import re
 from pathlib import Path
@@ -12,7 +12,7 @@ from ....infrastructure.faiss.embedding_store import GraphEmbeddingStore
 from ....infrastructure.kuzu import GraphStore
 from ....infrastructure.llm.text_embedder import StrictTextEmbedder
 from ....infrastructure.sqlite.retrieval_store import RetrievalIndexStore
-from ....llm.embeddings import embed_text
+from ....infrastructure.llm import embed_text
 from .answer_trace import _central_answer_trace_from_retrieval
 from .embedding import RETRIEVAL_EMBEDDING_KIND
 from .embedding import embed_missing_retrieval_documents

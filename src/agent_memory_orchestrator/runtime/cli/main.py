@@ -1,11 +1,11 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import argparse
 import json
 import sys
 
 from ...infrastructure.kuzu import GraphBackendUnavailable
-from ...llm.qwen import QwenUnavailable
+from ...infrastructure.llm import QwenUnavailable
 from ..daemon.client import DaemonUnavailable
 from .commands.bootstrap import add_bootstrap_subcommands as _add_bootstrap_subcommands
 from .commands.bootstrap import handle_bootstrap_command as _handle_bootstrap_command

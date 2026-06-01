@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import json
 import time
@@ -11,7 +11,7 @@ from ..evidence.triggers import detect_trigger
 from ..evidence.triggers import is_session_start
 from ..evidence.triggers import record_session_id
 from ..evidence.triggers import session_boundary_trigger
-from ..llm.qwen import OllamaQwenClient, QwenUnavailable
+from ..infrastructure.llm import OllamaQwenClient, QwenUnavailable
 from .daemon.client import DaemonClient, DaemonUnavailable
 
 

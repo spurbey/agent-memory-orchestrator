@@ -1,4 +1,4 @@
-"""Daemon graph and graph-debug routes."""
+﻿"""Daemon graph and graph-debug routes."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from ....application.services.session.detail import build_session_detail_fallbac
 from ...diagnostics import debug_drain, debug_graph, debug_hooks, debug_qwen
 from ....application.services.memory_graph.service import GraphRagService
 from ....infrastructure.kuzu import GraphBackendUnavailable
-from ....llm.qwen import QwenUnavailable
+from ....infrastructure.llm import QwenUnavailable
 from .. import dashboard
 from ..coordination import DRAIN_LOCK
 from ..coordination import GRAPH_WRITE_LOCK

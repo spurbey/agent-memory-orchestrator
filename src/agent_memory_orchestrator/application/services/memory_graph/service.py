@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from pathlib import Path
 from typing import Any
@@ -8,7 +8,7 @@ from ....domain.retrieval.policy import _sanitize_output_node
 from ....evidence.drain import EvidenceDrain
 from ....evidence.raw_store import RawEvidenceStore
 from ....infrastructure.kuzu import GraphStore, KuzuGraphStore
-from ....llm.qwen import OllamaQwenClient, QwenPlanner
+from ....infrastructure.llm import OllamaQwenClient, QwenPlanner
 from ....versioning import LocalGitBackend, VersionBackend, WorkLedger
 from ..retrieval.answer_trace import _active_central_versions_for_support as _active_central_versions_for_support
 from ..retrieval.runtime import embed_retrieval_index as _embed_retrieval_index
