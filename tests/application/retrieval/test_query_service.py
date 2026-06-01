@@ -11,9 +11,9 @@ import pytest
 from agent_memory_orchestrator.core.db import connect
 from agent_memory_orchestrator.core.config import Settings
 from agent_memory_orchestrator.application.services.graph_rag import GraphRagService
-from agent_memory_orchestrator.application.services.graph_rag import _active_central_versions_for_support
-from agent_memory_orchestrator.application.services.graph_rag import _answer_from_retrieval_result
-from agent_memory_orchestrator.application.services.graph_rag import _unique_nonempty
+from agent_memory_orchestrator.application.services.retrieval.answer_trace import _active_central_versions_for_support
+from agent_memory_orchestrator.domain.retrieval.answer import _answer_from_retrieval_result
+from agent_memory_orchestrator.domain.retrieval.answer import _unique_nonempty
 from agent_memory_orchestrator.graph.answer_trace import build_answer_trace
 from agent_memory_orchestrator.graph.answer_trace import build_central_answer_trace
 from agent_memory_orchestrator.graph.answer_trace import format_answer_trace
@@ -1019,7 +1019,7 @@ def test_retrieve_session_graph_applies_cross_encoder_rerank(tmp_path: Path, mon
         )
 
     monkeypatch.setattr(
-        "agent_memory_orchestrator.application.services.retrieval_query.rerank_candidates",
+        "agent_memory_orchestrator.application.services.retrieval.query.rerank_candidates",
         fake_rerank_candidates,
     )
 
@@ -1125,7 +1125,7 @@ def test_decision_history_query_prefers_primary_topic_over_metadata_noise(
         )
 
     monkeypatch.setattr(
-        "agent_memory_orchestrator.application.services.retrieval_query.rerank_candidates",
+        "agent_memory_orchestrator.application.services.retrieval.query.rerank_candidates",
         misleading_cross_encoder,
     )
 
