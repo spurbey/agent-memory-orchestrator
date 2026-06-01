@@ -41,6 +41,24 @@ def test_stage1_domain_reasoning_boundary_exports_existing_reasoning_contracts()
     assert is_strict_validation_fact({"command": "python -m pytest -q"}) is True
 
 
+def test_stage1_domain_code_analysis_is_compatibility_only() -> None:
+    analysis_path = (
+        Path(__file__).resolve().parents[1] / "src" / "agent_memory_orchestrator" / "domain" / "code" / "analysis.py"
+    )
+    tree = ast.parse(analysis_path.read_text(encoding="utf-8-sig"))
+    class_names = [node.name for node in ast.walk(tree) if isinstance(node, ast.ClassDef)]
+    function_names = [node.name for node in ast.walk(tree) if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef)]
+
+    assert class_names == []
+    assert function_names == []
+    for node in tree.body:
+        if _is_module_docstring(node) or _is_future_annotations_import(node):
+            continue
+        if isinstance(node, ast.ImportFrom):
+            continue
+        assert _is_all_assignment(node)
+
+
 def test_stage1_application_and_infrastructure_boundaries_are_importable() -> None:
     from agent_memory_orchestrator.application.services import CentralMergeService as RootCentralMergeService
     from agent_memory_orchestrator.application.services import ProductionPipelineService as RootProductionPipelineService
