@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from ..application.services.retrieval_embedding import RETRIEVAL_EMBEDDING_KIND as RETRIEVAL_EMBEDDING_KIND
-from ..application.services.retrieval_embedding import embed_missing_retrieval_documents as embed_missing_retrieval_documents
-from ..application.services.retrieval_query import retrieve_session_graph as retrieve_session_graph
+from ..application.services.retrieval.embedding import RETRIEVAL_EMBEDDING_KIND as RETRIEVAL_EMBEDDING_KIND
+from ..application.services.retrieval.embedding import embed_missing_retrieval_documents as embed_missing_retrieval_documents
+from ..application.services.retrieval.query import retrieve_session_graph as retrieve_session_graph
 from ..domain.retrieval.classification import classify_query as classify_query
 from ..domain.retrieval.models import EmbeddingRunResult as EmbeddingRunResult
 from ..domain.retrieval.models import RetrievalCandidate as RetrievalCandidate

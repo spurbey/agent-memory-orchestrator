@@ -7,11 +7,11 @@ from typing import Any
 
 from ....core.db import connect
 from ....infrastructure.faiss.embedding_store import GraphEmbeddingStore
-from ....application.services.retrieval_embedding import RETRIEVAL_EMBEDDING_KIND
+from ....application.services.retrieval.embedding import RETRIEVAL_EMBEDDING_KIND
 from ....domain.retrieval.models import RetrievalDocument
 from ....infrastructure.sqlite.retrieval_store import RetrievalIndexStore
 from ....domain.retrieval.projection import build_retrieval_documents_from_graph
-from ....application.services.retrieval_embedding import embed_missing_retrieval_documents
+from ....application.services.retrieval.embedding import embed_missing_retrieval_documents
 from ....infrastructure.llm.text_embedder import StrictTextEmbedder
 from ....domain.pipeline.constants import RESET_MARKER_KEY
 from ....domain.pipeline.constants import RETRIEVAL_PROJECTION_VERSION

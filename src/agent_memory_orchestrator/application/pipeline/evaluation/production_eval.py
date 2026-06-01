@@ -11,10 +11,10 @@ from typing import Any
 from ....core.config import Settings
 from ....infrastructure.faiss.embedding_store import GraphEmbeddingHit
 from ....infrastructure.faiss.embedding_store import cosine_similarity
-from ....application.services.retrieval_embedding import RETRIEVAL_EMBEDDING_KIND
+from ....application.services.retrieval.embedding import RETRIEVAL_EMBEDDING_KIND
 from ....domain.retrieval.models import RetrievalCandidate
 from ....domain.retrieval.models import RetrievalDocument
-from ....application.services.retrieval_query import retrieve_session_graph
+from ....application.services.retrieval.query import retrieve_session_graph
 from ....infrastructure.llm.text_embedder import StrictTextEmbedder
 
 
