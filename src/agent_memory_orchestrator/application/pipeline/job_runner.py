@@ -341,9 +341,21 @@ def _current_stage(job: dict[str, Any]) -> str:
     return PRODUCTION_STAGES[0]
 
 
-def _session_records(evidence_dir: Path, session_id: str) -> list[dict[str, Any]]:
+def _session_records(
+    evidence_dir: Path,
+    session_id: str,
+    *,
+    evidence_days: list[str] | tuple[str, ...] = (),
+    first_event_id: str = "",
+    latest_event_id: str = "",
+) -> list[dict[str, Any]]:
+    day_filter = {str(day) for day in evidence_days if str(day)}
+    first_id = str(first_event_id or "")
+    latest_id = str(latest_event_id or "")
     records: list[dict[str, Any]] = []
     for path in sorted(evidence_dir.glob("*.jsonl")):
+        if day_filter and path.stem not in day_filter:
+            continue
         with path.open("r", encoding="utf-8", errors="replace") as handle:
             for line in handle:
                 if not line.strip():
@@ -354,7 +366,37 @@ def _session_records(evidence_dir: Path, session_id: str) -> list[dict[str, Any]
                     continue
                 if str(record.get("session_id") or "") == session_id:
                     records.append(record)
+    if first_id or latest_id:
+        return _bounded_session_records(records, first_event_id=first_id, latest_event_id=latest_id)
     return records
+
+
+def _bounded_session_records(records: list[dict[str, Any]], *, first_event_id: str = "", latest_event_id: str = "") -> list[dict[str, Any]]:
+    if not records:
+        return []
+    first_index = 0
+    latest_index = len(records) - 1
+    if first_event_id:
+        found_first = False
+        for index, record in enumerate(records):
+            if str(record.get("id") or "") == first_event_id:
+                first_index = index
+                found_first = True
+                break
+        if not found_first:
+            return []
+    if latest_event_id:
+        found_latest = False
+        for index, record in enumerate(records):
+            if str(record.get("id") or "") == latest_event_id:
+                latest_index = index
+                found_latest = True
+                break
+        if not found_latest:
+            return []
+    if first_index > latest_index:
+        return []
+    return records[first_index : latest_index + 1]
 
 
 def _first_transcript_path(records: list[dict[str, Any]]) -> str:

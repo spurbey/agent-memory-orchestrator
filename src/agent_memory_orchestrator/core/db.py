@@ -291,6 +291,8 @@ CREATE TABLE IF NOT EXISTS v2_session_jobs (
   repo_path TEXT NOT NULL DEFAULT '',
   repo_id TEXT NOT NULL DEFAULT '',
   boundary_event_id TEXT NOT NULL DEFAULT '',
+  source_first_event_id TEXT NOT NULL DEFAULT '',
+  source_latest_event_id TEXT NOT NULL DEFAULT '',
   source_evidence_day TEXT NOT NULL DEFAULT '',
   source_evidence_days_json TEXT NOT NULL DEFAULT '[]',
   lock_owner TEXT NOT NULL DEFAULT '',
@@ -678,6 +680,8 @@ def _run_light_migrations(conn: sqlite3.Connection) -> None:
     _add_column_if_missing(conn, "v2_session_jobs", "source_app", "source_app TEXT NOT NULL DEFAULT ''")
     _add_column_if_missing(conn, "v2_session_jobs", "repo_path", "repo_path TEXT NOT NULL DEFAULT ''")
     _add_column_if_missing(conn, "v2_session_jobs", "repo_id", "repo_id TEXT NOT NULL DEFAULT ''")
+    _add_column_if_missing(conn, "v2_session_jobs", "source_first_event_id", "source_first_event_id TEXT NOT NULL DEFAULT ''")
+    _add_column_if_missing(conn, "v2_session_jobs", "source_latest_event_id", "source_latest_event_id TEXT NOT NULL DEFAULT ''")
     _add_column_if_missing(conn, "v2_session_jobs", "forced_at", "forced_at TEXT NOT NULL DEFAULT ''")
     _add_column_if_missing(conn, "v2_session_jobs", "forced_by", "forced_by TEXT NOT NULL DEFAULT ''")
     _add_column_if_missing(conn, "v2_session_job_stages", "stage_config_hash", "stage_config_hash TEXT NOT NULL DEFAULT ''")
