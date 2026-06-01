@@ -23,6 +23,7 @@ from .session_query import SessionGraphSearchStore
 from .session_query import query_session_graph
 from .text import HOOK_QUERY_EXPANSION_TERMS
 from .text import QUERY_STOPWORDS
+from .text import clip_text
 from .text import exact_tokens
 from .text import expanded_query_terms
 from .text import fts_query
@@ -49,6 +50,7 @@ __all__ = [
     "build_retrieval_documents_from_graph",
     "candidate_raw_scores",
     "classify_query",
+    "clip_text",
     "exact_tokens",
     "expanded_query_terms",
     "format_answer_trace",

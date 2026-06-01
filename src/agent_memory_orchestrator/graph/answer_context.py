@@ -6,7 +6,7 @@ from typing import Iterable
 
 from .answer_trace import build_answer_trace
 from .store import GraphStore
-from .text_utils import _clip
+from ..domain.retrieval.text import clip_text as _clip
 
 
 def _answer_from_retrieval_result(

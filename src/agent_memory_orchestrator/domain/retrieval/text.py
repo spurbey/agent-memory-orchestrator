@@ -87,9 +87,17 @@ def fts_query(query: str) -> str:
     return " OR ".join(sorted(expanded_query_terms(query))[:12])
 
 
+def clip_text(value: object, limit: int) -> str:
+    text = str(value or "").strip()
+    if len(text) <= limit:
+        return text
+    return text[: max(0, limit - 14)].rstrip() + " ...<clipped>"
+
+
 __all__ = [
     "HOOK_QUERY_EXPANSION_TERMS",
     "QUERY_STOPWORDS",
+    "clip_text",
     "exact_tokens",
     "expanded_query_terms",
     "fts_query",
