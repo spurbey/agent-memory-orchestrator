@@ -7,7 +7,7 @@ from typing import Iterable
 
 from ..core.config import Settings
 from ..core.db import connect
-from .answer_trace import build_central_answer_trace
+from ..domain.retrieval.answer_trace import build_central_answer_trace
 from .store import GraphStore
 
 

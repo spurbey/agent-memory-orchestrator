@@ -4,7 +4,7 @@ import re
 from typing import Any
 from typing import Iterable
 
-from .answer_trace import build_answer_trace
+from ..domain.retrieval.answer_trace import build_answer_trace
 from .store import GraphStore
 from ..domain.retrieval.text import clip_text as _clip
 
