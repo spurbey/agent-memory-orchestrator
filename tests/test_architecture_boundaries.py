@@ -65,6 +65,8 @@ def test_architecture_domain_code_package_roots_are_export_only() -> None:
         code_root / "ast" / "__init__.py",
         code_root / "diff" / "__init__.py",
         code_root / "hunks" / "__init__.py",
+        code_root / "symbols" / "__init__.py",
+        code_root / "versions" / "__init__.py",
     ]
 
     for path in package_roots:
