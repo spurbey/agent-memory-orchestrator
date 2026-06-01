@@ -42,13 +42,21 @@ def test_stage1_domain_reasoning_boundary_exports_existing_reasoning_contracts()
 
 
 def test_stage1_application_and_infrastructure_boundaries_are_importable() -> None:
-    from agent_memory_orchestrator.application.services import CentralMergeService
-    from agent_memory_orchestrator.application.services import ProductionPipelineService
-    from agent_memory_orchestrator.application.services import RetrievalQueryService
+    from agent_memory_orchestrator.application.services import CentralMergeService as RootCentralMergeService
+    from agent_memory_orchestrator.application.services import ProductionPipelineService as RootProductionPipelineService
+    from agent_memory_orchestrator.application.services import RetrievalQueryService as RootRetrievalQueryService
+    from agent_memory_orchestrator.application.services.capture import EvidenceIngestService
+    from agent_memory_orchestrator.application.services.central_merge import CentralMergeService
+    from agent_memory_orchestrator.application.services.connectors import ConnectorRuntimeService
     from agent_memory_orchestrator.application.services.memory_graph.service import GraphRagService
     from agent_memory_orchestrator.application.pipeline import build_compact_session_graph
     from agent_memory_orchestrator.application.pipeline import build_curated_session_graph
-    from agent_memory_orchestrator.application.services.session.detail import build_session_detail_fallback
+    from agent_memory_orchestrator.application.services.peer import PeerAgentService
+    from agent_memory_orchestrator.application.services.pipeline import ProductionPipelineService
+    from agent_memory_orchestrator.application.services.retrieval import RetrievalQueryService
+    from agent_memory_orchestrator.application.services.retrieval import retrieve_session_graph
+    from agent_memory_orchestrator.application.services.review import LocalAgentReviewService
+    from agent_memory_orchestrator.application.services.session import build_session_detail_fallback
     from agent_memory_orchestrator.domain.evidence.events import HOOK_CONTEXT_EVENTS
     from agent_memory_orchestrator.domain.evidence import build_reasoning_evidence_view
     from agent_memory_orchestrator.domain.reasoning import TimelineGraph
@@ -61,10 +69,18 @@ def test_stage1_application_and_infrastructure_boundaries_are_importable() -> No
     from agent_memory_orchestrator.infrastructure.sqlite import ProductionSessionJobStore
     from agent_memory_orchestrator.infrastructure.sqlite import RetrievalIndexStore
 
+    assert RootProductionPipelineService is ProductionPipelineService
+    assert RootCentralMergeService is CentralMergeService
+    assert RootRetrievalQueryService is RetrievalQueryService
     assert ProductionPipelineService.__name__ == "ProductionPipelineService"
     assert CentralMergeService.__name__ == "CentralMergeService"
+    assert ConnectorRuntimeService.__name__ == "ConnectorRuntimeService"
+    assert EvidenceIngestService.__name__ == "EvidenceIngestService"
+    assert LocalAgentReviewService.__name__ == "LocalAgentReviewService"
+    assert PeerAgentService.__name__ == "PeerAgentService"
     assert RetrievalQueryService.__name__ == "RetrievalQueryService"
     assert GraphRagService.__name__ == "GraphRagService"
+    assert retrieve_session_graph.__name__ == "retrieve_session_graph"
     assert build_session_detail_fallback.__name__ == "build_session_detail_fallback"
     assert ProductionSessionJobStore.__name__ == "ProductionSessionJobStore"
     assert RetrievalIndexStore.__name__ == "RetrievalIndexStore"
@@ -181,6 +197,41 @@ def test_stage1_graph_root_is_compatibility_only() -> None:
     assert offenders == []
 
 
+def test_stage1_application_services_root_is_compatibility_only() -> None:
+    services_root = Path(__file__).resolve().parents[1] / "src" / "agent_memory_orchestrator" / "application" / "services"
+    implementation_packages = {
+        "capture",
+        "central_merge",
+        "connectors",
+        "memory_graph",
+        "peer",
+        "pipeline",
+        "retrieval",
+        "review",
+        "session",
+    }
+
+    assert {path.name for path in services_root.iterdir() if path.is_dir()} >= implementation_packages
+
+    for path in services_root.glob("*.py"):
+        tree = ast.parse(path.read_text(encoding="utf-8-sig"))
+        class_names = [node.name for node in ast.walk(tree) if isinstance(node, ast.ClassDef)]
+        function_names = [node.name for node in ast.walk(tree) if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef)]
+        if path.name == "__init__.py":
+            assert class_names == []
+            assert set(function_names) <= {"__getattr__"}
+            continue
+
+        assert class_names == [], path.name
+        assert function_names == [], path.name
+        for node in tree.body:
+            if _is_module_docstring(node) or _is_future_annotations_import(node):
+                continue
+            if isinstance(node, ast.ImportFrom):
+                continue
+            assert _is_all_assignment(node), path.name
+
+
 def _absolute_or_suffix_module(module: str) -> str:
     if module.startswith("agent_memory_orchestrator."):
         return module
@@ -189,3 +240,24 @@ def _absolute_or_suffix_module(module: str) -> str:
 
 def _is_forbidden_legacy_import(module: str, forbidden: tuple[str, ...]) -> bool:
     return any(module == blocked or module.startswith(f"{blocked}.") for blocked in forbidden)
+
+
+def _is_module_docstring(node: ast.AST) -> bool:
+    return isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant) and isinstance(node.value.value, str)
+
+
+def _is_future_annotations_import(node: ast.AST) -> bool:
+    return (
+        isinstance(node, ast.ImportFrom)
+        and node.module == "__future__"
+        and any(alias.name == "annotations" for alias in node.names)
+    )
+
+
+def _is_all_assignment(node: ast.AST) -> bool:
+    return (
+        isinstance(node, ast.Assign)
+        and len(node.targets) == 1
+        and isinstance(node.targets[0], ast.Name)
+        and node.targets[0].id == "__all__"
+    )
