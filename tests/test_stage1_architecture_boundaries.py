@@ -272,6 +272,24 @@ def test_stage1_application_services_root_is_compatibility_only() -> None:
             assert _is_all_assignment(node), path.name
 
 
+def test_stage1_central_merge_apply_is_orchestration_only() -> None:
+    apply_path = (
+        Path(__file__).resolve().parents[1]
+        / "src"
+        / "agent_memory_orchestrator"
+        / "application"
+        / "services"
+        / "central_merge"
+        / "apply.py"
+    )
+    tree = ast.parse(apply_path.read_text(encoding="utf-8-sig"))
+    class_names = [node.name for node in ast.walk(tree) if isinstance(node, ast.ClassDef)]
+    function_names = [node.name for node in ast.walk(tree) if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef)]
+
+    assert class_names == []
+    assert set(function_names) == {"apply_merge_plan"}
+
+
 def _absolute_or_suffix_module(module: str) -> str:
     if module.startswith("agent_memory_orchestrator."):
         return module
