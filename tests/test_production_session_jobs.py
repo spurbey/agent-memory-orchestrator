@@ -178,6 +178,31 @@ def test_session_records_filter_by_evidence_days_and_event_bounds(tmp_path: Path
     )
 
 
+def test_qwen_checkpoint_uses_short_temp_names_for_long_windows_paths(tmp_path: Path) -> None:
+    from agent_memory_orchestrator.application.pipeline.qwen_checkpoint import _write_qwen_checkpoint
+
+    output_name = "stage4_packet_reasoning_results.json"
+    target_len = 258
+    segment_len = max(1, target_len - len(str(tmp_path)) - len(output_name) - 2)
+    stage_dir = tmp_path / ("q" * min(segment_len, 120))
+    output = stage_dir / output_name
+    manifest = stage_dir / "stage4_packet_reasoning_manifest.json"
+
+    _write_qwen_checkpoint(
+        output,
+        manifest,
+        [{"packet_id": "WP0001", "commit_sha": "abc123", "parsed_output": {}}],
+        [{"packet_id": "WP0001", "commit_sha": "abc123", "packet_hash": "p", "contract_hash": "c"}],
+        contract={"contract_hash": "c"},
+        complete=True,
+    )
+
+    assert output.exists()
+    assert manifest.exists()
+    assert not output.with_suffix(output.suffix + ".tmp").exists()
+    assert not manifest.with_suffix(manifest.suffix + ".tmp").exists()
+
+
 def test_production_stage_rows_track_hashes_and_config_hash(tmp_path: Path) -> None:
     settings = make_settings(tmp_path)
     store = ProductionSessionJobStore(settings)
@@ -293,7 +318,8 @@ def test_production_qwen_reasoning_reuses_existing_matching_checkpoint(tmp_path:
         assert stage["status"] == "complete"
         assert stage["diagnostics"]["reused_result_count"] == 1
         assert stage["diagnostics"]["generated_result_count"] == 0
-        assert (qwen_dir / "stage4_packet_reasoning_manifest.json").exists()
+        assert Path(stage["output_artifact"]).name == "results.json"
+        assert (qwen_dir / "manifest.json").exists()
     finally:
         store.close()
 

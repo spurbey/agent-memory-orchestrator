@@ -114,8 +114,10 @@ def _write_qwen_checkpoint(
     complete: bool,
 ) -> None:
     output.parent.mkdir(parents=True, exist_ok=True)
-    output_tmp = output.with_suffix(output.suffix + ".tmp")
-    manifest_tmp = manifest.with_suffix(manifest.suffix + ".tmp")
+    # Keep temp names short on Windows. The final artifact path can be close to
+    # MAX_PATH because production job directories include session/job ids.
+    output_tmp = output.parent / ".qwen-results.tmp"
+    manifest_tmp = manifest.parent / ".qwen-manifest.tmp"
     output_tmp.write_text(json.dumps(results, indent=2, ensure_ascii=False), encoding="utf-8")
     manifest_payload = {
         "complete": complete,

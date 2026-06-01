@@ -25,10 +25,14 @@ def path_hash(path: Path) -> str:
 
 
 def _stage_output(artifact_dir: Path, stage: str) -> Path:
+    if stage == "qwen_reasoning":
+        output = artifact_dir / stage / "results.json"
+        if output.exists():
+            return output
+        return artifact_dir / stage / "stage4_packet_reasoning_results.json"
     candidates = {
         "evidence_view": "reasoning_evidence_view.json",
         "work_packets": "reasoning_work_packets.json",
-        "qwen_reasoning": "stage4_packet_reasoning_results.json",
         "reasoning_review": "accepted_reasoning_nodes.json",
         "git_hunks": "code_hunks.json",
         "ast_code_nodes": "code_nodes.json",
