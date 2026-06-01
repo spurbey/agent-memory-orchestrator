@@ -45,13 +45,16 @@ def test_stage1_application_and_infrastructure_boundaries_are_importable() -> No
     from agent_memory_orchestrator.application.services import CentralMergeService
     from agent_memory_orchestrator.application.services import ProductionPipelineService
     from agent_memory_orchestrator.application.services import RetrievalQueryService
+    from agent_memory_orchestrator.application.services.graph_rag import GraphRagService
     from agent_memory_orchestrator.application.pipeline import build_compact_session_graph
     from agent_memory_orchestrator.application.pipeline import build_curated_session_graph
     from agent_memory_orchestrator.application.services.session_detail import build_session_detail_fallback
+    from agent_memory_orchestrator.domain.evidence.events import HOOK_CONTEXT_EVENTS
     from agent_memory_orchestrator.domain.evidence import build_reasoning_evidence_view
     from agent_memory_orchestrator.domain.reasoning import TimelineGraph
     from agent_memory_orchestrator.domain.reasoning import build_decision_threads
     from agent_memory_orchestrator.domain.reasoning import extract_decisions
+    from agent_memory_orchestrator.domain.versioning.flow import VERSION_FLOW_EDGE_KINDS
     from agent_memory_orchestrator.domain.versioning import resolve_session_repo_root
     from agent_memory_orchestrator.infrastructure.faiss import GraphEmbeddingStore
     from agent_memory_orchestrator.infrastructure.kuzu import KuzuGraphStore
@@ -61,6 +64,7 @@ def test_stage1_application_and_infrastructure_boundaries_are_importable() -> No
     assert ProductionPipelineService.__name__ == "ProductionPipelineService"
     assert CentralMergeService.__name__ == "CentralMergeService"
     assert RetrievalQueryService.__name__ == "RetrievalQueryService"
+    assert GraphRagService.__name__ == "GraphRagService"
     assert build_session_detail_fallback.__name__ == "build_session_detail_fallback"
     assert ProductionSessionJobStore.__name__ == "ProductionSessionJobStore"
     assert RetrievalIndexStore.__name__ == "RetrievalIndexStore"
@@ -73,6 +77,8 @@ def test_stage1_application_and_infrastructure_boundaries_are_importable() -> No
     assert build_decision_threads.__name__ == "build_decision_threads"
     assert extract_decisions.__name__ == "extract_decisions"
     assert resolve_session_repo_root.__name__ == "resolve_session_repo_root"
+    assert "session_start" in HOOK_CONTEXT_EVENTS
+    assert "COMMITTED_AS" in VERSION_FLOW_EDGE_KINDS
 
 
 def test_stage1_retrieval_boundary_exports_planned_module_names() -> None:
@@ -134,6 +140,41 @@ def test_stage1_production_code_does_not_depend_on_legacy_reasoning_graph_facade
             else:
                 continue
             if any(_is_forbidden_legacy_import(module, forbidden) for module in modules):
+                offenders.append(relative)
+                break
+
+    assert offenders == []
+
+
+def test_stage1_graph_root_is_compatibility_only() -> None:
+    src_root = Path(__file__).resolve().parents[1] / "src" / "agent_memory_orchestrator"
+    graph_root = src_root / "graph"
+    allowed_functions = {
+        "__init__.py": {"__getattr__"},
+        "text_utils.py": {"_clip"},
+    }
+
+    for path in graph_root.glob("*.py"):
+        tree = ast.parse(path.read_text(encoding="utf-8-sig"))
+        class_names = [node.name for node in ast.walk(tree) if isinstance(node, ast.ClassDef)]
+        function_names = [node.name for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)]
+        assert class_names == [], path.name
+        assert set(function_names) <= allowed_functions.get(path.name, set()), path.name
+
+    offenders: list[str] = []
+    for path in src_root.rglob("*.py"):
+        relative = path.relative_to(src_root).as_posix()
+        if relative.startswith("graph/"):
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8-sig"))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                modules = [alias.name for alias in node.names]
+            elif isinstance(node, ast.ImportFrom):
+                modules = [_absolute_or_suffix_module(node.module or "")]
+            else:
+                continue
+            if any(module == "agent_memory_orchestrator.graph" or module.startswith("agent_memory_orchestrator.graph.") for module in modules):
                 offenders.append(relative)
                 break
 
