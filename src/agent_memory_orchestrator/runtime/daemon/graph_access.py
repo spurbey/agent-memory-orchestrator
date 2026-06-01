@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import replace
 
 from ...core.config import Settings
-from ...graph.service import GraphRagService
+from ...application.services.graph_rag import GraphRagService
 from ...infrastructure.kuzu import KuzuGraphStore
 from ...infrastructure.kuzu.central_graph import repo_central_graph_path
 

@@ -6,7 +6,7 @@ from collections.abc import Callable
 from typing import Any
 
 from ....core.config import Settings
-from ....graph.service import GraphRagService
+from ....application.services.graph_rag import GraphRagService
 from ..coordination import GRAPH_WRITE_LOCK
 
 HOOK_ROUTES = ("/hooks/ingest",)

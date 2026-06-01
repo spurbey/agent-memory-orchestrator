@@ -8,7 +8,7 @@ from typing import Any
 
 from ....core.config import Settings
 from ....core.db import connect
-from ....graph.service import GraphRagService
+from ....application.services.graph_rag import GraphRagService
 from ....infrastructure.kuzu import KuzuGraphStore
 from ....infrastructure.sqlite.retrieval_store import RetrievalIndexStore
 from ....infrastructure.kuzu.central_graph import repo_central_graph_path

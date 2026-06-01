@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from ...core.config import Settings
-from ...graph.service import GraphRagService
+from ...application.services.graph_rag import GraphRagService
 from ..models import PeerNode
 from ..service import PeerService
 from .llm import PeerAgentLlmGateway

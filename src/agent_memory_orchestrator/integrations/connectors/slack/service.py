@@ -230,7 +230,7 @@ class SlackConnectorService:
         query = slack_query_from_text(message.text, self.config.bot_user_id)
         if not query:
             return {"ok": False, "error": "empty_mention_query"}
-        from ....graph.service import GraphRagService
+        from ....application.services.graph_rag import GraphRagService
 
         graph = GraphRagService(self.settings, read_only=True)
         try:

@@ -6,7 +6,7 @@ from typing import Any
 
 from ...core.config import Settings
 from ...application.pipeline.job_runner import ProductionSessionJobRunner
-from ...graph.service import GraphRagService
+from ...application.services.graph_rag import GraphRagService
 from .coordination import DRAIN_LOCK
 from .coordination import GRAPH_WRITE_LOCK
 from .coordination import production_stage_lock

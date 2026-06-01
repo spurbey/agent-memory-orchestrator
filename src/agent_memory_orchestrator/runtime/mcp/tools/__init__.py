@@ -5,7 +5,7 @@ from typing import Any
 
 from ...daemon.client import DaemonClient, DaemonUnavailable
 from ....core.config import Settings
-from ....graph.service import GraphRagService
+from ....application.services.graph_rag import GraphRagService
 from ....infrastructure.kuzu import GraphBackendUnavailable
 from ....llm.qwen import QwenUnavailable
 from ....memory import MemoryService
