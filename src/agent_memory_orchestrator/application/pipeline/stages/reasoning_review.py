@@ -7,8 +7,8 @@ from typing import Any
 from ....domain.reasoning import review_reasoning_extraction_results
 from ..job_runner import StageFailed
 from ..job_runner import StageResult
-from ..job_runner import _read_json
-from ..job_runner import _stage_output
+from ..stage_artifacts import _read_json
+from ..stage_artifacts import _stage_output
 
 
 def run_reasoning_review_stage(runner: Any, job: dict[str, Any], artifact_dir: Path, stage_dir: Path) -> StageResult:

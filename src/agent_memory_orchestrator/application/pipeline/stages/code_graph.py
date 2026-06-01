@@ -10,10 +10,10 @@ from ..job_runner import _code_node_record
 from ..job_runner import _hunk_record
 from ..job_runner import _packet_evidence_refs
 from ..job_runner import _packet_full_sha
-from ..job_runner import _read_json
 from ..job_runner import _relationship_edges
-from ..job_runner import _stage_output
 from ..job_runner import _symbol_versions
+from ..stage_artifacts import _read_json
+from ..stage_artifacts import _stage_output
 
 
 def run_git_hunks_stage(runner: Any, job: dict[str, Any], artifact_dir: Path, stage_dir: Path) -> StageResult:

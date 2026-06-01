@@ -16,8 +16,8 @@ from ..job_runner import _qwen_existing_results
 from ..job_runner import _qwen_packet_cache_key
 from ..job_runner import _qwen_packet_key
 from ..job_runner import _qwen_reusable_results
-from ..job_runner import _read_json
 from ..job_runner import _write_qwen_checkpoint
+from ..stage_artifacts import _read_json
 
 
 def run_qwen_reasoning_stage(runner: Any, job: dict[str, Any], artifact_dir: Path, stage_dir: Path) -> StageResult:

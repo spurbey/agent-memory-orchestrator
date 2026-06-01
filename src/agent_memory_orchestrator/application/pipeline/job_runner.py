@@ -21,20 +21,18 @@ from ...domain.versioning.repo_identity import resolve_repo_identity
 from ...domain.retrieval.models import RetrievalDocument
 from ...domain.reasoning import stage4_contract_hash
 from ...domain.reasoning import stage4_output_schema
-from ...domain.pipeline.constants import CENTRAL_MERGE_PLANNER_VERSION
-from ...domain.pipeline.constants import CODE_PARSER_POLICY_VERSION
-from ...domain.pipeline.constants import CURATED_GRAPH_SCHEMA_VERSION
 from ...domain.pipeline.constants import GRAPH_SCHEMA_VERSION
 from ...domain.pipeline.constants import PIPELINE_VERSION
 from ...domain.pipeline.constants import PRODUCTION_STAGES
-from ...domain.pipeline.constants import PROMOTION_POLICY_VERSION
-from ...domain.pipeline.constants import QUALITY_EVAL_POLICY_VERSION
-from ...domain.pipeline.constants import REASONING_CODE_LINK_POLICY_VERSION
-from ...domain.pipeline.constants import REASONING_REVIEW_POLICY_VERSION
-from ...domain.pipeline.constants import RETRIEVAL_PROJECTION_VERSION
-from ...domain.pipeline.constants import SESSION_GRAPH_WRITER_VERSION
-from ...domain.pipeline.constants import SYMBOL_VERSION_POLICY_VERSION
 from ...infrastructure.sqlite.production_job_store import ProductionSessionJobStore
+from .quality_gates import _central_merge_quality_result as _central_merge_quality_result
+from .quality_gates import _quality_issues as _quality_issues
+from .quality_gates import _quality_readiness as _quality_readiness
+from .stage_artifacts import _read_json
+from .stage_artifacts import file_sha256
+from .stage_artifacts import path_hash
+from .stage_config import stage_config_hash
+from .stage_config import stage_config_payload as stage_config_payload
 
 
 StageFn = Callable[[dict[str, Any], Path], dict[str, Any]]
@@ -285,100 +283,6 @@ def require_complete_production_marker(marker: dict[str, Any] | None) -> dict[st
     return marker
 
 
-def file_sha256(path: Path) -> str:
-    if not path.exists() or path.is_dir():
-        return path_hash(path)
-    return hashlib.sha256(path.read_bytes()).hexdigest()
-
-
-def path_hash(path: Path) -> str:
-    if path.is_file():
-        return file_sha256(path)
-    if path.is_dir():
-        rows: list[str] = []
-        for child in sorted(path.rglob("*")):
-            if child.is_file():
-                rows.append(f"{child.relative_to(path)}:{hashlib.sha256(child.read_bytes()).hexdigest()}")
-        return hashlib.sha256("\n".join(rows).encode("utf-8")).hexdigest()
-    return ""
-
-
-def stage_config_payload(settings: Settings, *, stage: str) -> dict[str, Any]:
-    payload: dict[str, Any] = {
-        "stage": stage,
-        "pipeline_version": PIPELINE_VERSION,
-        "graph_schema_version": GRAPH_SCHEMA_VERSION,
-    }
-    if stage == "qwen_reasoning":
-        payload.update(
-            {
-                "qwen_model": settings.qwen_model,
-                "qwen_runtime": settings.qwen_runtime,
-                "qwen_num_ctx": settings.qwen_num_ctx,
-                "qwen_prompt_contract_hash": stage4_contract_hash(),
-                "stage4_contract_hash": stage4_contract_hash(),
-                "stage4_schema_hash": hashlib.sha256(json.dumps(stage4_output_schema(), sort_keys=True).encode("utf-8")).hexdigest(),
-            }
-        )
-    elif stage == "reasoning_review":
-        payload.update(
-            {
-                "reasoning_review_policy_version": REASONING_REVIEW_POLICY_VERSION,
-                "stage4_contract_hash": stage4_contract_hash(),
-            }
-        )
-    elif stage == "ast_code_nodes":
-        payload["code_parser_policy_version"] = CODE_PARSER_POLICY_VERSION
-    elif stage == "symbol_versions":
-        payload.update(
-            {
-                "symbol_version_policy_version": SYMBOL_VERSION_POLICY_VERSION,
-                "code_parser_policy_version": CODE_PARSER_POLICY_VERSION,
-            }
-        )
-    elif stage == "reasoning_code_links":
-        payload["reasoning_code_link_policy_version"] = REASONING_CODE_LINK_POLICY_VERSION
-    elif stage == "kuzu_write":
-        payload.update(
-            {
-                "promotion_policy_version": PROMOTION_POLICY_VERSION,
-                "curated_graph_schema_version": CURATED_GRAPH_SCHEMA_VERSION,
-                "session_graph_writer_version": SESSION_GRAPH_WRITER_VERSION,
-            }
-        )
-    elif stage == "central_version_merge":
-        payload.update(
-            {
-                "central_merge_planner_version": CENTRAL_MERGE_PLANNER_VERSION,
-                "curated_graph_schema_version": CURATED_GRAPH_SCHEMA_VERSION,
-            }
-        )
-    elif stage == "retrieval_docs":
-        payload.update(
-            {
-                "retrieval_projection_version": RETRIEVAL_PROJECTION_VERSION,
-                "curated_graph_schema_version": CURATED_GRAPH_SCHEMA_VERSION,
-                "retrieval_node_limit": settings.auto_retrieval_node_limit,
-                "retrieval_max_doc_chars": settings.auto_retrieval_max_doc_chars,
-            }
-        )
-    elif stage in {"embeddings", "faiss"}:
-        payload.update(
-            {
-                "embedding_model": settings.embedding_model,
-                "vector_backend": settings.vector_backend,
-            }
-        )
-    elif stage == "quality_eval":
-        payload["quality_eval_policy_version"] = QUALITY_EVAL_POLICY_VERSION
-    return payload
-
-
-def stage_config_hash(settings: Settings, *, stage: str) -> str:
-    payload = stage_config_payload(settings, stage=stage)
-    return hashlib.sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()
-
-
 def _superseded_stage_metadata(
     *,
     existing: dict[str, Any] | None,
@@ -417,72 +321,6 @@ def _current_stage(job: dict[str, Any]) -> str:
     if stage in PRODUCTION_STAGES:
         return stage
     return PRODUCTION_STAGES[0]
-
-
-def _stage_output(artifact_dir: Path, stage: str) -> Path:
-    candidates = {
-        "evidence_view": "reasoning_evidence_view.json",
-        "work_packets": "reasoning_work_packets.json",
-        "qwen_reasoning": "stage4_packet_reasoning_results.json",
-        "reasoning_review": "accepted_reasoning_nodes.json",
-        "git_hunks": "code_hunks.json",
-        "ast_code_nodes": "code_nodes.json",
-        "symbol_versions": "symbol_versions.json",
-        "reasoning_code_links": "graph_edges.json",
-        "kuzu_write": "kuzu_write_result.json",
-        "central_version_merge": "merge_plan.json",
-        "retrieval_docs": "retrieval_docs_result.json",
-        "embeddings": "embeddings_result.json",
-        "faiss": "faiss_result.json",
-        "quality_eval": "quality_eval.json",
-    }
-    return artifact_dir / stage / candidates[stage]
-
-
-def _central_merge_quality_result(artifact_dir: Path) -> Any:
-    plan_result = _read_json(_stage_output(artifact_dir, "central_version_merge"))
-    merge_result = artifact_dir / "central_version_merge" / "merge_result.json"
-    if merge_result.exists():
-        applied = _read_json(merge_result)
-        if not isinstance(plan_result, dict) or not isinstance(applied, dict):
-            return applied
-        current_plan_id = str(plan_result.get("plan_id") or "")
-        applied_plan_id = str(applied.get("plan_id") or "")
-        if current_plan_id and applied_plan_id == current_plan_id:
-            return applied
-        return {
-            **plan_result,
-            "stale_merge_result": {
-                "plan_id": applied_plan_id,
-                "status": str(applied.get("status") or ""),
-                "mode": str(applied.get("mode") or ""),
-                "graph_commit_id": str((applied.get("graph_commit") if isinstance(applied.get("graph_commit"), dict) else {}).get("graph_commit_id") or ""),
-            },
-        }
-    return plan_result
-
-
-def _read_json(path: Path) -> Any:
-    return json.loads(path.read_text(encoding="utf-8"))
-
-
-def _read_jsonl_records(path: Path) -> list[dict[str, Any]]:
-    records: list[dict[str, Any]] = []
-    with path.open("r", encoding="utf-8", errors="replace") as handle:
-        for line in handle:
-            if not line.strip():
-                continue
-            try:
-                record = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if isinstance(record, dict):
-                records.append(record)
-    return records
-
-
-def _write_jsonl(path: Path, records: list[dict[str, Any]]) -> None:
-    path.write_text("".join(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n" for record in records), encoding="utf-8")
 
 
 def _session_records(evidence_dir: Path, session_id: str) -> list[dict[str, Any]]:
@@ -1136,157 +974,6 @@ def _versioned_items(value: Any, job: dict[str, Any]) -> list[dict[str, Any]]:
 
 def _job_repo_id(job: dict[str, Any]) -> str:
     return str(job.get("repo_id") or "") or resolve_repo_identity(str(job.get("repo_path") or "")).repo_id
-
-
-def _quality_issues(
-    *,
-    central_result: dict[str, Any],
-    retrieval_result: dict[str, Any],
-    embedding_result: dict[str, Any],
-    faiss_result: dict[str, Any],
-) -> list[dict[str, Any]]:
-    issues: list[dict[str, Any]] = []
-    central_status = str(central_result.get("status") or "")
-    central_mode = str(central_result.get("mode") or "")
-    if central_status != "applied" or central_mode != "apply_exact_atoms":
-        issues.append(
-            {
-                "code": "central_merge_not_applied",
-                "message": "central_version_merge produced a dry-run plan, not applied central memory",
-                "status": central_status,
-                "mode": central_mode,
-                "plan_id": central_result.get("plan_id") or "",
-            }
-        )
-    if central_result.get("stale_merge_result"):
-        issues.append(
-            {
-                "code": "central_merge_result_stale",
-                "message": "central_version_merge has a stale merge_result.json for a different plan",
-                "plan_id": central_result.get("plan_id") or "",
-                "stale_merge_result": central_result.get("stale_merge_result"),
-            }
-        )
-    if central_status == "applied" and str(central_result.get("input_source") or "") != "curated_graph_manifest":
-        issues.append(
-            {
-                "code": "central_consumed_non_curated_input",
-                "message": "central_version_merge did not apply from curated_graph_manifest",
-                "input_source": central_result.get("input_source") or "",
-            }
-        )
-    if central_status == "applied" and not str(central_result.get("curated_input_hash") or ""):
-        issues.append({"code": "central_missing_curated_input_hash", "message": "central apply lacks curated input hash"})
-    if central_result.get("existing_atom_scan_error"):
-        issues.append(
-            {
-                "code": "central_atom_scan_failed",
-                "message": "central_version_merge could not scan existing canonical atoms",
-                "error": central_result.get("existing_atom_scan_error"),
-            }
-        )
-
-    doc_count = int(retrieval_result.get("doc_count") or 0)
-    if doc_count <= 0:
-        issues.append({"code": "retrieval_docs_empty", "message": "retrieval_docs produced no documents"})
-    retrieval_source = str(retrieval_result.get("retrieval_source") or "")
-    if retrieval_source in {"compact_manifest_fallback", "curated_graph_manifest_missing"}:
-        issues.append(
-            {
-                "code": "retrieval_fallback_or_missing_curated",
-                "message": "retrieval_docs did not use curated product input",
-                "retrieval_source": retrieval_source,
-            }
-        )
-    if doc_count > 0 and not str(retrieval_result.get("active_projection_id") or ""):
-        issues.append({"code": "active_projection_missing", "message": "retrieval docs exist but no active projection was recorded"})
-    activation_gate = retrieval_result.get("activation_gate") if isinstance(retrieval_result.get("activation_gate"), dict) else {}
-    if doc_count > 0 and activation_gate and activation_gate.get("passed") is not True:
-        issues.append(
-            {
-                "code": "retrieval_projection_activation_gate_failed",
-                "message": "retrieval projection failed semantic activation gates",
-                "blocking_failures": activation_gate.get("blocking_failures") or [],
-            }
-        )
-
-    total_docs = int(embedding_result.get("total_docs") or doc_count or 0)
-    embedded = int(embedding_result.get("embedded") or 0)
-    already = int(embedding_result.get("already_embedded") or 0)
-    covered = embedded + already
-    if total_docs and covered < total_docs:
-        issues.append(
-            {
-                "code": "embedding_coverage_partial",
-                "message": "not all retrieval documents have active embeddings",
-                "covered_docs": covered,
-                "total_docs": total_docs,
-                "limit_hit": bool(embedding_result.get("limit_hit")),
-            }
-        )
-
-    faiss_status = str(faiss_result.get("status") or "")
-    faiss_items = int(faiss_result.get("item_count") or 0)
-    if total_docs and faiss_items < total_docs:
-        issues.append(
-            {
-                "code": "faiss_coverage_partial",
-                "message": "FAISS cache does not cover all retrieval documents",
-                "item_count": faiss_items,
-                "total_docs": total_docs,
-                "status": faiss_status,
-            }
-        )
-    if total_docs and faiss_items > total_docs:
-        issues.append(
-            {
-                "code": "faiss_coverage_stale",
-                "message": "FAISS cache includes vectors outside active retrieval document coverage",
-                "item_count": faiss_items,
-                "total_docs": total_docs,
-                "status": faiss_status,
-            }
-        )
-    return issues
-
-
-def _quality_readiness(
-    *,
-    issues: list[dict[str, Any]],
-    central_result: dict[str, Any],
-    retrieval_result: dict[str, Any],
-    embedding_result: dict[str, Any],
-    faiss_result: dict[str, Any],
-) -> dict[str, bool]:
-    issue_codes = {str(issue.get("code") or "") for issue in issues}
-    doc_count = int(retrieval_result.get("doc_count") or 0)
-    total_docs = int(embedding_result.get("total_docs") or doc_count or 0)
-    embedded = int(embedding_result.get("embedded") or 0)
-    already = int(embedding_result.get("already_embedded") or 0)
-    covered = embedded + already
-    faiss_items = int(faiss_result.get("item_count") or 0)
-    central_memory_ready = (
-        str(central_result.get("status") or "") == "applied"
-        and str(central_result.get("mode") or "") == "apply_exact_atoms"
-        and str(central_result.get("input_source") or "") == "curated_graph_manifest"
-        and bool(str(central_result.get("curated_input_hash") or ""))
-    )
-    lexical_retrieval_ready = (
-        doc_count > 0
-        and str(retrieval_result.get("retrieval_source") or "") in {"curated_graph_manifest", "central_active_graph_view"}
-        and bool(str(retrieval_result.get("active_projection_id") or ""))
-    )
-    vector_retrieval_ready = bool(total_docs) and covered >= total_docs and faiss_items == total_docs
-    answer_trace_ready = central_memory_ready and lexical_retrieval_ready
-    product_ready = central_memory_ready and lexical_retrieval_ready and vector_retrieval_ready and answer_trace_ready and not issue_codes
-    return {
-        "mechanical_complete": True,
-        "lexical_retrieval_ready": lexical_retrieval_ready,
-        "vector_retrieval_ready": vector_retrieval_ready,
-        "central_memory_ready": central_memory_ready,
-        "answer_trace_ready": answer_trace_ready,
-        "product_ready": product_ready,
-    }
 
 
 def _evidence_ref_nodes(packets: list[dict[str, Any]]) -> list[dict[str, Any]]:
