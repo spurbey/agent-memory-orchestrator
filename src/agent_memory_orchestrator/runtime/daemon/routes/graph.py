@@ -8,7 +8,7 @@ from typing import Any
 from ....core.config import Settings
 from ....application.services.session.detail import build_session_detail_fallback
 from ...diagnostics import debug_drain, debug_graph, debug_hooks, debug_qwen
-from ....application.services.graph_rag import GraphRagService
+from ....application.services.memory_graph.service import GraphRagService
 from ....infrastructure.kuzu import GraphBackendUnavailable
 from ....llm.qwen import QwenUnavailable
 from .. import dashboard

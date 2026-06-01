@@ -10,7 +10,7 @@ import pytest
 
 from agent_memory_orchestrator.core.db import connect
 from agent_memory_orchestrator.core.config import Settings
-from agent_memory_orchestrator.application.services.graph_rag import GraphRagService
+from agent_memory_orchestrator.application.services.memory_graph.service import GraphRagService
 from agent_memory_orchestrator.application.services.retrieval.answer_trace import _active_central_versions_for_support
 from agent_memory_orchestrator.domain.retrieval.answer import _answer_from_retrieval_result
 from agent_memory_orchestrator.domain.retrieval.answer import _unique_nonempty
