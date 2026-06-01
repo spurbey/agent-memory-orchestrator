@@ -36,8 +36,8 @@ from ..application.services.version_flow import _matches_version_flow_filter
 from ..application.services.version_flow import _version_flow_warnings
 from ..application.services.central_trace import _active_central_versions_for_support as _active_central_versions_for_support
 from ..application.services.central_trace import _central_answer_trace_from_retrieval
-from .constants import CAPTURE_ONLY_EVENTS
-from .constants import HOOK_CONTEXT_EVENTS
+from ..domain.evidence.events import CAPTURE_ONLY_EVENTS
+from ..domain.evidence.events import HOOK_CONTEXT_EVENTS
 from ..domain.retrieval.constants import ANSWER_SEED_KINDS
 from ..domain.retrieval.policy import _apply_retrieval_policy
 from ..domain.retrieval.policy import _expand_nodes
