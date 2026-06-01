@@ -27,23 +27,23 @@ def __getattr__(name: str):
 
         return {"CentralMergeRunResult": CentralMergeRunResult, "CentralMergeService": CentralMergeService}[name]
     if name == "ConnectorRuntimeService":
-        from .connector_runtime import ConnectorRuntimeService
+        from .connectors.runtime import ConnectorRuntimeService
 
         return ConnectorRuntimeService
     if name == "EvidenceIngestService":
-        from .evidence_ingest import EvidenceIngestService
+        from .capture.evidence_ingest import EvidenceIngestService
 
         return EvidenceIngestService
     if name == "LocalAgentReviewService":
-        from .local_agent_review import LocalAgentReviewService
+        from .review.local_agent import LocalAgentReviewService
 
         return LocalAgentReviewService
     if name == "ProductionPipelineService":
-        from .production_pipeline import ProductionPipelineService
+        from .pipeline.production import ProductionPipelineService
 
         return ProductionPipelineService
     if name == "PeerAgentService":
-        from .peer_agent import PeerAgentService
+        from .peer.agent import PeerAgentService
 
         return PeerAgentService
     if name == "SessionBoundaryService":

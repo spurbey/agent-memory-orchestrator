@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Mapping
 
-from ..services.local_agent_review import LocalAgentReviewService
+from ..services.review.local_agent import LocalAgentReviewService
 from ...extensions.contracts.local_agent_skill import LocalAgentSkillResult
 
 

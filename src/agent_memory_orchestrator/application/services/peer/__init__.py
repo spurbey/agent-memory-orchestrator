@@ -1,5 +1,5 @@
 from __future__ import annotations
 
-from .peer.agent import PeerAgentService
+from .agent import PeerAgentService
 
 __all__ = ["PeerAgentService"]
