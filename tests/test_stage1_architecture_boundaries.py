@@ -47,6 +47,7 @@ def test_stage1_application_and_infrastructure_boundaries_are_importable() -> No
     from agent_memory_orchestrator.application.services import RetrievalQueryService
     from agent_memory_orchestrator.application.pipeline import build_compact_session_graph
     from agent_memory_orchestrator.application.pipeline import build_curated_session_graph
+    from agent_memory_orchestrator.application.services.session_detail import build_session_detail_fallback
     from agent_memory_orchestrator.domain.evidence import build_reasoning_evidence_view
     from agent_memory_orchestrator.domain.reasoning import TimelineGraph
     from agent_memory_orchestrator.domain.reasoning import build_decision_threads
@@ -60,6 +61,7 @@ def test_stage1_application_and_infrastructure_boundaries_are_importable() -> No
     assert ProductionPipelineService.__name__ == "ProductionPipelineService"
     assert CentralMergeService.__name__ == "CentralMergeService"
     assert RetrievalQueryService.__name__ == "RetrievalQueryService"
+    assert build_session_detail_fallback.__name__ == "build_session_detail_fallback"
     assert ProductionSessionJobStore.__name__ == "ProductionSessionJobStore"
     assert RetrievalIndexStore.__name__ == "RetrievalIndexStore"
     assert KuzuGraphStore.__name__ == "KuzuGraphStore"

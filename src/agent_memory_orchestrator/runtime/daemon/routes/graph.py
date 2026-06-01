@@ -6,9 +6,9 @@ from collections.abc import Callable
 from typing import Any
 
 from ....core.config import Settings
+from ....application.services.session_detail import build_session_detail_fallback
 from ....graph.diagnostics import debug_drain, debug_graph, debug_hooks, debug_qwen
 from ....graph.service import GraphRagService
-from ....graph.service import build_session_detail_fallback
 from ....graph.store import GraphBackendUnavailable
 from ....llm.qwen import QwenUnavailable
 from .. import dashboard
