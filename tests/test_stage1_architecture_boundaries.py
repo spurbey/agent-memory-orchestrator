@@ -290,6 +290,24 @@ def test_stage1_central_merge_apply_is_orchestration_only() -> None:
     assert set(function_names) == {"apply_merge_plan"}
 
 
+def test_stage1_session_graph_runtime_is_compatibility_only() -> None:
+    runtime_path = (
+        Path(__file__).resolve().parents[1]
+        / "src"
+        / "agent_memory_orchestrator"
+        / "application"
+        / "services"
+        / "session"
+        / "graph_runtime.py"
+    )
+    tree = ast.parse(runtime_path.read_text(encoding="utf-8-sig"))
+    class_names = [node.name for node in ast.walk(tree) if isinstance(node, ast.ClassDef)]
+    function_names = [node.name for node in ast.walk(tree) if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef)]
+
+    assert class_names == []
+    assert function_names == []
+
+
 def _absolute_or_suffix_module(module: str) -> str:
     if module.startswith("agent_memory_orchestrator."):
         return module
