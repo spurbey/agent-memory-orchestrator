@@ -80,6 +80,10 @@ def _product_plan(plan):
     }
 
 
+def _write_jsonl(path: Path, records: list[dict[str, object]]) -> None:
+    path.write_text("".join(json.dumps(record) + "\n" for record in records), encoding="utf-8")
+
+
 def test_production_enqueue_is_idempotent_and_atomic_lock_skips_locked_failed_and_pending_model(tmp_path: Path) -> None:
     settings = make_settings(tmp_path)
     store = ProductionSessionJobStore(settings)
@@ -90,6 +94,8 @@ def test_production_enqueue_is_idempotent_and_atomic_lock_skips_locked_failed_an
             source_app="codex",
             repo_path=str(tmp_path),
             source_evidence_day="2026-05-20",
+            source_first_event_id="raw_first",
+            source_latest_event_id="raw_latest",
         )
         second = store.enqueue_session(
             session_id="s1",
@@ -103,6 +109,8 @@ def test_production_enqueue_is_idempotent_and_atomic_lock_skips_locked_failed_an
         assert second.created is False
         assert second.reason == "already_enqueued"
         assert second.job["job_id"] == first.job["job_id"]
+        assert first.job["source_first_event_id"] == "raw_first"
+        assert first.job["source_latest_event_id"] == "raw_latest"
 
         acquired = store.acquire_next(owner="runner-a", lease_seconds=60)
         assert acquired is not None
@@ -124,6 +132,50 @@ def test_production_enqueue_is_idempotent_and_atomic_lock_skips_locked_failed_an
         assert store.acquire_next(owner="runner-e", lease_seconds=60) is None
     finally:
         store.close()
+
+
+def test_session_records_filter_by_evidence_days_and_event_bounds(tmp_path: Path) -> None:
+    evidence_dir = tmp_path / ".evidence"
+    evidence_dir.mkdir()
+    _write_jsonl(
+        evidence_dir / "2026-05-19.jsonl",
+        [
+            {"id": "raw_old", "session_id": "s1"},
+            {"id": "raw_other_old", "session_id": "other"},
+        ],
+    )
+    _write_jsonl(
+        evidence_dir / "2026-05-20.jsonl",
+        [
+            {"id": "raw_before", "session_id": "s1"},
+            {"id": "raw_first", "session_id": "s1"},
+            {"id": "raw_middle", "session_id": "s1"},
+            {"id": "raw_other", "session_id": "other"},
+            {"id": "raw_latest", "session_id": "s1"},
+            {"id": "raw_after", "session_id": "s1"},
+        ],
+    )
+
+    records = runner_module._session_records(
+        evidence_dir,
+        "s1",
+        evidence_days=["2026-05-20"],
+        first_event_id="raw_first",
+        latest_event_id="raw_latest",
+    )
+
+    assert [record["id"] for record in records] == ["raw_first", "raw_middle", "raw_latest"]
+
+    assert (
+        runner_module._session_records(
+            evidence_dir,
+            "s1",
+            evidence_days=["2026-05-20"],
+            first_event_id="raw_missing",
+            latest_event_id="raw_latest",
+        )
+        == []
+    )
 
 
 def test_production_stage_rows_track_hashes_and_config_hash(tmp_path: Path) -> None:

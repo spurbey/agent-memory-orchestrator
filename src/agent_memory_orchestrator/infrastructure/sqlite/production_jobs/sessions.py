@@ -30,6 +30,8 @@ class SessionJobStoreMixin:
         repo_id: str = "",
         source_evidence_day: str = "",
         source_evidence_days: list[str] | tuple[str, ...] = (),
+        source_first_event_id: str = "",
+        source_latest_event_id: str = "",
         pipeline_version: str = PIPELINE_VERSION,
         graph_schema_version: str = GRAPH_SCHEMA_VERSION,
     ) -> EnqueueResult:
@@ -51,22 +53,27 @@ class SessionJobStoreMixin:
                 INSERT INTO v2_session_jobs(
                   job_id, session_id, pipeline_version, graph_schema_version, status,
                   current_stage, last_successful_stage, artifact_dir, source_app, repo_path, repo_id,
-                  boundary_event_id, source_evidence_day, source_evidence_days_json,
+                  boundary_event_id, source_first_event_id, source_latest_event_id,
+                  source_evidence_day, source_evidence_days_json,
                   created_at, updated_at
                 )
-                VALUES(?, ?, ?, ?, 'pending', ?, '', ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     job_id,
                     safe_session,
                     pipeline_version,
                     graph_schema_version,
+                    "pending",
                     PRODUCTION_STAGES[0],
+                    "",
                     artifact_dir,
                     source_app,
                     safe_repo_path,
                     safe_repo_id,
                     boundary_event_id,
+                    source_first_event_id,
+                    source_latest_event_id,
                     source_evidence_day,
                     json.dumps(days),
                     now,
@@ -74,7 +81,17 @@ class SessionJobStoreMixin:
                 ),
             )
             self.conn.commit()
-            self.log_event(job_id=job_id, event_type="enqueued", stage="", message="closed session enqueued", metadata={"boundary_event_id": boundary_event_id})
+            self.log_event(
+                job_id=job_id,
+                event_type="enqueued",
+                stage="",
+                message="closed session enqueued",
+                metadata={
+                    "boundary_event_id": boundary_event_id,
+                    "source_first_event_id": source_first_event_id,
+                    "source_latest_event_id": source_latest_event_id,
+                },
+            )
             return EnqueueResult(self.get_job(job_id) or {}, created=True, updated=False, reason="created")
 
         if str(existing.get("boundary_event_id") or "") == str(boundary_event_id or ""):
@@ -97,6 +114,8 @@ class SessionJobStoreMixin:
                 repo_path=?,
                 repo_id=?,
                 boundary_event_id=?,
+                source_first_event_id=?,
+                source_latest_event_id=?,
                 source_evidence_day=?,
                 source_evidence_days_json=?,
                 lock_owner='',
@@ -111,6 +130,8 @@ class SessionJobStoreMixin:
                 safe_repo_path or str(existing.get("repo_path") or ""),
                 safe_repo_id or str(existing.get("repo_id") or ""),
                 boundary_event_id,
+                source_first_event_id,
+                source_latest_event_id,
                 source_evidence_day,
                 json.dumps(days),
                 now,
@@ -124,7 +145,11 @@ class SessionJobStoreMixin:
             event_type="reenqueued",
             stage="",
             message="closed session boundary changed; invalidated production stages",
-            metadata={"boundary_event_id": boundary_event_id},
+            metadata={
+                "boundary_event_id": boundary_event_id,
+                "source_first_event_id": source_first_event_id,
+                "source_latest_event_id": source_latest_event_id,
+            },
         )
         return EnqueueResult(self.get_job(str(existing["job_id"])) or {}, created=False, updated=True, reason="boundary_changed")
 

@@ -23,7 +23,16 @@ from ..stage_artifacts import _write_jsonl
 def run_evidence_view_stage(runner: Any, job: dict[str, Any], artifact_dir: Path, stage_dir: Path) -> StageResult:
     del artifact_dir
     session_jsonl = stage_dir / "session_raw_evidence.jsonl"
-    records = _session_records(runner.settings.evidence_dir, str(job["session_id"]))
+    source_days = job.get("source_evidence_days")
+    if not isinstance(source_days, list | tuple):
+        source_days = ()
+    records = _session_records(
+        runner.settings.evidence_dir,
+        str(job["session_id"]),
+        evidence_days=source_days,
+        first_event_id=str(job.get("source_first_event_id") or ""),
+        latest_event_id=str(job.get("source_latest_event_id") or ""),
+    )
     if not records:
         raise RuntimeError(f"no_raw_evidence_for_session:{job['session_id']}")
     _write_jsonl(session_jsonl, records)
@@ -58,7 +67,14 @@ def run_evidence_view_stage(runner: Any, job: dict[str, Any], artifact_dir: Path
     output = stage_dir / "reasoning_evidence_view.json"
     return StageResult(
         output_path=output,
-        diagnostics={"raw_record_count": len(records), "quality": build.quality, "repo_resolution": repo_resolution.as_dict()},
+        diagnostics={
+            "raw_record_count": len(records),
+            "source_evidence_days": list(source_days),
+            "source_first_event_id": str(job.get("source_first_event_id") or ""),
+            "source_latest_event_id": str(job.get("source_latest_event_id") or ""),
+            "quality": build.quality,
+            "repo_resolution": repo_resolution.as_dict(),
+        },
     )
 
 

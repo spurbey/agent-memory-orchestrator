@@ -319,6 +319,8 @@ class EvidenceDrain:
             repo_path=state.repo_path,
             source_evidence_day=sorted(state.evidence_days)[-1] if state.evidence_days else "",
             source_evidence_days=sorted(state.evidence_days),
+            source_first_event_id=state.first_event_id,
+            source_latest_event_id=state.latest_event_id,
         )
         return {
             "mode": "production_job_enqueue",

@@ -132,6 +132,9 @@ def test_drain_session_boundary_persists_pending_window_across_runs(tmp_path: Pa
     assert job["status"] == "pending"
     assert job["current_stage"] == "evidence_view"
     assert job["source_app"] == "codex"
+    assert job["source_first_event_id"]
+    assert job["source_latest_event_id"]
+    assert job["source_first_event_id"] != job["source_latest_event_id"]
 
 
 def test_session_filtered_drain_uses_session_cursor_and_matching_limit(tmp_path: Path) -> None:
