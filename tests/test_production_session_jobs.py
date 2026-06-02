@@ -1406,6 +1406,33 @@ def test_production_fresh_init_marks_empty_new_install_without_reset(tmp_path: P
     assert again["reason"] == "marker_exists"
 
 
+def test_production_marker_reads_legacy_v2_reset_marker_as_current(tmp_path: Path) -> None:
+    settings = make_settings(tmp_path)
+    legacy_marker = {
+        "pipeline_version": "v2-reset-2026-05",
+        "graph_schema_version": "v2",
+        "fresh_install": True,
+        "backup_path": "",
+        "cleaned": {"graph": True, "retrieval": True, "faiss": True},
+        "validated": {"graph_empty": True, "retrieval_empty": True},
+    }
+    store = ProductionSessionJobStore(settings)
+    try:
+        store.upsert_marker("production_v2_reset", legacy_marker)
+        marker = store.marker()
+    finally:
+        store.close()
+
+    assert marker is not None
+    assert marker["marker_key"] == "production_marker"
+    assert marker["pipeline_version"] == PIPELINE_VERSION
+    assert marker["graph_schema_version"] == GRAPH_SCHEMA_VERSION
+    assert marker["legacy_marker_key"] == "production_v2_reset"
+    assert marker["adopted_legacy_production_marker"] is True
+    assert marker["cleaned"] == {"graph": True, "retrieval": True, "faiss": True}
+    assert require_complete_production_marker(marker) == marker
+
+
 def test_production_fresh_init_refuses_non_empty_retrieval_store(tmp_path: Path) -> None:
     settings = make_settings(tmp_path)
     settings.home.mkdir(parents=True, exist_ok=True)

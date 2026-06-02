@@ -18,6 +18,10 @@ from .base import default_artifact_dir
 from .base import stable_job_id
 from .base import utc_now
 
+LEGACY_RESET_MARKER_KEY = "production_v2_reset"
+LEGACY_RESET_PIPELINE_VERSION = "v2-reset-2026-05"
+LEGACY_RESET_GRAPH_SCHEMA_VERSION = "v2"
+
 
 class SessionJobStoreMixin:
     def enqueue_session(
@@ -466,6 +470,8 @@ class SessionJobStoreMixin:
 
     def marker(self, key: str = RESET_MARKER_KEY) -> dict[str, Any] | None:
         row = self.conn.execute("SELECT * FROM v2_production_markers WHERE marker_key = ?", (key,)).fetchone()
+        if row is None and key == RESET_MARKER_KEY:
+            return self._legacy_reset_marker()
         if row is None:
             return None
         try:
@@ -473,6 +479,54 @@ class SessionJobStoreMixin:
         except json.JSONDecodeError:
             payload = {}
         return {"marker_key": row["marker_key"], **payload, "created_at": row["created_at"], "updated_at": row["updated_at"]}
+
+    def _legacy_reset_marker(self) -> dict[str, Any] | None:
+        row = self.conn.execute("SELECT * FROM v2_production_markers WHERE marker_key = ?", (LEGACY_RESET_MARKER_KEY,)).fetchone()
+        payload: dict[str, Any] = {}
+        created_at = ""
+        updated_at = ""
+        if row is not None:
+            try:
+                payload = json.loads(row["value_json"])
+            except json.JSONDecodeError:
+                payload = {}
+            created_at = str(row["created_at"] or "")
+            updated_at = str(row["updated_at"] or "")
+        if not payload:
+            legacy_file = self.settings.home / ".state" / f"{LEGACY_RESET_MARKER_KEY}.json"
+            if not legacy_file.exists():
+                return None
+            try:
+                payload = json.loads(legacy_file.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                return None
+        if (
+            payload.get("pipeline_version") != LEGACY_RESET_PIPELINE_VERSION
+            or payload.get("graph_schema_version") != LEGACY_RESET_GRAPH_SCHEMA_VERSION
+        ):
+            return None
+        cleaned = payload.get("cleaned") if isinstance(payload.get("cleaned"), dict) else {}
+        if cleaned.get("graph") is not True or cleaned.get("retrieval") is not True:
+            return None
+        return {
+            "marker_key": RESET_MARKER_KEY,
+            "pipeline_version": PIPELINE_VERSION,
+            "graph_schema_version": GRAPH_SCHEMA_VERSION,
+            "backup_path": str(payload.get("backup_path") or ""),
+            "cleaned": {
+                "graph": bool(cleaned.get("graph")),
+                "retrieval": bool(cleaned.get("retrieval")),
+                "faiss": bool(cleaned.get("faiss")),
+            },
+            "validated": payload.get("validated") if isinstance(payload.get("validated"), dict) else {},
+            "validation": payload.get("validation") if isinstance(payload.get("validation"), dict) else {},
+            "legacy_marker_key": LEGACY_RESET_MARKER_KEY,
+            "legacy_pipeline_version": LEGACY_RESET_PIPELINE_VERSION,
+            "legacy_graph_schema_version": LEGACY_RESET_GRAPH_SCHEMA_VERSION,
+            "adopted_legacy_production_marker": True,
+            "created_at": created_at,
+            "updated_at": updated_at,
+        }
 
     def upsert_marker(self, key: str, value: dict[str, Any]) -> None:
         now = utc_now()
