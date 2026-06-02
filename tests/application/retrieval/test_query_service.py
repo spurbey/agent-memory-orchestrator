@@ -1828,6 +1828,75 @@ def test_answer_trace_walks_packet_commit_hunk_and_code_chain() -> None:
     assert "Fix: Hooks became capture-only" in trace_text
 
 
+def test_answer_trace_walks_curated_code_impact_edges() -> None:
+    graph = InMemoryGraphStore()
+    graph.upsert_node(
+        GraphNode(
+            id="packet:WP0042",
+            kind="Packet",
+            label="WP0042",
+            summary="Retrieval package work packet.",
+            metadata={"packet_id": "WP0042", "commit_sha": "40c27c7"},
+        )
+    )
+    graph.upsert_node(
+        GraphNode(
+            id="impact:WP0042",
+            kind="CodeImpactSummary",
+            label="Code impact for WP0042",
+            summary="Retrieval query ranking and answer trace behavior changed.",
+            metadata={"packet_id": "WP0042", "commit_sha": "40c27c7"},
+        )
+    )
+    graph.upsert_node(
+        GraphNode(
+            id="commit:40c27c7",
+            kind="Commit",
+            label="40c27c7",
+            summary="feat(reasoning-graph): wire indexed graph retrieval",
+            metadata={"packet_id": "WP0042", "commit_sha": "40c27c7"},
+        )
+    )
+    graph.upsert_node(
+        GraphNode(
+            id="file:retrieval",
+            kind="FileRef",
+            label="src/agent_memory_orchestrator/reasoning_graph/retrieval.py",
+            summary="Retrieval implementation file.",
+            metadata={"packet_id": "WP0042", "commit_sha": "40c27c7"},
+        )
+    )
+    graph.upsert_node(
+        GraphNode(
+            id="region:retrieve_session_graph",
+            kind="CodeRegionRef",
+            label="src/agent_memory_orchestrator/reasoning_graph/retrieval.py::retrieve_session_graph",
+            summary="Representative function code region retrieve_session_graph.",
+            metadata={"packet_id": "WP0042", "commit_sha": "40c27c7"},
+        )
+    )
+    for edge in [
+        GraphEdge("e1", "packet:WP0042", "impact:WP0042", "PACKET_HAS_CODE_IMPACT"),
+        GraphEdge("e2", "impact:WP0042", "commit:40c27c7", "CODE_IMPACT_IMPLEMENTED_BY_COMMIT"),
+        GraphEdge("e3", "impact:WP0042", "file:retrieval", "CODE_IMPACT_TOUCHES_FILE"),
+        GraphEdge("e4", "impact:WP0042", "region:retrieve_session_graph", "CODE_IMPACT_TOUCHES_CODE_REGION"),
+    ]:
+        graph.upsert_edge(edge)
+
+    trace = build_answer_trace(
+        seed_node_id="impact:WP0042",
+        graph_store=graph,
+        query="why did retrieve_session_graph change?",
+    )
+
+    assert trace["support"]["packet_ids"] == ["WP0042"]
+    assert trace["support"]["commit_shas"] == ["40c27c7"]
+    assert "impact:WP0042" in trace["support"]["code_node_ids"]
+    assert "region:retrieve_session_graph" in trace["support"]["code_node_ids"]
+    assert [item["id"] for item in trace["code_impacts"]] == ["impact:WP0042"]
+    assert [item["id"] for item in trace["file_impacts"]] == ["file:retrieval"]
+
+
 def test_central_answer_trace_contract_collects_active_support() -> None:
     trace = build_central_answer_trace(
         repo_id="repo:amo",
