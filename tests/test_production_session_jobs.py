@@ -19,6 +19,7 @@ from agent_memory_orchestrator.application.pipeline.job_runner import require_co
 from agent_memory_orchestrator.application.pipeline.storage_lifecycle import adopt_existing_production_storage
 from agent_memory_orchestrator.application.pipeline.storage_lifecycle import initialize_fresh_production_storage
 from agent_memory_orchestrator.application.pipeline.storage_lifecycle import reset_production_storage
+from agent_memory_orchestrator.application.pipeline.stages import retrieval_projection as retrieval_projection_module
 from agent_memory_orchestrator.infrastructure.faiss.embedding_store import GraphEmbeddingRecord
 from agent_memory_orchestrator.infrastructure.faiss.embedding_store import GraphEmbeddingStore
 from agent_memory_orchestrator.infrastructure.sqlite.production_job_store import ProductionSessionJobStore
@@ -82,6 +83,51 @@ def _product_plan(plan):
 
 def _write_jsonl(path: Path, records: list[dict[str, object]]) -> None:
     path.write_text("".join(json.dumps(record) + "\n" for record in records), encoding="utf-8")
+
+
+def test_central_active_retrieval_docs_scans_repo_graph_read_only(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    settings = make_settings(tmp_path)
+    opened: list[tuple[Path, bool]] = []
+
+    class FakeKuzuStore:
+        def __init__(self, graph_path: Path, *, read_only: bool = False) -> None:
+            self.graph_path = graph_path
+            self.read_only = read_only
+            opened.append((graph_path, read_only))
+
+        def init_schema(self) -> None:
+            raise AssertionError("central active retrieval scan must not initialize Kuzu schema")
+
+        def close(self) -> None:
+            return None
+
+    class FakeRunner:
+        graph_store_factory = FakeKuzuStore
+
+        def __init__(self, settings: Settings) -> None:
+            self.settings = settings
+
+    def fake_build_retrieval_documents_from_graph(graph, **_: object) -> list[RetrievalDocument]:
+        assert graph.read_only is True
+        return []
+
+    monkeypatch.setattr(retrieval_projection_module, "KuzuGraphStore", FakeKuzuStore)
+    monkeypatch.setattr(
+        retrieval_projection_module,
+        "build_retrieval_documents_from_graph",
+        fake_build_retrieval_documents_from_graph,
+    )
+
+    docs, error = retrieval_projection_module.central_active_retrieval_docs(
+        FakeRunner(settings),
+        repo_id="repo:amo",
+    )
+
+    assert docs == []
+    assert error == ""
+    assert opened == [(repo_central_graph_path(settings, "repo:amo"), True)]
 
 
 def test_production_enqueue_is_idempotent_and_atomic_lock_skips_locked_failed_and_pending_model(tmp_path: Path) -> None:
