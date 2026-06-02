@@ -157,6 +157,35 @@ def test_architecture_retrieval_boundary_exports_planned_module_names() -> None:
     assert _rank_nodes.__name__ == "_rank_nodes"
 
 
+def test_architecture_legacy_retrieval_root_is_compatibility_only() -> None:
+    from agent_memory_orchestrator.domain.retrieval import lexical_rerank_score as domain_lexical_rerank_score
+    from agent_memory_orchestrator.memory.legacy_retrieval import (
+        build_context_pack_payload as memory_build_context_pack_payload,
+    )
+    from agent_memory_orchestrator.retrieval import build_context_pack_payload
+    from agent_memory_orchestrator.retrieval import lexical_rerank_score
+
+    src_root = Path(__file__).resolve().parents[1] / "src" / "agent_memory_orchestrator"
+    retrieval_root = src_root / "retrieval"
+
+    assert build_context_pack_payload is memory_build_context_pack_payload
+    assert lexical_rerank_score is domain_lexical_rerank_score
+
+    for path in retrieval_root.glob("*.py"):
+        tree = ast.parse(path.read_text(encoding="utf-8-sig"))
+        class_names = [node.name for node in ast.walk(tree) if isinstance(node, ast.ClassDef)]
+        function_names = [node.name for node in ast.walk(tree) if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef)]
+
+        assert class_names == [], path.name
+        assert function_names == [], path.name
+        for node in tree.body:
+            if _is_module_docstring(node) or _is_future_annotations_import(node):
+                continue
+            if isinstance(node, ast.ImportFrom):
+                continue
+            assert _is_all_assignment(node), path.name
+
+
 def test_architecture_production_code_does_not_depend_on_legacy_reasoning_graph_facades() -> None:
     src_root = Path(__file__).resolve().parents[1] / "src" / "agent_memory_orchestrator"
     forbidden = (

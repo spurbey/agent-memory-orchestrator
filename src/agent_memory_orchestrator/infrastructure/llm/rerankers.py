@@ -3,7 +3,7 @@
 from dataclasses import dataclass
 from functools import lru_cache
 
-from ...retrieval import lexical_rerank_score
+from ...domain.retrieval import lexical_rerank_score
 
 
 @dataclass(slots=True, frozen=True)

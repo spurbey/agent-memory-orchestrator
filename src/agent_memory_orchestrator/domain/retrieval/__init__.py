@@ -27,6 +27,7 @@ from .text import clip_text
 from .text import exact_tokens
 from .text import expanded_query_terms
 from .text import fts_query
+from .text import lexical_rerank_score
 from .text import normalize
 from .text import stem_term
 from .text import terms
@@ -55,6 +56,7 @@ __all__ = [
     "expanded_query_terms",
     "format_answer_trace",
     "fts_query",
+    "lexical_rerank_score",
     "normalize",
     "query_has_code_locator",
     "query_session_graph",
