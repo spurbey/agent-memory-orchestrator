@@ -113,6 +113,19 @@ def test_production_eval_facade_keeps_specialized_boundaries() -> None:
     assert production_eval.stable_hash is stable_hash
 
 
+def test_kuzu_graph_store_facade_keeps_specialized_boundaries() -> None:
+    from agent_memory_orchestrator.infrastructure.kuzu.graph_store import GraphNode
+    from agent_memory_orchestrator.infrastructure.kuzu.graph_store import InMemoryGraphStore
+    from agent_memory_orchestrator.infrastructure.kuzu.graph_store import KuzuGraphStore
+    from agent_memory_orchestrator.infrastructure.kuzu.graph_store.kuzu import KuzuGraphStore as KuzuGraphStoreImpl
+    from agent_memory_orchestrator.infrastructure.kuzu.graph_store.memory import InMemoryGraphStore as InMemoryGraphStoreImpl
+    from agent_memory_orchestrator.infrastructure.kuzu.graph_store.models import GraphNode as GraphNodeModel
+
+    assert GraphNode is GraphNodeModel
+    assert InMemoryGraphStore is InMemoryGraphStoreImpl
+    assert KuzuGraphStore is KuzuGraphStoreImpl
+
+
 def _is_module_docstring(node: ast.AST) -> bool:
     return isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant) and isinstance(node.value.value, str)
 
