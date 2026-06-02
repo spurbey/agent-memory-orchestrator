@@ -1,11 +1,8 @@
 from __future__ import annotations
 
-import json
 import os
 from datetime import datetime, timezone
 from typing import Any
-from urllib import request
-from urllib.error import HTTPError, URLError
 
 from ..core.config import Settings
 from .auth import PeerAuthError, secret_for_peer, unwrap_payload, wrap_payload
@@ -19,6 +16,10 @@ from .invites import verify_invite_token_proof
 from .models import PeerNode
 from .netd_client import PeerNetdClient, PeerNetdError
 from .netd_runtime import PeerNetdRuntime
+from .netd_transport import build_netd_raw_message
+from .netd_transport import connect_peer_via_netd
+from .netd_transport import normalize_netd_envelope
+from .netd_transport import post_json
 from .policy import PeerPolicy
 from .protocol import PeerMessage
 from .store import PeerStore
@@ -384,7 +385,7 @@ class PeerService:
         prepared = self._prepare_outgoing_payload(peer, payload)
         if not prepared.get("ok"):
             return {"peer_id": peer.node_id, **prepared}
-        result = self._post_json(f"{peer.base_url}/peer/rooms/invite", prepared["payload"])
+        result = post_json(f"{peer.base_url}/peer/rooms/invite", prepared["payload"])
         return {"peer_id": peer.node_id, "auth": prepared.get("auth", {}), **result}
 
     def receive_invite(self, payload: dict[str, Any], *, transport_auth: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -517,41 +518,18 @@ class PeerService:
         return {"ok": True, "count": len(results), "results": results}
 
     def receive_netd_envelope(self, envelope: dict[str, Any]) -> dict[str, Any]:
-        message = envelope.get("message")
-        if not isinstance(message, dict):
-            return {"ok": False, "error": "netd envelope missing message object"}
-        message_type = str(message.get("type") or "").strip()
-        payload = message.get("payload")
-        if not isinstance(payload, dict):
-            payload = {
-                "room_id": message.get("room_id"),
-                "type": message_type,
-                "from_node_id": message.get("from_node_id"),
-                "to_node_ids": [message.get("to_node_id")] if message.get("to_node_id") else [],
-                "content": "",
-                "citations": message.get("citations") or [],
-                "metadata": message.get("metadata") or {},
-                "created_at": message.get("created_at") or "",
-            }
-        auth = {
-            "authenticated": bool(envelope.get("signature")),
-            "auth": "netd:hmac-sha256" if envelope.get("signature") else "netd:none",
-            "from_node_id": envelope.get("from_node_id") or message.get("from_node_id") or "",
-            "remote_peer_id": str(envelope.get("remote_peer_id") or "").strip(),
-            "payload_sha256": envelope.get("payload_sha256"),
-        }
+        normalized = normalize_netd_envelope(envelope)
+        if not normalized.get("ok"):
+            return normalized
+        message_type = str(normalized.get("message_type") or "")
+        payload = normalized.get("payload") if isinstance(normalized.get("payload"), dict) else {}
+        auth = normalized.get("auth") if isinstance(normalized.get("auth"), dict) else {}
         if message_type == "room_invite":
             return self.receive_invite(payload, transport_auth=auth)
         if message_type == "peer_join_request":
             return self.receive_join_request(payload, transport_auth=auth)
         if message_type == "peer_join_accepted":
             return {"ok": True, "accepted": True, "type": "peer_join_accepted", "payload": payload, "auth": auth}
-        payload.setdefault("type", message_type)
-        payload.setdefault("room_id", message.get("room_id"))
-        payload.setdefault("from_node_id", message.get("from_node_id"))
-        payload.setdefault("to_node_ids", [message.get("to_node_id")] if message.get("to_node_id") else [])
-        payload.setdefault("citations", message.get("citations") or [])
-        payload.setdefault("created_at", message.get("created_at") or "")
         return self.receive_message(payload, transport_auth=auth)
 
     def _validate_join_request(
@@ -674,24 +652,18 @@ class PeerService:
         if not peer.peer_id:
             return {"peer_id": peer.node_id, "ok": False, "error": "peer_id is required for libp2p send"}
         client = self._netd()
-        connect_results = self._connect_peer_via_netd(peer, client)
+        connect_results = connect_peer_via_netd(peer, client)
         config = self.store.load_config()
         try:
             result = client.send_raw(
                 peer.peer_id,
-                {
-                    "type": message_type,
-                    "room_id": room_id,
-                    "from_node_id": config.node_id,
-                    "to_node_id": peer.node_id,
-                    "payload": payload,
-                    "citations": payload.get("citations") if isinstance(payload.get("citations"), list) else [],
-                    "metadata": {
-                        "to_node_id": peer.node_id,
-                        "to_peer_id": peer.peer_id,
-                        "transport": "libp2p",
-                    },
-                },
+                build_netd_raw_message(
+                    local_node_id=config.node_id,
+                    peer=peer,
+                    payload=payload,
+                    message_type=message_type,
+                    room_id=room_id,
+                ),
             )
         except (PeerNetdError, ValueError, TypeError) as exc:
             return {
@@ -709,21 +681,6 @@ class PeerService:
             "response": result,
         }
 
-    def _connect_peer_via_netd(self, peer: PeerNode, client: PeerNetdClient) -> list[dict[str, Any]]:
-        results: list[dict[str, Any]] = []
-        if peer.rendezvous_addr and peer.rendezvous_namespace:
-            try:
-                discovered = client.rendezvous_discover(peer.rendezvous_addr, peer.rendezvous_namespace, connect=True)
-                results.append({"ok": True, "type": "rendezvous", "peers": discovered})
-            except PeerNetdError as exc:
-                results.append({"ok": False, "type": "rendezvous", "error": str(exc)})
-        for addr in (*peer.multiaddrs, *peer.relay_addrs):
-            try:
-                results.append({"ok": True, "type": "connect", "addr": addr, "response": client.connect(addr)})
-            except PeerNetdError as exc:
-                results.append({"ok": False, "type": "connect", "addr": addr, "error": str(exc)})
-        return results
-
     def _netd(self) -> PeerNetdClient:
         if self.netd_client is not None:
             return self.netd_client
@@ -733,17 +690,3 @@ class PeerService:
         status = PeerNetdRuntime(self.settings).status()
         api_url = str(status.get("api_url") or "").strip()
         return PeerNetdClient(base_url=api_url or "http://127.0.0.1:8788")
-
-    def _post_json(self, url: str, payload: dict[str, Any], *, timeout: float = 10.0) -> dict[str, Any]:
-        data = json.dumps(payload).encode("utf-8")
-        req = request.Request(url, data=data, method="POST", headers={"Content-Type": "application/json"})
-        try:
-            with request.urlopen(req, timeout=timeout) as response:  # noqa: S310 - peer URL is explicitly configured.
-                body = response.read().decode("utf-8")
-                parsed = json.loads(body) if body else {}
-                return {"ok": bool(parsed.get("ok", True)), "status": response.status, "response": parsed}
-        except HTTPError as exc:
-            body = exc.read().decode("utf-8", errors="replace")
-            return {"ok": False, "status": exc.code, "error": body or str(exc)}
-        except (URLError, TimeoutError, OSError) as exc:
-            return {"ok": False, "error": str(exc)}
