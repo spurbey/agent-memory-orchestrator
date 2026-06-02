@@ -102,6 +102,17 @@ def test_runtime_web_boundary_delegates_to_existing_asset_loader() -> None:
     assert "AMO Control Room" in runtime_assets.session_cockpit_html()
 
 
+def test_production_eval_facade_keeps_specialized_boundaries() -> None:
+    from agent_memory_orchestrator.application.pipeline.evaluation import production_eval
+    from agent_memory_orchestrator.application.pipeline.evaluation.production_eval_cases import _cases
+    from agent_memory_orchestrator.application.pipeline.evaluation.production_eval_retrieval import _faiss_state
+    from agent_memory_orchestrator.application.pipeline.evaluation.production_eval_storage import stable_hash
+
+    assert production_eval._cases is _cases
+    assert production_eval._faiss_state is _faiss_state
+    assert production_eval.stable_hash is stable_hash
+
+
 def _is_module_docstring(node: ast.AST) -> bool:
     return isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant) and isinstance(node.value.value, str)
 
