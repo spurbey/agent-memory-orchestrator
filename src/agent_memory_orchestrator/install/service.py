@@ -5,7 +5,6 @@ import re
 import shutil
 import sys
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -15,7 +14,16 @@ from .constants import CODEX_MCP_NAME
 from .constants import MANAGED_BEGIN
 from .constants import MANAGED_END
 from .constants import SKILL_CHECKPOINT_MARKER
-from .constants import SUPPORTED_TARGETS
+from .detection import _claude_has_amo_hooks
+from .detection import _codex_has_amo_hooks
+from .detection import _is_amo_claude_hook
+from .detection import _is_amo_codex_hook
+from .io import _backup_path
+from .io import _read_json
+from .io import _rstrip
+from .io import _safe_read
+from .targets import _expand_targets
+from .targets import _normalize_target
 from .templates import _claude_skill_checkpoint_command
 from .templates import _config_operation
 from .templates import _codex_managed_block
@@ -464,68 +472,3 @@ def _uninstall_claude(path: Path) -> dict[str, Any]:
     return {"target": "claude", "path": str(path), "changed": changed, "backup_path": backup_path}
 
 
-def _is_amo_claude_hook(entry: Any) -> bool:
-    if not isinstance(entry, dict):
-        return False
-    for hook in entry.get("hooks", []):
-        if isinstance(hook, dict) and _is_amo_hook_command(str(hook.get("command", ""))):
-            return True
-    return False
-
-
-def _is_amo_hook_command(command: str) -> bool:
-    return (
-        "agent_memory_orchestrator.hook" in command
-        or "agent_memory_orchestrator.runtime.hook.launcher" in command
-        or "amo_hook_launcher.py" in command
-    )
-
-
-def _is_amo_codex_hook(entry: Any) -> bool:
-    return _is_amo_claude_hook(entry)
-
-
-def _codex_has_amo_hooks(payload: dict[str, Any]) -> bool:
-    hooks = payload.get("hooks", {})
-    return any(_is_amo_codex_hook(entry) for entries in hooks.values() if isinstance(entries, list) for entry in entries)
-
-
-def _claude_has_amo_hooks(payload: dict[str, Any]) -> bool:
-    hooks = payload.get("hooks", {})
-    return any(_is_amo_claude_hook(entry) for entries in hooks.values() if isinstance(entries, list) for entry in entries)
-
-
-def _read_json(path: Path) -> dict[str, Any]:
-    if not path.exists():
-        return {}
-    raw = path.read_text(encoding="utf-8").strip()
-    if not raw:
-        return {}
-    payload = json.loads(raw)
-    if not isinstance(payload, dict):
-        raise ValueError(f"expected JSON object in {path}")
-    return payload
-
-
-def _safe_read(path: Path) -> str:
-    return path.read_text(encoding="utf-8") if path.exists() else ""
-
-
-def _backup_path(path: Path) -> Path:
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
-    return path.with_name(f"{path.name}.amo-backup-{stamp}")
-
-
-def _rstrip(text: str) -> str:
-    return text.rstrip()
-
-
-def _normalize_target(target: str) -> str:
-    selected = target.strip().lower()
-    if selected not in SUPPORTED_TARGETS:
-        raise ValueError(f"target must be one of: {', '.join(sorted(SUPPORTED_TARGETS))}")
-    return selected
-
-
-def _expand_targets(target: str) -> list[str]:
-    return ["codex", "claude"] if target == "all" else [target]
