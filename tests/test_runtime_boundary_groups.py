@@ -8,6 +8,9 @@ def test_cli_boundary_groups_are_importable() -> None:
     from agent_memory_orchestrator.runtime.cli.commands.connectors import SLACK_SUBCOMMANDS
     from agent_memory_orchestrator.runtime.cli.commands.graph import GRAPH_COMMANDS
     from agent_memory_orchestrator.runtime.cli.commands.models import MODEL_SUBCOMMANDS
+    from agent_memory_orchestrator.runtime.cli.commands.peer import add_peer_subcommands
+    from agent_memory_orchestrator.runtime.cli.commands.peer import handle_peer_command
+    from agent_memory_orchestrator.runtime.cli.commands.peer import peer_netd_options_from_args
     from agent_memory_orchestrator.runtime.cli.commands.pipeline import PRODUCTION_SUBCOMMANDS
     from agent_memory_orchestrator.runtime.cli.commands.retrieval import RETRIEVAL_COMMANDS
 
@@ -16,6 +19,9 @@ def test_cli_boundary_groups_are_importable() -> None:
     assert "graph-status" in GRAPH_COMMANDS
     assert "status" in SLACK_SUBCOMMANDS
     assert "preflight" in MODEL_SUBCOMMANDS
+    assert callable(add_peer_subcommands)
+    assert callable(handle_peer_command)
+    assert callable(peer_netd_options_from_args)
 
 
 def test_daemon_route_boundary_groups_are_importable() -> None:
@@ -57,6 +63,22 @@ def test_mcp_tool_boundary_groups_are_importable() -> None:
 
 def test_mcp_tools_package_root_is_export_only() -> None:
     path = Path(__file__).resolve().parents[1] / "src" / "agent_memory_orchestrator" / "runtime" / "mcp" / "tools" / "__init__.py"
+    tree = ast.parse(path.read_text(encoding="utf-8-sig"))
+    class_names = [node.name for node in ast.walk(tree) if isinstance(node, ast.ClassDef)]
+    function_names = [node.name for node in ast.walk(tree) if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef)]
+
+    assert class_names == []
+    assert function_names == []
+    for node in tree.body:
+        if _is_module_docstring(node) or _is_future_annotations_import(node):
+            continue
+        if isinstance(node, ast.ImportFrom):
+            continue
+        assert _is_all_assignment(node)
+
+
+def test_peer_cli_package_root_is_export_only() -> None:
+    path = Path(__file__).resolve().parents[1] / "src" / "agent_memory_orchestrator" / "runtime" / "cli" / "commands" / "peer" / "__init__.py"
     tree = ast.parse(path.read_text(encoding="utf-8-sig"))
     class_names = [node.name for node in ast.walk(tree) if isinstance(node, ast.ClassDef)]
     function_names = [node.name for node in ast.walk(tree) if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef)]
