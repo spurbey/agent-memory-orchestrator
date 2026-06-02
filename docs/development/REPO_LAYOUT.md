@@ -1,88 +1,130 @@
-# AMO Repository Layout
+# AMO Repository Layout And Refactor Policy
 
-AMO uses a layered, local-first architecture. Structural changes should keep
-production imports, persisted stores, CLI/MCP wiring, and user installs working
-while preserving clear source ownership.
+This is the contributor-facing layout policy. For the detailed source tree and
+per-file ownership map, read [AMO Code Architecture Tree](../ARCHITECTURE_TREE.md).
 
-## Target Shape
+## Current Layering
 
 ```text
 agent_memory_orchestrator/
-  domain/
-    evidence/
-    reasoning/
-    code/
-    versioning/
-    retrieval/
-    peer/
-    connectors/
-
-  application/
-    ports/
-    services/
-    workflows/
-
-  infrastructure/
-    sqlite/
-    kuzu/
-    faiss/
-    git/
-    llm/
-    peer_netd/
-    slack/
-    filesystem/
-
-  runtime/
-    cli/
-    daemon/
-    mcp/
-    hook/
-    web/
-
-  integrations/
-    adapters/
-    connectors/
-
-  extensions/
-    contracts/
-    loader.py
-    registry.py
-
+  domain/          pure product models and deterministic algorithms
+  application/     pipeline stages, services, workflows, and ports
+  infrastructure/  SQLite, Kuzu, FAISS, Git, filesystem, LLM, network adapters
+  runtime/         CLI, daemon, MCP, hooks, web entrypoints
+  evidence/        active raw evidence store, drain, triggers, windows
+  peer/            peer rooms, peer-agent, peer-netd lifecycle and transport
+  integrations/    external connector and agent adapters
+  install/         local installer/config/hook setup
+  extensions/      extension contracts and local/private loader boundary
+  core/            shared config and common primitives
 ```
 
-## Current Migration Policy
+Compatibility or legacy-public roots:
 
-- Move one bounded subsystem per commit.
-- Keep persisted database names until a deliberate release boundary.
-- Do not reintroduce root-level compatibility wrappers for internal code.
-- Keep application services and workflows as thin coordination boundaries unless production behavior already exists.
-- Do not change retrieval ranking, central merge semantics, evidence capture, or production pipeline behavior during structural refactors.
-- Do not delete raw evidence handling or current production tests.
-- Legacy session-extraction paths are removed; do not add new production dependencies on obsolete node kinds.
-- Run `python -m ruff check src tests` and focused pytest suites after each structural move.
+```text
+graph/
+memory/
+retrieval/
+llm/
+orchestration/
+skill_checkpoint/
+versioning/
+web/
+bin/
+```
+
+Compatibility roots can stay while tests prove they are needed, but new
+implementation should move toward the layered owner unless the file is a thin
+facade.
 
 ## Product Boundary Map
 
 ```text
-production pipeline + retrieval boundaries
-central merge/versioning boundaries
-daemon/CLI/MCP runtime split
-peer-agent + peer-netd split
-connector ingestion/responding split
-active-session local agent review/blast-radius workflows
-plugin contracts and private extension loader
-legacy-public API isolation
+capture/evidence:
+  runtime hooks/connectors -> evidence/raw_store.py -> evidence/drain.py
+
+production pipeline:
+  application/pipeline/job_runner.py -> application/pipeline/stages/*
+
+reasoning/code facts:
+  domain/evidence -> domain/reasoning -> domain/code
+
+central memory:
+  domain/versioning -> application/services/central_merge -> infrastructure/kuzu/sqlite
+
+retrieval/RAG:
+  domain/retrieval -> application/services/retrieval -> infrastructure/sqlite/faiss/kuzu
+
+peer context:
+  peer/agent -> peer/service -> peer/netd_transport -> peer-netd sidecar
+
+connectors:
+  integrations/connectors -> application/services/connectors -> evidence ingest
+
+runtime surfaces:
+  runtime/cli, runtime/daemon, runtime/mcp, runtime/hook, runtime/web
 ```
 
-## Import Rule
+## Refactor Policy
 
-New code must import the layered package owner:
+- Move one bounded subsystem per commit.
+- Keep persisted database names and schema behavior unless the task is an
+  explicit migration.
+- Preserve public imports with thin facades when tests or users depend on them.
+- Do not reintroduce old `reasoning_graph/` implementation dependencies.
+- Do not change retrieval ranking, central merge semantics, evidence capture, or
+  pipeline behavior during structural-only refactors.
+- Do not delete raw evidence handling or production tests.
+- Do not shuffle code only to reduce line counts. Split only when the new file
+  has a clear product responsibility.
+- Prefer domain/application/infrastructure/runtime ownership over generic
+  utility dumps.
 
-```text
-domain        = pure contracts and deterministic domain helpers
-application   = service/workflow coordination and ports
-infrastructure = SQLite, Kuzu, FAISS, Git, LLM, filesystem, network adapters
-runtime       = CLI, daemon, MCP, hook entrypoints
-integrations  = external agent/connector adapters
-extensions    = local plugin contracts, registry, and loader
+## Test Policy For Structural Work
+
+Always run:
+
+```bash
+python -m ruff check src tests
 ```
+
+Then run focused tests for the touched subsystem. Examples:
+
+```bash
+python -m pytest tests/test_peer_rooms.py tests/test_peer_agent.py -q
+python -m pytest tests/test_install_service.py tests/test_runtime_boundary_groups.py -q
+python -m pytest tests/test_central_merge_decision.py tests/test_central_merge_planner.py -q
+python -m pytest tests/infrastructure/faiss tests/test_retrieval*.py -q
+```
+
+Before committing broad architecture changes, run:
+
+```bash
+python -m pytest -q
+```
+
+## Where To Add New Code
+
+Use the owner that matches the behavior:
+
+| Behavior | Put domain rules in | Put orchestration in | Put adapters in | Put user surface in |
+| --- | --- | --- | --- | --- |
+| Evidence capture | `domain/evidence` | `application/services/capture` | `evidence`, `integrations` | `runtime/hook`, daemon routes |
+| Production stage | `domain/pipeline` plus relevant domain | `application/pipeline/stages` | `infrastructure/*` | CLI/daemon/web |
+| Retrieval ranking | `domain/retrieval` | `application/services/retrieval` | SQLite/FAISS/Kuzu adapters | MCP/daemon/web |
+| Central merge | `domain/versioning` | `application/services/central_merge` | SQLite/Kuzu adapters | CLI/daemon/web |
+| Peer-agent | `domain/peer` | `peer/agent`, `application/services/peer` | `peer/netd_*`, `infrastructure/peer_netd` | CLI/MCP |
+| Connector | `domain/connectors` | `application/services/connectors` | `integrations/connectors` | CLI/daemon/web |
+| Private algorithm | `extensions/contracts` | extension loader/registry | gitignored local implementation | configured extension |
+
+## Cleanup Rule
+
+A file should remain only if it is one of these:
+
+- Current product implementation in the right hierarchy.
+- Public compatibility facade with tests.
+- Legacy-public API with tests.
+- Documentation, fixture, packaged binary, or runtime asset referenced by the
+  product.
+
+Everything else should be removed deliberately, not hidden in another package.

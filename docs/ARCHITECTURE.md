@@ -71,6 +71,23 @@ query
 - Model downloads are explicit setup actions.
 - Runtime state, evidence, graph stores, logs, and exports stay out of Git.
 
+## Source Ownership
+
+The codebase is organized around product responsibility:
+
+```text
+domain        pure models, contracts, and deterministic algorithms
+application   pipeline stages, services, workflows, and ports
+infrastructure concrete SQLite, Kuzu, FAISS, Git, filesystem, LLM, network adapters
+runtime       CLI, daemon, MCP, hook, and web entrypoints
+evidence      active raw evidence store and drain path
+peer          peer rooms, peer-agent policy, and peer-netd lifecycle
+integrations  connector and external-agent adapters
+install       end-user local setup and hook/config generation
+extensions    extension contracts and private/local algorithm boundary
+```
+
 See [Reasoning Graph](./reasoning_graph/README.md) for graph model details.
-See [Codebase Architecture Tree](./ARCHITECTURE_TREE.md) for source-root
-ownership and refactor boundaries.
+See [Code Architecture Tree](./ARCHITECTURE_TREE.md) for the detailed folder and
+file ownership map, data flow, RAG pipeline placement, peer/connector placement,
+and refactor rules.
