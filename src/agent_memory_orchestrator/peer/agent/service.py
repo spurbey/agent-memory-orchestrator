@@ -9,6 +9,9 @@ from ..models import PeerNode
 from ..service import PeerService
 from .llm import PeerAgentLlmGateway
 from .quality import AnswerQuality, AnswerQualityEvaluator
+from .responses import best_finalizable_response
+from .responses import best_response
+from .responses import peer_responses
 from .schemas import CONTEXT_REQUEST, CONTEXT_RESPONSE, FINAL_SYNTHESIS
 from .schemas import RESPONSE_LLM_ANSWER, RESPONSE_LOW_CONFIDENCE, RESPONSE_NEEDS_APPROVAL, RESPONSE_RETRIEVAL_BUNDLE
 from .schemas import citation_strings, compact_retrieval_bundle, redacted_answer_text, redacted_retrieval_bundle, stable_json_hash, support_from_retrieval
@@ -481,7 +484,10 @@ class PeerAgentService:
         summary_result = self._maybe_summarize_initiator_room(room)
         if summary_result:
             results.append(summary_result)
-        if self._best_finalizable_response(room_id) is not None:
+        if best_finalizable_response(
+            self._peer_responses(room_id),
+            strong_confidence=self.settings.peer_agent_strong_confidence,
+        ) is not None:
             self._finalize_room(room_id, reason="first_strong_peer_response")
             results.append({"ok": True, "room_id": room_id, "finalized": True})
         return results
@@ -518,7 +524,7 @@ class PeerAgentService:
         if state.get("status") == "finalized":
             return {"ok": True, "room_id": room_id, "already_finalized": True, "final": state.get("final", {})}
         responses = self._peer_responses(room_id)
-        best = self._best_response(responses)
+        best = best_response(responses)
         local_result = state.get("local_retrieval") if isinstance(state.get("local_retrieval"), dict) else {}
         answer = str((best or {}).get("content") or "")
         mode = "peer_assisted" if best else "retrieval_only"
@@ -693,50 +699,7 @@ class PeerAgentService:
 
     def _peer_responses(self, room_id: str) -> list[dict[str, Any]]:
         room = self.peer.store.get_room(room_id)
-        rows: list[dict[str, Any]] = []
-        for message in room.get("messages", []):
-            if str(message.get("type") or "") != CONTEXT_RESPONSE:
-                continue
-            metadata = message.get("metadata") if isinstance(message.get("metadata"), dict) else {}
-            rows.append(
-                {
-                    "message_id": message.get("message_id", ""),
-                    "source_peer": message.get("from_node_id") or message.get("from") or "",
-                    "content": message.get("content", ""),
-                    "confidence": message.get("confidence", 0.0),
-                    "citations": message.get("citations", []),
-                    "mode": metadata.get("mode", ""),
-                    "answer_grade": bool(metadata.get("answer_grade")),
-                    "quality": metadata.get("quality") if isinstance(metadata.get("quality"), dict) else {},
-                    "support": metadata.get("support") if isinstance(metadata.get("support"), list) else [],
-                    "retrieval_bundle": metadata.get("retrieval_bundle") if isinstance(metadata.get("retrieval_bundle"), dict) else {},
-                    "request_id": metadata.get("request_id", ""),
-                }
-            )
-        return rows
-
-    def _best_finalizable_response(self, room_id: str) -> dict[str, Any] | None:
-        for response in self._peer_responses(room_id):
-            if not response.get("answer_grade"):
-                continue
-            if _clamp_float(response.get("confidence"), default=0.0) < self.settings.peer_agent_strong_confidence:
-                continue
-            if response.get("support") or response.get("citations"):
-                return response
-        return None
-
-    def _best_response(self, responses: list[dict[str, Any]]) -> dict[str, Any] | None:
-        if not responses:
-            return None
-        return sorted(
-            responses,
-            key=lambda item: (
-                bool(item.get("answer_grade")),
-                _clamp_float(item.get("confidence"), default=0.0),
-                bool(item.get("support") or item.get("citations")),
-            ),
-            reverse=True,
-        )[0]
+        return peer_responses(room)
 
     def _min_confidence(self, value: Any = None) -> float:
         if value is None:
