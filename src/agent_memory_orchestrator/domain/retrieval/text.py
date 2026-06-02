@@ -94,6 +94,20 @@ def clip_text(value: object, limit: int) -> str:
     return text[: max(0, limit - 14)].rstrip() + " ...<clipped>"
 
 
+def lexical_rerank_score(query: str, text: str) -> float:
+    query_terms = {term for term in _lexical_terms(query) if len(term) >= 3}
+    if not query_terms:
+        return 0.0
+    text_terms = set(_lexical_terms(text))
+    overlap = len(query_terms & text_terms) / len(query_terms)
+    phrase_bonus = 0.15 if query.lower() in text.lower() else 0.0
+    return min(1.0, overlap + phrase_bonus)
+
+
+def _lexical_terms(text: str) -> list[str]:
+    return re.findall(r"[a-z0-9_./-]+", text.lower())
+
+
 __all__ = [
     "HOOK_QUERY_EXPANSION_TERMS",
     "QUERY_STOPWORDS",
@@ -101,6 +115,7 @@ __all__ = [
     "exact_tokens",
     "expanded_query_terms",
     "fts_query",
+    "lexical_rerank_score",
     "normalize",
     "stem_term",
     "terms",
