@@ -116,6 +116,15 @@ def rerank_document(
             score -= 0.28
             reasons.append("code_locator_mismatch_penalty")
     code_locator_query = _query_has_code_locator(query)
+    strict_locator_query = bool(_strict_code_locator_terms(query))
+    strict_locator_match = _strict_code_locator_match(query, text)
+    if strict_locator_query:
+        if strict_locator_match:
+            score += 0.22
+            reasons.append("strict_code_locator_match")
+        else:
+            score -= 0.85
+            reasons.append("strict_code_locator_mismatch")
     if intent == "version_flow" and doc.doc_type == "file_impact":
         # FileImpactSummary is the curated per-file rollup that carries the
         # ordered commit/reason packet context. A central file KnowledgeVersion
@@ -195,8 +204,9 @@ def rerank_document(
         reasons.append("test_artifact_penalty")
     role = _doc_impact_role(doc)
     if role == "validation_test" and "test" not in terms:
-        score -= 0.10
-        reasons.append("validation_support_penalty")
+        penalty = 0.45 if doc.doc_type in {"symbol_ref", "code_region_ref", "file_ref"} else 0.18
+        score -= penalty
+        reasons.append(f"validation_support_penalty:{round(penalty, 2)}")
     elif role in {"docs", "config"} and not code_locator_query:
         score -= 0.04
         reasons.append(f"{role}_support_penalty")
@@ -243,11 +253,40 @@ def _code_locator_terms(query: str) -> set[str]:
 
 
 def _code_locator_match(query: str, normalized_doc_text: str) -> bool:
+    if _strict_code_locator_terms(query):
+        return _strict_code_locator_match(query, normalized_doc_text)
     locator_terms = _code_locator_terms(query)
     if not locator_terms:
         return False
     text = normalized_doc_text.lower()
     return any(term in text for term in locator_terms)
+
+
+def _strict_code_locator_terms(query: str) -> set[str]:
+    out: set[str] = set()
+    for token in re.findall(r"[A-Za-z0-9_./:-]+", str(query or "")):
+        lowered = token.lower().replace("\\", "/").strip(".,;:()[]{}")
+        if not lowered:
+            continue
+        if "/" in lowered or "." in lowered or "::" in lowered:
+            out.add(lowered)
+    return out
+
+
+def _strict_code_locator_match(query: str, normalized_doc_text: str) -> bool:
+    locators = _strict_code_locator_terms(query)
+    if not locators:
+        return False
+    text = normalized_doc_text.lower().replace("\\", "/")
+    for locator in locators:
+        if locator in text:
+            return True
+        if "::" in locator:
+            path_part, symbol_part = locator.split("::", 1)
+            path_stem = path_part.rsplit("/", 1)[-1].rsplit(".", 1)[0]
+            if symbol_part and symbol_part in text and (path_part in text or (path_stem and path_stem in text)):
+                return True
+    return False
 
 
 def _primary_rank_text(doc: RetrievalDocument, *, include_code_locator_context: bool = False) -> str:

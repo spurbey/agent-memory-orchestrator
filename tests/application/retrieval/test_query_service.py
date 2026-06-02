@@ -1656,6 +1656,86 @@ def test_graph_service_retrieve_falls_back_from_stale_configured_embedding_scope
     assert result["retrieval"]["candidate_counts"]["vector"] > 0
 
 
+def test_strict_path_query_does_not_return_same_directory_wrong_file(tmp_path: Path) -> None:
+    conn, index_store, _embedding_store = _sqlite_store(tmp_path)
+    try:
+        index_store.upsert_documents(
+            [
+                RetrievalDocument(
+                    doc_id="install-service",
+                    doc_type="file_impact",
+                    graph_node_id="file-impact:install-service",
+                    node_kind="FileImpactSummary",
+                    repo_id="repo:amo",
+                    packet_id="WP0001",
+                    commit_sha="abc123",
+                    title="Impact summary for src/agent_memory_orchestrator/install/service.py",
+                    body="src/agent_memory_orchestrator/install/service.py changed in the service layer.",
+                )
+            ]
+        )
+
+        result = retrieve_session_graph(
+            query="why did src/agent_memory_orchestrator/application/services/retrieval/query.py change?",
+            index_store=index_store,
+            graph_store=InMemoryGraphStore(),
+            repo_id="repo:amo",
+            limit=5,
+            expand_neighbors=0,
+        )
+
+        assert result.hits == ()
+    finally:
+        conn.close()
+
+
+def test_validation_test_symbol_refs_do_not_beat_code_impact_for_function_query(tmp_path: Path) -> None:
+    conn, index_store, _embedding_store = _sqlite_store(tmp_path)
+    try:
+        index_store.upsert_documents(
+            [
+                RetrievalDocument(
+                    doc_id="test-symbol",
+                    doc_type="symbol_ref",
+                    graph_node_id="sym:test-retrieve",
+                    node_kind="SymbolRef",
+                    repo_id="repo:amo",
+                    packet_id="WP0001",
+                    commit_sha="abc123",
+                    title="tests/test_reasoning_graph_retrieval.py::test_retrieve_session_graph",
+                    body="validation test symbol for retrieve_session_graph",
+                    metadata={"impact_role": "validation_test"},
+                ),
+                RetrievalDocument(
+                    doc_id="implementation-impact",
+                    doc_type="code_impact",
+                    graph_node_id="impact:retrieve-session-graph",
+                    node_kind="CodeImpactSummary",
+                    repo_id="repo:amo",
+                    packet_id="WP0002",
+                    commit_sha="def456",
+                    title="Code impact for retrieve_session_graph",
+                    body="retrieve_session_graph changed retrieval ranking and answer trace behavior.",
+                    metadata={"impact_role": "primary_implementation"},
+                ),
+            ]
+        )
+
+        result = retrieve_session_graph(
+            query="what changed in retrieve_session_graph?",
+            index_store=index_store,
+            graph_store=InMemoryGraphStore(),
+            repo_id="repo:amo",
+            limit=5,
+            expand_neighbors=0,
+        )
+
+        assert result.hits
+        assert result.hits[0].document.doc_id == "implementation-impact"
+    finally:
+        conn.close()
+
+
 def test_answer_trace_walks_packet_commit_hunk_and_code_chain() -> None:
     graph = InMemoryGraphStore()
     graph.upsert_node(

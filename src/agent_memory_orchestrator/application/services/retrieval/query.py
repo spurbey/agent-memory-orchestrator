@@ -131,6 +131,8 @@ def retrieve_session_graph(
 def _meaningful_hit(score: float, reasons: tuple[str, ...]) -> bool:
     if score <= 0:
         return False
+    if "strict_code_locator_mismatch" in reasons and "strict_code_locator_match" not in reasons:
+        return False
     return any(
         str(reason).startswith(("term_overlap:", "topic_focus_overlap:", "central_active_boost:", "version_target_overlap:", "exact:"))
         or str(reason).startswith("bi_encoder_score:")
