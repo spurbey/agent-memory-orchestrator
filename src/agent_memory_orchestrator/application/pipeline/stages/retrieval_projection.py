@@ -123,11 +123,12 @@ def run_retrieval_docs_stage(runner: Any, job: dict[str, Any], artifact_dir: Pat
 def central_active_retrieval_docs(runner: Any, *, repo_id: str) -> tuple[list[RetrievalDocument], str]:
     graph_path = repo_central_graph_path(runner.settings, repo_id)
     factory = getattr(runner, "graph_store_factory", KuzuGraphStore)
-    if factory is KuzuGraphStore:
-        graph = KuzuGraphStore(graph_path, read_only=True)
-    else:
-        graph = factory(graph_path)
+    graph = None
     try:
+        if factory is KuzuGraphStore:
+            graph = KuzuGraphStore(graph_path, read_only=True)
+        else:
+            graph = factory(graph_path)
         docs = build_retrieval_documents_from_graph(
             graph,
             node_limit=runner.settings.auto_retrieval_node_limit,
@@ -139,7 +140,8 @@ def central_active_retrieval_docs(runner: Any, *, repo_id: str) -> tuple[list[Re
     except Exception as exc:  # pragma: no cover - central graph may be locked by another process
         return [], f"central_active_graph_view_scan_failed:{type(exc).__name__}:{exc}"
     finally:
-        graph.close()
+        if graph is not None:
+            graph.close()
     central_docs = [
         dataclass_replace(
             doc,
