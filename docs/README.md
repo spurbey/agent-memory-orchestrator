@@ -8,6 +8,7 @@ This is the documentation map for Agent Memory Orchestrator.
 | --- | --- |
 | Install and run AMO | [Root README](../README.md) |
 | Understand the reasoning graph | [Reasoning Graph README](./reasoning_graph/README.md) |
+| Understand the code architecture | [Code architecture tree](./ARCHITECTURE_TREE.md) |
 | Develop locally | [Local development](./setup/local-development.md) |
 | Configure local models | [Local models](./setup/local-models.md) |
 | Test retrieval quality | [Retrieval pipeline](./operations/retrieval.md) |
@@ -22,6 +23,7 @@ AMO is local-first. Hooks capture evidence, the daemon owns graph work, Kuzu sto
 Production source of truth:
 
 - [Reasoning Graph overview](./reasoning_graph/README.md)
+- [Code architecture tree](./ARCHITECTURE_TREE.md)
 
 ## Operational Guides
 
@@ -36,6 +38,7 @@ Production source of truth:
 - [Open source readiness review](./development/OPEN_SOURCE_READINESS_REVIEW.md)
 - [Public release checklist](./development/PUBLIC_RELEASE_CHECKLIST.md)
 - [Repository layout](./development/REPO_LAYOUT.md)
+- [Code architecture tree](./ARCHITECTURE_TREE.md)
 
 ## Historical Material
 

@@ -48,11 +48,29 @@ peer-netd/
   internal/store/store.go
 
 src/agent_memory_orchestrator/peer/
+  auth.py
   cards.py
+  context.py
   doctor.py
+  invites.py
+  models.py
   netd_client.py
+  netd_binary.py
+  netd_platform.py
   netd_runtime.py
   netd_service.py
+  netd_transport.py
+  service.py
+  store.py
+  transport_auth.py
+  agent/
+    llm.py
+    quality.py
+    responses.py
+    schemas.py
+    selection.py
+    service.py
+    state.py
 
 scripts/
   build_peer_netd_binaries.py
@@ -62,13 +80,35 @@ scripts/
 
 `doctor.py` produces the operator readiness report for peer identity, packaged `peer-netd` source, binary/build state, sidecar health, trusted peers, and shared-secret environment variables.
 
+`service.py` owns peer-room, invite, and message orchestration. It does not own
+low-level network normalization or binary lifecycle details.
+
+`transport_auth.py` owns signed payload preparation, incoming payload unwrap,
+and transport-auth enforcement.
+
 `netd_client.py` is the Python bridge. It talks to `amo-peer-netd` over localhost HTTP and converts AMO peer-room messages into sidecar send requests.
 
-`netd_runtime.py` is the managed sidecar lifecycle layer. It locates repo or packaged `peer-netd` source, builds the Go binary into `AMO_HOME/.peer/bin`, starts/stops it, writes PID/API/log state under `AMO_HOME/.peer/netd`, and refuses unsafe managed starts where the local API port is dynamic.
+`netd_transport.py` normalizes delivered sidecar envelopes, builds outbound raw
+sidecar messages, connects known peer addresses, and keeps the legacy direct-HTTP
+posting helper isolated.
+
+`netd_runtime.py` is the managed sidecar lifecycle layer. It starts/stops the
+sidecar, writes PID/API/log state under `AMO_HOME/.peer/netd`, and refuses
+unsafe managed starts where the local API port is dynamic.
+
+`netd_binary.py` locates repo or packaged `peer-netd` source, discovers packaged
+prebuilt binaries, builds the Go binary into `AMO_HOME/.peer/bin`, installs a
+packaged binary when available, and verifies required sidecar capabilities.
 
 Managed starts persist the libp2p private key at `AMO_HOME/.peer/netd/identity.key` by default. This keeps peer IDs and relay multiaddrs stable across restarts.
 
 `netd_service.py` plans OS startup integration. It returns a Windows Scheduled Task plan or user-systemd unit plan by default, and only mutates the host when `--apply` is explicitly used.
+
+`agent/service.py` owns the bot-to-bot ask/watch/finalize loop. Supporting
+modules keep the service smaller: `selection.py` selects trusted peers,
+`responses.py` parses and ranks peer responses, `quality.py` evaluates answer
+grade, `schemas.py` defines redacted room message payloads, and `state.py`
+persists peer-agent room state.
 
 `scripts/build_peer_netd_binaries.py` builds release binaries into `src/agent_memory_orchestrator/bin/<goos-goarch>/`. Wheel/package builds include those files when present, so normal users do not need Go once release packaging generates platform binaries.
 
