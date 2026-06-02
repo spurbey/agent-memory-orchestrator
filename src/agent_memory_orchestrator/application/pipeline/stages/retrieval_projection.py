@@ -13,6 +13,7 @@ from ....infrastructure.sqlite.retrieval_store import RetrievalIndexStore
 from ....domain.retrieval.projection import build_retrieval_documents_from_graph
 from ....application.services.retrieval.embedding import embed_missing_retrieval_documents
 from ....infrastructure.llm.text_embedder import StrictTextEmbedder
+from ....infrastructure.kuzu import KuzuGraphStore
 from ....domain.pipeline.constants import RESET_MARKER_KEY
 from ....domain.pipeline.constants import RETRIEVAL_PROJECTION_VERSION
 from ..job_runner import PendingModel
@@ -120,9 +121,13 @@ def run_retrieval_docs_stage(runner: Any, job: dict[str, Any], artifact_dir: Pat
 
 
 def central_active_retrieval_docs(runner: Any, *, repo_id: str) -> tuple[list[RetrievalDocument], str]:
-    graph = runner.graph_store_factory(repo_central_graph_path(runner.settings, repo_id))
+    graph_path = repo_central_graph_path(runner.settings, repo_id)
+    factory = getattr(runner, "graph_store_factory", KuzuGraphStore)
+    if factory is KuzuGraphStore:
+        graph = KuzuGraphStore(graph_path, read_only=True)
+    else:
+        graph = factory(graph_path)
     try:
-        graph.init_schema()
         docs = build_retrieval_documents_from_graph(
             graph,
             node_limit=runner.settings.auto_retrieval_node_limit,
