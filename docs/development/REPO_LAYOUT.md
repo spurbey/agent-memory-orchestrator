@@ -30,12 +30,22 @@ orchestration/
 skill_checkpoint/
 versioning/
 web/
-bin/
 ```
 
 Compatibility roots can stay while tests prove they are needed, but new
 implementation should move toward the layered owner unless the file is a thin
 facade.
+
+Optional generated/package roots:
+
+```text
+bin/
+```
+
+`src/agent_memory_orchestrator/bin/` is not a required source root. Release
+builds may generate packaged native helper binaries there, but CI and source
+ownership tests must not require that directory to exist when no binary asset is
+tracked.
 
 ## Product Boundary Map
 

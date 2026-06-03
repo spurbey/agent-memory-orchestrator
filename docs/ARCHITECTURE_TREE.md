@@ -614,14 +614,6 @@ Key folders:
 - `js/core/`: shared frontend utilities.
 - `js/graph/`: graph explorer modules.
 
-### `bin/`
-
-Packaged native helper binaries.
-
-Key folders:
-
-- `windows-amd64/`: Windows peer-netd binary assets.
-
 ## Product Pipelines By Concern
 
 ### Evidence And Capture
@@ -899,3 +891,7 @@ Production implementation now belongs to `domain/`, `application/`,
 application service files are retained for compatibility or legacy-public API
 coverage. New product implementation should not grow those roots unless the file
 is explicitly a facade.
+
+`src/agent_memory_orchestrator/bin/` is optional generated/package output for
+native helper binaries. It can exist in local release builds, but it is not a
+required tracked source root.
