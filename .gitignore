@@ -34,7 +34,15 @@ _update-notifier-last-checked
 *.sqlite
 *.sqlite3
 
+# Local/private extension algorithms
+.local-extensions/
+.private-extensions/
+src/agent_memory_orchestrator/extensions/local/
+src/agent_memory_orchestrator/extensions/private/
+src/agent_memory_orchestrator/extensions/experimental/
+
 # OS/editor
 .DS_Store
 Thumbs.db
 .vscode/
+.codex/

@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import copy
 import hashlib
@@ -11,7 +11,7 @@ from typing import Any, Protocol
 
 from ..core.config import Settings
 from ..evidence.raw_store import RawEvidenceStore
-from ..llm.qwen import OllamaQwenClient
+from ..infrastructure.llm import OllamaQwenClient
 
 SKILL_CHECKPOINT_SCHEMA_VERSION = "skill-checkpoint-v1"
 DEFAULT_NUM_PREDICT = 1300

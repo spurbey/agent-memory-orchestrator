@@ -36,7 +36,7 @@ export async function retryJob(jobId) {
 export async function runRetrieval(setView) {
   const query = $("retrievalQuery").value.trim() || $("globalSearch").value.trim();
   if (!query) return;
-  $("retrievalResult").innerHTML = `<section class="panel"><p class="muted">Searching V2 graph memory...</p></section>`;
+  $("retrievalResult").innerHTML = `<section class="panel"><p class="muted">Searching production graph memory...</p></section>`;
   setView("retrieval");
   try {
     const result = await apiPost("/graph/retrieve", {
@@ -58,8 +58,6 @@ export async function runAdminJob(kind) {
   output.textContent = `Running ${kind}...`;
   try {
     let result;
-    if (kind === "consolidate") result = await apiPost("/graph/consolidate", { limit: 500, apply: false });
-    if (kind === "cache") result = await apiPost("/graph/rebuild-cache", { limit: 5000 });
     if (kind === "debugGraph") result = await apiGet("/api/debug/graph?limit=50");
     if (kind === "debugQwen") result = await apiGet("/api/debug/qwen");
     output.textContent = formatJson(result || { ok: false, error: `unknown job ${kind}` });

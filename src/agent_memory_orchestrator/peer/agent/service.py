@@ -1,19 +1,35 @@
 from __future__ import annotations
 
 import time
-from datetime import datetime, timezone
 from typing import Any
 
 from ...core.config import Settings
-from ...graph.service import GraphRagService
+from ...application.services.memory_graph.service import GraphRagService
 from ..models import PeerNode
 from ..service import PeerService
 from .llm import PeerAgentLlmGateway
 from .quality import AnswerQuality, AnswerQualityEvaluator
+from .responses import best_finalizable_response
+from .responses import best_response
+from .responses import peer_responses
+from .selection import select_context_peers
 from .schemas import CONTEXT_REQUEST, CONTEXT_RESPONSE, FINAL_SYNTHESIS
 from .schemas import RESPONSE_LLM_ANSWER, RESPONSE_LOW_CONFIDENCE, RESPONSE_NEEDS_APPROVAL, RESPONSE_RETRIEVAL_BUNDLE
 from .schemas import citation_strings, compact_retrieval_bundle, redacted_answer_text, redacted_retrieval_bundle, stable_json_hash, support_from_retrieval
 from .state import PeerAgentStateStore, utc_now
+from .service_utils import _answer_text
+from .service_utils import _clamp_float
+from .service_utils import _deadline_at
+from .service_utils import _deadline_expired
+from .service_utils import _deterministic_summary
+from .service_utils import _elapsed_ms
+from .service_utils import _has_verified_transport
+from .service_utils import _require_text
+from .service_utils import _retrieval_intent
+from .service_utils import _retrieval_only_answer
+from .service_utils import _room_summary
+from .service_utils import _supports_from_responses
+from .service_utils import _targets_peer
 
 
 class PeerAgentService:
@@ -469,7 +485,10 @@ class PeerAgentService:
         summary_result = self._maybe_summarize_initiator_room(room)
         if summary_result:
             results.append(summary_result)
-        if self._best_finalizable_response(room_id) is not None:
+        if best_finalizable_response(
+            self._peer_responses(room_id),
+            strong_confidence=self.settings.peer_agent_strong_confidence,
+        ) is not None:
             self._finalize_room(room_id, reason="first_strong_peer_response")
             results.append({"ok": True, "room_id": room_id, "finalized": True})
         return results
@@ -506,7 +525,7 @@ class PeerAgentService:
         if state.get("status") == "finalized":
             return {"ok": True, "room_id": room_id, "already_finalized": True, "final": state.get("final", {})}
         responses = self._peer_responses(room_id)
-        best = self._best_response(responses)
+        best = best_response(responses)
         local_result = state.get("local_retrieval") if isinstance(state.get("local_retrieval"), dict) else {}
         answer = str((best or {}).get("content") or "")
         mode = "peer_assisted" if best else "retrieval_only"
@@ -620,25 +639,7 @@ class PeerAgentService:
 
     def _select_peers(self, *, peer_ids: list[str] | None = None) -> list[PeerNode]:
         config = self.peer.store.load_config()
-        requested = [item.strip() for item in peer_ids or [] if item.strip()]
-        requested_set = set(requested)
-        by_id = {peer.node_id: peer for peer in config.peers}
-        candidates = [by_id[item] for item in requested if item in by_id] if requested else list(config.peers)
-        selected: list[PeerNode] = []
-        for peer in candidates:
-            if requested_set and peer.node_id not in requested_set:
-                continue
-            if peer.trust != "trusted":
-                continue
-            if not any((peer.peer_id, peer.base_url, peer.multiaddrs, peer.relay_addrs, peer.rendezvous_addr)):
-                continue
-            capabilities = set(peer.capabilities)
-            if capabilities and not capabilities.intersection({"graph_retrieval", "memory_search"}):
-                continue
-            selected.append(peer)
-            if len(selected) >= self.settings.peer_agent_max_peers:
-                break
-        return selected
+        return select_context_peers(config, peer_ids=peer_ids, max_peers=self.settings.peer_agent_max_peers)
 
     def _validate_context_request(
         self,
@@ -681,50 +682,7 @@ class PeerAgentService:
 
     def _peer_responses(self, room_id: str) -> list[dict[str, Any]]:
         room = self.peer.store.get_room(room_id)
-        rows: list[dict[str, Any]] = []
-        for message in room.get("messages", []):
-            if str(message.get("type") or "") != CONTEXT_RESPONSE:
-                continue
-            metadata = message.get("metadata") if isinstance(message.get("metadata"), dict) else {}
-            rows.append(
-                {
-                    "message_id": message.get("message_id", ""),
-                    "source_peer": message.get("from_node_id") or message.get("from") or "",
-                    "content": message.get("content", ""),
-                    "confidence": message.get("confidence", 0.0),
-                    "citations": message.get("citations", []),
-                    "mode": metadata.get("mode", ""),
-                    "answer_grade": bool(metadata.get("answer_grade")),
-                    "quality": metadata.get("quality") if isinstance(metadata.get("quality"), dict) else {},
-                    "support": metadata.get("support") if isinstance(metadata.get("support"), list) else [],
-                    "retrieval_bundle": metadata.get("retrieval_bundle") if isinstance(metadata.get("retrieval_bundle"), dict) else {},
-                    "request_id": metadata.get("request_id", ""),
-                }
-            )
-        return rows
-
-    def _best_finalizable_response(self, room_id: str) -> dict[str, Any] | None:
-        for response in self._peer_responses(room_id):
-            if not response.get("answer_grade"):
-                continue
-            if _clamp_float(response.get("confidence"), default=0.0) < self.settings.peer_agent_strong_confidence:
-                continue
-            if response.get("support") or response.get("citations"):
-                return response
-        return None
-
-    def _best_response(self, responses: list[dict[str, Any]]) -> dict[str, Any] | None:
-        if not responses:
-            return None
-        return sorted(
-            responses,
-            key=lambda item: (
-                bool(item.get("answer_grade")),
-                _clamp_float(item.get("confidence"), default=0.0),
-                bool(item.get("support") or item.get("citations")),
-            ),
-            reverse=True,
-        )[0]
+        return peer_responses(room)
 
     def _min_confidence(self, value: Any = None) -> float:
         if value is None:
@@ -742,125 +700,3 @@ class PeerAgentService:
     def _ensure_enabled(self) -> None:
         if not self.settings.peer_agent_enabled:
             raise RuntimeError("peer-agent is disabled by AMO_PEER_AGENT_ENABLED")
-
-
-def _retrieval_intent(result: dict[str, Any]) -> str:
-    retrieval = result.get("retrieval") if isinstance(result.get("retrieval"), dict) else {}
-    return str(retrieval.get("intent") or "")
-
-
-def _answer_text(result: dict[str, Any]) -> str:
-    answer = result.get("answer") if isinstance(result.get("answer"), dict) else {}
-    return str(answer.get("text") or "").strip()
-
-
-def _supports_from_responses(responses: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    supports: list[dict[str, Any]] = []
-    for response in responses:
-        response_support = response.get("support") if isinstance(response.get("support"), list) else []
-        for support in response_support:
-            if isinstance(support, dict):
-                supports.append(support)
-    return supports
-
-
-def _retrieval_only_answer(local_result: Any, responses: list[dict[str, Any]]) -> str:
-    if isinstance(local_result, dict):
-        local_answer = str((local_result.get("answer") or {}).get("text") or "")
-        if local_answer:
-            return local_answer
-    lines = ["No final LLM synthesis was available. Structured retrieval results:"]
-    for index, response in enumerate(responses[:5], start=1):
-        lines.append(f"{index}. {response.get('source_peer')}: {response.get('content')}")
-    return "\n".join(lines)
-
-
-def _deterministic_summary(context: dict[str, Any]) -> str:
-    room = context.get("room") if isinstance(context.get("room"), dict) else {}
-    layers = context.get("layers") if isinstance(context.get("layers"), dict) else {}
-    recent = layers.get("recent_messages") if isinstance(layers.get("recent_messages"), list) else []
-    lines = [
-        "# Rolling Summary",
-        "",
-        "## Current Understanding",
-        "",
-        f"- Topic: {room.get('topic') or context.get('topic') or 'peer room'}",
-        f"- Recent messages considered: {len(recent)}",
-        "",
-        "## Open Questions",
-        "",
-        "- Pending peer-agent finalization.",
-    ]
-    return "\n".join(lines)
-
-
-def _room_summary(room: dict[str, Any]) -> dict[str, Any]:
-    return {
-        "room_id": room.get("room_id"),
-        "topic": room.get("topic"),
-        "initiator_node_id": room.get("initiator_node_id"),
-        "participants": room.get("participants", []),
-        "status": room.get("status"),
-        "message_count": len(room.get("messages", [])) if isinstance(room.get("messages"), list) else 0,
-    }
-
-
-def _deadline_at(timeout_seconds: float) -> str:
-    return datetime.fromtimestamp(time.time() + max(0.0, timeout_seconds), tz=timezone.utc).isoformat()
-
-
-def _deadline_expired(value: str) -> bool:
-    text = str(value or "").strip()
-    if not text:
-        return False
-    try:
-        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
-    except ValueError:
-        return True
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=timezone.utc)
-    return parsed <= datetime.now(timezone.utc)
-
-
-def _has_verified_transport(metadata: dict[str, Any]) -> bool:
-    auth = metadata.get("transport_auth") if isinstance(metadata.get("transport_auth"), dict) else {}
-    if not str(auth.get("auth") or "").startswith("netd:"):
-        return False
-    return bool(auth.get("authenticated") or str(auth.get("remote_peer_id") or "").strip())
-
-
-def _targets_peer(message: dict[str, Any], metadata: dict[str, Any], node_id: str) -> bool:
-    recipients = _recipient_set(message.get("to_node_ids") or message.get("to"))
-    target_peer = str(metadata.get("target_peer_id") or "").strip()
-    if target_peer:
-        return target_peer == node_id
-    return node_id in recipients
-
-
-def _recipient_set(value: Any) -> set[str]:
-    if value is None or value == "":
-        return set()
-    if isinstance(value, str):
-        return {value.strip()} if value.strip() else set()
-    if isinstance(value, (list, tuple, set)):
-        return {str(item).strip() for item in value if str(item).strip()}
-    return {str(value).strip()} if str(value).strip() else set()
-
-
-def _elapsed_ms(started: float) -> int:
-    return int((time.monotonic() - started) * 1000)
-
-
-def _clamp_float(value: Any, *, default: float) -> float:
-    try:
-        parsed = float(value)
-    except (TypeError, ValueError):
-        parsed = default
-    return max(0.0, min(1.0, parsed))
-
-
-def _require_text(value: str, name: str) -> str:
-    text = str(value or "").strip()
-    if not text:
-        raise ValueError(f"{name} is required")
-    return text

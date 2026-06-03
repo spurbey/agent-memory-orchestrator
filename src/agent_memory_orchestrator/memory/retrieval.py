@@ -1,16 +1,16 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import json
 import re
 import sqlite3
 import time
 
-from ..llm.embeddings import cosine_similarity, embed_text_with_model
-from ..llm.rerankers import RerankCandidate, rerank_candidates
-from ..llm.vector_cache import search_faiss_cache
-from ..retrieval import build_context_pack_payload
-from ..retrieval import reciprocal_rank_fusion, understand_query
+from ..infrastructure.llm import cosine_similarity, embed_text_with_model
+from ..infrastructure.llm import RerankCandidate, rerank_candidates
+from ..infrastructure.llm import search_faiss_cache
 from .common import elapsed_ms, new_id, stable_json, utc_now
+from .legacy_retrieval import build_context_pack_payload
+from .legacy_retrieval import reciprocal_rank_fusion, understand_query
 
 
 class MemoryRetrievalMixin:

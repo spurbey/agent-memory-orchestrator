@@ -2,25 +2,20 @@ from __future__ import annotations
 
 import pytest
 
-from agent_memory_orchestrator.app import daemon as daemon_module
-from agent_memory_orchestrator.app.daemon import (
+from agent_memory_orchestrator.runtime.daemon import graph_access as graph_access_module
+from agent_memory_orchestrator.runtime.daemon.coordination import production_stage_requires_graph_write_lock
+from agent_memory_orchestrator.runtime.daemon.server import (
     DaemonAlreadyRunning,
     _DaemonOwnerLock,
     _bounded_int,
     _graph_workbench_html,
     _load_web_asset,
-    _read_graph_service,
     _session_cockpit_html,
-    _v2_stage_requires_graph_write_lock,
     _web_asset_bytes,
 )
+from agent_memory_orchestrator.runtime.daemon.client import DaemonClient
+from agent_memory_orchestrator.runtime.daemon.owner_lock import read_daemon_owner_metadata
 from agent_memory_orchestrator.core.config import Settings
-
-
-def test_root_daemon_module_keeps_compatibility_exports() -> None:
-    from agent_memory_orchestrator import daemon as compat_daemon
-
-    assert compat_daemon._bounded_int("5", default=1, minimum=1, maximum=10) == 5
 
 
 def test_bounded_int_clamps_invalid_and_extreme_values() -> None:
@@ -40,7 +35,7 @@ def test_web_assets_load_from_package_static_folder() -> None:
     graph_css, graph_css_type = _web_asset_bytes("css/graph-workbench.css")
 
     assert "AMO Control Room" in html
-    assert "V2 production pipeline" in _session_cockpit_html()
+    assert "Production pipeline" in _session_cockpit_html()
     assert 'type="module" src="/web/amo.js"' in _session_cockpit_html()
     assert b"control-room/app.js" in js
     assert content_type.startswith("application/javascript")
@@ -59,12 +54,12 @@ def test_web_asset_loader_blocks_path_traversal() -> None:
         _web_asset_bytes("../daemon.py")
 
 
-def test_daemon_v2_lock_scope_keeps_long_stages_unlocked() -> None:
-    assert _v2_stage_requires_graph_write_lock("kuzu_write") is True
-    assert _v2_stage_requires_graph_write_lock("central_version_merge") is True
-    assert _v2_stage_requires_graph_write_lock("qwen_reasoning") is False
-    assert _v2_stage_requires_graph_write_lock("ast_code_nodes") is False
-    assert _v2_stage_requires_graph_write_lock("embeddings") is False
+def test_daemon_production_lock_scope_keeps_long_stages_unlocked() -> None:
+    assert production_stage_requires_graph_write_lock("kuzu_write") is True
+    assert production_stage_requires_graph_write_lock("central_version_merge") is True
+    assert production_stage_requires_graph_write_lock("qwen_reasoning") is False
+    assert production_stage_requires_graph_write_lock("ast_code_nodes") is False
+    assert production_stage_requires_graph_write_lock("embeddings") is False
 
 
 def test_daemon_owner_lock_blocks_second_process_owner(tmp_path) -> None:
@@ -78,6 +73,19 @@ def test_daemon_owner_lock_blocks_second_process_owner(tmp_path) -> None:
 
     second = _DaemonOwnerLock.acquire(settings)
     second.release()
+
+
+def test_daemon_client_uses_owner_lock_endpoint_metadata(tmp_path) -> None:
+    settings = _settings_for_daemon_lock(tmp_path)
+    owner = _DaemonOwnerLock.acquire(settings, host="127.0.0.1", port=8777)
+    try:
+        metadata = read_daemon_owner_metadata(settings)
+        client = DaemonClient.from_settings(settings)
+    finally:
+        owner.release()
+
+    assert metadata["port"] == 8777
+    assert client.base_url == "http://127.0.0.1:8777"
 
 
 def test_read_graph_service_uses_repo_central_graph_read_only(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -98,12 +106,12 @@ def test_read_graph_service_uses_repo_central_graph_read_only(tmp_path, monkeypa
         def close(self) -> None:
             return None
 
-    monkeypatch.setattr(daemon_module, "KuzuGraphStore", FakeStore)
-    monkeypatch.setattr(daemon_module, "GraphRagService", FakeGraph)
+    monkeypatch.setattr(graph_access_module, "KuzuGraphStore", FakeStore)
+    monkeypatch.setattr(graph_access_module, "GraphRagService", FakeGraph)
 
-    graph = _read_graph_service(settings, repo_id="repo:amo")
+    graph = graph_access_module.read_graph_service(settings, repo_id="repo:amo")
 
-    expected_path = daemon_module.repo_central_graph_path(settings, "repo:amo")
+    expected_path = graph_access_module.repo_central_graph_path(settings, "repo:amo")
     assert graph is not None
     assert opened_stores == [(expected_path, True)]
     service_path, service_store, service_read_only = opened_services[0]

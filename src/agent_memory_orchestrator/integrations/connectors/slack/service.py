@@ -6,7 +6,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
-from ....config import Settings
+from ....core.config import Settings
 from ....evidence.raw_store import RawEvidenceStore
 from .client import SlackApiClient, SlackApiError
 from .config import SlackConfig, load_slack_config, token_presence, validate_token_prefixes, write_slack_config
@@ -211,7 +211,7 @@ class SlackConnectorService:
             "session_id": session_id,
             "event_type": connector_event.event_type,
             "evidence": evidence.as_dict(),
-            "next_step": "Run graph-drain for this session to create the cleaned window and GraphDelta.",
+            "next_step": "Run graph-drain for this session to enqueue the closed-session production pipeline.",
         }
 
     def post_ack_reply(self, *, channel: str, thread_ts: str = "") -> dict[str, Any]:
@@ -230,7 +230,7 @@ class SlackConnectorService:
         query = slack_query_from_text(message.text, self.config.bot_user_id)
         if not query:
             return {"ok": False, "error": "empty_mention_query"}
-        from ....graph.service import GraphRagService
+        from ....application.services.memory_graph.service import GraphRagService
 
         graph = GraphRagService(self.settings, read_only=True)
         try:

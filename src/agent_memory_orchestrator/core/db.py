@@ -281,8 +281,8 @@ CREATE TABLE IF NOT EXISTS orchestration_decisions (
 CREATE TABLE IF NOT EXISTS v2_session_jobs (
   job_id TEXT PRIMARY KEY,
   session_id TEXT NOT NULL,
-  pipeline_version TEXT NOT NULL DEFAULT 'v2-reset-2026-05',
-  graph_schema_version TEXT NOT NULL DEFAULT 'v2',
+  pipeline_version TEXT NOT NULL DEFAULT 'production-2026-05',
+  graph_schema_version TEXT NOT NULL DEFAULT 'production-graph-v1',
   status TEXT NOT NULL DEFAULT 'pending',
   current_stage TEXT NOT NULL DEFAULT '',
   last_successful_stage TEXT NOT NULL DEFAULT '',
@@ -291,6 +291,8 @@ CREATE TABLE IF NOT EXISTS v2_session_jobs (
   repo_path TEXT NOT NULL DEFAULT '',
   repo_id TEXT NOT NULL DEFAULT '',
   boundary_event_id TEXT NOT NULL DEFAULT '',
+  source_first_event_id TEXT NOT NULL DEFAULT '',
+  source_latest_event_id TEXT NOT NULL DEFAULT '',
   source_evidence_day TEXT NOT NULL DEFAULT '',
   source_evidence_days_json TEXT NOT NULL DEFAULT '[]',
   lock_owner TEXT NOT NULL DEFAULT '',
@@ -343,8 +345,8 @@ CREATE TABLE IF NOT EXISTS v2_central_merge_plans (
   plan_id TEXT PRIMARY KEY,
   job_id TEXT NOT NULL,
   session_id TEXT NOT NULL,
-  pipeline_version TEXT NOT NULL DEFAULT 'v2-reset-2026-05',
-  graph_schema_version TEXT NOT NULL DEFAULT 'v2',
+  pipeline_version TEXT NOT NULL DEFAULT 'production-2026-05',
+  graph_schema_version TEXT NOT NULL DEFAULT 'production-graph-v1',
   plan_version TEXT NOT NULL DEFAULT '',
   status TEXT NOT NULL DEFAULT 'planned',
   mode TEXT NOT NULL DEFAULT 'dry_run',
@@ -405,8 +407,8 @@ CREATE TABLE IF NOT EXISTS v2_graph_commits (
   branch TEXT NOT NULL DEFAULT 'main',
   parent_graph_commit_id TEXT NOT NULL DEFAULT '',
   status TEXT NOT NULL DEFAULT 'planned',
-  pipeline_version TEXT NOT NULL DEFAULT 'v2-reset-2026-05',
-  graph_schema_version TEXT NOT NULL DEFAULT 'v2',
+  pipeline_version TEXT NOT NULL DEFAULT 'production-2026-05',
+  graph_schema_version TEXT NOT NULL DEFAULT 'production-graph-v1',
   algorithm_versions_json TEXT NOT NULL DEFAULT '{}',
   added_nodes_json TEXT NOT NULL DEFAULT '[]',
   added_edges_json TEXT NOT NULL DEFAULT '[]',
@@ -678,6 +680,8 @@ def _run_light_migrations(conn: sqlite3.Connection) -> None:
     _add_column_if_missing(conn, "v2_session_jobs", "source_app", "source_app TEXT NOT NULL DEFAULT ''")
     _add_column_if_missing(conn, "v2_session_jobs", "repo_path", "repo_path TEXT NOT NULL DEFAULT ''")
     _add_column_if_missing(conn, "v2_session_jobs", "repo_id", "repo_id TEXT NOT NULL DEFAULT ''")
+    _add_column_if_missing(conn, "v2_session_jobs", "source_first_event_id", "source_first_event_id TEXT NOT NULL DEFAULT ''")
+    _add_column_if_missing(conn, "v2_session_jobs", "source_latest_event_id", "source_latest_event_id TEXT NOT NULL DEFAULT ''")
     _add_column_if_missing(conn, "v2_session_jobs", "forced_at", "forced_at TEXT NOT NULL DEFAULT ''")
     _add_column_if_missing(conn, "v2_session_jobs", "forced_by", "forced_by TEXT NOT NULL DEFAULT ''")
     _add_column_if_missing(conn, "v2_session_job_stages", "stage_config_hash", "stage_config_hash TEXT NOT NULL DEFAULT ''")

@@ -7,7 +7,8 @@ This is the documentation map for Agent Memory Orchestrator.
 | Need | Read |
 | --- | --- |
 | Install and run AMO | [Root README](../README.md) |
-| Understand the V2 reasoning graph | [Reasoning Graph README](./reasoning_graph/README.md) |
+| Understand the reasoning graph | [Reasoning Graph README](./reasoning_graph/README.md) |
+| Understand the code architecture | [Code architecture tree](./ARCHITECTURE_TREE.md) |
 | Develop locally | [Local development](./setup/local-development.md) |
 | Configure local models | [Local models](./setup/local-models.md) |
 | Test retrieval quality | [Retrieval pipeline](./operations/retrieval.md) |
@@ -19,9 +20,10 @@ This is the documentation map for Agent Memory Orchestrator.
 
 AMO is local-first. Hooks capture evidence, the daemon owns graph work, Kuzu stores graph truth, SQLite stores retrieval/index ledgers, and FAISS is a rebuildable vector cache.
 
-V2 source of truth:
+Production source of truth:
 
-- [Reasoning Graph V2 overview](./reasoning_graph/README.md)
+- [Reasoning Graph overview](./reasoning_graph/README.md)
+- [Code architecture tree](./ARCHITECTURE_TREE.md)
 
 ## Operational Guides
 
@@ -36,7 +38,8 @@ V2 source of truth:
 - [Open source readiness review](./development/OPEN_SOURCE_READINESS_REVIEW.md)
 - [Public release checklist](./development/PUBLIC_RELEASE_CHECKLIST.md)
 - [Repository layout](./development/REPO_LAYOUT.md)
+- [Code architecture tree](./ARCHITECTURE_TREE.md)
 
 ## Historical Material
 
-Documents not linked from this map are background material. The V2 docs above are the current product path.
+Documents not linked from this map are background material. The production docs above are the current product path.

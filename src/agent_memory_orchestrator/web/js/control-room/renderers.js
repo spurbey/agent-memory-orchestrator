@@ -1,5 +1,5 @@
-import { PIPELINE_GROUPS, V2_STAGE_LABELS } from "./state.js";
-import { globalPipelineCounts, graphNodeCounts, jobForSession, pipelineItems, sessionPipelineCounts } from "./v2-pipeline.js";
+import { PIPELINE_GROUPS, PRODUCTION_STAGE_LABELS } from "./state.js";
+import { globalPipelineCounts, graphNodeCounts, jobForSession, pipelineItems, sessionPipelineCounts } from "./production-pipeline.js";
 import {
   $,
   edgeKind,
@@ -40,7 +40,7 @@ export function setDaemon(ok, label) {
 
 export function renderHealth(state) {
   const h = state.health || {};
-  const marker = h.v2_reset_marker || {};
+  const marker = h.production_marker || {};
   const rows = [
     ["daemon", h.ok ? "online" : "unknown"],
     ["graph backend", h.graph_backend],
@@ -48,8 +48,8 @@ export function renderHealth(state) {
     ["qwen model", h.qwen_model],
     ["qwen extract", `${h.qwen_extract_timeout_seconds || "?"}s`],
     ["auto drain", h.auto_drain_enabled ? "enabled" : "off"],
-    ["V2 marker", marker.adopted_existing_v2 ? "adopted existing stores" : marker.cleaned?.graph ? "clean reset applied" : "missing"],
-    ["pipeline", marker.pipeline_version || "v2-reset-2026-05"],
+    ["production marker", marker.adopted_existing_production ? "adopted existing stores" : marker.cleaned?.graph ? "clean reset applied" : "missing"],
+    ["pipeline", marker.pipeline_version || "production"],
   ];
   $("healthPanel").innerHTML = rows.map(([k, v]) => `<div class="health-item"><strong>${escapeHtml(v || "unknown")}</strong><span>${escapeHtml(k)}</span></div>`).join("");
 }
@@ -67,8 +67,8 @@ export function renderDashboard(state) {
   $("metricGrid").innerHTML = [
     metric("Sessions", sessions.length, "captured workstreams"),
     metric("Raw events", rawEvents, "append-only evidence rows"),
-    metric("V2 jobs", jobs.length, `${activeJobs} active, ${waitingJobs} waiting on model`),
-    metric("V2 graph", graphCounts.v2, `${edges.length} visible relations`),
+    metric("Production jobs", jobs.length, `${activeJobs} active, ${waitingJobs} waiting on model`),
+    metric("Production graph", graphCounts.production, `${edges.length} visible relations`),
   ].join("");
 
   renderPipeline($("pipelineStrip"), pipelineItems(globalPipelineCounts({ sessions, jobs, nodes })));
@@ -106,7 +106,7 @@ export function renderSessionDetail(state) {
   const events = detail.events || [];
   const status = job?.status || "not queued";
 
-  $("sessionSource").textContent = "Closed-session V2 job";
+  $("sessionSource").textContent = "Closed-session production job";
   $("sessionTitle").textContent = data.session_id;
   $("sessionSummary").textContent = job
     ? `${timeline.length} raw events, job ${status}, current stage ${job.current_stage || "-"}, last complete ${job.last_successful_stage || "-"}`
@@ -119,7 +119,7 @@ export function renderSessionDetail(state) {
   $("selectedJobPanel").innerHTML = renderSelectedJob(job, detail);
   $("jobStageRows").innerHTML = renderStageRows(stages, job);
   $("jobArtifacts").innerHTML = renderArtifacts(stages, job);
-  $("jobEventLog").innerHTML = events.map(renderJobEvent).join("") || empty("No V2 job events recorded yet.");
+  $("jobEventLog").innerHTML = events.map(renderJobEvent).join("") || empty("No production job events recorded yet.");
 }
 
 export function renderJobs(state) {
@@ -134,7 +134,7 @@ export function renderJobs(state) {
     return;
   }
   const jobs = state.jobs.jobs || [];
-  list.innerHTML = jobs.map(renderJobCard).join("") || empty("No V2 session jobs yet.");
+  list.innerHTML = jobs.map(renderJobCard).join("") || empty("No production session jobs yet.");
 }
 
 export function renderConnectorStatus(state) {
@@ -176,7 +176,7 @@ export function renderVersionFlow(state) {
 
 export function renderRetrievalResult(result) {
   if (result?.ok === false) {
-    $("retrievalResult").innerHTML = `<section class="panel"><h2>V2 retrieval is not ready</h2><p class="muted">${escapeHtml(result.error || "Unknown retrieval error")}</p>${result.hint ? `<p class="muted">${escapeHtml(result.hint)}</p>` : ""}<pre class="code-block">${escapeHtml(formatJson({ graph_path: result.graph_path, db_path: result.db_path }))}</pre></section>`;
+    $("retrievalResult").innerHTML = `<section class="panel"><h2>Production retrieval is not ready</h2><p class="muted">${escapeHtml(result.error || "Unknown retrieval error")}</p>${result.hint ? `<p class="muted">${escapeHtml(result.hint)}</p>` : ""}<pre class="code-block">${escapeHtml(formatJson({ graph_path: result.graph_path, db_path: result.db_path }))}</pre></section>`;
     return;
   }
   const retrieval = result.retrieval || {};
@@ -187,9 +187,9 @@ export function renderRetrievalResult(result) {
     <section class="panel">
       <div class="result-grid">
         <div>
-          <p class="eyebrow">Indexed V2 retrieval</p>
+          <p class="eyebrow">Indexed production retrieval</p>
           <h2>${escapeHtml(retrieval.intent || "general")}</h2>
-          <p class="muted">${escapeHtml(result.graph_scope || "v2 graph")} | repo ${escapeHtml(result.repo_id || "all")} | ${escapeHtml(truncate(result.db_path || "", 84))}</p>
+          <p class="muted">${escapeHtml(result.graph_scope || "production graph")} | repo ${escapeHtml(result.repo_id || "all")} | ${escapeHtml(truncate(result.db_path || "", 84))}</p>
           <div class="session-meta">
             <span class="pill ${String(retrieval.vector_status || "").includes("completed") ? "good" : "warn"}">vector ${escapeHtml(retrieval.vector_status || "unknown")}</span>
             <span class="pill blue">${escapeHtml(retrieval.reranker || "deterministic")}</span>
@@ -251,12 +251,12 @@ function repoLabel(repo) {
 }
 
 function renderSelectedJob(job, detail) {
-  if (!job) return empty("This session has no V2 job yet. Start a newer session or run Scan / Enqueue after a session_start boundary exists.");
+  if (!job) return empty("This session has no production job yet. Start a newer session or run Scan / Enqueue after a session_start boundary exists.");
   const stages = detail.stages || [];
   return `<article class="job-card selected-job">
     <div class="panel-head">
       <div>
-        <p class="eyebrow">V2 job</p>
+        <p class="eyebrow">Production job</p>
         <h3>${escapeHtml(job.job_id)}</h3>
       </div>
       <span class="pill ${statusTone(job.status)}">${escapeHtml(job.status)}</span>
@@ -276,7 +276,7 @@ function renderStageRows(stages, job) {
   if (!(stages || []).length) return empty("The job exists but has not started a stage yet.");
   return `<div class="stage-table">${stages.map(stage => `<article class="stage-row">
     <div>
-      <strong>${escapeHtml(V2_STAGE_LABELS[stage.stage] || readableKind(stage.stage))}</strong>
+      <strong>${escapeHtml(PRODUCTION_STAGE_LABELS[stage.stage] || readableKind(stage.stage))}</strong>
       <p class="muted small">${escapeHtml(stage.stage)}</p>
     </div>
     <span class="pill ${statusTone(stage.status)}">${escapeHtml(stage.status)}</span>
@@ -288,12 +288,12 @@ function renderStageRows(stages, job) {
 }
 
 function renderArtifacts(stages, job) {
-  if (!job) return empty("No V2 artifact directory exists for this session yet.");
+  if (!job) return empty("No production artifact directory exists for this session yet.");
   const rows = (stages || []).filter(stage => stage.output_artifact);
   return `<div class="artifact-list">
     <article class="artifact-card"><strong>Artifact directory</strong><p class="muted small">${escapeHtml(job.artifact_dir || "")}</p></article>
     ${rows.map(stage => `<article class="artifact-card">
-      <span class="pill ${statusTone(stage.status)}">${escapeHtml(V2_STAGE_LABELS[stage.stage] || stage.stage)}</span>
+      <span class="pill ${statusTone(stage.status)}">${escapeHtml(PRODUCTION_STAGE_LABELS[stage.stage] || stage.stage)}</span>
       <p>${escapeHtml(stage.output_artifact)}</p>
       ${stage.output_hash ? `<p class="muted small">sha256 ${escapeHtml(truncate(stage.output_hash, 32))}</p>` : ""}
     </article>`).join("")}
@@ -337,15 +337,15 @@ function renderJobCard(job) {
 }
 
 function renderMarker(marker) {
-  if (!marker) return `<span class="pill warn">V2 production marker missing</span><span class="pill">run reset or adopt before V2 graph writes</span>`;
+  if (!marker) return `<span class="pill warn">Production marker missing</span><span class="pill">run reset or adopt before session graph writes</span>`;
   if (marker.fresh_install) {
-    return `<span class="pill good">Fresh V2 stores ready</span><span class="pill blue">${escapeHtml(marker.pipeline_version || "v2")}</span><span class="pill">no pre-V2 graph cleanup needed</span>`;
+    return `<span class="pill good">Fresh production stores ready</span><span class="pill blue">${escapeHtml(marker.pipeline_version || "production")}</span><span class="pill">no graph cleanup needed</span>`;
   }
-  if (marker.adopted_existing_v2) {
+  if (marker.adopted_existing_production) {
     const docs = marker.validation?.retrieval?.retrieval_document_count;
-    return `<span class="pill good">V2 adopted existing stores</span><span class="pill blue">${escapeHtml(marker.pipeline_version || "v2")}</span>${docs ? `<span class="pill">${escapeHtml(docs)} retrieval docs at adoption</span>` : ""}`;
+    return `<span class="pill good">Production adopted existing stores</span><span class="pill blue">${escapeHtml(marker.pipeline_version || "production")}</span>${docs ? `<span class="pill">${escapeHtml(docs)} retrieval docs at adoption</span>` : ""}`;
   }
-  return `<span class="pill good">V2 clean reset applied</span><span class="pill blue">${escapeHtml(marker.pipeline_version || "v2")}</span>`;
+  return `<span class="pill good">Production clean reset applied</span><span class="pill blue">${escapeHtml(marker.pipeline_version || "production")}</span>`;
 }
 
 function connectorKv(label, value, tone) {

@@ -2,11 +2,8 @@ from __future__ import annotations
 
 import json
 import os
-import platform
-import shutil
 import signal
 import subprocess
-import sys
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -14,15 +11,37 @@ from pathlib import Path
 from typing import Any
 
 from agent_memory_orchestrator.core.config import Settings
+from agent_memory_orchestrator.peer.netd_binary import binary_capabilities
+from agent_memory_orchestrator.peer.netd_binary import build_binary
+from agent_memory_orchestrator.peer.netd_binary import go_path
+from agent_memory_orchestrator.peer.netd_binary import install_packaged_binary
+from agent_memory_orchestrator.peer.netd_binary import packaged_binary_candidates
+from agent_memory_orchestrator.peer.netd_binary import packaged_binary_path
+from agent_memory_orchestrator.peer.netd_binary import protocol_capabilities
+from agent_memory_orchestrator.peer.netd_binary import resolve_binary
+from agent_memory_orchestrator.peer.netd_binary import source_dir
+from agent_memory_orchestrator.peer.netd_binary import source_dir_candidates
 from agent_memory_orchestrator.peer.netd_client import PeerNetdClient, PeerNetdError
-
-
-class PeerNetdRuntimeError(RuntimeError):
-    """Raised when the managed peer sidecar cannot be built or controlled."""
+from agent_memory_orchestrator.peer.netd_errors import PeerNetdRuntimeError
+from agent_memory_orchestrator.peer.netd_platform import _creation_flags
+from agent_memory_orchestrator.peer.netd_platform import _missing_binary_requirements
+from agent_memory_orchestrator.peer.netd_platform import _tail_text
+from agent_memory_orchestrator.peer.netd_platform import binary_name
+from agent_memory_orchestrator.peer.netd_platform import platform_binary_dir_name
 
 
 REQUIRED_NETD_FLAGS = ("identity-key", "advertise-addr")
 REQUIRED_NETD_PROTOCOL_CAPABILITIES = ("remote_peer_id",)
+
+__all__ = [
+    "PeerNetdLaunchOptions",
+    "PeerNetdRuntime",
+    "PeerNetdRuntimeError",
+    "REQUIRED_NETD_FLAGS",
+    "REQUIRED_NETD_PROTOCOL_CAPABILITIES",
+    "binary_name",
+    "platform_binary_dir_name",
+]
 
 
 @dataclass(slots=True, frozen=True)
@@ -68,32 +87,8 @@ class PeerNetdRuntime:
     state_filename: str = "netd.json"
 
     def build(self, output_path: Path | None = None) -> dict[str, Any]:
-        source_dir = self.source_dir()
-        if not source_dir.exists():
-            raise PeerNetdRuntimeError(f"peer-netd source directory not found: {source_dir}")
-
-        go_path = self.go_path()
-        if not go_path:
-            raise PeerNetdRuntimeError("Go toolchain not found; install Go or set PATH before building peer-netd")
-
         target = output_path or self.default_binary_path()
-        target.parent.mkdir(parents=True, exist_ok=True)
-        result = subprocess.run(
-            [go_path, "build", "-o", str(target), ".\\cmd\\amo-peer-netd" if os.name == "nt" else "./cmd/amo-peer-netd"],
-            cwd=source_dir,
-            text=True,
-            capture_output=True,
-            check=False,
-            timeout=180,
-        )
-        if result.returncode != 0:
-            raise PeerNetdRuntimeError(f"go build failed: {result.stderr.strip() or result.stdout.strip()}")
-        return {
-            "ok": True,
-            "binary": str(target),
-            "source_dir": str(source_dir),
-            "go": go_path,
-        }
+        return build_binary(source_dir=self.source_dir(), target=target, go_path=self.go_path())
 
     def start(self, options: PeerNetdLaunchOptions, build_if_missing: bool = True) -> dict[str, Any]:
         if options.api_addr.endswith(":0"):
@@ -224,81 +219,14 @@ class PeerNetdRuntime:
 
     def binary_capabilities(self, binary: Path | None = None) -> dict[str, Any]:
         candidate = (binary or self.resolve_binary()).expanduser().resolve()
-        if not candidate.exists():
-            return {
-                "ok": False,
-                "binary": str(candidate),
-                "exists": False,
-                "missing_required_flags": list(REQUIRED_NETD_FLAGS),
-                "missing_protocol_capabilities": list(REQUIRED_NETD_PROTOCOL_CAPABILITIES),
-            }
-        try:
-            result = subprocess.run(
-                [str(candidate), "-h"],
-                text=True,
-                capture_output=True,
-                check=False,
-                timeout=5,
-            )
-        except (OSError, subprocess.SubprocessError) as exc:
-            return {
-                "ok": False,
-                "binary": str(candidate),
-                "exists": True,
-                "executable": False,
-                "error": str(exc),
-                "missing_required_flags": list(REQUIRED_NETD_FLAGS),
-                "missing_protocol_capabilities": list(REQUIRED_NETD_PROTOCOL_CAPABILITIES),
-            }
-        help_text = f"{result.stdout}\n{result.stderr}"
-        missing = [
-            flag
-            for flag in REQUIRED_NETD_FLAGS
-            if f"-{flag}" not in help_text and f"--{flag}" not in help_text
-        ]
-        protocol_capabilities = self.protocol_capabilities(candidate)
-        missing_protocol = [
-            capability
-            for capability in REQUIRED_NETD_PROTOCOL_CAPABILITIES
-            if capability not in protocol_capabilities.get("protocol_capabilities", [])
-        ]
-        return {
-            "ok": not missing and not missing_protocol,
-            "binary": str(candidate),
-            "exists": True,
-            "executable": True,
-            "returncode": result.returncode,
-            "missing_required_flags": missing,
-            "protocol_capabilities": protocol_capabilities.get("protocol_capabilities", []),
-            "missing_protocol_capabilities": missing_protocol,
-            "capabilities_error": protocol_capabilities.get("error", ""),
-        }
+        return binary_capabilities(
+            candidate,
+            required_flags=REQUIRED_NETD_FLAGS,
+            required_protocol_capabilities=REQUIRED_NETD_PROTOCOL_CAPABILITIES,
+        )
 
     def protocol_capabilities(self, binary: Path) -> dict[str, Any]:
-        try:
-            result = subprocess.run(
-                [str(binary), "--capabilities"],
-                text=True,
-                capture_output=True,
-                check=False,
-                timeout=5,
-            )
-        except (OSError, subprocess.SubprocessError) as exc:
-            return {"ok": False, "protocol_capabilities": [], "error": str(exc)}
-        if result.returncode != 0:
-            return {
-                "ok": False,
-                "protocol_capabilities": [],
-                "error": (result.stderr.strip() or result.stdout.strip()),
-            }
-        try:
-            payload = json.loads(result.stdout.strip())
-        except json.JSONDecodeError as exc:
-            return {"ok": False, "protocol_capabilities": [], "error": str(exc)}
-        capabilities = payload.get("protocol_capabilities") if isinstance(payload, dict) else []
-        if not isinstance(capabilities, list):
-            capabilities = []
-        return {"ok": True, "protocol_capabilities": [str(item) for item in capabilities]}
+        return protocol_capabilities(binary)
 
     def stop(self) -> dict[str, Any]:
         state = self.read_state()
@@ -502,79 +430,30 @@ class PeerNetdRuntime:
         return self.bin_dir / binary_name()
 
     def resolve_binary(self) -> Path:
-        if self.binary_path:
-            return self.binary_path.expanduser().resolve()
-        env_path = os.getenv("AMO_PEER_NETD_BIN", "").strip()
-        if env_path:
-            return Path(env_path).expanduser().resolve()
-        default_path = self.default_binary_path()
-        if default_path.exists():
-            return default_path
-        found = shutil.which(binary_name())
-        if found:
-            return Path(found).resolve()
-        packaged = self.packaged_binary_path()
-        if packaged is not None:
-            return packaged
-        return default_path
+        return resolve_binary(
+            self.binary_path,
+            default_path=self.default_binary_path(),
+            packaged_path=self.packaged_binary_path(),
+        )
 
     def install_packaged_binary(self, source: Path, target: Path | None = None) -> Path:
         target = target or self.default_binary_path()
-        target.parent.mkdir(parents=True, exist_ok=True)
-        if source.resolve() != target.resolve():
-            shutil.copy2(source, target)
-        if os.name != "nt":
-            target.chmod(target.stat().st_mode | 0o111)
-        return target
+        return install_packaged_binary(source, target)
 
     def packaged_binary_path(self) -> Path | None:
-        for candidate in self.packaged_binary_candidates():
-            if candidate.exists() and candidate.is_file():
-                return candidate
-        return None
+        return packaged_binary_path(self.packaged_binary_candidates())
 
     def packaged_binary_candidates(self) -> list[Path]:
-        candidates: list[Path] = []
-        installed_package_root = Path(__file__).resolve().parents[1]
-        candidates.append(installed_package_root / "bin" / platform_binary_dir_name() / binary_name())
-        for source_dir in self.source_dir_candidates():
-            candidates.append(source_dir / "bin" / platform_binary_dir_name() / binary_name())
-
-        prefix_root = Path(sys.prefix).resolve()
-        candidates.extend(
-            [
-                prefix_root / "bin" / platform_binary_dir_name() / binary_name(),
-                prefix_root / "Scripts" / platform_binary_dir_name() / binary_name(),
-            ]
-        )
-        return list(dict.fromkeys(candidates))
+        return packaged_binary_candidates(repo_root=self.repo_root)
 
     def source_dir(self) -> Path:
-        for candidate in self.source_dir_candidates():
-            if candidate.exists():
-                return candidate
-        return self.source_dir_candidates()[0]
+        return source_dir(self.source_dir_candidates())
 
     def source_dir_candidates(self) -> list[Path]:
-        if self.repo_root:
-            return [self.repo_root / "peer-netd"]
-
-        package_root = Path(__file__).resolve().parents[3]
-        prefix_root = Path(sys.prefix).resolve()
-        candidates = [
-            package_root / "peer-netd",
-            prefix_root / "peer-netd",
-            prefix_root / "Lib" / "peer-netd",
-            prefix_root / "share" / "peer-netd",
-        ]
-        return list(dict.fromkeys(candidates))
+        return source_dir_candidates(repo_root=self.repo_root)
 
     def go_path(self) -> str:
-        found = shutil.which("go")
-        if found:
-            return found
-        bundled = self.source_dir().parent / ".tmp" / "tools" / "go" / "bin" / ("go.exe" if os.name == "nt" else "go")
-        return str(bundled) if bundled.exists() else ""
+        return go_path(self.source_dir())
 
     def read_state(self) -> dict[str, Any]:
         if not self.state_path.exists():
@@ -613,54 +492,3 @@ class PeerNetdRuntime:
     @staticmethod
     def api_url(api_addr: str) -> str:
         return "http://" + api_addr.removeprefix("http://").removeprefix("https://")
-
-
-def binary_name() -> str:
-    return "amo-peer-netd.exe" if os.name == "nt" else "amo-peer-netd"
-
-
-def platform_binary_dir_name() -> str:
-    system = platform.system().lower()
-    if system.startswith("windows"):
-        goos = "windows"
-    elif system == "darwin":
-        goos = "darwin"
-    elif system == "linux":
-        goos = "linux"
-    else:
-        goos = system or "unknown"
-
-    machine = platform.machine().lower()
-    if machine in {"amd64", "x86_64"}:
-        goarch = "amd64"
-    elif machine in {"arm64", "aarch64"}:
-        goarch = "arm64"
-    elif machine in {"armv7l", "armv7"}:
-        goarch = "arm"
-    elif machine in {"i386", "i686", "x86"}:
-        goarch = "386"
-    else:
-        goarch = machine or "unknown"
-    return f"{goos}-{goarch}"
-
-
-def _missing_binary_requirements(capabilities: dict[str, Any]) -> list[str]:
-    missing = [str(item) for item in capabilities.get("missing_required_flags", [])]
-    missing.extend(f"protocol:{item}" for item in capabilities.get("missing_protocol_capabilities", []))
-    return missing
-
-
-def _creation_flags() -> int:
-    if os.name != "nt":
-        return 0
-    flags = 0
-    for name in ("CREATE_NO_WINDOW", "CREATE_NEW_PROCESS_GROUP", "DETACHED_PROCESS"):
-        flags |= int(getattr(subprocess, name, 0))
-    return flags
-
-
-def _tail_text(path: Path, limit: int = 2000) -> str:
-    if not path.exists():
-        return ""
-    text = path.read_text(encoding="utf-8", errors="replace")
-    return text[-limit:]

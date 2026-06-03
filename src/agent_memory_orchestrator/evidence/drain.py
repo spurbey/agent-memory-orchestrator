@@ -8,10 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from ..core.config import Settings
-from ..graph.session import SessionGraphBuilder
-from ..graph.store import GraphStore
-from ..reasoning_graph.jobs import V2SessionJobStore
-from ..versioning import VersionBackend
+from ..infrastructure.sqlite.production_job_store import ProductionSessionJobStore
 from .triggers import detect_trigger
 from .triggers import is_session_start
 from .triggers import record_session_id
@@ -55,7 +52,7 @@ class JsonlReadIssue:
 
 
 class EvidenceDrain:
-    """Drains append-only hook evidence into the Kuzu session graph.
+    """Drains append-only hook evidence into production session jobs.
 
     This class is daemon-side. Hooks must not instantiate it.
     """
@@ -63,21 +60,17 @@ class EvidenceDrain:
     def __init__(
         self,
         settings: Settings,
-        store: GraphStore,
-        version_backend: VersionBackend,
         *,
         cursor_path: Path | None = None,
         pending_path: Path | None = None,
         evidence_roots: list[Path] | None = None,
-        builder: SessionGraphBuilder | None = None,
-        job_store: V2SessionJobStore | None = None,
+        job_store: ProductionSessionJobStore | None = None,
     ) -> None:
         self.settings = settings
         self.cursor_path = cursor_path or settings.home / ".state" / "evidence_cursors.json"
         self.pending_path = pending_path or settings.home / ".state" / "evidence_pending_windows.json"
         self.evidence_roots = evidence_roots or [settings.evidence_dir]
-        self.builder = builder
-        self.job_store = job_store if job_store is not None else (None if builder is not None else V2SessionJobStore(settings))
+        self.job_store = job_store if job_store is not None else ProductionSessionJobStore(settings)
 
     def drain(self, *, limit: int = 500, session_id: str = "", max_windows: int | None = None) -> dict[str, Any]:
         start = time.monotonic()
@@ -169,8 +162,6 @@ class EvidenceDrain:
                     continue
 
                 state = states.setdefault(current_session, DrainSessionState())
-                if self.builder is not None:
-                    self.builder.ingest_basic_record(record)
                 stats["records_ingested"] += 1
                 decision = detect_trigger(record)
                 _update_state_from_record(state, record, evidence_day=evidence_day)
@@ -320,10 +311,7 @@ class EvidenceDrain:
         state: DrainSessionState,
         trigger: Any,
     ) -> dict[str, Any]:
-        if self.builder is not None:
-            return self.builder.process_window(session_id=session_id, records=state.pending_records, trigger=trigger)
-        if self.job_store is None:
-            raise RuntimeError("V2 session job store is required for enqueue-only drain")
+        del trigger
         enqueue = self.job_store.enqueue_session(
             session_id=session_id,
             boundary_event_id=boundary_event_id,
@@ -331,9 +319,11 @@ class EvidenceDrain:
             repo_path=state.repo_path,
             source_evidence_day=sorted(state.evidence_days)[-1] if state.evidence_days else "",
             source_evidence_days=sorted(state.evidence_days),
+            source_first_event_id=state.first_event_id,
+            source_latest_event_id=state.latest_event_id,
         )
         return {
-            "mode": "v2_job_enqueue",
+            "mode": "production_job_enqueue",
             "job_id": enqueue.job.get("job_id"),
             "created": enqueue.created,
             "updated": enqueue.updated,

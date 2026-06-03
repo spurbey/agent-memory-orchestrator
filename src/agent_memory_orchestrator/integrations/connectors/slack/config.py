@@ -6,7 +6,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
-from ....config import Settings
+from ....core.config import Settings
 
 
 APP_TOKEN_ENV = "AMO_SLACK_APP_TOKEN"
