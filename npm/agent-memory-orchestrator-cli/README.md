@@ -7,7 +7,7 @@ It installs the Python AMO runtime with `pipx`, writes local config, configures 
 ## Install
 
 ```bash
-npx -y agent-memory-orchestrator-cli -- install --target codex --preset cpu-balanced --qwen-model qwen3.5:9b
+npx -y agent-memory-orchestrator-cli -- install --target codex --preset cpu-balanced --qwen-model qwen3:1.7b
 ```
 
 The `--` after the package name is intentional. It prevents npm/npx from consuming AMO flags such as `--target`.
@@ -15,7 +15,7 @@ The `--` after the package name is intentional. It prevents npm/npx from consumi
 Install for Claude and Codex:
 
 ```bash
-npx -y agent-memory-orchestrator-cli -- install --target all --preset cpu-balanced --qwen-model qwen3.5:9b
+npx -y agent-memory-orchestrator-cli -- install --target all --preset cpu-balanced --qwen-model qwen3:1.7b
 ```
 
 If `npx` resolves `agent-memory-orchestrator-cli@0.1.1`, that registry package is too old for this command shape. Publish/use `0.1.4` or newer.
@@ -66,6 +66,16 @@ npx -y agent-memory-orchestrator-cli -- doctor --target codex
 amo-cli doctor --target codex
 ```
 
+If Windows reports `No module named 'agent_memory_orchestrator.app.cli'`,
+the terminal is still finding an old pip-installed `amo-cli.exe` shim. Remove
+the stale package and rerun the `npx` installer:
+
+```powershell
+py -3.11 -m pip uninstall -y agent-memory-orchestrator agent-memory-orchestrator-cli
+pipx uninstall agent-memory-orchestrator
+npx -y agent-memory-orchestrator-cli@latest -- install --from "git+https://github.com/spurbey/agent-memory-orchestrator.git@main" --target codex --preset cpu-balanced --qwen-model qwen3:1.7b --yes --force
+```
+
 ## Uninstall Managed Entries
 
 ```bash
@@ -75,7 +85,7 @@ amo-cli uninstall --target all
 ## Optional Slack Runtime
 
 ```bash
-npx -y agent-memory-orchestrator-cli -- install --target codex --preset cpu-balanced --qwen-model qwen3.5:9b --with-slack
+npx -y agent-memory-orchestrator-cli -- install --target codex --preset cpu-balanced --qwen-model qwen3:1.7b --with-slack
 amo-cli slack setup-wizard
 amo-cli slack run --reply-mode answer
 ```
