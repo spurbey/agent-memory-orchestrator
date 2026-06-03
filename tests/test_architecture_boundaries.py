@@ -271,10 +271,15 @@ def test_architecture_graph_root_is_compatibility_only() -> None:
 def test_architecture_source_roots_have_explicit_product_ownership() -> None:
     repo_root = Path(__file__).resolve().parents[1]
     src_root = repo_root / "src" / "agent_memory_orchestrator"
-    actual_roots = {path.name for path in src_root.iterdir() if path.is_dir() and path.name != "__pycache__"}
+    optional_generated_roots = {"bin"}
+    actual_roots = {
+        path.name
+        for path in src_root.iterdir()
+        if path.is_dir() and path.name not in {"__pycache__", *optional_generated_roots}
+    }
     product_domain_roots = {"domain", "evidence", "versioning", "peer"}
     product_application_roots = {"application"}
-    infrastructure_roots = {"infrastructure", "llm", "integrations", "install", "bin"}
+    infrastructure_roots = {"infrastructure", "llm", "integrations", "install"}
     runtime_roots = {"runtime", "web", "skill_checkpoint", "core", "orchestration", "extensions"}
     compatibility_roots = {"graph"}
     legacy_public_roots = {"memory", "retrieval"}
@@ -293,6 +298,8 @@ def test_architecture_source_roots_have_explicit_product_ownership() -> None:
     architecture_tree = (repo_root / "docs" / "ARCHITECTURE_TREE.md").read_text(encoding="utf-8")
     for root in expected_roots | {"reasoning_graph"}:
         assert f"`{root}/`" in architecture_tree
+    for root in optional_generated_roots:
+        assert f"`src/agent_memory_orchestrator/{root}/` is optional" in architecture_tree
 
 
 def test_architecture_application_services_root_is_compatibility_only() -> None:
