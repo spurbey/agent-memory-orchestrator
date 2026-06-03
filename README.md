@@ -9,7 +9,7 @@
   <a href="./LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-0f766e.svg"></a>
   <img alt="Python 3.10-3.13" src="https://img.shields.io/badge/python-3.10--3.13-2563eb.svg">
   <img alt="Local first" src="https://img.shields.io/badge/local--first-yes-16a34a.svg">
-  <img alt="GraphRAG V2" src="https://img.shields.io/badge/GraphRAG-V2-7c3aed.svg">
+  <img alt="Production GraphRAG" src="https://img.shields.io/badge/GraphRAG-production-7c3aed.svg">
 </p>
 
 ---
@@ -26,7 +26,7 @@ It turns agent sessions into a queryable graph of:
 - reasoning nodes that explain why code changed
 - retrieval-ready context with packet, commit, evidence, and code citations
 
-AMO is not another chat history dump. The V2 graph treats Git and code as the factual spine, then uses local LLM extraction only to enrich the why.
+AMO is not another chat history dump. The production graph treats Git and code as the factual spine, then uses local LLM extraction only to enrich the why.
 
 ## Why It Exists
 
@@ -67,8 +67,8 @@ The `npx` installer automatically chooses a compatible Python for `pipx` and ski
 Python 3.14 when it would force Kuzu to build from source. If a machine has no
 Python 3.10-3.13 interpreter, install Python 3.13 and rerun the same command.
 
-Fresh installs initialize an empty V2 production graph marker automatically. The destructive
-`v2-reset-production` command is only for machines that already have old pre-V2 graph/retrieval
+Fresh installs initialize an empty production graph marker automatically. The destructive
+`reset-production` command is only for machines that already have existing graph/retrieval
 data and need an explicit backup-first cleanup.
 
 Open the local UI:
@@ -95,7 +95,7 @@ python -m venv .venv
 pip install -e ".[dev,models]"
 amo-cli init-db
 amo-cli init-graph
-amo-cli v2-init-production
+amo-cli init-production
 amo-daemon
 ```
 
@@ -152,7 +152,7 @@ Full guide: [Slack connector](./docs/integrations/slack.md).
 
 ## How Retrieval Works
 
-AMO V2 retrieval is layered for precision:
+AMO production retrieval is layered for precision:
 
 1. classify the query
 2. collect exact, BM25, and vector candidates
@@ -179,14 +179,15 @@ The daemon processes captured sessions in the background:
 ```text
 hook JSONL capture
 -> daemon drain
--> cleaned evidence window when the next session starts
--> local Qwen extraction with deterministic fallback
--> Kuzu graph updates
+-> closed-session production job when the next session starts
+-> reasoning evidence view and commit-backed packets
+-> local Qwen reasoning extraction with deterministic review
+-> session graph write and central version merge
 -> retrieval document rebuild
 -> small resumable embedding/FAISS refresh batch
 ```
 
-The only raw-to-processing trigger is a new `session_start` for a different session. The daemon keeps the previous session's pending evidence in `.state/`, closes that session when the next one starts, then builds the cleaned window and graph update. Write, git, test, stop, connector finalize, and "remember this" events remain evidence inside the eventual session window; they do not trigger processing by themselves. The automatic loop can be controlled with `auto_drain_enabled`, `auto_drain_interval_seconds`, `auto_drain_record_limit`, and `auto_embedding_batch_size` in `~/.agent-memory-orchestrator/config.json`.
+The only raw-to-processing trigger is a new `session_start` for a different session. The daemon keeps the previous session's pending evidence in `.state/`, closes that session when the next one starts, then enqueues the closed-session production job. Write, git, test, stop, connector finalize, and "remember this" events remain evidence inside the eventual production job; they do not trigger processing by themselves. The automatic loop can be controlled with `auto_drain_enabled`, `auto_drain_interval_seconds`, `auto_drain_record_limit`, and `auto_embedding_batch_size` in `~/.agent-memory-orchestrator/config.json`.
 
 Retrieval is explicit through CLI or MCP tools such as:
 
@@ -200,7 +201,7 @@ Retrieval is explicit through CLI or MCP tools such as:
 ## Documentation
 
 - [Documentation map](./docs/README.md)
-- [Reasoning Graph V2](./docs/reasoning_graph/README.md)
+- [Reasoning Graph](./docs/reasoning_graph/README.md)
 - [Local development](./docs/setup/local-development.md)
 - [Local models](./docs/setup/local-models.md)
 - [Retrieval pipeline](./docs/operations/retrieval.md)
@@ -209,7 +210,7 @@ Retrieval is explicit through CLI or MCP tools such as:
 
 ## Project Status
 
-AMO is an active local-first product. The current direction is V2:
+AMO is an active local-first product. The current production direction is:
 
 - Git-backed work packets are the durable factual unit.
 - Reasoning nodes are extracted packet-wise and validated before graph promotion.

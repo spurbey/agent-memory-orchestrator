@@ -72,7 +72,7 @@ The LLM context window is assembled from three layers:
 
 The peer config is not sent directly to the LLM. AMO projects only the safe sharing boundary into the room context.
 
-The modular production layout is:
+The old direct-HTTP experiment used this rough layout:
 
 ```text
 src/agent_memory_orchestrator/peer/
@@ -85,6 +85,11 @@ src/agent_memory_orchestrator/peer/
   service.py     # orchestration API used by CLI/server
   server.py      # direct HTTP listener for Tailscale/private transport
 ```
+
+Current production peer architecture is the libp2p sidecar path documented in
+[`peer-network-libp2p.md`](./peer-network-libp2p.md). Current source ownership
+is documented in [`../ARCHITECTURE_TREE.md`](../ARCHITECTURE_TREE.md); do not use
+the historical `server.py` path for new work.
 
 ## Peer Listener Endpoints
 

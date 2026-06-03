@@ -5,7 +5,7 @@ AMO is local-first graph memory for AI coding sessions.
 ## Runtime Shape
 
 - Hooks capture evidence and fail open.
-- The daemon owns session-boundary drain, V2 session jobs, Kuzu, retrieval, local model calls, and web UI state.
+- The daemon owns session-boundary drain, production session jobs, Kuzu, retrieval, local model calls, and web UI state.
 - MCP exposes explicit retrieval tools to agents.
 - Kuzu stores graph truth.
 - SQLite stores retrieval/index ledgers.
@@ -19,42 +19,40 @@ hook evidence
 -> append-only JSONL
 -> daemon drain loop
 -> trigger only when a later session starts
--> enqueue durable V2 session job in SQLite
+-> enqueue durable production session job in SQLite
 -> evidence view and commit-backed work packets
 -> packet-wise Qwen reasoning extraction when available
 -> deterministic hunks, AST/code nodes, symbols, and code links
--> V2 Kuzu graph write
+-> session graph write
+-> central version merge
 -> retrieval document rebuild
 -> bounded embedding/FAISS refresh
 ```
 
 Hooks never perform graph work directly. Drain does not run Qwen, Kuzu writes,
-retrieval rebuild, embeddings, or old `GraphDelta` processing. It reads raw
+retrieval rebuild, embeddings, or session-graph extraction. It reads raw
 evidence, tracks cursors/session boundaries, and idempotently enqueues the
 previous session when a new `session_start` appears.
 
-The V2 job runner owns resumable processing and stores job/stage/event state in
+The production job runner owns resumable processing and stores job/stage/event state in
 SQLite. If Qwen or the embedding model is unavailable, the job pauses as
 `pending_model`; it does not create fake answer-grade reasoning or hash-vector
 production output.
 
-Old pre-V2 graph/retrieval data is cleaned only through an explicit backup-first
+Old graph/retrieval data is cleaned only through an explicit backup-first
 operator command:
 
 ```bash
-amo-cli v2-reset-production --backup --clean-graph --clean-retrieval
+amo-cli reset-production --backup --clean-graph --clean-retrieval
 ```
 
 Fresh installs do not need this command. Install/init creates a non-destructive
-fresh V2 marker when production graph and retrieval stores are empty.
+fresh production marker when production graph and retrieval stores are empty.
 
-The reset command never deletes raw JSONL evidence, config, or V2 job tables.
+The reset command never deletes raw JSONL evidence, config, or production job tables.
 It writes the production reset marker only after both graph and retrieval/vector
 storage have been cleaned from a verified backup; backup-only runs do not unlock
-V2 production writes.
-The legacy `GraphDelta` path is isolated to `graph-drain-smoke` and writes to a
-disposable graph under `.state/smoke/`, not the production Kuzu path.
-
+production writes.
 ## Retrieval Shape
 
 ```text
@@ -73,4 +71,23 @@ query
 - Model downloads are explicit setup actions.
 - Runtime state, evidence, graph stores, logs, and exports stay out of Git.
 
-See [Reasoning Graph V2](./reasoning_graph/README.md) for graph model details.
+## Source Ownership
+
+The codebase is organized around product responsibility:
+
+```text
+domain        pure models, contracts, and deterministic algorithms
+application   pipeline stages, services, workflows, and ports
+infrastructure concrete SQLite, Kuzu, FAISS, Git, filesystem, LLM, network adapters
+runtime       CLI, daemon, MCP, hook, and web entrypoints
+evidence      active raw evidence store and drain path
+peer          peer rooms, peer-agent policy, and peer-netd lifecycle
+integrations  connector and external-agent adapters
+install       end-user local setup and hook/config generation
+extensions    extension contracts and private/local algorithm boundary
+```
+
+See [Reasoning Graph](./reasoning_graph/README.md) for graph model details.
+See [Code Architecture Tree](./ARCHITECTURE_TREE.md) for the detailed folder and
+file ownership map, data flow, RAG pipeline placement, peer/connector placement,
+and refactor rules.

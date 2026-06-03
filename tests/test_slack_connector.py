@@ -3,8 +3,8 @@ from __future__ import annotations
 import json
 from urllib.parse import parse_qs, urlparse
 
-from agent_memory_orchestrator.app.cli import main
-from agent_memory_orchestrator.config import Settings
+from agent_memory_orchestrator.runtime.cli.main import main
+from agent_memory_orchestrator.core.config import Settings
 from agent_memory_orchestrator.integrations.connectors.slack import SlackConfig, SlackConnectorService
 from agent_memory_orchestrator.integrations.connectors.slack.client import SlackApiClient
 from agent_memory_orchestrator.integrations.connectors.slack.config import load_slack_config, slack_secret_path
@@ -14,12 +14,6 @@ from agent_memory_orchestrator.integrations.connectors.slack.service import buil
 from agent_memory_orchestrator.integrations.connectors.slack.socket_mode import SlackSocketModeRunner
 from agent_memory_orchestrator.integrations.connectors.slack.wizard import run_slack_setup_wizard
 from agent_memory_orchestrator.evidence.triggers import detect_trigger
-
-
-def test_legacy_slack_connector_package_keeps_public_exports() -> None:
-    from agent_memory_orchestrator.connectors.slack import SlackConnectorService as LegacyService
-
-    assert LegacyService is SlackConnectorService
 
 
 def test_slack_manifest_enables_socket_mode_and_message_scopes() -> None:

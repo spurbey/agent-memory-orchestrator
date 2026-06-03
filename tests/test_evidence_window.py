@@ -1,13 +1,10 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import json
-from pathlib import Path
 from typing import Any
 
-from agent_memory_orchestrator.config import Settings
 from agent_memory_orchestrator.evidence.triggers import TriggerDecision
 from agent_memory_orchestrator.evidence.window import MAX_QWEN_RECORDS, clean_evidence_window
-from agent_memory_orchestrator.graph.session import QwenGraphExtractor
 
 
 FORBIDDEN_QWEN_TERMS = (
@@ -19,33 +16,6 @@ FORBIDDEN_QWEN_TERMS = (
     "status_porcelain",
     "after_preview",
 )
-
-
-class _FakeQwenClient:
-    def __init__(self) -> None:
-        self.prompt = ""
-
-    def _generate_json(
-        self,
-        prompt: str,
-        *,
-        num_predict: int,
-        timeout_seconds: float | None = None,
-        schema: dict[str, Any] | None = None,
-    ) -> dict[str, Any]:
-        self.prompt = prompt
-        return {
-            "summary": "Updated evidence window cleaning before Qwen graph extraction.",
-            "goal": ["clean raw artifacts before graph extraction"],
-            "latest_decision": ["Qwen sees cleaned bounded evidence only."],
-            "changed_files": ["src/agent_memory_orchestrator/evidence_window.py"],
-            "tests": [],
-            "blockers": [],
-            "next_step": ["Run focused evidence-window tests."],
-            "decisions": ["Qwen sees cleaned bounded evidence only."],
-            "fixes": [],
-            "bugs": [],
-        }
 
 
 def test_clean_evidence_window_removes_raw_artifacts_and_bounds_records() -> None:
@@ -60,26 +30,6 @@ def test_clean_evidence_window_removes_raw_artifacts_and_bounds_records() -> Non
     assert "code edit applied" in encoded
     for forbidden in FORBIDDEN_QWEN_TERMS:
         assert forbidden not in encoded
-
-
-def test_qwen_graph_extractor_receives_clean_bounded_prompt(tmp_path: Path) -> None:
-    settings = make_settings(tmp_path)
-    fake = _FakeQwenClient()
-    extractor = QwenGraphExtractor(settings)
-    extractor.client = fake  # type: ignore[assignment]
-    trigger = TriggerDecision(True, "session_boundary", "new session s2 started after session s1")
-
-    delta = extractor.extract(session_id="s1", records=_dirty_records(), trigger=trigger)
-    lowered = fake.prompt.lower()
-
-    assert delta.summary == "Updated evidence window cleaning before Qwen graph extraction."
-    assert delta.goal == "clean raw artifacts before graph extraction"
-    assert delta.latest_decision == "Qwen sees cleaned bounded evidence only."
-    assert delta.next_step == "Run focused evidence-window tests."
-    assert len(fake.prompt) < 5000
-    for forbidden in FORBIDDEN_QWEN_TERMS:
-        assert forbidden not in lowered
-    assert "src/agent_memory_orchestrator/evidence_window.py" in lowered
 
 
 def _dirty_records() -> list[dict[str, Any]]:
@@ -147,29 +97,3 @@ def _dirty_records() -> list[dict[str, Any]]:
         }
     )
     return records
-
-
-def make_settings(tmp_path: Path) -> Settings:
-    return Settings(
-        home=tmp_path,
-        db_path=tmp_path / "legacy.db",
-        export_dir=tmp_path / "exports",
-        local_only=True,
-        mcp_transport="stdio",
-        mcp_host="127.0.0.1",
-        mcp_port=8765,
-        embedding_dims=64,
-        embedding_model="hash-fallback",
-        reranker_model="BAAI/bge-reranker-base",
-        vector_backend="disabled",
-        approval_mode="manual",
-        owner_user_id="local",
-        workspace_id="local",
-        project_id="default",
-        visibility_scope="private",
-        sensitivity_level="normal",
-        consensus_threshold=0.7,
-        max_review_rounds=5,
-        graph_path=tmp_path / "graph" / "amo.kuzu",
-        evidence_dir=tmp_path / "evidence",
-    )

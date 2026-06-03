@@ -77,7 +77,7 @@ Kuzu is opened for graph writes.
 
 If a second daemon starts for the same AMO home, it must exit before starting
 auto-drain. Dashboard/API readers should use SQLite, retrieval projections, and
-V2 artifacts by default; explicit graph expansion can still fail fast if Kuzu is
+production artifacts by default; explicit graph expansion can still fail fast if Kuzu is
 locked by the graph owner.
 
 ## Kuzu Access Matrix
@@ -85,7 +85,7 @@ locked by the graph owner.
 | Operation | Normal owner | Kuzu mode |
 | --- | --- | --- |
 | Hook capture | Hook process | none |
-| V2 session graph write | Daemon job runner | read-write |
+| Session graph write | Daemon job runner | read-write |
 | Central merge apply | Daemon job runner | read-write |
 | Retrieval candidate search | CLI/API/MCP/UI | none, SQLite/FAISS only |
 | Retrieval graph expansion | Daemon/API/CLI diagnostic | read-only |

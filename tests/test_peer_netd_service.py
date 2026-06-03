@@ -27,7 +27,7 @@ def test_peer_netd_service_plan_contains_enable_command(tmp_path: Path) -> None:
     command = plan["enable_command"]
     assert plan["ok"] is True
     assert plan["apply"] is False
-    assert "agent_memory_orchestrator.app.cli" in command
+    assert "agent_memory_orchestrator.runtime.cli.main" in command
     assert "--amo-home" in command
     assert str(tmp_path) in command
     assert "--node-id" in command
@@ -52,7 +52,7 @@ def test_peer_netd_service_plan_can_include_watcher(tmp_path: Path) -> None:
     watcher = plan["watcher"]
     watch_command = watcher["watch_command"]
     assert watcher["service_name"]
-    assert "agent_memory_orchestrator.app.cli" in watch_command
+    assert "agent_memory_orchestrator.runtime.cli.main" in watch_command
     assert "--amo-home" in watch_command
     assert str(tmp_path) in watch_command
     assert "peer-agent" in watch_command

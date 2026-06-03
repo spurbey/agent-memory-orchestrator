@@ -1,6 +1,6 @@
 # Retrieval Pipeline
 
-AMO V2 retrieval answers why-code-changed questions from graph truth, not raw chat logs.
+AMO production retrieval answers why-code-changed questions from graph truth, not raw chat logs.
 
 ## Pipeline
 
@@ -68,20 +68,20 @@ Current traversal rules:
 
 ## Production Refresh
 
-In production, retrieval refresh is a V2 job stage, not a separate daemon side
+In production, retrieval refresh is a production job stage, not a separate daemon side
 effect:
 
 ```text
 drain/enqueue closed sessions
--> V2SessionJobRunner
--> kuzu_write
+-> ProductionSessionJobRunner
+-> session graph write
 -> central_version_merge
 -> retrieval_docs
 -> embeddings
 -> faiss
 ```
 
-The V2 job runner builds retrieval documents only from graph nodes carrying the
+The production job runner builds retrieval documents only from graph nodes carrying the
 current `pipeline_version` and `graph_schema_version`. This keeps any legacy
 manual/smoke graph output out of the production retrieval ledger.
 
@@ -92,7 +92,7 @@ if active GraphView(repo_id, main, active) has central versions:
   build central-first docs from active KnowledgeVersion/KnowledgeAtom for repo_id
   also index session graph docs as provenance support
 else:
-  fall back to V2 session graph docs
+  fall back to production session graph docs
 ```
 
 `GraphCommit` and `GraphView` docs are lineage/debug context. They are not the
@@ -121,7 +121,7 @@ amo-cli graph-retrieval-embed --repo-id repo:remote:... --model BAAI/bge-m3
 ```
 
 These commands are maintenance/smoke tools. The normal closed-session production
-path uses the V2 job runner so stage status, errors, and retries are observable
+path uses the production job runner so stage status, errors, and retries are observable
 from `/api/jobs` and the dashboard Admin view.
 
 ## Retrieve
@@ -183,7 +183,7 @@ Expected response shape:
 
 ## Dashboard Retrieval
 
-The web dashboard Retrieval tab defaults to the same indexed V2 endpoint as the
+The web dashboard Retrieval tab defaults to the same indexed production endpoint as the
 CLI: `/graph/retrieve`. It should show:
 
 - generated answer text
@@ -198,12 +198,12 @@ same selector. Use `All repositories` only for operator/debug scans; use a
 specific repo for product retrieval so similarly named files or symbols in
 different projects do not compete.
 
-The dashboard no longer exposes the older `/graph/search` path. `/graph/search`
-remains only as a compatibility/smoke route for old tooling. Product retrieval
-must use the V2 document index, embedding ledger, FAISS cache, reranker, graph
+The dashboard does not expose `/graph/search`. That endpoint remains only for
+operator/debug graph inspection and explicit raw-evidence lookup. Product retrieval
+must use the production document index, embedding ledger, FAISS cache, reranker, graph
 neighborhood expansion, and answer-trace renderer.
 
-Configure the active V2 source in `config.json`:
+Configure the active production source in `config.json`:
 
 ```json
 {
@@ -214,7 +214,7 @@ Configure the active V2 source in `config.json`:
 }
 ```
 
-`retrieval_graph_path` can point at an isolated V2 graph when the graph used for
+`retrieval_graph_path` can point at an isolated production graph when the graph used for
 retrieval differs from the dashboard graph. Blank means use `graph_path`.
 `retrieval_graph_scope` can be blank; AMO will choose the active embedded scope
 for the configured model when possible.
@@ -243,7 +243,7 @@ If a result cannot cite graph support, treat it as not ready for answer-grade re
 
 Kuzu remains graph truth. FAISS can be deleted and rebuilt.
 
-## Real V2 Reset Validation
+## Reset-Fixture Validation
 
 The current real-session validation target is:
 
@@ -263,7 +263,7 @@ Expected high-level result:
 - `vector_status = faiss:completed`
 - `reranker = deterministic+bi_encoder+cross_encoder`
 - `what decisions were made about Codex hooks?` ranks `Fix: Hook behavior change to capture-only` first.
-- `which code changes are connected to Qwen extraction?` ranks Stage 4 decision-extraction reasoning first.
+- `which code changes are connected to Qwen extraction?` ranks Qwen reasoning extraction first.
 - `why did we add focused evidence windows?` ranks the focused evidence window reasoning and code nodes.
 
 Latest trace validation:

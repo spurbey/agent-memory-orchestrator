@@ -30,7 +30,7 @@ amo-daemon
 Installed Codex/Claude setup can point the daemon at the user AMO home:
 
 ```powershell
-python -m agent_memory_orchestrator.daemon --amo-home "$env:USERPROFILE\.agent-memory-orchestrator"
+amo-daemon --amo-home "$env:USERPROFILE\.agent-memory-orchestrator"
 ```
 
 Open:
@@ -49,7 +49,7 @@ amo-mcp
 MCP clients should run:
 
 ```bash
-python -m agent_memory_orchestrator.mcp.server
+amo-mcp
 ```
 
 ## Import Existing Sessions

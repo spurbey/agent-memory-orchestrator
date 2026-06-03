@@ -1,21 +1,26 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 from pathlib import Path
 
 import pytest
 
-from agent_memory_orchestrator.config import Settings
-from agent_memory_orchestrator.graph.service import GraphRagService
-from agent_memory_orchestrator.graph.store import GraphNode, InMemoryGraphStore
-from agent_memory_orchestrator.mcp.tools import MCP_MEMORY_TOOL_CONTRACTS, MemoryMcpToolService
+from agent_memory_orchestrator.core.config import Settings
+from agent_memory_orchestrator.application.services.memory_graph.service import GraphRagService
+from agent_memory_orchestrator.infrastructure.kuzu import GraphNode, InMemoryGraphStore
+from agent_memory_orchestrator.domain.retrieval.models import RetrievalDocument
+from agent_memory_orchestrator.infrastructure.sqlite.retrieval_store import RetrievalIndexStore
+from agent_memory_orchestrator.runtime.mcp.tools import MCP_MEMORY_TOOL_CONTRACTS, MemoryMcpToolService
 from agent_memory_orchestrator.llm.qwen import DeterministicPlanner
 
 
 def make_settings(tmp_path: Path) -> Settings:
+    (tmp_path / ".data").mkdir(parents=True, exist_ok=True)
     return Settings(
         home=tmp_path,
         db_path=tmp_path / "agent_memory.db",
+        retrieval_db_path=tmp_path / ".data" / "retrieval.sqlite",
         export_dir=tmp_path / "exports",
         local_only=True,
         mcp_transport="stdio",
@@ -38,6 +43,19 @@ def make_settings(tmp_path: Path) -> Settings:
         rerank_top_k=50,
         rerank_max_chars=1800,
     )
+
+
+class _FakeIndexedGraph:
+    def __init__(self, payload: dict) -> None:
+        self.payload = payload
+        self.calls: list[dict] = []
+
+    def retrieve_indexed_graph(self, **kwargs) -> dict:
+        self.calls.append(kwargs)
+        return self.payload
+
+    def close(self) -> None:
+        pass
 
 
 def test_mcp_memory_tool_contracts_are_explicit(tmp_path) -> None:
@@ -96,9 +114,8 @@ def test_mcp_graph_tools_are_explicit_and_do_not_use_hybrid_context_pack_injecti
     finally:
         svc.close()
 
-    assert result["ok"] is True
-    assert result["count"] >= 1
-    assert "AMO GraphRAG context" in result["context"]
+    assert result["ok"] is False
+    assert result["error"] == "active_repo_projection_missing"
     assert status["ok"] is True
     assert status["counts"]["draft"] >= 1
 
@@ -108,13 +125,155 @@ def test_mcp_graph_tool_without_injected_graph_requires_daemon(tmp_path) -> None
     settings = Settings(**{**settings.__dict__, "mcp_port": 9})
     svc = MemoryMcpToolService(settings)
     try:
-        result = svc.amo_graph_search(query="codex hooks", limit=3)
+        result = svc.amo_graph_search(query="codex hooks", repo_id="repo:amo", limit=3)
     finally:
         svc.close()
 
     assert result["ok"] is False
     assert result["requires_daemon"] is True
     assert result["tool"] == "amo_graph_search"
+
+
+def test_mcp_graph_search_uses_active_repo_projection_when_repo_id_is_provided(tmp_path) -> None:
+    payload = {
+        "ok": True,
+        "retrieval": {
+            "query": "why did graph service change?",
+            "vector_status": "faiss:completed",
+            "hits": [
+                {
+                    "score": 1.42,
+                    "reasons": ["term_overlap:graph,service"],
+                    "document": {
+                        "doc_id": "doc:file-impact",
+                        "doc_type": "file_impact",
+                        "node_kind": "FileImpactSummary",
+                        "repo_id": "repo:amo",
+                        "packet_id": "WP0001",
+                        "commit_sha": "abc1234",
+                        "title": "Impact summary for src/agent_memory_orchestrator/graph/service.py",
+                        "body": "FileImpactSummary: graph/service.py changed to render active repository retrieval context.",
+                        "metadata": {
+                            "path": "src/agent_memory_orchestrator/graph/service.py",
+                            "commit": {"message": "feat(retrieval): render repository context"},
+                            "problem_refs": [{"excerpt": "The answer only showed prompt text."}],
+                            "rationale_refs": [{"excerpt": "Render file impact and version context for MCP."}],
+                        },
+                    },
+                }
+            ],
+        },
+        "answer": {
+            "text": "Answer from repository memory:\nUse this as retrieval context for synthesis.",
+            "context": {
+                "version_timeline": {
+                    "entries": [
+                        {
+                            "commit_sha": "abc1234",
+                            "message": "feat(retrieval): render repository context",
+                            "why": "Render file impact and version context for MCP.",
+                        }
+                    ]
+                }
+            },
+        },
+    }
+    graph = _FakeIndexedGraph(payload)
+    svc = MemoryMcpToolService(make_settings(tmp_path), graph=graph)  # type: ignore[arg-type]
+    try:
+        result = svc.amo_graph_search(
+            query="why did graph service change?",
+            repo_id="repo:amo",
+            limit=5,
+            require_vector=True,
+        )
+    finally:
+        svc.close()
+
+    assert graph.calls[0]["repo_id"] == "repo:amo"
+    assert graph.calls[0]["require_vector"] is True
+    assert result["ok"] is True
+    assert result["retrieval_mode"] == "active_repository_memory"
+    assert "retrieval context" in result["context_for_synthesis"]
+    assert result["retrieval_status"]["vector"] == "faiss:completed"
+    assert result["hits"][0]["kind"] == "file_impact"
+    assert result["hits"][0]["commit"]["sha"] == "abc1234"
+    assert result["hits"][0]["evidence"][0]["role"] == "user_goal"
+    assert result["version_history"][0]["commit"] == "abc1234"
+
+
+def test_mcp_graph_search_resolves_repo_name_to_active_projection(tmp_path) -> None:
+    settings = make_settings(tmp_path)
+    repo_id = "repo:remote:311ebb9cda1fb40f"
+    projection_id = "rproj:amo"
+    conn = sqlite3.connect(settings.retrieval_db_path)
+    conn.row_factory = sqlite3.Row
+    index_store = RetrievalIndexStore(conn)
+    try:
+        index_store.upsert_projection(
+            projection_id=projection_id,
+            repo_id=repo_id,
+            projection_version="curated-retrieval-projection-v1",
+            source_artifact_hash="source",
+            doc_content_hash="docs",
+            status="validated",
+        )
+        index_store.activate_projection(repo_id=repo_id, projection_id=projection_id)
+        index_store.upsert_documents(
+            [
+                RetrievalDocument(
+                    doc_id="doc:packet",
+                    doc_type="packet",
+                    graph_node_id="job:WP0001",
+                    node_kind="Packet",
+                    repo_id=repo_id,
+                    projection_id=projection_id,
+                    packet_id="WP0001",
+                    commit_sha="abc1234",
+                    title="WP0001 Add AMO demo",
+                    body="Packet for AMO demo.",
+                    metadata={"repo_path": r"C:\Users\sumit\Downloads\Dora\agent-memory-orchestrator"},
+                )
+            ]
+        )
+    finally:
+        conn.close()
+
+    payload = {
+        "ok": True,
+        "retrieval": {
+            "vector_status": "faiss:completed",
+            "hits": [
+                {
+                    "score": 1.0,
+                    "document": {
+                        "doc_id": "doc:packet",
+                        "doc_type": "packet",
+                        "node_kind": "Packet",
+                        "repo_id": repo_id,
+                        "title": "WP0001 Add AMO demo",
+                        "body": "Packet for AMO demo.",
+                        "metadata": {"problem_refs": [{"excerpt": "Build AMO demo retrieval."}]},
+                    },
+                }
+            ],
+        },
+        "answer": {"text": "Answer from repository memory:"},
+    }
+    graph = _FakeIndexedGraph(payload)
+    svc = MemoryMcpToolService(settings, graph=graph)  # type: ignore[arg-type]
+    try:
+        result = svc.amo_graph_search(query="why was demo created", repo_id="agent-memory-orchestrator", limit=3)
+        default_result = svc.amo_graph_search(query="why was demo created", limit=3)
+    finally:
+        svc.close()
+
+    assert graph.calls[0]["repo_id"] == repo_id
+    assert graph.calls[1]["repo_id"] == repo_id
+    assert result["ok"] is True
+    assert default_result["ok"] is True
+    assert result["repo"]["id"] == repo_id
+    assert default_result["repo"]["id"] == repo_id
 
 
 def test_mcp_memory_write_search_context_and_timeline(tmp_path) -> None:

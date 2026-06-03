@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import json
 import os
@@ -7,7 +7,7 @@ import urllib.request
 from typing import Any
 
 from ...core.config import Settings
-from ...llm.qwen import OllamaQwenClient, QwenUnavailable
+from ...infrastructure.llm import OllamaQwenClient, QwenUnavailable
 from .prompts import FINAL_SYNTHESIS_SCHEMA, PEER_ANSWER_SCHEMA, ROOM_SUMMARY_SCHEMA
 from .prompts import final_synthesis_prompt, peer_answer_prompt, room_summary_prompt
 

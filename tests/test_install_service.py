@@ -3,20 +3,13 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from agent_memory_orchestrator.app.cli import main
-from agent_memory_orchestrator.config import Settings
+from agent_memory_orchestrator.runtime.cli.main import main
+from agent_memory_orchestrator.core.config import Settings
 from agent_memory_orchestrator.install.service import InstallOptions
 from agent_memory_orchestrator.install.service import apply_install_plan
 from agent_memory_orchestrator.install.service import build_install_plan
 from agent_memory_orchestrator.install.service import doctor
 from agent_memory_orchestrator.install.service import uninstall
-
-
-def test_legacy_install_service_module_keeps_public_exports() -> None:
-    from agent_memory_orchestrator import install_service
-
-    assert install_service.InstallOptions is InstallOptions
-    assert install_service.build_install_plan is build_install_plan
 
 
 def test_codex_install_applies_managed_hooks_and_mcp(tmp_path: Path) -> None:
@@ -36,9 +29,9 @@ def test_codex_install_applies_managed_hooks_and_mcp(tmp_path: Path) -> None:
     assert "existing = true" in text
     assert "codex_hooks = true" in text
     assert "[mcp_servers.agent_memory_orchestrator]" in text
-    assert "agent_memory_orchestrator.mcp.server" in text
+    assert "agent_memory_orchestrator.runtime.mcp.server" in text
     assert "[[hooks.UserPromptSubmit]]" not in text
-    assert "agent_memory_orchestrator.hook --agent codex" not in text
+    assert "agent_memory_orchestrator.runtime.hook.launcher --agent codex" not in text
     assert str(amo_home.resolve()).replace("\\", "\\\\") in text
     assert (amo_home / "bin" / "amo_hook_launcher.py").exists()
 
@@ -54,7 +47,7 @@ def test_codex_install_applies_managed_hooks_and_mcp(tmp_path: Path) -> None:
     assert "skill-checkpoint mark --agent codex" in codex_skill.read_text(encoding="utf-8")
     launcher_text = (amo_home / "bin" / "amo_hook_launcher.py").read_text(encoding="utf-8")
     assert "IMPORT_ROOT" in launcher_text
-    assert "runpy.run_module('agent_memory_orchestrator.hook'" in launcher_text
+    assert "runpy.run_module('agent_memory_orchestrator.runtime.hook.launcher'" in launcher_text
 
     status = doctor(target="codex", user_home=user_home, amo_home=amo_home)
     assert status["ok"] is True
@@ -80,7 +73,10 @@ def test_claude_install_merges_json_settings(tmp_path: Path) -> None:
     assert "agent-memory-orchestrator" in payload["mcpServers"]
     assert payload["mcpServers"]["agent-memory-orchestrator"]["args"][-1] == str(amo_home.resolve())
     assert "UserPromptSubmit" in payload["hooks"]
-    assert any("agent_memory_orchestrator.hook --agent claude" in hook["command"] for hook in payload["hooks"]["Stop"][0]["hooks"])
+    assert any(
+        "agent_memory_orchestrator.runtime.hook.launcher --agent claude" in hook["command"]
+        for hook in payload["hooks"]["Stop"][0]["hooks"]
+    )
     command = user_home / ".claude" / "commands" / "skill-checkpoint.md"
     assert command.exists()
     assert "skill-checkpoint mark --agent claude" in command.read_text(encoding="utf-8")
@@ -103,8 +99,8 @@ def test_uninstall_removes_managed_entries(tmp_path: Path) -> None:
     codex_text = (user_home / ".codex" / "config.toml").read_text(encoding="utf-8")
     codex_hooks = (user_home / ".codex" / "hooks.json").read_text(encoding="utf-8")
     claude_payload = json.loads((user_home / ".claude" / "settings.json").read_text(encoding="utf-8"))
-    assert "agent_memory_orchestrator.hook" not in codex_text
-    assert "agent_memory_orchestrator.hook" not in codex_hooks
+    assert "agent_memory_orchestrator.runtime.hook.launcher" not in codex_text
+    assert "agent_memory_orchestrator.runtime.hook.launcher" not in codex_hooks
     assert "amo_hook_launcher.py" not in codex_hooks
     assert "agent-memory-orchestrator" not in claude_payload.get("mcpServers", {})
     assert not any(claude_payload.get("hooks", {}).values())
