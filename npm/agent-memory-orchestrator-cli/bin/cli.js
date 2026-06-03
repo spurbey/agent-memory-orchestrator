@@ -41,7 +41,7 @@ Wrapper flags:
   --with-all-extras     Enable all optional runtime extras.
 
 Examples:
-  npx -y agent-memory-orchestrator-cli -- install --target codex --preset cpu-balanced --qwen-model qwen3.5:9b
+  npx -y agent-memory-orchestrator-cli -- install --target codex --preset cpu-balanced --qwen-model qwen3:1.7b
   npx -y agent-memory-orchestrator-cli -- install --with-models --download-models --target all
   npx -y agent-memory-orchestrator-cli -- install --with-slack --target claude
   npx -y agent-memory-orchestrator-cli -- doctor --target codex
@@ -319,19 +319,43 @@ function injectOptionalPackages(runner, extras) {
   );
 }
 
-function pipxBinDirs(runner) {
+function pipxEnvValue(runner, name) {
+  const result = run(runner.cmd, pipxArgs(runner, ["environment", "--value", name]), { silent: true });
+  if (!result.ok) {
+    return null;
+  }
+  const value = (result.stdout || "").trim();
+  return value || null;
+}
+
+function pipxBinDirs(runner, packageName = PIPX_PACKAGE) {
   const dirs = [];
-  const envResult = run(runner.cmd, pipxArgs(runner, ["environment", "--value", "PIPX_BIN_DIR"]), { silent: true });
-  const envDir = (envResult.stdout || "").trim();
-  if (envResult.ok && envDir) {
+  const envDir = pipxEnvValue(runner, "PIPX_BIN_DIR");
+  if (envDir) {
     dirs.push(envDir);
   }
 
+  const scriptsDir = process.platform === "win32" ? "Scripts" : "bin";
+  const pipxHome = pipxEnvValue(runner, "PIPX_HOME");
+  if (pipxHome) {
+    dirs.push(path.join(pipxHome, "venvs", packageName, scriptsDir));
+  }
+
   dirs.push(path.join(os.homedir(), ".local", "bin"));
+  dirs.push(path.join(os.homedir(), "pipx", "venvs", packageName, scriptsDir));
+  dirs.push(path.join(os.homedir(), ".local", "pipx", "venvs", packageName, scriptsDir));
   if (process.platform === "win32") {
     const appData = process.env.APPDATA;
+    const localAppData = process.env.LOCALAPPDATA;
     if (appData) {
       dirs.push(path.join(appData, "Python", "Scripts"));
+    }
+    if (localAppData) {
+      dirs.push(path.join(localAppData, "pipx", "pipx", "venvs", packageName, scriptsDir));
+      dirs.push(path.join(localAppData, "Programs", "Python", "Python313", "Scripts"));
+      dirs.push(path.join(localAppData, "Programs", "Python", "Python312", "Scripts"));
+      dirs.push(path.join(localAppData, "Programs", "Python", "Python311", "Scripts"));
+      dirs.push(path.join(localAppData, "Programs", "Python", "Python310", "Scripts"));
     }
   }
   return [...new Set(dirs)];
@@ -341,16 +365,49 @@ function executableName(appName) {
   return process.platform === "win32" ? `${appName}.exe` : appName;
 }
 
-function resolveInstalledApp(runner, appName) {
-  if (commandExists(appName)) {
-    return appName;
+function validateInstalledApp(candidate) {
+  const result = run(candidate, ["--help"], { silent: true });
+  if (result.ok) {
+    return { ok: true };
   }
-  for (const dir of pipxBinDirs(runner)) {
-    const candidate = path.join(dir, executableName(appName));
-    if (fs.existsSync(candidate)) {
+  const detail = outputTail(`${result.stdout || ""}\n${result.stderr || ""}`);
+  const staleNamespace = detail.includes("agent_memory_orchestrator.app.");
+  return { ok: false, staleNamespace, detail };
+}
+
+function resolveInstalledApp(runner, appName) {
+  const candidates = [];
+  for (const dir of pipxBinDirs(runner, PIPX_PACKAGE)) {
+    candidates.push(path.join(dir, executableName(appName)));
+  }
+  if (commandExists(appName)) {
+    candidates.push(appName);
+  }
+
+  const checked = [];
+  for (const candidate of [...new Set(candidates)]) {
+    if (candidate !== appName && !fs.existsSync(candidate)) {
+      continue;
+    }
+    const validation = validateInstalledApp(candidate);
+    if (validation.ok) {
       return candidate;
     }
+    checked.push({ candidate, ...validation });
+    if (!validation.staleNamespace && candidate !== appName) {
+      const detail = validation.detail ? `\n${validation.detail}` : "";
+      throw new Error(`Installed ${appName} exists but failed its startup check: ${candidate}${detail}`);
+    }
   }
+
+  const stale = checked.find((item) => item.staleNamespace);
+  if (stale) {
+    throw new Error(
+      `Found a stale ${appName} entrypoint that still imports agent_memory_orchestrator.app.*: ${stale.candidate}\n` +
+        "Remove the old pip-installed AMO package or rerun the npx installer after opening a fresh terminal."
+    );
+  }
+
   return null;
 }
 
@@ -420,7 +477,7 @@ function runDoctor(args) {
           : null,
         pipx_available: Boolean(runner),
         amo_cli_available: false,
-        hint: "Run `npx -y agent-memory-orchestrator-cli -- install --target codex --preset cpu-balanced --qwen-model qwen3.5:9b`.",
+        hint: "Run `npx -y agent-memory-orchestrator-cli -- install --target codex --preset cpu-balanced --qwen-model qwen3:1.7b`.",
       },
       null,
       2
