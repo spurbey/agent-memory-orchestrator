@@ -177,6 +177,141 @@ class PeerAgentService:
             return self._room_result(room_id, mode="peer_assisted", reason="timeout_partial", started=started)
         return self._room_result(room_id, mode="timed_out", reason="deadline_reached", started=started)
 
+    def ask_room(
+        self,
+        *,
+        room_id: str,
+        query: str,
+        peer_ids: list[str] | None = None,
+        session_id: str = "",
+        min_confidence: float | None = None,
+        timeout_seconds: float | None = None,
+        reason: str = "manual_followup",
+    ) -> dict[str, Any]:
+        self._ensure_enabled()
+        safe_query = _require_text(query, "query")
+        safe_room_id = _require_text(room_id, "room_id")
+        started = time.monotonic()
+        room = self.peer.store.get_room(safe_room_id)
+        config = self.peer.store.load_config()
+        if str(room.get("initiator_node_id") or "") != config.node_id:
+            return {
+                "ok": False,
+                "room_id": safe_room_id,
+                "error": "ask_room_requires_initiator_node",
+            }
+        peers = self._room_target_peers(room, peer_ids=peer_ids)
+        if not peers:
+            return {"ok": False, "room_id": safe_room_id, "error": "no_room_peers_to_ask"}
+        threshold = self._min_confidence(min_confidence)
+        timeout = self._timeout(timeout_seconds)
+        deadline_at = _deadline_at(timeout)
+        logical_request_id = f"q_{stable_json_hash({'room_id': safe_room_id, 'query': safe_query, 'created_at': utc_now()})[:16]}"
+        state = self.state.load(safe_room_id)
+        state["agent_managed"] = True
+        state["schema_version"] = 1
+        state["status"] = "open"
+        state["deadline_at"] = deadline_at
+        state["final"] = {}
+        if not str(state.get("original_query") or "").strip():
+            state["original_query"] = str(room.get("topic") or safe_query)
+        peer_requests = state.get("peer_requests") if isinstance(state.get("peer_requests"), list) else []
+        deliveries: list[dict[str, Any]] = []
+        for peer in peers:
+            request_id = f"req_{stable_json_hash({'logical_request_id': logical_request_id, 'peer': peer.node_id})[:16]}"
+            metadata = {
+                "schema_version": 1,
+                "agent_room_schema_version": 1,
+                "logical_request_id": logical_request_id,
+                "request_id": request_id,
+                "room_id": safe_room_id,
+                "parent_message_id": "",
+                "audience": "peer",
+                "target_peer_id": peer.node_id,
+                "query": safe_query,
+                "session_id": session_id,
+                "intent": "room_followup",
+                "open_gaps": [],
+                "min_confidence": threshold,
+                "deadline_at": deadline_at,
+                "requested_capabilities": ["graph_retrieval", "memory_search", "llm_answer"],
+                "disclosure_boundary": room.get("share_boundary") or config.share_boundary(),
+                "raw_evidence_requested": False,
+            }
+            delivery = self.peer.send_message_to_peer(
+                peer_id=peer.node_id,
+                room_id=safe_room_id,
+                message_type=CONTEXT_REQUEST,
+                content=safe_query,
+                metadata=metadata,
+            )
+            deliveries.append(delivery)
+            peer_requests.append(
+                {
+                    "peer_id": peer.node_id,
+                    "request_id": request_id,
+                    "logical_request_id": logical_request_id,
+                    "query": safe_query,
+                    "reason": reason,
+                    "delivery_ok": bool(delivery.get("ok")),
+                    "delivery": delivery.get("delivery", {}),
+                }
+            )
+        state["peer_requests"] = peer_requests
+        self.state.save(safe_room_id, state)
+        return {
+            "ok": True,
+            "room_id": safe_room_id,
+            "mode": "room_followup",
+            "query": safe_query,
+            "logical_request_id": logical_request_id,
+            "peer_requests": peer_requests[-len(peers) :],
+            "deliveries": deliveries,
+            "timing": {"total_ms": _elapsed_ms(started)},
+        }
+
+    def continue_room(
+        self,
+        *,
+        room_id: str,
+        min_confidence: float | None = None,
+        timeout_seconds: float | None = None,
+    ) -> dict[str, Any]:
+        self._ensure_enabled()
+        safe_room_id = _require_text(room_id, "room_id")
+        room = self.peer.store.get_room(safe_room_id)
+        config = self.peer.store.load_config()
+        if str(room.get("initiator_node_id") or "") != config.node_id:
+            return {
+                "ok": False,
+                "room_id": safe_room_id,
+                "error": "continue_room_requires_initiator_node",
+            }
+        state = self.state.load(safe_room_id)
+        context = self.peer.store.context_pack(safe_room_id, viewer_node_id=config.node_id)
+        responses = self._peer_responses(safe_room_id)
+        plan = self._plan_room_continuation(context=context, responses=responses, state=state)
+        action = str(plan.get("action") or "wait").strip().lower()
+        self._record_planner_action(safe_room_id, plan)
+        if action == "finalize":
+            final = self._finalize_room(safe_room_id, reason="planner_finalized")
+            return {"ok": True, "room_id": safe_room_id, "action": "finalize", "plan": plan, "finalize": final}
+        if action in {"ask_peer", "ask_peers"}:
+            query = str(plan.get("query") or "").strip()
+            if not query:
+                return {"ok": False, "room_id": safe_room_id, "action": action, "plan": plan, "error": "planner_query_required"}
+            peer_ids = [str(item).strip() for item in plan.get("peer_ids", []) if str(item).strip()]
+            followup = self.ask_room(
+                room_id=safe_room_id,
+                query=query,
+                peer_ids=peer_ids or None,
+                min_confidence=min_confidence,
+                timeout_seconds=timeout_seconds,
+                reason="planner_followup",
+            )
+            return {"ok": bool(followup.get("ok")), "room_id": safe_room_id, "action": action, "plan": plan, "followup": followup}
+        return {"ok": True, "room_id": safe_room_id, "action": "wait", "plan": plan}
+
     def watch_once(self, *, limit: int | None = None) -> dict[str, Any]:
         self._ensure_enabled()
         config = self.peer.store.load_config()
@@ -662,6 +797,70 @@ class PeerAgentService:
     def _select_peers(self, *, peer_ids: list[str] | None = None) -> list[PeerNode]:
         config = self.peer.store.load_config()
         return select_context_peers(config, peer_ids=peer_ids, max_peers=self.settings.peer_agent_max_peers)
+
+    def _room_target_peers(self, room: dict[str, Any], *, peer_ids: list[str] | None = None) -> list[PeerNode]:
+        config = self.peer.store.load_config()
+        if peer_ids:
+            return [peer for peer in self._select_peers(peer_ids=peer_ids) if peer.node_id in set(peer_ids)]
+        participants = [str(item) for item in room.get("participants", []) if str(item).strip()]
+        room_peer_ids = [node_id for node_id in participants if node_id != config.node_id]
+        return self._select_peers(peer_ids=room_peer_ids)
+
+    def _plan_room_continuation(
+        self,
+        *,
+        context: dict[str, Any],
+        responses: list[dict[str, Any]],
+        state: dict[str, Any],
+    ) -> dict[str, Any]:
+        try:
+            payload = self.llm.plan_room_continuation(
+                room_context=context,
+                peer_responses=responses,
+                agent_state=state,
+                allow_provider=True,
+            )
+        except Exception as exc:
+            payload = self._deterministic_room_plan(responses, reason=f"planner_unavailable:{type(exc).__name__}")
+        return self._normalize_room_plan(payload)
+
+    def _deterministic_room_plan(self, responses: list[dict[str, Any]], *, reason: str) -> dict[str, Any]:
+        if responses:
+            return {
+                "action": "finalize",
+                "peer_ids": [],
+                "query": "",
+                "reason": reason,
+                "confidence": 0.5,
+            }
+        return {
+            "action": "wait",
+            "peer_ids": [],
+            "query": "",
+            "reason": reason,
+            "confidence": 0.0,
+        }
+
+    def _normalize_room_plan(self, payload: dict[str, Any]) -> dict[str, Any]:
+        action = str(payload.get("action") or "wait").strip().lower()
+        if action not in {"finalize", "ask_peer", "ask_peers", "wait"}:
+            action = "wait"
+        peer_ids = payload.get("peer_ids") if isinstance(payload.get("peer_ids"), list) else []
+        return {
+            "action": action,
+            "peer_ids": [str(item).strip() for item in peer_ids if str(item).strip()],
+            "query": str(payload.get("query") or "").strip(),
+            "reason": str(payload.get("reason") or "").strip(),
+            "confidence": _clamp_float(payload.get("confidence"), default=0.0),
+            "created_at": utc_now(),
+        }
+
+    def _record_planner_action(self, room_id: str, plan: dict[str, Any]) -> dict[str, Any]:
+        state = self.state.load(room_id)
+        actions = state.get("planner_actions") if isinstance(state.get("planner_actions"), list) else []
+        actions.append(plan)
+        state["planner_actions"] = actions[-20:]
+        return self.state.save(room_id, state)
 
     def _validate_context_request(
         self,

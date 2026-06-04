@@ -25,6 +25,38 @@ class PeerToolMixin:
     def peer_room_status(self, *, room_id: str) -> dict[str, Any]:
         return self._peer_agent_service().status(_require_text(room_id, "room_id"))
 
+    def peer_room_ask(
+        self,
+        *,
+        room_id: str,
+        query: str,
+        peer_ids: list[str] | None = None,
+        session_id: str = "",
+        min_confidence: float = 0.72,
+        timeout_seconds: float = 45,
+    ) -> dict[str, Any]:
+        return self._peer_agent_service().ask_room(
+            room_id=_require_text(room_id, "room_id"),
+            query=_require_text(query, "query"),
+            peer_ids=peer_ids,
+            session_id=session_id,
+            min_confidence=min_confidence,
+            timeout_seconds=timeout_seconds,
+        )
+
+    def peer_room_continue(
+        self,
+        *,
+        room_id: str,
+        min_confidence: float = 0.72,
+        timeout_seconds: float = 45,
+    ) -> dict[str, Any]:
+        return self._peer_agent_service().continue_room(
+            room_id=_require_text(room_id, "room_id"),
+            min_confidence=min_confidence,
+            timeout_seconds=timeout_seconds,
+        )
+
     def peer_room_context(self, *, room_id: str) -> dict[str, Any]:
         return self._peer_agent_service().context(_require_text(room_id, "room_id"))
 

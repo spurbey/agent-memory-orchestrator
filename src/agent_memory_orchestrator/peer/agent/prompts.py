@@ -30,6 +30,20 @@ FINAL_SYNTHESIS_SCHEMA: dict[str, Any] = {
 }
 
 
+ROOM_CONTINUATION_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "action": {"type": "string"},
+        "peer_ids": {"type": "array", "items": {"type": "string"}},
+        "query": {"type": "string"},
+        "reason": {"type": "string"},
+        "confidence": {"type": "number"},
+    },
+    "required": ["action", "peer_ids", "query", "reason", "confidence"],
+    "additionalProperties": False,
+}
+
+
 ROOM_SUMMARY_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
@@ -75,6 +89,28 @@ def final_synthesis_prompt(
         f"Query: {query}\n"
         f"Local result: {json.dumps(local_result, ensure_ascii=False, sort_keys=True)[:12000]}\n"
         f"Peer responses: {json.dumps(peer_responses, ensure_ascii=False, sort_keys=True)[:16000]}"
+    )
+
+
+def room_continuation_prompt(
+    *,
+    room_context: dict[str, Any],
+    peer_responses: list[dict[str, Any]],
+    agent_state: dict[str, Any],
+) -> str:
+    return (
+        "/no_think\n"
+        "You are the initiator-side AMO peer-agent conversation planner. "
+        "Decide exactly one next action for this peer room. "
+        "Use action=finalize only when the current peer responses answer the room goal. "
+        "Use action=ask_peer when one peer should answer a focused follow-up. "
+        "Use action=ask_peers when multiple peers should answer the same focused follow-up. "
+        "Use action=wait when no useful peer response has arrived yet. "
+        "Do not ask for raw evidence. Keep follow-up query short and specific. "
+        "Return JSON only with action, peer_ids, query, reason, and confidence.\n\n"
+        f"Room context: {json.dumps(room_context, ensure_ascii=False, sort_keys=True)[:14000]}\n"
+        f"Peer responses: {json.dumps(peer_responses, ensure_ascii=False, sort_keys=True)[:12000]}\n"
+        f"Agent state: {json.dumps(agent_state, ensure_ascii=False, sort_keys=True)[:5000]}"
     )
 
 
