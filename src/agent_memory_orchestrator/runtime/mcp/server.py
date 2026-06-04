@@ -176,6 +176,7 @@ def create_server(settings: Settings) -> FastMCP:
         session_id: str = "",
         min_confidence: float = 0.72,
         timeout_seconds: float = 45,
+        wait_for_response: bool = False,
     ) -> dict:
         """Send a schema-valid follow-up request inside an existing peer-agent room."""
         return memory_tools.peer_room_ask(
@@ -185,6 +186,7 @@ def create_server(settings: Settings) -> FastMCP:
             session_id=session_id,
             min_confidence=min_confidence,
             timeout_seconds=timeout_seconds,
+            wait_for_response=wait_for_response,
         )
 
     @mcp.tool()

@@ -244,6 +244,11 @@ def add_peer_subcommands(sub: Any) -> None:
     peer_agent_ask_room.add_argument("--session-id", default="")
     peer_agent_ask_room.add_argument("--min-confidence", type=float, default=None)
     peer_agent_ask_room.add_argument("--timeout-seconds", type=float, default=None)
+    peer_agent_ask_room.add_argument(
+        "--wait-for-response",
+        action="store_true",
+        help="After sending the follow-up, drain peer-agent inbox until targeted peer responses arrive or timeout.",
+    )
     peer_agent_continue = peer_agent_sub.add_parser("continue", help="Let the initiator planner choose one next room action")
     peer_agent_continue.add_argument("--room-id", required=True)
     peer_agent_continue.add_argument("--min-confidence", type=float, default=None)
