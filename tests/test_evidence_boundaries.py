@@ -1,21 +1,25 @@
 ﻿from __future__ import annotations
 
-from agent_memory_orchestrator.evidence import EvidenceDrain as LegacyEvidenceDrain
 from agent_memory_orchestrator.evidence import RawEvidenceRef as LegacyRawEvidenceRef
 from agent_memory_orchestrator.evidence import TriggerDecision as LegacyTriggerDecision
+from agent_memory_orchestrator.evidence import clean_evidence_window as legacy_clean_evidence_window
 from agent_memory_orchestrator.evidence import session_boundary_trigger as legacy_session_boundary_trigger
 
 
-def test_domain_evidence_boundary_exports_existing_contracts() -> None:
-    from agent_memory_orchestrator.domain.evidence import EvidenceDrain
+def test_domain_evidence_boundary_owns_models_and_deterministic_rules() -> None:
+    import agent_memory_orchestrator.domain.evidence as evidence_domain
+
     from agent_memory_orchestrator.domain.evidence import RawEvidenceRef
     from agent_memory_orchestrator.domain.evidence import TriggerDecision
+    from agent_memory_orchestrator.domain.evidence import clean_evidence_window
     from agent_memory_orchestrator.domain.evidence import session_boundary_trigger
 
-    assert EvidenceDrain is LegacyEvidenceDrain
     assert RawEvidenceRef is LegacyRawEvidenceRef
     assert TriggerDecision is LegacyTriggerDecision
+    assert clean_evidence_window is legacy_clean_evidence_window
     assert session_boundary_trigger is legacy_session_boundary_trigger
+    assert not hasattr(evidence_domain, "EvidenceDrain")
+    assert not hasattr(evidence_domain, "RawEvidenceStore")
 
 
 def test_application_evidence_services_delegate_without_new_behavior(tmp_path) -> None:
@@ -34,7 +38,7 @@ def test_application_evidence_services_delegate_without_new_behavior(tmp_path) -
     assert (tmp_path / f"{ref.created_at[:10]}.jsonl").exists()
 
     fake = _FakeDrain()
-    service = SessionBoundaryService(fake)  # type: ignore[arg-type]
+    service = SessionBoundaryService(fake)
 
     assert service.drain_closed_sessions(limit=1)["limit"] == 1
     assert service.pending(session_id="s1") == {"session_id": "s1"}

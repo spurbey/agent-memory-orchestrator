@@ -6,13 +6,14 @@ from pathlib import Path
 from typing import Any
 
 from ....domain.evidence import RawEvidenceRef
-from ....domain.evidence import RawEvidenceStore
+from ....evidence.raw_store import RawEvidenceStore
+from ...ports import EvidenceStorePort
 
 
 class EvidenceIngestService:
     """Thin service wrapper around the raw evidence ledger."""
 
-    def __init__(self, evidence_dir: Path, *, store: RawEvidenceStore | None = None) -> None:
+    def __init__(self, evidence_dir: Path, *, store: EvidenceStorePort | None = None) -> None:
         self.store = store or RawEvidenceStore(evidence_dir)
 
     def append(

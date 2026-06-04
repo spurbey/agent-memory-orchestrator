@@ -138,6 +138,29 @@ def test_peer_agent_duplicate_request_is_idempotent(tmp_path: Path) -> None:
     assert len(responses) == 1
 
 
+def test_peer_agent_watch_skips_room_locked_by_another_watcher(tmp_path: Path) -> None:
+    settings = make_settings(tmp_path)
+    store = peer_room_with_request(tmp_path, local_node="poco-amo")
+    netd = FakeNetdClient()
+    svc = PeerAgentService(
+        settings,
+        peer_service=PeerService(settings, store=store, netd_client=netd),
+        graph=FakeGraph(good_retrieval()),
+        llm=FakeLlm(fail_peer=True),
+    )
+    room_id = store.list_rooms()[0]["room_id"]
+
+    with svc.state.room_lock(room_id) as acquired:
+        assert acquired is True
+        result = svc.watch_once()
+
+    assert result["processed"][0]["reason"] == "room_locked"
+    assert netd.sent == []
+    svc.watch_once()
+    responses = [item for item in netd.sent if item["message"]["type"] == CONTEXT_RESPONSE]
+    assert len(responses) == 1
+
+
 def test_peer_agent_retries_failed_response_delivery(tmp_path: Path) -> None:
     settings = make_settings(tmp_path)
     store = peer_room_with_request(tmp_path, local_node="poco-amo")
@@ -254,7 +277,7 @@ def test_peer_agent_disabled_config_blocks_automation(tmp_path: Path) -> None:
         svc.ask(query="what was local-first", timeout_seconds=0)
 
 
-def test_initiator_synthesizes_from_peer_response_with_own_llm(tmp_path: Path) -> None:
+def test_initiator_accepts_first_peer_response_without_final_llm(tmp_path: Path) -> None:
     settings = make_settings(tmp_path)
     store = PeerStore(settings)
     store.init_config(node_id="zenbook-amo")
@@ -280,8 +303,48 @@ def test_initiator_synthesizes_from_peer_response_with_own_llm(tmp_path: Path) -
     assert any(item.get("finalized") for item in result["processed"])
     state = json.loads((settings.home / ".peer" / "rooms" / room["room_id"] / "agent_state.json").read_text(encoding="utf-8"))
     assert state["status"] == "finalized"
-    assert state["final"]["answer"] == "Synthesized by initiator."
-    assert llm.final_calls == 1
+    assert state["final"]["answer"] == "Peer response text with a portable commit citation."
+    assert state["final"]["reason"] == "first_peer_response"
+    assert llm.final_calls == 0
+
+
+def test_initiator_finalizes_low_grade_retrieval_bundle_without_waiting(tmp_path: Path) -> None:
+    settings = make_settings(tmp_path)
+    store = PeerStore(settings)
+    store.init_config(node_id="zenbook-amo")
+    room = store.create_room(topic="what was local-first", participants=["poco-amo"])
+    response = strong_peer_response(room["room_id"], mode=RESPONSE_RETRIEVAL_BUNDLE)
+    response["confidence"] = 0.31
+    response["metadata"]["answer_grade"] = False
+    response["metadata"]["quality"] = {
+        "answer_grade": False,
+        "confidence": 0.31,
+        "gaps": ["top hit is not clearly answer-grade"],
+    }
+    store.append_message(room["room_id"], response)
+    llm = FakeLlm(fail_final=False)
+    svc = PeerAgentService(settings, peer_service=PeerService(settings, store=store), llm=llm)
+    svc.state.save(
+        room["room_id"],
+        {
+            "agent_managed": True,
+            "schema_version": 1,
+            "status": "open",
+            "original_query": "what was local-first",
+            "local_retrieval": compact_local_answer(""),
+            "deadline_at": "2999-01-01T00:00:00+00:00",
+        },
+    )
+
+    result = svc.watch_once()
+
+    assert any(item.get("finalized") for item in result["processed"])
+    state = json.loads((settings.home / ".peer" / "rooms" / room["room_id"] / "agent_state.json").read_text(encoding="utf-8"))
+    assert state["status"] == "finalized"
+    assert state["final"]["mode"] == RESPONSE_RETRIEVAL_BUNDLE
+    assert state["final"]["reason"] == "first_peer_response"
+    assert state["final"]["answer"] == "Peer response text with a portable commit citation."
+    assert llm.final_calls == 0
 
 
 def test_initiator_without_llm_returns_retrieval_only_for_bundle(tmp_path: Path) -> None:
@@ -306,7 +369,7 @@ def test_initiator_without_llm_returns_retrieval_only_for_bundle(tmp_path: Path)
     svc.watch_once()
 
     state = json.loads((settings.home / ".peer" / "rooms" / room["room_id"] / "agent_state.json").read_text(encoding="utf-8"))
-    assert state["final"]["mode"] == "retrieval_only"
+    assert state["final"]["mode"] == RESPONSE_RETRIEVAL_BUNDLE
     assert "Peer response text" in state["final"]["answer"]
 
 

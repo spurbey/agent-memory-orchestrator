@@ -107,6 +107,110 @@ def test_decision_dry_run_compares_session_frames_to_active_central_versions() -
     assert central_candidate["proposed_relation"] in {"RELATED_REVIEW", "REFINES", "DUPLICATE_OF"}
 
 
+def test_decision_review_candidates_dedupe_active_central_and_ledger_frames() -> None:
+    result = build_decision_review_candidates(
+        session_nodes=[
+            {
+                "id": "reason:new",
+                "kind": "ReasoningNode",
+                "properties": {
+                    "node_type": "Decision",
+                    "status": "accepted",
+                    "subject": "Qwen JSON hardening",
+                    "statement": "Disable Ollama thinking for Qwen JSON calls.",
+                    "selected_files": ["src/agent_memory_orchestrator/llm/qwen.py"],
+                },
+            }
+        ],
+        central_nodes=[
+            {
+                "id": "reason:existing",
+                "kind": "KnowledgeVersion",
+                "status": "active",
+                "metadata": {
+                    "repo_id": "repo:test",
+                    "atom_kind": "decision",
+                    "status": "active",
+                    "version_metadata": {
+                        "node_type": "Decision",
+                        "subject": "Qwen JSON hardening",
+                        "statement": "Disable Ollama thinking for Qwen JSON calls.",
+                        "selected_files": ["src/agent_memory_orchestrator/llm/qwen.py"],
+                    },
+                },
+            }
+        ],
+        historical_frames=[
+            {
+                "frame_id": "dframe:existing",
+                "source_node_id": "reason:existing",
+                "repo_id": "repo:test",
+                "frame_kind": "decision",
+                "subject": "Qwen JSON hardening",
+                "statement": "Disable Ollama thinking for Qwen JSON calls.",
+                "linked_files": ["src/agent_memory_orchestrator/llm/qwen.py"],
+                "tokens": ["disable", "ollama", "thinking", "qwen", "json", "calls"],
+            }
+        ],
+        repo_id="repo:test",
+        job_id="v2job:test",
+        plan_id="v2plan:test",
+    )
+
+    assert result["metrics"]["duplicate_comparison_frame_count"] == 1
+    assert result["metrics"]["comparison_decision_frame_count"] == 1
+    assert result["metrics"]["decision_candidate_count"] == 1
+    assert result["candidates"][0]["score"]["target_scope"] == "central"
+
+
+def test_decision_review_candidates_dedupe_current_and_historical_pair_paths() -> None:
+    result = build_decision_review_candidates(
+        session_nodes=[
+            {
+                "id": "reason:new",
+                "kind": "ReasoningNode",
+                "properties": {
+                    "node_type": "Decision",
+                    "status": "accepted",
+                    "subject": "Qwen JSON hardening",
+                    "statement": "Disable Ollama thinking for Qwen JSON calls.",
+                    "selected_files": ["src/agent_memory_orchestrator/llm/qwen.py"],
+                },
+            },
+            {
+                "id": "reason:existing",
+                "kind": "ReasoningNode",
+                "properties": {
+                    "node_type": "Decision",
+                    "status": "accepted",
+                    "subject": "Qwen JSON hardening",
+                    "statement": "Disable Ollama thinking for Qwen JSON calls.",
+                    "selected_files": ["src/agent_memory_orchestrator/llm/qwen.py"],
+                },
+            },
+        ],
+        historical_frames=[
+            {
+                "frame_id": "dframe:existing",
+                "source_node_id": "reason:existing",
+                "repo_id": "repo:test",
+                "frame_kind": "decision",
+                "subject": "Qwen JSON hardening",
+                "statement": "Disable Ollama thinking for Qwen JSON calls.",
+                "linked_files": ["src/agent_memory_orchestrator/llm/qwen.py"],
+                "tokens": ["disable", "ollama", "thinking", "qwen", "json", "calls"],
+            }
+        ],
+        repo_id="repo:test",
+        job_id="v2job:test",
+        plan_id="v2plan:test",
+    )
+
+    candidate_ids = [candidate["candidate_id"] for candidate in result["candidates"]]
+    assert len(candidate_ids) == len(set(candidate_ids)) == 1
+    assert result["candidates"][0]["score"]["target_scope"] == "session"
+
+
 def test_decision_review_candidates_detect_supersede_and_conflict_markers() -> None:
     supersede_result = build_decision_review_candidates(
         compact_graph={

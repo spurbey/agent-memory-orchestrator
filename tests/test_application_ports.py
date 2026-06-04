@@ -6,6 +6,7 @@ def test_application_ports_are_importable_from_package_boundary() -> None:
 
     expected = {
         "ConnectorTransportPort",
+        "DaemonStatusPort",
         "EmbeddingStorePort",
         "EvidenceStorePort",
         "GitPort",
