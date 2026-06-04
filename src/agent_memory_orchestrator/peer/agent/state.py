@@ -137,6 +137,7 @@ class PeerAgentStateStore:
             "processed_request_ids": [],
             "sent_response_for_request_ids": [],
             "response_attempts": {},
+            "planner_actions": [],
             "deadline_at": "",
             "finalized_reason": "",
             "last_error": "",
