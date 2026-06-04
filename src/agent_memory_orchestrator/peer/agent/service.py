@@ -368,10 +368,7 @@ class PeerAgentService:
         answer_grade = quality.answer_grade
         confidence = quality.confidence
         if support or quality.confidence >= threshold:
-            if self.settings.peer_agent_allow_retrieval_only_responses:
-                mode = RESPONSE_RETRIEVAL_BUNDLE
-                content = content or "Retrieval bundle attached."
-            else:
+            if self.llm.local_ollama_ready():
                 try:
                     llm_payload = self.llm.generate_peer_answer(
                         query=query,
@@ -388,7 +385,14 @@ class PeerAgentService:
                     answer_grade = bool(llm_payload.get("answer_grade", answer_grade)) and bool(support)
                     mode = RESPONSE_LLM_ANSWER
                 except Exception:
-                    mode = RESPONSE_LOW_CONFIDENCE
+                    if self.settings.peer_agent_allow_retrieval_only_responses:
+                        mode = RESPONSE_RETRIEVAL_BUNDLE
+                        content = content or "Retrieval bundle attached."
+                    else:
+                        mode = RESPONSE_LOW_CONFIDENCE
+            elif self.settings.peer_agent_allow_retrieval_only_responses:
+                mode = RESPONSE_RETRIEVAL_BUNDLE
+                content = content or "Retrieval bundle attached."
         return self._send_response(
             peer_id=initiator,
             room_id=room_id,

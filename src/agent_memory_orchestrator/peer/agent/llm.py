@@ -53,16 +53,38 @@ class PeerAgentLlmGateway:
         allow_provider: bool = True,
     ) -> dict[str, Any]:
         prompt = final_synthesis_prompt(query=query, local_result=local_result, peer_responses=peer_responses)
-        try:
-            return self._local_json(prompt, schema=FINAL_SYNTHESIS_SCHEMA, num_predict=900)
-        except PeerAgentLlmUnavailable:
-            if not allow_provider or not self.settings.peer_agent_allow_initiator_api_fallback:
-                raise
+        if self.local_ollama_ready():
+            try:
+                return self._local_json(prompt, schema=FINAL_SYNTHESIS_SCHEMA, num_predict=900)
+            except PeerAgentLlmUnavailable:
+                pass
+        if allow_provider and self.settings.peer_agent_allow_initiator_api_fallback and self.provider_configured():
             return self._provider_json(prompt, schema=FINAL_SYNTHESIS_SCHEMA)
+        raise PeerAgentLlmUnavailable("peer_agent_no_synthesis_provider_available")
 
     def summarize_room(self, *, room_context: dict[str, Any]) -> dict[str, Any]:
         prompt = room_summary_prompt(room_context=room_context)
         return self._local_json(prompt, schema=ROOM_SUMMARY_SCHEMA, num_predict=600)
+
+    def local_ollama_ready(self, *, timeout_seconds: float = 0.75) -> bool:
+        if self.settings.peer_agent_runtime != "ollama":
+            return False
+        endpoint = self.settings.peer_agent_endpoint or self.settings.qwen_endpoint
+        model = self.settings.peer_agent_model or self.settings.qwen_model
+        if not endpoint or not model:
+            return False
+        return _ollama_model_loaded(endpoint.rstrip("/"), model, timeout_seconds=timeout_seconds)
+
+    def provider_configured(self) -> bool:
+        if self.settings.peer_agent_api_provider != "openai_compatible":
+            return False
+        key_env = self.settings.peer_agent_api_key_env
+        return bool(
+            self.settings.peer_agent_api_base_url
+            and self.settings.peer_agent_api_model
+            and key_env
+            and os.getenv(key_env, "")
+        )
 
     def _local_json(self, prompt: str, *, schema: dict[str, Any], num_predict: int) -> dict[str, Any]:
         if self.settings.peer_agent_runtime != "ollama":
@@ -135,3 +157,38 @@ class PeerAgentLlmGateway:
         if not isinstance(parsed, dict):
             raise PeerAgentLlmUnavailable("peer_agent_provider_json_must_be_object")
         return parsed
+
+
+def _ollama_model_loaded(endpoint: str, model: str, *, timeout_seconds: float) -> bool:
+    try:
+        with urllib.request.urlopen(f"{endpoint}/api/ps", timeout=timeout_seconds) as response:  # noqa: S310
+            payload = json.loads(response.read().decode("utf-8"))
+    except (OSError, TimeoutError, urllib.error.URLError, json.JSONDecodeError):
+        return False
+    models = payload.get("models") if isinstance(payload, dict) else []
+    if not isinstance(models, list):
+        return False
+    expected = _model_aliases(model)
+    for item in models:
+        if not isinstance(item, dict):
+            continue
+        names = {
+            str(item.get("name") or "").strip(),
+            str(item.get("model") or "").strip(),
+            str(item.get("digest") or "").strip(),
+        }
+        if any(name in expected for name in names if name):
+            return True
+    return False
+
+
+def _model_aliases(model: str) -> set[str]:
+    text = str(model or "").strip()
+    if not text:
+        return set()
+    aliases = {text}
+    if ":" not in text:
+        aliases.add(f"{text}:latest")
+    else:
+        aliases.add(text.split(":", 1)[0])
+    return aliases
