@@ -21,6 +21,7 @@ from ....application.pipeline.storage_lifecycle import adopt_existing_production
 from ....application.pipeline.storage_lifecycle import initialize_fresh_production_storage
 from ....application.pipeline.storage_lifecycle import reset_production_storage
 from ....infrastructure.sqlite.production_job_store import ProductionSessionJobStore
+from ...daemon.status import RuntimeDaemonStatus
 
 PIPELINE_COMMANDS = (
     "init-production",
@@ -109,6 +110,7 @@ def handle_pipeline_command(args: Any, *, emit: Callable[[object], None]) -> int
             clean_graph=args.clean_graph,
             clean_retrieval=args.clean_retrieval,
             force_if_daemon_running=args.force_if_daemon_running,
+            daemon_status=RuntimeDaemonStatus(settings),
         )
         emit(result)
         return 0
@@ -121,6 +123,7 @@ def handle_pipeline_command(args: Any, *, emit: Callable[[object], None]) -> int
             validate_graph=args.validate_graph,
             validate_retrieval=args.validate_retrieval,
             force_if_daemon_running=args.force_if_daemon_running,
+            daemon_status=RuntimeDaemonStatus(settings),
         )
         emit(result)
         return 0

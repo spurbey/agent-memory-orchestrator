@@ -1385,6 +1385,18 @@ def test_production_reset_requires_backup_and_preserves_raw_config_and_job_table
     assert marker["cleaned"] == {"graph": True, "retrieval": True, "faiss": True}
 
 
+def test_production_reset_fails_closed_without_daemon_status_adapter(tmp_path: Path) -> None:
+    settings = make_settings(tmp_path)
+
+    with pytest.raises(RuntimeError, match="daemon_status_unknown"):
+        reset_production_storage(
+            settings,
+            backup=True,
+            clean_graph=True,
+            clean_retrieval=True,
+        )
+
+
 def test_production_fresh_init_marks_empty_new_install_without_reset(tmp_path: Path) -> None:
     settings = make_settings(tmp_path)
     settings.home.mkdir(parents=True, exist_ok=True)
