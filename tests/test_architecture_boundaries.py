@@ -139,6 +139,38 @@ def test_architecture_application_and_infrastructure_boundaries_are_importable()
     assert "COMMITTED_AS" in VERSION_FLOW_EDGE_KINDS
 
 
+def test_architecture_connector_evidence_and_peer_domains_do_not_import_outer_implementations() -> None:
+    src_root = Path(__file__).resolve().parents[1] / "src" / "agent_memory_orchestrator"
+    domain_roots = (
+        src_root / "domain" / "connectors",
+        src_root / "domain" / "evidence",
+        src_root / "domain" / "peer",
+    )
+    offenders: list[str] = []
+
+    for domain_root in domain_roots:
+        for path in domain_root.rglob("*.py"):
+            for module in _resolved_project_imports(path, src_root=src_root):
+                if module == "agent_memory_orchestrator.domain" or module.startswith("agent_memory_orchestrator.domain."):
+                    continue
+                offenders.append(f"{path.relative_to(src_root).as_posix()} -> {module}")
+
+    assert offenders == []
+
+
+def test_architecture_application_does_not_import_runtime_adapters() -> None:
+    src_root = Path(__file__).resolve().parents[1] / "src" / "agent_memory_orchestrator"
+    application_root = src_root / "application"
+    offenders: list[str] = []
+
+    for path in application_root.rglob("*.py"):
+        for module in _resolved_project_imports(path, src_root=src_root):
+            if module == "agent_memory_orchestrator.runtime" or module.startswith("agent_memory_orchestrator.runtime."):
+                offenders.append(f"{path.relative_to(src_root).as_posix()} -> {module}")
+
+    assert offenders == []
+
+
 def test_architecture_retrieval_boundary_exports_planned_module_names() -> None:
     from agent_memory_orchestrator.domain.retrieval import build_answer_trace
     from agent_memory_orchestrator.domain.retrieval import build_central_answer_trace
@@ -377,6 +409,27 @@ def _absolute_or_suffix_module(module: str) -> str:
     if module.startswith("agent_memory_orchestrator."):
         return module
     return f"agent_memory_orchestrator.{module}"
+
+
+def _resolved_project_imports(path: Path, *, src_root: Path) -> list[str]:
+    tree = ast.parse(path.read_text(encoding="utf-8-sig"))
+    relative = path.relative_to(src_root).with_suffix("")
+    package_parts = ["agent_memory_orchestrator", *relative.parts[:-1]]
+    modules: list[str] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            modules.extend(alias.name for alias in node.names if alias.name.startswith("agent_memory_orchestrator"))
+            continue
+        if not isinstance(node, ast.ImportFrom):
+            continue
+        if node.level == 0:
+            module = node.module or ""
+        else:
+            keep = max(0, len(package_parts) - (node.level - 1))
+            module = ".".join([*package_parts[:keep], *(node.module or "").split(".")])
+        if module == "agent_memory_orchestrator" or module.startswith("agent_memory_orchestrator."):
+            modules.append(module.rstrip("."))
+    return modules
 
 
 def _is_forbidden_legacy_import(module: str, forbidden: tuple[str, ...]) -> bool:
