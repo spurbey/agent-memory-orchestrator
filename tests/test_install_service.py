@@ -135,6 +135,7 @@ def test_settings_loads_installer_runtime_config(tmp_path: Path, monkeypatch) ->
     assert settings.qwen_compress_timeout_seconds == 12.0
     assert settings.qwen_num_ctx == 2048
     assert settings.drain_max_windows_per_run == 3
+    assert settings.auto_embedding_batch_size == 10000
 
 
 def test_settings_default_home_is_user_amo_dir(tmp_path: Path, monkeypatch) -> None:
@@ -148,6 +149,7 @@ def test_settings_default_home_is_user_amo_dir(tmp_path: Path, monkeypatch) -> N
     assert settings.graph_path == user_home / ".agent-memory-orchestrator" / ".graph" / "amo.kuzu"
     assert settings.retrieval_db_path == user_home / ".agent-memory-orchestrator" / ".data" / "retrieval.sqlite"
     assert settings.qwen_model == "qwen3.5:9b"
+    assert settings.auto_embedding_batch_size == 10000
 
 
 def test_settings_loads_bom_prefixed_json_config(tmp_path: Path, monkeypatch) -> None:

@@ -86,7 +86,7 @@ class Settings:
     auto_drain_record_limit: int = 500
     auto_retrieval_node_limit: int = 10000
     auto_retrieval_max_doc_chars: int = 5000
-    auto_embedding_batch_size: int = 32
+    auto_embedding_batch_size: int = 10000
     peer_agent_enabled: bool = True
     peer_agent_runtime: str = "ollama"
     peer_agent_model: str = ""
@@ -152,7 +152,7 @@ class Settings:
         auto_drain_record_limit = int(_setting(config, "auto_drain_record_limit", "500"))
         auto_retrieval_node_limit = int(_setting(config, "auto_retrieval_node_limit", "10000"))
         auto_retrieval_max_doc_chars = int(_setting(config, "auto_retrieval_max_doc_chars", "5000"))
-        auto_embedding_batch_size = int(_setting(config, "auto_embedding_batch_size", "32"))
+        auto_embedding_batch_size = int(_setting(config, "auto_embedding_batch_size", "10000"))
         peer_agent_enabled = _parse_bool(_setting(config, "peer_agent_enabled", True), default=True)
         peer_agent_runtime = str(_setting(config, "peer_agent_runtime", "ollama")).strip().lower()
         peer_agent_model = str(_setting(config, "peer_agent_model", qwen_model)).strip()
