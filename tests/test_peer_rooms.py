@@ -634,6 +634,48 @@ def test_context_pack_uses_deduped_orchestration_view_for_initiator(tmp_path: Pa
     assert pack["layers"]["pairwise_recent_messages"] == recent
 
 
+def test_context_pack_excludes_answered_context_requests_from_open_questions(tmp_path: Path) -> None:
+    settings = make_settings(tmp_path / "initiator")
+    store = PeerStore(settings)
+    store.init_config(node_id="zenbook-amo")
+    room = PeerService(settings, store=store).open_room(
+        topic="collect peer answers",
+        peer_ids=["poco-amo"],
+        send_invites=False,
+    )["room"]
+    svc = PeerService(settings, store=store)
+    svc.append_message(
+        room_id=room["room_id"],
+        from_node_id="zenbook-amo",
+        to_node_ids=["poco-amo"],
+        message_type="context_request",
+        content="Answered question?",
+        metadata={"request_id": "req_answered", "query": "Answered question?"},
+    )
+    svc.append_message(
+        room_id=room["room_id"],
+        from_node_id="poco-amo",
+        to_node_ids=["zenbook-amo"],
+        message_type="context_response",
+        content="Answered.",
+        metadata={"request_id": "req_answered"},
+    )
+    svc.append_message(
+        room_id=room["room_id"],
+        from_node_id="zenbook-amo",
+        to_node_ids=["poco-amo"],
+        message_type="context_request",
+        content="Still pending?",
+        metadata={"request_id": "req_pending", "query": "Still pending?"},
+    )
+
+    initiator_pack = svc.context_pack(room["room_id"], viewer_node_id="zenbook-amo")["context"]
+    peer_pack = svc.context_pack(room["room_id"], viewer_node_id="poco-amo")["context"]
+
+    assert [item["request_id"] for item in initiator_pack["layers"]["open_questions"]] == ["req_pending"]
+    assert [item["request_id"] for item in peer_pack["layers"]["open_questions"]] == ["req_pending"]
+
+
 def make_settings(tmp_path: Path) -> Settings:
     return Settings(
         home=tmp_path,

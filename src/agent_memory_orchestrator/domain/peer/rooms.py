@@ -247,6 +247,7 @@ def _open_questions(
 ) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     groups: dict[str, dict[str, Any]] = {}
+    answered_request_ids = _answered_request_ids(messages)
     for message in messages:
         if str(message.get("type") or "") != "context_request":
             continue
@@ -255,6 +256,9 @@ def _open_questions(
         if role != "initiator" and not _is_group_visible(message) and sender != viewer_node_id and viewer_node_id not in recipients:
             continue
         metadata = message.get("metadata") if isinstance(message.get("metadata"), dict) else {}
+        request_id = str(metadata.get("request_id") or message.get("message_id") or "")
+        if request_id and request_id in answered_request_ids:
+            continue
         query = str(metadata.get("query") or message.get("content") or "").strip()
         if not query:
             continue
@@ -272,7 +276,6 @@ def _open_questions(
             }
             groups[key] = row
             out.append(row)
-        request_id = str(metadata.get("request_id") or message.get("message_id") or "")
         if request_id and request_id not in row["request_ids"]:
             row["request_ids"].append(request_id)
         for recipient in recipients:
@@ -285,6 +288,19 @@ def _open_questions(
         row["to"] = sorted(row["to"])
         row["request_count"] = len(row["request_ids"]) if row["request_ids"] else max(len(row["to"]), 1)
     return out
+
+
+def _answered_request_ids(messages: list[dict[str, Any]]) -> set[str]:
+    answered: set[str] = set()
+    for message in messages:
+        if str(message.get("type") or "") != "context_response":
+            continue
+        metadata = message.get("metadata") if isinstance(message.get("metadata"), dict) else {}
+        for key in ("request_id", "parent_message_id"):
+            request_id = str(metadata.get(key) or "").strip()
+            if request_id:
+                answered.add(request_id)
+    return answered
 
 
 def _compact_message(message: dict[str, Any]) -> dict[str, Any]:
