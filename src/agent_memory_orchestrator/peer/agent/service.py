@@ -113,11 +113,13 @@ class PeerAgentService:
             }
         )
         deliveries = []
+        logical_request_id = f"q_{stable_json_hash({'room_id': room_id, 'query': safe_query})[:16]}"
         for peer in peers:
             request_id = f"req_{stable_json_hash({'room_id': room_id, 'peer': peer.node_id, 'query': safe_query})[:16]}"
             metadata = {
                 "schema_version": 1,
                 "agent_room_schema_version": 1,
+                "logical_request_id": logical_request_id,
                 "request_id": request_id,
                 "room_id": room_id,
                 "parent_message_id": "",
