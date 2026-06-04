@@ -78,6 +78,36 @@ def test_peer_agent_ask_can_target_specific_peer(tmp_path: Path) -> None:
     assert context_messages[0]["payload"]["metadata"]["target_peer_id"] == "poco-amo"
 
 
+def test_peer_agent_ask_room_sends_schema_valid_followup(tmp_path: Path) -> None:
+    settings = make_settings(tmp_path)
+    store = PeerStore(settings)
+    store.init_config(node_id="zenbook-amo")
+    store.add_peer(PeerNode(node_id="poco-amo", peer_id="12D3KooWPeer", capabilities=("graph_retrieval",)))
+    room = store.create_room(topic="debug peer room", participants=["poco-amo"])
+    netd = FakeNetdClient()
+    svc = PeerAgentService(settings, peer_service=PeerService(settings, store=store, netd_client=netd))
+
+    result = svc.ask_room(
+        room_id=room["room_id"],
+        peer_ids=["poco-amo"],
+        query="Can you answer a valid room follow-up?",
+        timeout_seconds=60,
+    )
+
+    assert result["ok"] is True
+    assert result["mode"] == "room_followup"
+    context_messages = [item["message"] for item in netd.sent if item["message"]["type"] == CONTEXT_REQUEST]
+    assert len(context_messages) == 1
+    metadata = context_messages[0]["payload"]["metadata"]
+    assert metadata["schema_version"] == 1
+    assert metadata["agent_room_schema_version"] == 1
+    assert metadata["request_id"].startswith("req_")
+    assert metadata["logical_request_id"].startswith("q_")
+    assert metadata["room_id"] == room["room_id"]
+    assert metadata["target_peer_id"] == "poco-amo"
+    assert metadata["query"] == "Can you answer a valid room follow-up?"
+
+
 def test_peer_agent_watch_returns_llm_answer_when_peer_ollama_available(tmp_path: Path) -> None:
     settings = make_settings(tmp_path, peer_agent_allow_retrieval_only_responses=False)
     store = peer_room_with_request(tmp_path, local_node="poco-amo")
@@ -246,6 +276,52 @@ def test_peer_agent_skips_context_request_when_peer_is_not_tagged(tmp_path: Path
     assert result["processed"][0]["reason"] == "request_not_tagged_for_peer"
 
 
+def test_peer_agent_continue_room_planner_can_ask_followup(tmp_path: Path) -> None:
+    settings = make_settings(tmp_path)
+    store = PeerStore(settings)
+    store.init_config(node_id="zenbook-amo")
+    store.add_peer(PeerNode(node_id="poco-amo", peer_id="12D3KooWPeer", capabilities=("graph_retrieval",)))
+    room = store.create_room(topic="what was local-first", participants=["poco-amo"])
+    store.append_message(room["room_id"], strong_peer_response(room["room_id"], mode=RESPONSE_RETRIEVAL_BUNDLE))
+    netd = FakeNetdClient()
+    llm = FakeLlm(
+        plan_action={
+            "action": "ask_peer",
+            "peer_ids": ["poco-amo"],
+            "query": "Can you clarify the remaining local-first gap?",
+            "reason": "Need one focused follow-up.",
+            "confidence": 0.76,
+        }
+    )
+    svc = PeerAgentService(settings, peer_service=PeerService(settings, store=store, netd_client=netd), llm=llm)
+    svc.state.save(
+        room["room_id"],
+        {
+            "agent_managed": True,
+            "schema_version": 1,
+            "status": "open",
+            "original_query": "what was local-first",
+            "local_retrieval": compact_local_answer(""),
+            "deadline_at": "2999-01-01T00:00:00+00:00",
+        },
+    )
+
+    result = svc.continue_room(room_id=room["room_id"], timeout_seconds=60)
+
+    assert result["ok"] is True
+    assert result["action"] == "ask_peer"
+    assert result["followup"]["ok"] is True
+    context_messages = [item["message"] for item in netd.sent if item["message"]["type"] == CONTEXT_REQUEST]
+    assert len(context_messages) == 1
+    metadata = context_messages[0]["payload"]["metadata"]
+    assert metadata["schema_version"] == 1
+    assert metadata["agent_room_schema_version"] == 1
+    assert metadata["target_peer_id"] == "poco-amo"
+    assert metadata["query"] == "Can you clarify the remaining local-first gap?"
+    state = json.loads((settings.home / ".peer" / "rooms" / room["room_id"] / "agent_state.json").read_text(encoding="utf-8"))
+    assert state["planner_actions"][-1]["action"] == "ask_peer"
+
+
 def test_peer_agent_redacts_local_refs_when_citation_sharing_disabled(tmp_path: Path) -> None:
     settings = make_settings(tmp_path)
     store = peer_room_with_request(tmp_path, local_node="poco-amo")
@@ -410,10 +486,16 @@ def test_peer_agent_mcp_contracts_are_registered(tmp_path: Path) -> None:
 
     contracts = service.tool_contracts()
     result = service.peer_memory_ask(query="hello", timeout_seconds=0)
+    followup = service.peer_room_ask(room_id="room_1", query="follow up")
+    continued = service.peer_room_continue(room_id="room_1")
 
     assert "peer_memory_ask" in MCP_MEMORY_TOOL_CONTRACTS
+    assert "peer_room_ask" in contracts["tools"]
+    assert "peer_room_continue" in contracts["tools"]
     assert "peer_room_messages" in contracts["tools"]
     assert result["mode"] == "retrieval_only"
+    assert followup["mode"] == "room_followup"
+    assert continued["action"] == "wait"
 
 
 def peer_room_with_request(
@@ -577,17 +659,22 @@ class FakeLlm:
         *,
         peer_answer: dict[str, Any] | None = None,
         final_answer: dict[str, Any] | None = None,
+        plan_action: dict[str, Any] | None = None,
         local_ready: bool = True,
         fail_peer: bool = False,
         fail_final: bool = False,
+        fail_plan: bool = False,
     ) -> None:
         self.peer_answer = peer_answer or {"answer": "peer answer", "confidence": 0.9, "answer_grade": True, "gaps": []}
         self.final_answer = final_answer or {"answer": "final answer", "confidence": 0.9, "mode": "peer_assisted", "gaps": []}
+        self.plan_action = plan_action or {"action": "finalize", "peer_ids": [], "query": "", "reason": "enough context", "confidence": 0.8}
         self.local_ready = local_ready
         self.fail_peer = fail_peer
         self.fail_final = fail_final
+        self.fail_plan = fail_plan
         self.peer_calls = 0
         self.final_calls = 0
+        self.plan_calls = 0
 
     def local_ollama_ready(self, **kwargs: Any) -> bool:
         return self.local_ready
@@ -607,6 +694,12 @@ class FakeLlm:
             raise RuntimeError("final llm unavailable")
         return self.final_answer
 
+    def plan_room_continuation(self, **kwargs: Any) -> dict[str, Any]:
+        self.plan_calls += 1
+        if self.fail_plan:
+            raise RuntimeError("planner llm unavailable")
+        return self.plan_action
+
     def summarize_room(self, **kwargs: Any) -> dict[str, Any]:
         return {"summary_md": "# Rolling Summary\n\n## Current Understanding\n\n- Test summary."}
 
@@ -617,6 +710,12 @@ class FakePeerAgent:
 
     def status(self, room_id: str) -> dict[str, Any]:
         return {"ok": True, "room_id": room_id}
+
+    def ask_room(self, **kwargs: Any) -> dict[str, Any]:
+        return {"ok": True, "mode": "room_followup", "room_id": kwargs.get("room_id", ""), "peer_requests": []}
+
+    def continue_room(self, **kwargs: Any) -> dict[str, Any]:
+        return {"ok": True, "action": "wait", "room_id": kwargs.get("room_id", "")}
 
     def context(self, room_id: str) -> dict[str, Any]:
         return {"ok": True, "room_id": room_id, "context": {}}
