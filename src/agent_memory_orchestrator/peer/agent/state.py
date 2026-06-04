@@ -64,6 +64,7 @@ class PeerAgentStateStore:
             "last_ok": bool(attempt.get("ok")),
             "last_error": str((attempt.get("delivery") or {}).get("error") or attempt.get("error") or ""),
             "mode": str(attempt.get("mode") or prior.get("mode") or ""),
+            "last_timing": attempt.get("timing") if isinstance(attempt.get("timing"), dict) else {},
         }
         state["response_attempts"] = attempts
         return self.save(room_id, state)
