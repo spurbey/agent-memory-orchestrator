@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import os
 import json
+import time
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -79,6 +82,45 @@ class PeerAgentStateStore:
         if not safe:
             raise ValueError("room_id is required")
         return self.store.rooms_dir / safe / "agent_state.json"
+
+    def lock_path_for(self, room_id: str) -> Path:
+        return self.path_for(room_id).with_suffix(".lock")
+
+    @contextmanager
+    def room_lock(self, room_id: str, *, stale_seconds: float = 120.0) -> Any:
+        path = self.lock_path_for(room_id)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        acquired = False
+        fd: int | None = None
+        while True:
+            try:
+                fd = os.open(str(path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+                payload = json.dumps({"pid": os.getpid(), "created_at": utc_now()}).encode("utf-8")
+                os.write(fd, payload)
+                acquired = True
+                break
+            except FileExistsError:
+                try:
+                    age = time.time() - path.stat().st_mtime
+                    if age > stale_seconds:
+                        path.unlink(missing_ok=True)
+                        continue
+                except OSError:
+                    pass
+                yield False
+                return
+            finally:
+                if fd is not None:
+                    os.close(fd)
+                    fd = None
+        try:
+            yield True
+        finally:
+            if acquired:
+                try:
+                    path.unlink(missing_ok=True)
+                except OSError:
+                    pass
 
     def default_state(self, room_id: str) -> dict[str, Any]:
         return {
