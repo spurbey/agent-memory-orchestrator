@@ -34,6 +34,7 @@ class PeerToolMixin:
         session_id: str = "",
         min_confidence: float = 0.72,
         timeout_seconds: float = 45,
+        wait_for_response: bool = False,
     ) -> dict[str, Any]:
         return self._peer_agent_service().ask_room(
             room_id=_require_text(room_id, "room_id"),
@@ -42,6 +43,7 @@ class PeerToolMixin:
             session_id=session_id,
             min_confidence=min_confidence,
             timeout_seconds=timeout_seconds,
+            wait_for_response=wait_for_response,
         )
 
     def peer_room_continue(
