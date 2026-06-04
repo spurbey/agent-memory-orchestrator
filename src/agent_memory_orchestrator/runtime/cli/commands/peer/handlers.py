@@ -333,6 +333,7 @@ def handle_peer_command(
                     content=args.content,
                     citations=args.citation,
                     confidence=args.confidence,
+                    metadata={"audience": args.audience} if args.audience else None,
                 )
             )
             return 0
@@ -345,6 +346,7 @@ def handle_peer_command(
                     message_type=args.type,
                     citations=args.citation,
                     confidence=args.confidence,
+                    metadata={"audience": args.audience} if args.audience else None,
                 )
             )
             return 0

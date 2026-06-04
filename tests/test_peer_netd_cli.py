@@ -673,6 +673,93 @@ def test_peer_poll_netd_watch_fail_fast_returns_nonzero(tmp_path: Path, capsys, 
     assert lines == [{"ok": False, "error": "sidecar not ready", "watching": False}]
 
 
+def test_peer_append_message_audience_group_reaches_context_layer(tmp_path: Path, capsys) -> None:
+    assert main(["peer", "--amo-home", str(tmp_path), "init", "--node-id", "zenbook-amo"]) == 0
+    capsys.readouterr()
+    assert (
+        main(
+            [
+                "peer",
+                "--amo-home",
+                str(tmp_path),
+                "open-room",
+                "--topic",
+                "debug group context",
+                "--peer",
+                "poco-amo",
+                "--no-send",
+            ]
+        )
+        == 0
+    )
+    room_payload = json.loads(capsys.readouterr().out)
+    room_id = room_payload["room"]["room_id"]
+
+    assert (
+        main(
+            [
+                "peer",
+                "--amo-home",
+                str(tmp_path),
+                "append-message",
+                "--room-id",
+                room_id,
+                "--from-node-id",
+                "zenbook-amo",
+                "--to-node-id",
+                "poco-amo",
+                "--type",
+                "peer_message",
+                "--audience",
+                "group",
+                "--content",
+                "Shared debug note.",
+            ]
+        )
+        == 0
+    )
+    capsys.readouterr()
+
+    assert main(["peer", "--amo-home", str(tmp_path), "context", "--room-id", room_id]) == 0
+    context_payload = json.loads(capsys.readouterr().out)
+    group_recent = context_payload["context"]["layers"]["group_recent_messages"]
+    assert any(item["content"] == "Shared debug note." for item in group_recent)
+
+
+def test_peer_send_message_passes_audience_metadata(tmp_path: Path, capsys, monkeypatch) -> None:
+    captured: dict = {}
+
+    def fake_send_message_to_peer(self: PeerService, **kwargs) -> dict:
+        captured.update(kwargs)
+        return {"ok": True, "message": {"metadata": kwargs.get("metadata") or {}}}
+
+    monkeypatch.setattr(PeerService, "send_message_to_peer", fake_send_message_to_peer)
+
+    code = main(
+        [
+            "peer",
+            "--amo-home",
+            str(tmp_path),
+            "send-message",
+            "--room-id",
+            "room-debug",
+            "--peer-id",
+            "poco-amo",
+            "--type",
+            "peer_message",
+            "--audience",
+            "group",
+            "--content",
+            "Shared debug note.",
+        ]
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+    assert code == 0
+    assert captured["metadata"] == {"audience": "group"}
+    assert payload["message"]["metadata"] == {"audience": "group"}
+
+
 def test_peer_netd_install_service_is_plan_by_default(tmp_path: Path, capsys) -> None:
     code = main(
         [
