@@ -103,7 +103,8 @@ def build_decision_review_candidates(
     frames = build_decision_frames(compact_graph=compact_graph or {}, session_nodes=session_nodes or [], repo_id=repo_id)
     central_frames = build_decision_frames(session_nodes=_active_central_decision_nodes(central_nodes or [], repo_id=repo_id), repo_id=repo_id)
     persisted_frames = _coerce_historical_frames(historical_frames or [], repo_id=repo_id)
-    comparison_frames = [*central_frames, *persisted_frames]
+    comparison_frames = _dedupe_comparison_frames([*central_frames, *persisted_frames])
+    duplicate_comparison_frame_count = len(central_frames) + len(persisted_frames) - len(comparison_frames)
     candidates = _review_candidates(frames=frames, comparison_frames=comparison_frames, job_id=job_id, plan_id=plan_id)
     high_risk = [candidate for candidate in candidates if candidate["score"].get("false_positive_risk")]
     relation_counts: dict[str, int] = {}
@@ -117,6 +118,8 @@ def build_decision_review_candidates(
             "decision_frame_count": len(frames),
             "active_central_decision_frame_count": len(central_frames),
             "historical_decision_frame_count": len(persisted_frames),
+            "comparison_decision_frame_count": len(comparison_frames),
+            "duplicate_comparison_frame_count": duplicate_comparison_frame_count,
             "decision_candidate_count": len(candidates),
             "review_candidate_count": len(candidates),
             "candidate_relation_counts": relation_counts,
@@ -161,6 +164,19 @@ def _coerce_historical_frames(rows: list[dict[str, Any]], *, repo_id: str) -> li
         except TypeError:
             continue
     return [frame for frame in frames if frame.frame_id and frame.source_node_id]
+
+
+def _dedupe_comparison_frames(frames: list[DecisionFrame]) -> list[DecisionFrame]:
+    """Prefer the active central representation over duplicate ledger rows."""
+
+    out: list[DecisionFrame] = []
+    seen_source_node_ids: set[str] = set()
+    for frame in frames:
+        if frame.source_node_id in seen_source_node_ids:
+            continue
+        seen_source_node_ids.add(frame.source_node_id)
+        out.append(frame)
+    return out
 
 
 def build_decision_frames(
@@ -235,6 +251,7 @@ def _review_candidates(
     comparison_frames: list[DecisionFrame] | None = None,
 ) -> list[dict[str, Any]]:
     candidates: list[dict[str, Any]] = []
+    candidate_ids: set[str] = set()
     pairs = list(combinations(frames, 2))
     if comparison_frames:
         pairs.extend((left, right) for left in frames for right in comparison_frames)
@@ -254,9 +271,13 @@ def _review_candidates(
             "target": target_frame.source_node_id,
             "relation": relation,
         }
+        candidate_id = f"v2review:{stable_hash(candidate_seed)[:32]}"
+        if candidate_id in candidate_ids:
+            continue
+        candidate_ids.add(candidate_id)
         candidates.append(
             ReviewCandidate(
-                candidate_id=f"v2review:{stable_hash(candidate_seed)[:32]}",
+                candidate_id=candidate_id,
                 plan_id=plan_id,
                 job_id=job_id,
                 source_node_id=source_frame.source_node_id,
