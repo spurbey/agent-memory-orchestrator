@@ -108,6 +108,29 @@ def test_peer_agent_ask_room_sends_schema_valid_followup(tmp_path: Path) -> None
     assert metadata["query"] == "Can you answer a valid room follow-up?"
 
 
+def test_peer_agent_ask_room_can_wait_for_target_response(tmp_path: Path) -> None:
+    settings = make_settings(tmp_path)
+    store = PeerStore(settings)
+    store.init_config(node_id="zenbook-amo")
+    store.add_peer(PeerNode(node_id="poco-amo", peer_id="12D3KooWPeer", capabilities=("graph_retrieval",)))
+    room = store.create_room(topic="debug peer room", participants=["poco-amo"])
+    netd = FakeNetdClient()
+    svc = PeerAgentService(settings, peer_service=PeerService(settings, store=store, netd_client=netd))
+
+    result = svc.ask_room(
+        room_id=room["room_id"],
+        peer_ids=["poco-amo"],
+        query="Can you answer a valid room follow-up?",
+        timeout_seconds=0.1,
+        wait_for_response=True,
+    )
+
+    assert result["ok"] is True
+    assert result["response_count"] == 0
+    assert result["peer_responses"] == []
+    assert result["timing"]["wait_ms"] >= 0
+
+
 def test_peer_agent_watch_returns_llm_answer_when_peer_ollama_available(tmp_path: Path) -> None:
     settings = make_settings(tmp_path, peer_agent_allow_retrieval_only_responses=False)
     store = peer_room_with_request(tmp_path, local_node="poco-amo")
@@ -220,6 +243,32 @@ def test_peer_agent_retries_failed_response_delivery(tmp_path: Path) -> None:
     state = json.loads((settings.home / ".peer" / "rooms" / room_id / "agent_state.json").read_text(encoding="utf-8"))
     assert state["response_attempts"]["req_1"]["attempt_count"] == 2
     assert "req_1" in state["sent_response_for_request_ids"]
+
+
+def test_peer_agent_response_records_stage_timing(tmp_path: Path) -> None:
+    settings = make_settings(tmp_path)
+    store = peer_room_with_request(tmp_path, local_node="poco-amo")
+    netd = FakeNetdClient()
+    svc = PeerAgentService(
+        settings,
+        peer_service=PeerService(settings, store=store, netd_client=netd),
+        graph=FakeGraph(good_retrieval()),
+        llm=FakeLlm(local_ready=False),
+    )
+
+    result = svc.watch_once()
+
+    assert result["processed"][0]["ok"] is True
+    response = [item for item in netd.sent if item["message"]["type"] == CONTEXT_RESPONSE][0]["message"]
+    timing = response["payload"]["metadata"]["timing"]
+    assert timing["retrieval_ms"] >= 0
+    assert timing["quality_support_ms"] >= 0
+    assert timing["llm_ready"] is False
+    assert timing["llm_ready_ms"] >= 0
+    assert timing["total_ms"] >= timing["retrieval_ms"]
+    room_id = store.list_rooms()[0]["room_id"]
+    state = json.loads((settings.home / ".peer" / "rooms" / room_id / "agent_state.json").read_text(encoding="utf-8"))
+    assert state["response_attempts"]["req_1"]["last_timing"]["retrieval_ms"] >= 0
 
 
 def test_peer_agent_skips_stale_manual_context_requests(tmp_path: Path) -> None:

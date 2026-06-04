@@ -187,6 +187,7 @@ class PeerAgentService:
         min_confidence: float | None = None,
         timeout_seconds: float | None = None,
         reason: str = "manual_followup",
+        wait_for_response: bool = False,
     ) -> dict[str, Any]:
         self._ensure_enabled()
         safe_query = _require_text(query, "query")
@@ -259,7 +260,7 @@ class PeerAgentService:
             )
         state["peer_requests"] = peer_requests
         self.state.save(safe_room_id, state)
-        return {
+        result = {
             "ok": True,
             "room_id": safe_room_id,
             "mode": "room_followup",
@@ -269,6 +270,22 @@ class PeerAgentService:
             "deliveries": deliveries,
             "timing": {"total_ms": _elapsed_ms(started)},
         }
+        if wait_for_response:
+            wait_started = time.monotonic()
+            expected_request_ids = [str(item.get("request_id") or "") for item in result["peer_requests"]]
+            responses = self._wait_for_request_responses(
+                safe_room_id,
+                request_ids=expected_request_ids,
+                timeout_seconds=timeout,
+            )
+            result["peer_responses"] = responses
+            result["response_count"] = len(responses)
+            result["timing"] = {
+                **result["timing"],
+                "wait_ms": _elapsed_ms(wait_started),
+                "total_ms": _elapsed_ms(started),
+            }
+        return result
 
     def continue_room(
         self,
@@ -450,6 +467,8 @@ class PeerAgentService:
         metadata: dict[str, Any],
         request_id: str,
     ) -> dict[str, Any]:
+        started = time.monotonic()
+        timing: dict[str, Any] = {}
         config = self.peer.store.load_config()
         room_id = str(room.get("room_id") or "")
         initiator = str(message.get("from_node_id") or message.get("from") or room.get("initiator_node_id") or "")
@@ -468,6 +487,7 @@ class PeerAgentService:
                 quality={},
                 support=[],
                 retrieval_bundle={},
+                timing={"total_ms": _elapsed_ms(started), "policy_blocked": True},
             )
         if metadata.get("raw_evidence_requested") and config.raw_evidence != "allowed":
             return self._send_response(
@@ -482,8 +502,12 @@ class PeerAgentService:
                 quality={},
                 support=[],
                 retrieval_bundle={},
+                timing={"total_ms": _elapsed_ms(started), "policy_blocked": True},
             )
+        stage_started = time.monotonic()
         retrieval = self._retrieve(query, session_id=str(metadata.get("session_id") or ""))
+        timing["retrieval_ms"] = _elapsed_ms(stage_started)
+        stage_started = time.monotonic()
         quality = self.quality.evaluate(retrieval, query=query, min_confidence=threshold)
         support = support_from_retrieval(
             retrieval,
@@ -496,6 +520,7 @@ class PeerAgentService:
             include_answer_text=config.share_summaries,
             include_local_refs=config.share_citations,
         )
+        timing["quality_support_ms"] = _elapsed_ms(stage_started)
         mode = RESPONSE_LOW_CONFIDENCE
         content = redacted_answer_text(
             _answer_text(retrieval),
@@ -505,14 +530,20 @@ class PeerAgentService:
         answer_grade = quality.answer_grade
         confidence = quality.confidence
         if support or quality.confidence >= threshold:
-            if self.llm.local_ollama_ready():
+            stage_started = time.monotonic()
+            llm_ready = self.llm.local_ollama_ready()
+            timing["llm_ready"] = llm_ready
+            timing["llm_ready_ms"] = _elapsed_ms(stage_started)
+            if llm_ready:
                 try:
+                    stage_started = time.monotonic()
                     llm_payload = self.llm.generate_peer_answer(
                         query=query,
                         retrieval_bundle=bundle,
                         quality=quality.as_dict(),
                         room_context=self.peer.store.context_pack(room_id, viewer_node_id=config.node_id),
                     )
+                    timing["llm_generate_ms"] = _elapsed_ms(stage_started)
                     content = redacted_answer_text(
                         str(llm_payload.get("answer") or content).strip() or content,
                         support=support,
@@ -521,7 +552,8 @@ class PeerAgentService:
                     confidence = _clamp_float(llm_payload.get("confidence"), default=confidence)
                     answer_grade = bool(llm_payload.get("answer_grade", answer_grade)) and bool(support)
                     mode = RESPONSE_LLM_ANSWER
-                except Exception:
+                except Exception as exc:
+                    timing["llm_error"] = type(exc).__name__
                     if self.settings.peer_agent_allow_retrieval_only_responses:
                         mode = RESPONSE_RETRIEVAL_BUNDLE
                         content = content or "Retrieval bundle attached."
@@ -542,6 +574,7 @@ class PeerAgentService:
             quality=quality.as_dict(),
             support=support,
             retrieval_bundle=bundle,
+            timing={**timing, "total_ms": _elapsed_ms(started)},
         )
 
     def _send_response(
@@ -558,7 +591,9 @@ class PeerAgentService:
         quality: dict[str, Any],
         support: list[dict[str, Any]],
         retrieval_bundle: dict[str, Any],
+        timing: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        safe_timing = dict(timing or {})
         metadata = {
             "schema_version": 1,
             "request_id": request_id,
@@ -571,6 +606,7 @@ class PeerAgentService:
             "quality": quality,
             "support": support,
             "retrieval_bundle": retrieval_bundle,
+            "timing": safe_timing,
             "response_hash": stable_json_hash(
                 {
                     "request_id": request_id,
@@ -596,7 +632,9 @@ class PeerAgentService:
                     "metadata": metadata,
                 },
                 "delivery": {"ok": False, "error": "peer_not_configured"},
+                "timing": safe_timing,
             }
+        send_started = time.monotonic()
         delivery = self.peer.send_message_to_peer(
             peer_id=peer_id,
             room_id=room_id,
@@ -607,7 +645,13 @@ class PeerAgentService:
             metadata=metadata,
             append_on_success_only=True,
         )
-        return {"ok": bool(delivery.get("ok")), "mode": mode, "message": delivery.get("message"), "delivery": delivery.get("delivery")}
+        return {
+            "ok": bool(delivery.get("ok")),
+            "mode": mode,
+            "message": delivery.get("message"),
+            "delivery": delivery.get("delivery"),
+            "timing": {**safe_timing, "send_ms": _elapsed_ms(send_started)},
+        }
 
     def _process_initiator_room(self, room: dict[str, Any]) -> list[dict[str, Any]]:
         room_id = str(room.get("room_id") or "")
@@ -805,6 +849,30 @@ class PeerAgentService:
         participants = [str(item) for item in room.get("participants", []) if str(item).strip()]
         room_peer_ids = [node_id for node_id in participants if node_id != config.node_id]
         return self._select_peers(peer_ids=room_peer_ids)
+
+    def _wait_for_request_responses(
+        self,
+        room_id: str,
+        *,
+        request_ids: list[str],
+        timeout_seconds: float,
+    ) -> list[dict[str, Any]]:
+        expected = {str(item).strip() for item in request_ids if str(item).strip()}
+        if not expected:
+            return []
+        deadline = time.monotonic() + max(0.1, float(timeout_seconds))
+        responses: list[dict[str, Any]] = []
+        while time.monotonic() < deadline:
+            self.watch_once(limit=20)
+            responses = [
+                response
+                for response in self._peer_responses(room_id)
+                if str(response.get("request_id") or "") in expected
+            ]
+            if {str(item.get("request_id") or "") for item in responses} >= expected:
+                return responses
+            time.sleep(0.5)
+        return responses
 
     def _plan_room_continuation(
         self,
