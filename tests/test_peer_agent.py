@@ -79,7 +79,7 @@ def test_peer_agent_ask_can_target_specific_peer(tmp_path: Path) -> None:
 
 
 def test_peer_agent_watch_returns_llm_answer_when_peer_ollama_available(tmp_path: Path) -> None:
-    settings = make_settings(tmp_path)
+    settings = make_settings(tmp_path, peer_agent_allow_retrieval_only_responses=False)
     store = peer_room_with_request(tmp_path, local_node="poco-amo")
     netd = FakeNetdClient()
     llm = FakeLlm(peer_answer={"answer": "Peer found the local-first decision.", "confidence": 0.91, "answer_grade": True, "gaps": []})
@@ -99,15 +99,16 @@ def test_peer_agent_watch_returns_llm_answer_when_peer_ollama_available(tmp_path
     assert responses[0]["payload"]["metadata"]["answer_grade"] is True
 
 
-def test_peer_agent_watch_returns_retrieval_bundle_without_peer_llm(tmp_path: Path) -> None:
+def test_peer_agent_watch_returns_retrieval_bundle_without_waiting_for_peer_llm(tmp_path: Path) -> None:
     settings = make_settings(tmp_path)
     store = peer_room_with_request(tmp_path, local_node="poco-amo")
     netd = FakeNetdClient()
+    llm = FakeLlm(fail_peer=True)
     svc = PeerAgentService(
         settings,
         peer_service=PeerService(settings, store=store, netd_client=netd),
         graph=FakeGraph(good_retrieval()),
-        llm=FakeLlm(fail_peer=True),
+        llm=llm,
     )
 
     svc.watch_once()
@@ -118,6 +119,7 @@ def test_peer_agent_watch_returns_retrieval_bundle_without_peer_llm(tmp_path: Pa
     assert bundle["answer"]["text"]
     assert bundle["support"]
     assert "retrieval" not in bundle
+    assert llm.peer_calls == 0
 
 
 def test_peer_agent_duplicate_request_is_idempotent(tmp_path: Path) -> None:
@@ -579,9 +581,11 @@ class FakeLlm:
         self.final_answer = final_answer or {"answer": "final answer", "confidence": 0.9, "mode": "peer_assisted", "gaps": []}
         self.fail_peer = fail_peer
         self.fail_final = fail_final
+        self.peer_calls = 0
         self.final_calls = 0
 
     def generate_peer_answer(self, **kwargs: Any) -> dict[str, Any]:
+        self.peer_calls += 1
         if self.fail_peer:
             raise RuntimeError("peer llm unavailable")
         return self.peer_answer
