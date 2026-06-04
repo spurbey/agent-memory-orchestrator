@@ -82,7 +82,10 @@ def test_peer_agent_watch_returns_llm_answer_when_peer_ollama_available(tmp_path
     settings = make_settings(tmp_path, peer_agent_allow_retrieval_only_responses=False)
     store = peer_room_with_request(tmp_path, local_node="poco-amo")
     netd = FakeNetdClient()
-    llm = FakeLlm(peer_answer={"answer": "Peer found the local-first decision.", "confidence": 0.91, "answer_grade": True, "gaps": []})
+    llm = FakeLlm(
+        local_ready=True,
+        peer_answer={"answer": "Peer found the local-first decision.", "confidence": 0.91, "answer_grade": True, "gaps": []},
+    )
     svc = PeerAgentService(
         settings,
         peer_service=PeerService(settings, store=store, netd_client=netd),
@@ -103,7 +106,7 @@ def test_peer_agent_watch_returns_retrieval_bundle_without_waiting_for_peer_llm(
     settings = make_settings(tmp_path)
     store = peer_room_with_request(tmp_path, local_node="poco-amo")
     netd = FakeNetdClient()
-    llm = FakeLlm(fail_peer=True)
+    llm = FakeLlm(local_ready=False, fail_peer=True)
     svc = PeerAgentService(
         settings,
         peer_service=PeerService(settings, store=store, netd_client=netd),
@@ -574,15 +577,23 @@ class FakeLlm:
         *,
         peer_answer: dict[str, Any] | None = None,
         final_answer: dict[str, Any] | None = None,
+        local_ready: bool = True,
         fail_peer: bool = False,
         fail_final: bool = False,
     ) -> None:
         self.peer_answer = peer_answer or {"answer": "peer answer", "confidence": 0.9, "answer_grade": True, "gaps": []}
         self.final_answer = final_answer or {"answer": "final answer", "confidence": 0.9, "mode": "peer_assisted", "gaps": []}
+        self.local_ready = local_ready
         self.fail_peer = fail_peer
         self.fail_final = fail_final
         self.peer_calls = 0
         self.final_calls = 0
+
+    def local_ollama_ready(self, **kwargs: Any) -> bool:
+        return self.local_ready
+
+    def provider_configured(self) -> bool:
+        return False
 
     def generate_peer_answer(self, **kwargs: Any) -> dict[str, Any]:
         self.peer_calls += 1
