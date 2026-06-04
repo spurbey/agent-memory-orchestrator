@@ -3,28 +3,17 @@ from __future__ import annotations
 import hashlib
 import json
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from ..core.config import Settings
+from ..domain.evidence.models import DrainSessionState
+from ..domain.evidence.triggers import detect_trigger
+from ..domain.evidence.triggers import is_session_start
+from ..domain.evidence.triggers import record_session_id
+from ..domain.evidence.triggers import session_boundary_trigger
 from ..infrastructure.sqlite.production_job_store import ProductionSessionJobStore
-from .triggers import detect_trigger
-from .triggers import is_session_start
-from .triggers import record_session_id
-from .triggers import session_boundary_trigger
-
-
-@dataclass(slots=True)
-class DrainSessionState:
-    pending_count: int = 0
-    first_event_id: str = ""
-    latest_event_id: str = ""
-    source_app: str = ""
-    repo_path: str = ""
-    evidence_days: set[str] = field(default_factory=set)
-    enqueued_windows: int = 0
-    pending_records: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass(slots=True, frozen=True)

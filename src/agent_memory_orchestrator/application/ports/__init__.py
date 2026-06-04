@@ -4,6 +4,7 @@ from .connector_transport import ConnectorTransportPort
 from .central_merge_store import CentralMergeStorePort
 from .embedding_store import EmbeddingStorePort
 from .evidence_store import EvidenceStorePort
+from .evidence_store import SessionDrainPort
 from .git import GitPort
 from .graph_store import GraphStorePort
 from .llm import LlmPort
@@ -15,6 +16,7 @@ __all__ = [
     "CentralMergeStorePort",
     "EmbeddingStorePort",
     "EvidenceStorePort",
+    "SessionDrainPort",
     "GitPort",
     "GraphStorePort",
     "LlmPort",
