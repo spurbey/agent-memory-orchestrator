@@ -8,8 +8,8 @@ from typing import Any
 
 from ...core.config import Settings
 from ...infrastructure.llm import OllamaQwenClient, QwenUnavailable
-from .prompts import FINAL_SYNTHESIS_SCHEMA, PEER_ANSWER_SCHEMA, ROOM_SUMMARY_SCHEMA
-from .prompts import final_synthesis_prompt, peer_answer_prompt, room_summary_prompt
+from .prompts import FINAL_SYNTHESIS_SCHEMA, PEER_ANSWER_SCHEMA, ROOM_CONTINUATION_SCHEMA, ROOM_SUMMARY_SCHEMA
+from .prompts import final_synthesis_prompt, peer_answer_prompt, room_continuation_prompt, room_summary_prompt
 
 
 class PeerAgentLlmUnavailable(RuntimeError):
@@ -65,6 +65,28 @@ class PeerAgentLlmGateway:
     def summarize_room(self, *, room_context: dict[str, Any]) -> dict[str, Any]:
         prompt = room_summary_prompt(room_context=room_context)
         return self._local_json(prompt, schema=ROOM_SUMMARY_SCHEMA, num_predict=600)
+
+    def plan_room_continuation(
+        self,
+        *,
+        room_context: dict[str, Any],
+        peer_responses: list[dict[str, Any]],
+        agent_state: dict[str, Any],
+        allow_provider: bool = True,
+    ) -> dict[str, Any]:
+        prompt = room_continuation_prompt(
+            room_context=room_context,
+            peer_responses=peer_responses,
+            agent_state=agent_state,
+        )
+        if self.local_ollama_ready():
+            try:
+                return self._local_json(prompt, schema=ROOM_CONTINUATION_SCHEMA, num_predict=700)
+            except PeerAgentLlmUnavailable:
+                pass
+        if allow_provider and self.settings.peer_agent_allow_initiator_api_fallback and self.provider_configured():
+            return self._provider_json(prompt, schema=ROOM_CONTINUATION_SCHEMA)
+        raise PeerAgentLlmUnavailable("peer_agent_no_planner_provider_available")
 
     def local_ollama_ready(self, *, timeout_seconds: float = 0.75) -> bool:
         if self.settings.peer_agent_runtime != "ollama":
