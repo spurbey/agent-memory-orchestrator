@@ -169,6 +169,38 @@ def create_server(settings: Settings) -> FastMCP:
         return memory_tools.peer_room_status(room_id=room_id)
 
     @mcp.tool()
+    def peer_room_ask(
+        room_id: str,
+        query: str,
+        peer_ids: list[str] | None = None,
+        session_id: str = "",
+        min_confidence: float = 0.72,
+        timeout_seconds: float = 45,
+    ) -> dict:
+        """Send a schema-valid follow-up request inside an existing peer-agent room."""
+        return memory_tools.peer_room_ask(
+            room_id=room_id,
+            query=query,
+            peer_ids=peer_ids,
+            session_id=session_id,
+            min_confidence=min_confidence,
+            timeout_seconds=timeout_seconds,
+        )
+
+    @mcp.tool()
+    def peer_room_continue(
+        room_id: str,
+        min_confidence: float = 0.72,
+        timeout_seconds: float = 45,
+    ) -> dict:
+        """Let the initiator planner choose one next action for a peer-agent room."""
+        return memory_tools.peer_room_continue(
+            room_id=room_id,
+            min_confidence=min_confidence,
+            timeout_seconds=timeout_seconds,
+        )
+
+    @mcp.tool()
     def peer_room_context(room_id: str) -> dict:
         """Read local peer-agent room context."""
         return memory_tools.peer_room_context(room_id=room_id)
