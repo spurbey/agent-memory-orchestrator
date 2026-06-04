@@ -76,6 +76,16 @@ MCP_MEMORY_TOOL_CONTRACTS: dict[str, dict[str, Any]] = {
         "required": ["room_id"],
         "returns": ["room", "agent_state"],
     },
+    "peer_room_ask": {
+        "description": "Send a schema-valid follow-up request inside an existing peer-agent room.",
+        "required": ["room_id", "query"],
+        "returns": ["room_id", "mode", "logical_request_id", "peer_requests", "deliveries", "timing"],
+    },
+    "peer_room_continue": {
+        "description": "Let the initiator planner choose one next action for a peer-agent room.",
+        "required": ["room_id"],
+        "returns": ["room_id", "action", "plan", "followup", "finalize"],
+    },
     "peer_room_context": {
         "description": "Read the local three-layer context pack for a peer-agent room.",
         "required": ["room_id"],
