@@ -4,20 +4,19 @@
 def test_connector_domain_connector_boundary_exports_existing_contracts() -> None:
     from agent_memory_orchestrator.domain.connectors import ConnectorEvent
     from agent_memory_orchestrator.domain.connectors import ConnectorResponse
-    from agent_memory_orchestrator.domain.connectors import SlackMessage
-    from agent_memory_orchestrator.domain.connectors import parse_message_envelope
-    from agent_memory_orchestrator.domain.connectors import should_reply_message
     from agent_memory_orchestrator.extensions.contracts.connector import ConnectorResponse as ExtensionConnectorResponse
     from agent_memory_orchestrator.integrations.connectors.base import ConnectorEvent as IntegrationConnectorEvent
-    from agent_memory_orchestrator.integrations.connectors.slack.events import SlackMessage as IntegrationSlackMessage
-    from agent_memory_orchestrator.integrations.connectors.slack.events import parse_message_envelope as integration_parse
-    from agent_memory_orchestrator.integrations.connectors.slack.events import should_reply_message as integration_should_reply
 
     assert ConnectorEvent is IntegrationConnectorEvent
     assert ConnectorResponse is ExtensionConnectorResponse
-    assert SlackMessage is IntegrationSlackMessage
-    assert parse_message_envelope is integration_parse
-    assert should_reply_message is integration_should_reply
+
+
+def test_connector_domain_does_not_export_source_specific_slack_contracts() -> None:
+    import agent_memory_orchestrator.domain.connectors as connector_domain
+
+    assert not hasattr(connector_domain, "SlackMessage")
+    assert not hasattr(connector_domain, "parse_message_envelope")
+    assert not hasattr(connector_domain, "should_reply_message")
 
 
 def test_connector_application_and_slack_infrastructure_boundaries_are_importable() -> None:

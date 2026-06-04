@@ -94,7 +94,7 @@ def _runtime_config_payload(resolved_models: dict[str, str]) -> dict[str, Any]:
         "auto_drain_record_limit": 500,
         "auto_retrieval_node_limit": 10000,
         "auto_retrieval_max_doc_chars": 5000,
-        "auto_embedding_batch_size": 32,
+        "auto_embedding_batch_size": 10000,
         "approval_mode": "manual",
         "embedding_model": resolved_models["embedding_model"],
         "embedding_dims": 1024 if resolved_models["embedding_model"] == "BAAI/bge-m3" else 384,

@@ -1,15 +1,7 @@
-"""Evidence domain contracts.
-
-The append-only evidence implementation remains in ``agent_memory_orchestrator.evidence``.
-This package is the planned domain boundary for callers that should not depend
-on implementation layout.
-"""
+"""Evidence models and deterministic selection rules."""
 
 from __future__ import annotations
 
-from .boundaries import EvidenceDrain
-from .boundaries import RawEvidenceStore
-from .boundaries import clean_evidence_window
 from .models import DrainSessionState
 from .models import RawEvidenceRef
 from .models import TriggerDecision
@@ -17,6 +9,10 @@ from .triggers import detect_trigger
 from .triggers import is_session_start
 from .triggers import record_session_id
 from .triggers import session_boundary_trigger
+from .windows import MAX_QWEN_CONTENT_CHARS
+from .windows import MAX_QWEN_RECORDS
+from .windows import MAX_QWEN_TOTAL_CHARS
+from .windows import clean_evidence_window
 from .views import DEFAULT_CODE_WRITE_SAMPLE_LIMIT
 from .views import REASONING_EVIDENCE_VIEW_SCHEMA_VERSION
 from .views import REASONING_EVIDENCE_VIEW_STAGE
@@ -29,9 +25,10 @@ from .views import write_reasoning_evidence_view_artifacts
 __all__ = [
     "DEFAULT_CODE_WRITE_SAMPLE_LIMIT",
     "DrainSessionState",
-    "EvidenceDrain",
+    "MAX_QWEN_CONTENT_CHARS",
+    "MAX_QWEN_RECORDS",
+    "MAX_QWEN_TOTAL_CHARS",
     "RawEvidenceRef",
-    "RawEvidenceStore",
     "REASONING_EVIDENCE_VIEW_SCHEMA_VERSION",
     "REASONING_EVIDENCE_VIEW_STAGE",
     "ReasoningEvidenceViewBuild",

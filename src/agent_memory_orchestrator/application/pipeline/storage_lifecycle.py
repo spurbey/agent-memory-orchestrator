@@ -6,15 +6,14 @@ import time
 from pathlib import Path
 from typing import Any
 
-from ...runtime.daemon.client import DaemonClient
-from ...runtime.daemon.client import DaemonUnavailable
 from ...core.config import Settings
 from ...core.db import connect
-from ...infrastructure.kuzu import KuzuGraphStore
 from ...domain.pipeline.constants import GRAPH_SCHEMA_VERSION
 from ...domain.pipeline.constants import PIPELINE_VERSION
 from ...domain.pipeline.constants import RESET_MARKER_KEY
+from ...infrastructure.kuzu import KuzuGraphStore
 from ...infrastructure.sqlite.production_job_store import ProductionSessionJobStore
+from ..ports import DaemonStatusPort
 
 
 def initialize_fresh_production_storage(settings: Settings) -> dict[str, Any]:
@@ -62,12 +61,15 @@ def reset_production_storage(
     clean_graph: bool,
     clean_retrieval: bool,
     force_if_daemon_running: bool = False,
+    daemon_status: DaemonStatusPort | None = None,
 ) -> dict[str, Any]:
     if not backup:
         raise ValueError("--backup is required for reset-production")
     if not clean_graph or not clean_retrieval:
         raise ValueError("--clean-graph and --clean-retrieval are required to apply production reset")
-    daemon = _daemon_status(settings)
+    daemon = _daemon_status(daemon_status)
+    if not daemon.get("checked") and not force_if_daemon_running:
+        raise RuntimeError("daemon_status_unknown: supply a daemon status adapter or pass --force-if-daemon-running")
     if daemon.get("running") and not force_if_daemon_running:
         raise RuntimeError("daemon_running: stop amo-daemon or pass --force-if-daemon-running")
 
@@ -136,6 +138,7 @@ def adopt_existing_production_storage(
     validate_graph: bool,
     validate_retrieval: bool,
     force_if_daemon_running: bool = False,
+    daemon_status: DaemonStatusPort | None = None,
 ) -> dict[str, Any]:
     """Mark existing production stores as production-ready without deleting them.
 
@@ -147,7 +150,9 @@ def adopt_existing_production_storage(
         raise ValueError("--backup is required for adopt-production")
     if not validate_graph or not validate_retrieval:
         raise ValueError("--validate-graph and --validate-retrieval are required to adopt existing production stores")
-    daemon = _daemon_status(settings)
+    daemon = _daemon_status(daemon_status)
+    if not daemon.get("checked") and not force_if_daemon_running:
+        raise RuntimeError("daemon_status_unknown: supply a daemon status adapter or pass --force-if-daemon-running")
     if daemon.get("running") and not force_if_daemon_running:
         raise RuntimeError("daemon_running: stop amo-daemon or pass --force-if-daemon-running")
 
@@ -176,14 +181,14 @@ def adopt_existing_production_storage(
     return {"ok": True, "backup_path": str(backup_dir), "marker": marker}
 
 
-def _daemon_status(settings: Settings) -> dict[str, Any]:
+def _daemon_status(status_port: DaemonStatusPort | None) -> dict[str, Any]:
+    if status_port is None:
+        return {"running": False, "checked": False}
     try:
-        health = DaemonClient.from_settings(settings, timeout_seconds=1.0).health()
-    except DaemonUnavailable:
-        return {"running": False}
+        status = status_port.status()
     except Exception:
-        return {"running": False}
-    return {"running": bool(health.get("ok")), "health": health}
+        return {"running": False, "checked": False}
+    return {**status, "running": bool(status.get("running")), "checked": True}
 
 
 def _backup_production_paths(settings: Settings, *, label: str, timestamp: str) -> tuple[Path, dict[str, Any]]:

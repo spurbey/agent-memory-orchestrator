@@ -189,17 +189,21 @@ class PeerAgentService:
             room_id = str(room.get("room_id") or "")
             if not room_id:
                 continue
-            try:
-                detail = self.peer.store.get_room(room_id)
-                if str(detail.get("initiator_node_id") or "") == config.node_id:
-                    processed.extend(self._process_initiator_room(detail))
-                else:
-                    processed.extend(self._process_peer_room(detail))
-            except Exception as exc:
-                state = self.state.load(room_id)
-                state["last_error"] = str(exc)
-                self.state.save(room_id, state)
-                processed.append({"room_id": room_id, "ok": False, "error": str(exc)})
+            with self.state.room_lock(room_id) as lock_acquired:
+                if not lock_acquired:
+                    processed.append({"room_id": room_id, "ok": True, "skipped": True, "reason": "room_locked"})
+                    continue
+                try:
+                    detail = self.peer.store.get_room(room_id)
+                    if str(detail.get("initiator_node_id") or "") == config.node_id:
+                        processed.extend(self._process_initiator_room(detail))
+                    else:
+                        processed.extend(self._process_peer_room(detail))
+                except Exception as exc:
+                    state = self.state.load(room_id)
+                    state["last_error"] = str(exc)
+                    self.state.save(room_id, state)
+                    processed.append({"room_id": room_id, "ok": False, "error": str(exc)})
         return {
             "ok": not drain_error,
             "netd": drained or {"ok": False, "error": drain_error},
@@ -422,6 +426,7 @@ class PeerAgentService:
             "target_peer_id": peer_id,
             "mode": mode,
             "answer_grade": bool(answer_grade),
+            "finalizable": bool(str(content or "").strip() or support or retrieval_bundle),
             "quality": quality,
             "support": support,
             "retrieval_bundle": retrieval_bundle,
@@ -472,7 +477,7 @@ class PeerAgentService:
             return []
         results: list[dict[str, Any]] = []
         if _deadline_expired(str(state.get("deadline_at") or "")):
-            self._finalize_room(room_id, reason="deadline_reached")
+            self._finalize_room(room_id, reason="deadline_reached", lock_held=True)
             return [{"ok": True, "room_id": room_id, "finalized": True, "reason": "deadline_reached"}]
         for message in room.get("messages", []):
             if str(message.get("type") or "") != CONTEXT_RESPONSE:
@@ -489,7 +494,7 @@ class PeerAgentService:
             self._peer_responses(room_id),
             strong_confidence=self.settings.peer_agent_strong_confidence,
         ) is not None:
-            self._finalize_room(room_id, reason="first_strong_peer_response")
+            self._finalize_room(room_id, reason="first_peer_response", lock_held=True)
             results.append({"ok": True, "room_id": room_id, "finalized": True})
         return results
 
@@ -520,7 +525,12 @@ class PeerAgentService:
         self.state.save(room_id, state)
         return {"ok": True, "room_id": room_id, "summary_updated": True, "summary": result}
 
-    def _finalize_room(self, room_id: str, *, reason: str) -> dict[str, Any]:
+    def _finalize_room(self, room_id: str, *, reason: str, lock_held: bool = False) -> dict[str, Any]:
+        if not lock_held:
+            with self.state.room_lock(room_id) as lock_acquired:
+                if not lock_acquired:
+                    return {"ok": True, "room_id": room_id, "skipped": True, "reason": "room_locked"}
+                return self._finalize_room(room_id, reason=reason, lock_held=True)
         state = self.state.load(room_id)
         if state.get("status") == "finalized":
             return {"ok": True, "room_id": room_id, "already_finalized": True, "final": state.get("final", {})}
@@ -530,22 +540,28 @@ class PeerAgentService:
         answer = str((best or {}).get("content") or "")
         mode = "peer_assisted" if best else "retrieval_only"
         confidence = _clamp_float((best or {}).get("confidence"), default=0.0)
-        try:
-            payload = self.llm.synthesize_final(
-                query=str(state.get("original_query") or ""),
-                local_result=local_result,
-                peer_responses=responses,
-                allow_provider=True,
-            )
-            answer = str(payload.get("answer") or answer).strip() or answer
-            confidence = _clamp_float(payload.get("confidence"), default=confidence)
-            mode = str(payload.get("mode") or mode)
-        except Exception:
-            if best and best.get("mode") == RESPONSE_RETRIEVAL_BUNDLE:
-                mode = "retrieval_only"
-            if not answer:
-                answer = _retrieval_only_answer(local_result, responses)
-                mode = "retrieval_only"
+        if reason != "first_peer_response":
+            try:
+                payload = self.llm.synthesize_final(
+                    query=str(state.get("original_query") or ""),
+                    local_result=local_result,
+                    peer_responses=responses,
+                    allow_provider=True,
+                )
+                answer = str(payload.get("answer") or answer).strip() or answer
+                confidence = _clamp_float(payload.get("confidence"), default=confidence)
+                mode = str(payload.get("mode") or mode)
+            except Exception:
+                if best and best.get("mode") == RESPONSE_RETRIEVAL_BUNDLE:
+                    mode = "retrieval_only"
+                if not answer:
+                    answer = _retrieval_only_answer(local_result, responses)
+                    mode = "retrieval_only"
+        elif best:
+            mode = str(best.get("mode") or mode)
+        if not answer:
+            answer = _retrieval_only_answer(local_result, responses)
+            mode = "retrieval_only"
         final = {
             "answer": answer,
             "mode": mode,
@@ -555,6 +571,10 @@ class PeerAgentService:
             "citations": _supports_from_responses(responses),
             "created_at": utc_now(),
         }
+        state["status"] = "finalized"
+        state["finalized_reason"] = reason
+        state["final"] = final
+        self.state.save(room_id, state)
         self.peer.append_message(
             room_id=room_id,
             from_node_id=self.peer.store.load_config().node_id,
@@ -565,10 +585,6 @@ class PeerAgentService:
             confidence=confidence,
             metadata={"mode": mode, "audience": "local", "local_only": True, "reason": reason, "support": final["citations"]},
         )
-        state["status"] = "finalized"
-        state["finalized_reason"] = reason
-        state["final"] = final
-        self.state.save(room_id, state)
         return {"ok": True, "room_id": room_id, "final": final}
 
     def _room_result(self, room_id: str, *, mode: str, reason: str, started: float) -> dict[str, Any]:
@@ -584,7 +600,7 @@ class PeerAgentService:
             "peer_responses": responses,
             "citations": final.get("citations") or _supports_from_responses(responses),
             "timing": {"total_ms": _elapsed_ms(started)},
-            "reason": reason,
+            "reason": str(final.get("reason") or reason),
         }
 
     def _retrieval_only_result(

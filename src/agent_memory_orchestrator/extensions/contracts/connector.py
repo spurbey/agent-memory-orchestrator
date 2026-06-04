@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Mapping, Protocol, Sequence, runtime_checkable
+from typing import Any, Mapping, Protocol, runtime_checkable
+
+from ...domain.connectors.responses import ConnectorResponse
 
 
 @dataclass(slots=True, frozen=True)
@@ -11,13 +13,6 @@ class ConnectorEvent:
     text: str = ""
     thread_id: str = ""
     metadata: Mapping[str, Any] = field(default_factory=dict)
-
-
-@dataclass(slots=True, frozen=True)
-class ConnectorResponse:
-    ok: bool
-    messages: Sequence[str] = field(default_factory=tuple)
-    diagnostics: Mapping[str, Any] = field(default_factory=dict)
 
 
 @runtime_checkable

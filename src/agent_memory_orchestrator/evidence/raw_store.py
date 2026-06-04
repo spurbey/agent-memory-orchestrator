@@ -6,35 +6,12 @@ import json
 import os
 import time
 import uuid
-from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from types import TracebackType
 from typing import Any
 
-
-@dataclass(slots=True, frozen=True)
-class RawEvidenceRef:
-    id: str
-    hash: str
-    path: str
-    offset: int
-    session_id: str
-    source_app: str
-    event_name: str
-    created_at: str
-
-    def as_dict(self) -> dict[str, Any]:
-        return {
-            "id": self.id,
-            "hash": self.hash,
-            "path": self.path,
-            "offset": self.offset,
-            "session_id": self.session_id,
-            "source_app": self.source_app,
-            "event_name": self.event_name,
-            "created_at": self.created_at,
-        }
+from ..domain.evidence.models import RawEvidenceRef
 
 
 class RawEvidenceStore:

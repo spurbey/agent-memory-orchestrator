@@ -108,6 +108,7 @@ central memory but still cite session packets, commits, evidence, and code.
 
 ```text
 runtime/mcp/tools/peer.py or runtime/cli/commands/peer/
+-> domain/peer/ models, protocol, policy, room context
 -> peer/agent/service.py
 -> peer/service.py
 -> peer/netd_client.py
@@ -121,8 +122,8 @@ sidecar owns network transport only.
 
 ```text
 integrations/connectors/<source>/
--> application/services/connectors/runtime.py
 -> domain/connectors/
+-> application/services/connectors/runtime.py
 -> application/services/capture/evidence_ingest.py
 -> evidence/raw_store.py
 ```
@@ -158,9 +159,12 @@ Key files:
 
 - `models.py`: canonical evidence/window data structures.
 - `events.py`: event type helpers.
-- `boundaries.py`: session and evidence boundary rules.
 - `triggers.py`: deterministic trigger detection.
+- `windows.py`: deterministic bounded evidence-window selection.
 - `views.py`: evidence view construction used by the production pipeline.
+
+`EvidenceDrain` and `RawEvidenceStore` are intentionally not exported here.
+They remain operational adapters under `evidence/`.
 
 #### `domain/reasoning/`
 
@@ -241,9 +245,9 @@ Pure peer models and policy. Concrete room storage and networking live elsewhere
 
 Key files:
 
-- `models.py`: peer and context models.
+- `models.py`: peer config and identity models.
 - `protocol.py`: peer protocol contracts.
-- `rooms.py`: room rules.
+- `rooms.py`: deterministic room context-pack construction.
 - `policy.py`: sharing/trust policy.
 
 #### `domain/connectors/`
@@ -356,6 +360,7 @@ Key files:
 - `llm.py`: LLM/model provider port.
 - `git.py`: Git backend port.
 - `evidence_store.py`: evidence store port.
+- `daemon_status.py`: read-only daemon health port for safety-critical workflows.
 - `central_merge_store.py`: central merge persistence port.
 - `connector_transport.py`: connector transport port.
 - `peer_transport.py`: peer transport port.
@@ -443,12 +448,12 @@ together, while still split internally.
 
 Key files and folders:
 
-- `models.py`: peer config and node records.
+- `models.py`: compatibility export for `domain/peer/models.py`.
 - `auth.py`: HMAC payload wrapping/unwrapping.
 - `transport_auth.py`: transport auth policy helpers.
 - `cards.py`: peer card sharing/importing.
 - `invites.py`: invite construction and validation helpers.
-- `context.py`: context pack helpers.
+- `context.py`: compatibility export for `domain/peer/rooms.py`.
 - `doctor.py`: peer diagnostics.
 - `store.py`: local peer room/config store.
 - `service.py`: room, invite, and message orchestration.
@@ -470,15 +475,17 @@ Key files and folders:
 
 ### `evidence/`
 
-Active append-only evidence ingestion and drain root. This root remains active
-because hooks and daemon drain use it directly.
+Operational append-only evidence ingestion and drain root. This root remains
+active because hooks and daemon drain use it directly. Deterministic models,
+trigger rules, and window selection live in `domain/evidence`; compatibility
+facades here preserve older imports.
 
 Key files:
 
 - `raw_store.py`: append-only raw evidence store.
 - `drain.py`: evidence drain and closed-session enqueue logic.
-- `triggers.py`: trigger helpers.
-- `window.py`: evidence window helpers.
+- `triggers.py`: compatibility facade for domain trigger rules.
+- `window.py`: compatibility facade for domain window selection.
 
 ### `install/`
 
@@ -620,6 +627,7 @@ Key folders:
 
 ```text
 runtime hook or connector
+-> domain/evidence models and trigger/window rules
 -> application/services/capture/evidence_ingest.py
 -> evidence/raw_store.py
 -> evidence/drain.py
@@ -675,6 +683,7 @@ not proof.
 
 ```text
 runtime/mcp/tools/peer.py
+-> domain/peer/ models, protocol, policy, room context
 -> peer/agent/service.py
 -> peer/service.py
 -> peer/netd_transport.py
