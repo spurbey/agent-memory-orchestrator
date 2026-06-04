@@ -570,29 +570,68 @@ def test_context_pack_uses_pairwise_recent_messages_for_peer(tmp_path: Path) -> 
     assert pack["policy_projection"]["share_boundary"]
 
 
-def test_context_pack_uses_last_three_room_messages_for_initiator(tmp_path: Path) -> None:
+def test_context_pack_uses_deduped_orchestration_view_for_initiator(tmp_path: Path) -> None:
     settings = make_settings(tmp_path / "initiator")
     store = PeerStore(settings)
     store.init_config(node_id="zenbook-amo")
     room = PeerService(settings, store=store).open_room(
         topic="collect peer answers",
-        peer_ids=["poco-amo"],
+        peer_ids=["poco-amo", "ui-amo"],
         send_invites=False,
     )["room"]
     svc = PeerService(settings, store=store)
-    for idx in range(4):
+    for peer_id in ("poco-amo", "ui-amo"):
         svc.append_message(
             room_id=room["room_id"],
-            from_node_id=f"peer-{idx}",
-            content=f"message {idx}",
-            message_type="context_response",
+            from_node_id="zenbook-amo",
+            to_node_ids=[peer_id],
+            message_type="context_request",
+            content="Can you check relay setup memory?",
+            metadata={
+                "logical_request_id": "q_relay_setup",
+                "request_id": f"req_{peer_id}",
+                "query": "Can you check relay setup memory?",
+                "target_peer_id": peer_id,
+            },
         )
+    svc.append_message(
+        room_id=room["room_id"],
+        from_node_id="poco-amo",
+        to_node_ids=["zenbook-amo"],
+        message_type="context_response",
+        content="Poco found relay setup commits.",
+        confidence=0.82,
+    )
+    svc.append_message(
+        room_id=room["room_id"],
+        from_node_id="ui-amo",
+        to_node_ids=["zenbook-amo"],
+        message_type="context_response",
+        content="UI found no related memory.",
+        confidence=0.31,
+    )
+    svc.append_message(
+        room_id=room["room_id"],
+        from_node_id="zenbook-amo",
+        message_type="final_synthesis",
+        content="Local final answer should not replace peer orchestration context.",
+        metadata={"local_only": True, "audience": "local"},
+    )
 
     pack = svc.context_pack(room["room_id"], viewer_node_id="zenbook-amo")["context"]
-    recent_contents = [item["content"] for item in pack["layers"]["recent_messages"]]
+    recent = pack["layers"]["recent_messages"]
+    recent_contents = [item["content"] for item in recent]
+    request_groups = [item for item in recent if item["type"] == "context_request_group"]
 
     assert pack["role"] == "initiator"
-    assert recent_contents == ["message 1", "message 2", "message 3"]
+    assert len(request_groups) == 1
+    assert request_groups[0]["to_node_ids"] == ["poco-amo", "ui-amo"]
+    assert request_groups[0]["metadata"]["request_count"] == 2
+    assert recent_contents.count("Can you check relay setup memory?") == 1
+    assert "Poco found relay setup commits." in recent_contents
+    assert "UI found no related memory." in recent_contents
+    assert "Local final answer should not replace peer orchestration context." not in recent_contents
+    assert pack["layers"]["pairwise_recent_messages"] == recent
 
 
 def make_settings(tmp_path: Path) -> Settings:

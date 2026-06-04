@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass
 from typing import Any
 
@@ -50,14 +51,17 @@ def build_context_pack(*, room: dict[str, Any], viewer_node_id: str, config: Pee
     messages = [item for item in room.get("messages", []) if isinstance(item, dict)]
     roster = tuple(_participant_roster(room=room, viewer_node_id=viewer_node_id, config=config))
     group_recent = tuple(_compact_message(item) for item in _group_visible_messages(messages)[-4:])
-    pairwise_recent = tuple(
-        _compact_message(item) for item in _pairwise_messages(messages, initiator=initiator, peer=viewer_node_id)[-4:]
-    )
+    if role == "initiator":
+        pairwise_recent = tuple(_initiator_orchestration_messages(messages, initiator=initiator)[-8:])
+    else:
+        pairwise_recent = tuple(
+            _compact_message(item) for item in _pairwise_messages(messages, initiator=initiator, peer=viewer_node_id)[-4:]
+        )
     open_questions = tuple(
         _open_questions(messages, viewer_node_id=viewer_node_id, initiator=initiator, role=role)[-6:]
     )
     if role == "initiator":
-        recent = group_recent[-3:] or tuple(_compact_message(item) for item in messages if is_conversation_message(item))[-3:]
+        recent = pairwise_recent
     else:
         recent = pairwise_recent
     pack = PeerContextPack(
@@ -154,6 +158,86 @@ def _pairwise_messages(messages: list[dict[str, Any]], *, initiator: str, peer: 
     return out
 
 
+def _initiator_orchestration_messages(messages: list[dict[str, Any]], *, initiator: str) -> list[dict[str, Any]]:
+    """Project transport messages into the initiator's peer-orchestration view.
+
+    Transport may carry one context_request per peer for delivery/idempotency.
+    The initiator context should show one logical question with all tagged peers,
+    followed by peer responses, rather than duplicate request prose.
+    """
+    out: list[dict[str, Any]] = []
+    request_groups: dict[str, dict[str, Any]] = {}
+    for message in messages:
+        if not is_conversation_message(message):
+            continue
+        if _is_group_visible(message):
+            continue
+        message_type = str(message.get("type") or "")
+        metadata = message.get("metadata") if isinstance(message.get("metadata"), dict) else {}
+        sender = str(message.get("from_node_id") or message.get("from") or "")
+        recipients = normalize_recipients(message.get("to_node_ids") or message.get("to"))
+        if message_type == "context_request" and sender == initiator:
+            key = _logical_request_key(message, metadata)
+            group = request_groups.get(key)
+            if group is None:
+                group = _compact_request_group(message, metadata)
+                request_groups[key] = group
+                out.append(group)
+            _merge_request_group(group, recipients, metadata)
+            continue
+        if message_type == "context_response" and sender != initiator and (initiator in recipients or not recipients):
+            out.append(_compact_message(message))
+            continue
+        if message_type == "peer_message" and (sender == initiator or initiator in recipients or not recipients):
+            out.append(_compact_message(message))
+    return out
+
+
+def _logical_request_key(message: dict[str, Any], metadata: dict[str, Any]) -> str:
+    logical_id = str(metadata.get("logical_request_id") or "").strip()
+    if logical_id:
+        return f"logical:{logical_id}"
+    query = str(metadata.get("query") or message.get("content") or "").strip()
+    return f"query:{query}"
+
+
+def _compact_request_group(message: dict[str, Any], metadata: dict[str, Any]) -> dict[str, Any]:
+    query = str(metadata.get("query") or message.get("content") or "").strip()
+    logical_id = str(metadata.get("logical_request_id") or "").strip()
+    request_id = str(metadata.get("request_id") or message.get("message_id") or "")
+    fallback_id = hashlib.sha256(query.encode("utf-8")).hexdigest()[:16]
+    return {
+        "message_id": f"group_{logical_id or request_id or fallback_id}",
+        "type": "context_request_group",
+        "from_node_id": str(message.get("from_node_id") or message.get("from") or ""),
+        "to_node_ids": [],
+        "content": _clip(query, 800),
+        "citations": [],
+        "confidence": None,
+        "metadata": {
+            "logical_request_id": logical_id,
+            "request_ids": [],
+            "request_count": 0,
+        },
+    }
+
+
+def _merge_request_group(group: dict[str, Any], recipients: tuple[str, ...], metadata: dict[str, Any]) -> None:
+    to_node_ids = list(group.get("to_node_ids") or [])
+    for recipient in recipients:
+        if recipient not in to_node_ids:
+            to_node_ids.append(recipient)
+    group["to_node_ids"] = sorted(to_node_ids)
+    compact_metadata = group.get("metadata") if isinstance(group.get("metadata"), dict) else {}
+    request_ids = list(compact_metadata.get("request_ids") or [])
+    request_id = str(metadata.get("request_id") or "").strip()
+    if request_id and request_id not in request_ids:
+        request_ids.append(request_id)
+    compact_metadata["request_ids"] = request_ids
+    compact_metadata["request_count"] = len(request_ids) if request_ids else max(len(to_node_ids), 1)
+    group["metadata"] = compact_metadata
+
+
 def _open_questions(
     messages: list[dict[str, Any]],
     *,
@@ -162,6 +246,7 @@ def _open_questions(
     role: str,
 ) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
+    groups: dict[str, dict[str, Any]] = {}
     for message in messages:
         if str(message.get("type") or "") != "context_request":
             continue
@@ -174,15 +259,31 @@ def _open_questions(
         if not query:
             continue
         gaps = metadata.get("open_gaps") if isinstance(metadata.get("open_gaps"), list) else []
-        out.append(
-            {
+        key = _logical_request_key(message, metadata) if role == "initiator" else str(metadata.get("request_id") or message.get("message_id") or "")
+        row = groups.get(key)
+        if row is None:
+            row = {
                 "request_id": str(metadata.get("request_id") or message.get("message_id") or ""),
+                "request_ids": [],
                 "from": sender,
-                "to": list(recipients),
+                "to": [],
                 "query": _clip(query, 320),
-                "open_gaps": [_clip(str(gap), 160) for gap in gaps[:5] if str(gap).strip()],
+                "open_gaps": [],
             }
-        )
+            groups[key] = row
+            out.append(row)
+        request_id = str(metadata.get("request_id") or message.get("message_id") or "")
+        if request_id and request_id not in row["request_ids"]:
+            row["request_ids"].append(request_id)
+        for recipient in recipients:
+            if recipient not in row["to"]:
+                row["to"].append(recipient)
+        for gap in gaps[:5]:
+            clipped = _clip(str(gap), 160)
+            if clipped and clipped not in row["open_gaps"]:
+                row["open_gaps"].append(clipped)
+        row["to"] = sorted(row["to"])
+        row["request_count"] = len(row["request_ids"]) if row["request_ids"] else max(len(row["to"]), 1)
     return out
 
 
@@ -193,6 +294,8 @@ def _compact_message(message: dict[str, Any]) -> dict[str, Any]:
         for key in ("request_id", "parent_message_id", "mode", "answer_grade", "audience", "target_peer_id")
         if key in metadata
     }
+    if "logical_request_id" in metadata:
+        compact_metadata["logical_request_id"] = metadata["logical_request_id"]
     return {
         "message_id": str(message.get("message_id") or ""),
         "type": str(message.get("type") or ""),
@@ -224,6 +327,11 @@ def _render_context_text(pack: PeerContextPack) -> str:
     group_text = _render_messages(pack.group_recent_messages, empty="- No recent group-visible exchanges.")
     pairwise_text = _render_messages(pack.pairwise_recent_messages, empty="- No recent tagged peer exchange.")
     recent_text = _render_messages(pack.recent_messages, empty="- No recent scoped exchanges.")
+    pairwise_label = (
+        "Layer 3B - Recent Peer-Orchestration Exchanges"
+        if pack.role == "initiator"
+        else "Layer 3B - Recent Tagged Peer Exchanges"
+    )
     return (
         "AMO Peer Room Context\n\n"
         "Layer 1 - Room Brief\n"
@@ -236,7 +344,7 @@ def _render_context_text(pack: PeerContextPack) -> str:
         f"{question_text}\n\n"
         "Layer 3A - Recent Group-visible Exchanges\n"
         f"{group_text}\n\n"
-        "Layer 3B - Recent Tagged Peer Exchanges\n"
+        f"{pairwise_label}\n"
         f"{pairwise_text}\n\n"
         f"Active Scoped View ({pack.role})\n"
         f"{recent_text}\n\n"
