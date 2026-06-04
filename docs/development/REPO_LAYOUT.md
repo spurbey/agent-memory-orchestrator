@@ -11,8 +11,8 @@ agent_memory_orchestrator/
   application/     pipeline stages, services, workflows, and ports
   infrastructure/  SQLite, Kuzu, FAISS, Git, filesystem, LLM, network adapters
   runtime/         CLI, daemon, MCP, hooks, web entrypoints
-  evidence/        active raw evidence store, drain, triggers, windows
-  peer/            peer rooms, peer-agent, peer-netd lifecycle and transport
+  evidence/        raw store/drain adapters plus compatibility facades
+  peer/            peer orchestration, storage, peer-agent, and network lifecycle
   integrations/    external connector and agent adapters
   install/         local installer/config/hook setup
   extensions/      extension contracts and local/private loader boundary
@@ -51,7 +51,7 @@ tracked.
 
 ```text
 capture/evidence:
-  runtime hooks/connectors -> evidence/raw_store.py -> evidence/drain.py
+  runtime hooks/connectors -> domain/evidence rules -> evidence/raw_store.py -> evidence/drain.py
 
 production pipeline:
   application/pipeline/job_runner.py -> application/pipeline/stages/*
@@ -66,10 +66,10 @@ retrieval/RAG:
   domain/retrieval -> application/services/retrieval -> infrastructure/sqlite/faiss/kuzu
 
 peer context:
-  peer/agent -> peer/service -> peer/netd_transport -> peer-netd sidecar
+  domain/peer -> peer/agent -> peer/service -> peer/netd_transport -> peer-netd sidecar
 
 connectors:
-  integrations/connectors -> application/services/connectors -> evidence ingest
+  integrations/connectors -> domain/connectors -> application/services/connectors -> evidence ingest
 
 runtime surfaces:
   runtime/cli, runtime/daemon, runtime/mcp, runtime/hook, runtime/web
@@ -89,6 +89,12 @@ runtime surfaces:
   has a clear product responsibility.
 - Prefer domain/application/infrastructure/runtime ownership over generic
   utility dumps.
+- Keep dependency direction explicit: runtime and adapters may call application;
+  application calls domain or ports; domain must not import runtime, adapters,
+  source-specific integrations, or active outer implementations.
+- Keep `domain/connectors`, `domain/evidence`, and `domain/peer` source-neutral.
+  Their outer `integrations`, `evidence`, and `peer` roots adapt or orchestrate
+  those contracts rather than owning duplicate models.
 
 ## Test Policy For Structural Work
 
