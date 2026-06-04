@@ -4,13 +4,13 @@ from __future__ import annotations
 
 from typing import Any
 
-from ....domain.evidence import EvidenceDrain
+from ...ports import SessionDrainPort
 
 
 class SessionBoundaryService:
     """Wrap daemon-side evidence drain behavior behind an application service."""
 
-    def __init__(self, drain: EvidenceDrain) -> None:
+    def __init__(self, drain: SessionDrainPort) -> None:
         self.drain = drain
 
     def drain_closed_sessions(
