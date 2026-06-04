@@ -385,6 +385,25 @@ def handle_peer_command(
             )
             emit(result)
             return 0 if result.get("ok") else 1
+        if args.peer_agent_command == "ask-room":
+            result = svc.ask_room(
+                room_id=args.room_id,
+                query=args.query,
+                peer_ids=args.peer or None,
+                session_id=args.session_id,
+                min_confidence=args.min_confidence,
+                timeout_seconds=args.timeout_seconds,
+            )
+            emit(result)
+            return 0 if result.get("ok") else 1
+        if args.peer_agent_command == "continue":
+            result = svc.continue_room(
+                room_id=args.room_id,
+                min_confidence=args.min_confidence,
+                timeout_seconds=args.timeout_seconds,
+            )
+            emit(result)
+            return 0 if result.get("ok") else 1
         if args.peer_agent_command == "watch":
             return _watch_peer_agent(
                 svc,
