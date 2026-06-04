@@ -393,6 +393,7 @@ def handle_peer_command(
                 session_id=args.session_id,
                 min_confidence=args.min_confidence,
                 timeout_seconds=args.timeout_seconds,
+                wait_for_response=args.wait_for_response,
             )
             emit(result)
             return 0 if result.get("ok") else 1

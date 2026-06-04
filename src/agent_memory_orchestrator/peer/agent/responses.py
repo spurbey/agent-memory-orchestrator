@@ -33,6 +33,7 @@ def peer_responses(room: dict[str, Any]) -> list[dict[str, Any]]:
             "quality": metadata.get("quality") if isinstance(metadata.get("quality"), dict) else {},
             "support": metadata.get("support") if isinstance(metadata.get("support"), list) else [],
             "retrieval_bundle": metadata.get("retrieval_bundle") if isinstance(metadata.get("retrieval_bundle"), dict) else {},
+            "timing": metadata.get("timing") if isinstance(metadata.get("timing"), dict) else {},
             "request_id": metadata.get("request_id", ""),
         }
         response["finalizable"] = bool(metadata.get("finalizable", is_finalizable_response(response)))
