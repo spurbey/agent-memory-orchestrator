@@ -60,18 +60,20 @@ def peer_answer_prompt(
     retrieval_bundle: dict[str, Any],
     quality: dict[str, Any],
     room_context: dict[str, Any],
+    room_context_char_limit: int = 1050,
+    retrieval_char_limit: int = 950,
+    answer_max_words: int = 90,
 ) -> str:
     return (
         "/no_think\n"
-        "You are an AMO peer agent responding from your own local memory only. "
-        "You cannot see the initiator's private memory. Use only the retrieval result and room context below. "
-        "Layer 3A shows the current room discussion. Layer 3B shows only your tagged exchange with the initiator. "
-        "If the retrieval does not directly support an answer, set answer_grade=false and explain the gap. "
-        "Return JSON only with answer, confidence, answer_grade, and gaps.\n\n"
+        "You are an AMO peer agent. Answer only from your local retrieval and the compact room context. "
+        "Do not expose raw evidence. If retrieval is not direct, set answer_grade=false. "
+        f"Keep answer under {max(1, int(answer_max_words))} words and gaps under 2 short items. "
+        "Return JSON only: answer, confidence, answer_grade, gaps.\n\n"
         f"Query: {query}\n"
         f"Quality: {_compact_quality_text(quality)}\n\n"
-        f"Room context:\n{_room_context_text(room_context, limit=7000)}\n\n"
-        f"Local retrieval:\n{_retrieval_text(retrieval_bundle, limit=4500)}"
+        f"Room context:\n{_peer_answer_room_context_text(room_context, limit=max(300, int(room_context_char_limit)))}\n\n"
+        f"Local retrieval:\n{_retrieval_text(retrieval_bundle, limit=max(300, int(retrieval_char_limit)))}"
     )
 
 
@@ -131,6 +133,67 @@ def _room_context_text(room_context: dict[str, Any], *, limit: int) -> str:
     if not text:
         text = json.dumps(room_context.get("layers", room_context), ensure_ascii=False, sort_keys=True)
     return _clip(text, limit)
+
+
+def _peer_answer_room_context_text(room_context: dict[str, Any], *, limit: int) -> str:
+    layers = room_context.get("layers") if isinstance(room_context.get("layers"), dict) else {}
+    if not layers:
+        return _room_context_text(room_context, limit=limit)
+    lines = [
+        "Layer 1 - Room Brief",
+        _compact_room_brief(str(layers.get("room_md") or "")),
+        "",
+        "Layer 2 - Rolling Summary",
+        _clip(str(layers.get("rolling_summary_md") or "").strip() or "- No summary yet.", 250),
+        "",
+        "Layer 3A - Active Room Discussion",
+        _messages_text(layers.get("active_recent_messages"), limit=230, empty="- No active room discussion yet."),
+        "",
+        "Layer 3B - Tagged Initiator/Peer Exchange",
+        _messages_text(layers.get("pairwise_recent_messages"), limit=260, empty="- No tagged peer exchange yet."),
+    ]
+    return _clip("\n".join(lines), limit)
+
+
+def _compact_room_brief(room_md: str) -> str:
+    lines = []
+    capture = False
+    for raw_line in str(room_md or "").splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        if line.startswith("room_id:") or line.startswith("initiator:"):
+            lines.append(line)
+            continue
+        if line in {"## Topic", "## Participants", "## Share Boundary"}:
+            capture = True
+            lines.append(line.replace("## ", ""))
+            continue
+        if line.startswith("## "):
+            capture = False
+            continue
+        if capture:
+            lines.append(line)
+    return _clip("\n".join(lines) if lines else room_md, 300)
+
+
+def _messages_text(value: Any, *, limit: int, empty: str) -> str:
+    if not isinstance(value, list) or not value:
+        return empty
+    lines = []
+    for message in value[-2:]:
+        if not isinstance(message, dict):
+            continue
+        sender = str(message.get("from_node_id") or message.get("from") or "unknown").strip()
+        recipients = message.get("to_node_ids") if isinstance(message.get("to_node_ids"), list) else []
+        to_text = f" -> {','.join(str(item) for item in recipients if item)}" if recipients else ""
+        message_type = str(message.get("type") or "peer_message").strip()
+        metadata = message.get("metadata") if isinstance(message.get("metadata"), dict) else {}
+        mode = str(metadata.get("mode") or "").strip()
+        mode_text = f" mode={mode}" if mode else ""
+        content = _clip(str(message.get("content") or "").strip(), 110)
+        lines.append(f"- [{message_type}{mode_text}] {sender}{to_text}: {content}")
+    return _clip("\n".join(lines) if lines else empty, limit)
 
 
 def _retrieval_text(retrieval_bundle: dict[str, Any], *, limit: int) -> str:
