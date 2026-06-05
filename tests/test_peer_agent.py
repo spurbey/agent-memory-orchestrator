@@ -10,6 +10,7 @@ import pytest
 from agent_memory_orchestrator.core.config import Settings
 from agent_memory_orchestrator.runtime.mcp.tools import MCP_MEMORY_TOOL_CONTRACTS, MemoryMcpToolService
 from agent_memory_orchestrator.peer.agent import PeerAgentService
+from agent_memory_orchestrator.peer.agent.llm import PeerAgentLlmGateway
 from agent_memory_orchestrator.peer.agent.prompts import peer_answer_prompt
 from agent_memory_orchestrator.peer.agent.schemas import CONTEXT_REQUEST, CONTEXT_RESPONSE, RESPONSE_RETRIEVAL_BUNDLE
 from agent_memory_orchestrator.peer.models import PeerNode
@@ -195,6 +196,32 @@ def test_peer_answer_prompt_uses_rendered_context_without_raw_layer_dump() -> No
     assert "local_ref" not in prompt
     assert "WP-PRIVATE" not in prompt
     assert "E-PRIVATE" not in prompt
+
+
+def test_peer_agent_llm_ready_accepts_installed_ollama_model(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    settings = make_settings(tmp_path, peer_agent_model="qwen3:1.7b", peer_agent_endpoint="http://127.0.0.1:11434")
+
+    def fake_urlopen(url: str, timeout: float):
+        if url.endswith("/api/ps"):
+            return FakeHttpResponse({"models": []})
+        if url.endswith("/api/tags"):
+            return FakeHttpResponse({"models": [{"name": "qwen3:1.7b"}]})
+        raise AssertionError(url)
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+
+    assert PeerAgentLlmGateway(settings).local_ollama_ready() is True
+
+
+def test_peer_agent_llm_ready_rejects_missing_ollama_model(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    settings = make_settings(tmp_path, peer_agent_model="qwen3:1.7b", peer_agent_endpoint="http://127.0.0.1:11434")
+
+    def fake_urlopen(url: str, timeout: float):
+        return FakeHttpResponse({"models": [{"name": "other-model:latest"}]})
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+
+    assert PeerAgentLlmGateway(settings).local_ollama_ready() is False
 
 
 def test_peer_agent_watch_returns_llm_answer_when_peer_ollama_available(tmp_path: Path) -> None:
@@ -924,6 +951,20 @@ class FakeNetdClient:
 
     def connect(self, addr: str) -> dict[str, Any]:
         return {"ok": True, "addr": addr}
+
+
+class FakeHttpResponse:
+    def __init__(self, payload: dict[str, Any]) -> None:
+        self.payload = payload
+
+    def __enter__(self) -> FakeHttpResponse:
+        return self
+
+    def __exit__(self, *_args: Any) -> None:
+        return None
+
+    def read(self) -> bytes:
+        return json.dumps(self.payload).encode("utf-8")
 
     def rendezvous_discover(self, addr: str, namespace: str, connect: bool = True) -> list[dict[str, Any]]:
         return []
