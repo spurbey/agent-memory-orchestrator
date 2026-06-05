@@ -134,6 +134,8 @@ class PeerAgentStateStore:
             "original_query": "",
             "local_retrieval": {},
             "peer_requests": [],
+            "active_request_ids": [],
+            "active_logical_request_id": "",
             "processed_message_ids": [],
             "processed_request_ids": [],
             "sent_response_for_request_ids": [],

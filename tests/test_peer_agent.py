@@ -157,6 +157,105 @@ def test_peer_agent_ask_room_carries_initiator_summary_after_summary_exists(tmp_
     assert "Designer answered the first three turns." in metadata["room_summary_md"]
 
 
+def test_peer_agent_ask_room_does_not_finalize_from_stale_prior_response(tmp_path: Path) -> None:
+    settings = make_settings(tmp_path)
+    store = PeerStore(settings)
+    store.init_config(node_id="zenbook-amo")
+    store.add_peer(PeerNode(node_id="poco-amo", peer_id="12D3KooWPeer", capabilities=("graph_retrieval",)))
+    room = store.create_room(
+        topic="debug peer room",
+        participants=["zenbook-amo", "poco-amo"],
+        initiator_node_id="zenbook-amo",
+    )
+    append_completed_turn(store, room["room_id"], 1)
+    netd = FakeNetdClient()
+    svc = PeerAgentService(settings, peer_service=PeerService(settings, store=store, netd_client=netd))
+    state = svc.state.load(room["room_id"])
+    state["agent_managed"] = True
+    state["status"] = "open"
+    svc.state.save(room["room_id"], state)
+
+    svc.ask_room(room_id=room["room_id"], peer_ids=["poco-amo"], query="turn 2 question", timeout_seconds=60)
+    maintenance = svc._process_initiator_room_locked(room["room_id"])
+
+    assert maintenance
+    state = svc.state.load(room["room_id"])
+    assert state["status"] == "open"
+    assert state["final"] == {}
+
+
+def test_peer_agent_ask_room_wait_summarizes_before_next_followup(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    settings = make_settings(tmp_path)
+    store = PeerStore(settings)
+    store.init_config(node_id="zenbook-amo")
+    store.add_peer(PeerNode(node_id="poco-amo", peer_id="12D3KooWPeer", capabilities=("graph_retrieval",)))
+    room = store.create_room(
+        topic="responsive button discussion",
+        participants=["zenbook-amo", "poco-amo"],
+        initiator_node_id="zenbook-amo",
+    )
+    netd = FakeNetdClient()
+    llm = FakeLlm()
+    svc = PeerAgentService(settings, peer_service=PeerService(settings, store=store, netd_client=netd), llm=llm)
+    state = svc.state.load(room["room_id"])
+    state["agent_managed"] = True
+    state["status"] = "open"
+    svc.state.save(room["room_id"], state)
+    for index in range(1, 3):
+        append_completed_turn(store, room["room_id"], index)
+
+    def fake_wait(room_id: str, *, request_ids: list[str], timeout_seconds: float) -> list[dict[str, Any]]:
+        del timeout_seconds
+        request_id = request_ids[0]
+        request_message = [
+            message
+            for message in store.get_room(room_id)["messages"]
+            if (message.get("metadata") or {}).get("request_id") == request_id
+        ][-1]
+        response = {
+            "message_id": "msg_response_waited_3",
+            "type": CONTEXT_RESPONSE,
+            "from": "poco-amo",
+            "from_node_id": "poco-amo",
+            "to": ["zenbook-amo"],
+            "to_node_ids": ["zenbook-amo"],
+            "content": "turn 3 answer",
+            "metadata": {
+                "request_id": request_id,
+                "parent_message_id": request_message["message_id"],
+                "mode": RESPONSE_RETRIEVAL_BUNDLE,
+                "answer_grade": True,
+                "finalizable": True,
+            },
+        }
+        store.append_message(room_id, response)
+        return [{"message_id": response["message_id"], "request_id": request_id, "content": response["content"]}]
+
+    monkeypatch.setattr(svc, "_wait_for_request_responses", fake_wait)
+
+    result = svc.ask_room(
+        room_id=room["room_id"],
+        peer_ids=["poco-amo"],
+        query="turn 3 question",
+        timeout_seconds=5,
+        wait_for_response=True,
+    )
+
+    assert result["response_count"] == 1
+    assert any(item.get("summary_updated") for item in result["post_response_maintenance"])
+    assert llm.summary_calls == 1
+    state = svc.state.load(room["room_id"])
+    assert state["summary"]["summary_version"] == 1
+    assert state["summary"]["summarized_until_request_count"] == 3
+
+    svc.ask_room(room_id=room["room_id"], peer_ids=["poco-amo"], query="turn 4 question", timeout_seconds=0)
+
+    context_messages = [item["message"] for item in netd.sent if item["message"]["type"] == CONTEXT_REQUEST]
+    metadata = context_messages[-1]["payload"]["metadata"]
+    assert metadata["room_summary_version"] == 1
+    assert "Test summary." in metadata["room_summary_md"]
+
+
 def test_peer_answer_prompt_uses_rendered_context_without_raw_layer_dump() -> None:
     prompt = peer_answer_prompt(
         query="From design memory, what changed to make the button responsive?",
