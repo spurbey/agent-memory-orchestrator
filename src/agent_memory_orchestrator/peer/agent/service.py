@@ -58,6 +58,8 @@ class PeerAgentService:
         session_id: str = "",
         min_confidence: float | None = None,
         timeout_seconds: float | None = None,
+        wait_for_response: bool = False,
+        planner_managed: bool = False,
     ) -> dict[str, Any]:
         self._ensure_enabled()
         safe_query = _require_text(query, "query")
@@ -112,6 +114,7 @@ class PeerAgentService:
                 "peer_requests": [],
                 "active_request_ids": [],
                 "active_logical_request_id": "",
+                "planner_loop_active": bool(planner_managed),
             }
         )
         deliveries = []
@@ -160,6 +163,31 @@ class PeerAgentService:
         state["active_request_ids"] = active_request_ids
         state["active_logical_request_id"] = logical_request_id
         self.state.save(room_id, state)
+        if wait_for_response:
+            wait_started = time.monotonic()
+            responses = []
+            if timeout > 0:
+                responses = self._wait_for_request_responses(
+                    room_id,
+                    request_ids=active_request_ids,
+                    timeout_seconds=timeout,
+                )
+            maintenance = self._process_initiator_room_locked(room_id, timeout_seconds=1.0)
+            result = self._room_result(
+                room_id,
+                mode="peer_assisted" if responses else "timed_out",
+                reason="targeted_peer_responses_received" if responses else "targeted_peer_response_timeout",
+                started=started,
+            )
+            result["peer_requests"] = state.get("peer_requests", [])
+            result["response_count"] = len(responses)
+            result["post_response_maintenance"] = maintenance
+            result["timing"] = {
+                **result["timing"],
+                "wait_ms": _elapsed_ms(wait_started),
+                "total_ms": _elapsed_ms(started),
+            }
+            return result
         if timeout <= 0:
             return self._room_result(
                 room_id,
@@ -196,6 +224,7 @@ class PeerAgentService:
         timeout_seconds: float | None = None,
         reason: str = "manual_followup",
         wait_for_response: bool = False,
+        planner_managed: bool = False,
     ) -> dict[str, Any]:
         self._ensure_enabled()
         safe_query = _require_text(query, "query")
@@ -222,6 +251,7 @@ class PeerAgentService:
         state["status"] = "open"
         state["deadline_at"] = deadline_at
         state["final"] = {}
+        state["planner_loop_active"] = bool(planner_managed)
         if not str(state.get("original_query") or "").strip():
             state["original_query"] = str(room.get("topic") or safe_query)
         peer_requests = state.get("peer_requests") if isinstance(state.get("peer_requests"), list) else []
@@ -342,9 +372,32 @@ class PeerAgentService:
                 min_confidence=min_confidence,
                 timeout_seconds=timeout_seconds,
                 reason="planner_followup",
+                planner_managed=True,
             )
             return {"ok": bool(followup.get("ok")), "room_id": safe_room_id, "action": action, "plan": plan, "followup": followup}
         return {"ok": True, "room_id": safe_room_id, "action": "wait", "plan": plan}
+
+    def discuss(
+        self,
+        *,
+        query: str,
+        peer_ids: list[str] | None = None,
+        session_id: str = "",
+        min_confidence: float | None = None,
+        timeout_seconds: float | None = None,
+        max_turns: int = 4,
+    ) -> dict[str, Any]:
+        from .lifecycle import run_discussion
+
+        return run_discussion(
+            self,
+            query=query,
+            peer_ids=peer_ids,
+            session_id=session_id,
+            min_confidence=min_confidence,
+            timeout_seconds=timeout_seconds,
+            max_turns=max_turns,
+        )
 
     def watch_once(self, *, limit: int | None = None) -> dict[str, Any]:
         self._ensure_enabled()
@@ -712,7 +765,7 @@ class PeerAgentService:
         summary_result = self._maybe_summarize_initiator_room(room)
         if summary_result:
             results.append(summary_result)
-        if best_finalizable_response(
+        if not state.get("planner_loop_active") and best_finalizable_response(
             _active_peer_responses(self._peer_responses(room_id), state=state),
             strong_confidence=self.settings.peer_agent_strong_confidence,
         ) is not None:
@@ -798,6 +851,9 @@ class PeerAgentService:
         }
         state["status"] = "finalized"
         state["finalized_reason"] = reason
+        state["planner_loop_active"] = False
+        state["active_request_ids"] = []
+        state["active_logical_request_id"] = ""
         state["final"] = final
         self.state.save(room_id, state)
         self.peer.append_message(
