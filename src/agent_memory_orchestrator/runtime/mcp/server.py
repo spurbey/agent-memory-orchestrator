@@ -164,6 +164,25 @@ def create_server(settings: Settings) -> FastMCP:
         )
 
     @mcp.tool()
+    def peer_memory_discuss(
+        query: str,
+        session_id: str = "",
+        min_confidence: float = 0.72,
+        timeout_seconds: float = 45,
+        max_turns: int = 4,
+        peer_ids: list[str] | None = None,
+    ) -> dict:
+        """Run an automated bounded peer-agent room discussion."""
+        return memory_tools.peer_memory_discuss(
+            query=query,
+            session_id=session_id,
+            min_confidence=min_confidence,
+            timeout_seconds=timeout_seconds,
+            max_turns=max_turns,
+            peer_ids=peer_ids,
+        )
+
+    @mcp.tool()
     def peer_room_status(room_id: str) -> dict:
         """Inspect peer-agent room status and agent_state."""
         return memory_tools.peer_room_status(room_id=room_id)
