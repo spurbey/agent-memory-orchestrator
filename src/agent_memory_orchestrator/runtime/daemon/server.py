@@ -19,6 +19,9 @@ from .owner_lock import DaemonOwnerLock
 from .routes.jobs import handle_job_retry_post as _handle_job_retry_post
 from .routes.jobs import handle_jobs_get as _handle_jobs_get
 from .routes.health import handle_health_get as _handle_health_get
+from .routes.antelligent import handle_antelligent_get as _handle_antelligent_get
+from .routes.antelligent import handle_antelligent_post as _handle_antelligent_post
+from .routes.antelligent import handle_antelligent_websocket as _handle_antelligent_websocket
 from .routes.graph import handle_graph_get as _handle_graph_get
 from .routes.graph import handle_graph_post as _handle_graph_post
 from .routes.connectors import handle_connectors_get as _handle_connectors_get
@@ -34,6 +37,15 @@ from .routes.web import web_asset_bytes as _web_asset_bytes
 _DaemonOwnerLock = DaemonOwnerLock
 _CLIENT_ABORT_ERRORS = (BrokenPipeError, ConnectionAbortedError, ConnectionResetError)
 _load_web_asset = load_web_asset
+_LOCAL_UI_ORIGIN_PREFIXES = (
+    "http://localhost",
+    "http://127.0.0.1",
+    "https://localhost",
+    "https://127.0.0.1",
+    "tauri://localhost",
+    "http://tauri.localhost",
+    "https://tauri.localhost",
+)
 
 
 def _start_auto_drain_worker(settings: Settings) -> Any:
@@ -55,6 +67,16 @@ def _list_repositories_fast(settings: Settings, *, limit: int = 200) -> dict[str
 class AmoHandler(BaseHTTPRequestHandler):
     settings: Settings
 
+    def _send_cors_headers(self) -> None:
+        origin = str(self.headers.get("Origin") or "")
+        if not origin.startswith(_LOCAL_UI_ORIGIN_PREFIXES):
+            return
+        self.send_header("Access-Control-Allow-Origin", origin)
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Authorization, Content-Type, Accept")
+        self.send_header("Access-Control-Max-Age", "600")
+        self.send_header("Vary", "Origin")
+
     def _write_html(self, status: int, body: str) -> bool:
         encoded = body.encode("utf-8")
         try:
@@ -62,6 +84,7 @@ class AmoHandler(BaseHTTPRequestHandler):
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.send_header("Cache-Control", "no-store")
             self.send_header("Content-Length", str(len(encoded)))
+            self._send_cors_headers()
             self.end_headers()
             self.wfile.write(encoded)
         except _CLIENT_ABORT_ERRORS:
@@ -75,6 +98,7 @@ class AmoHandler(BaseHTTPRequestHandler):
             self.send_header("Content-Type", "application/json")
             self.send_header("Cache-Control", "no-store")
             self.send_header("Content-Length", str(len(body)))
+            self._send_cors_headers()
             self.end_headers()
             self.wfile.write(body)
         except _CLIENT_ABORT_ERRORS:
@@ -87,11 +111,21 @@ class AmoHandler(BaseHTTPRequestHandler):
             self.send_header("Content-Type", content_type)
             self.send_header("Cache-Control", "no-store")
             self.send_header("Content-Length", str(len(body)))
+            self._send_cors_headers()
             self.end_headers()
             self.wfile.write(body)
         except _CLIENT_ABORT_ERRORS:
             return False
         return True
+
+    def do_OPTIONS(self) -> None:  # noqa: N802
+        try:
+            self.send_response(204)
+            self.send_header("Content-Length", "0")
+            self._send_cors_headers()
+            self.end_headers()
+        except _CLIENT_ABORT_ERRORS:
+            return
 
     def do_GET(self) -> None:  # noqa: N802
         parsed = urlparse(self.path)
@@ -132,6 +166,22 @@ class AmoHandler(BaseHTTPRequestHandler):
             return
         if _handle_health_get(path=path, settings=self.settings, write_json=self._write_json):
             return
+        if _handle_antelligent_websocket(
+            path=path,
+            query=query,
+            headers=self.headers,
+            settings=self.settings,
+            handler=self,
+        ):
+            return
+        if _handle_antelligent_get(
+            path=path,
+            query=query,
+            headers=self.headers,
+            settings=self.settings,
+            write_json=self._write_json,
+        ):
+            return
         if path == "/api/repos":
             raw_limit = (query.get("limit") or ["200"])[0]
             limit = _bounded_int(raw_limit, default=200, minimum=1, maximum=1000)
@@ -148,6 +198,8 @@ class AmoHandler(BaseHTTPRequestHandler):
         self._write_json(404, {"error": "not found"})
 
     def do_POST(self) -> None:  # noqa: N802
+        parsed = urlparse(self.path)
+        path = parsed.path
         length = int(self.headers.get("Content-Length", "0"))
         raw = self.rfile.read(length).decode("utf-8") if length else "{}"
         try:
@@ -157,6 +209,14 @@ class AmoHandler(BaseHTTPRequestHandler):
             return
 
         try:
+            if _handle_antelligent_post(
+                path=path,
+                payload=payload,
+                headers=self.headers,
+                settings=self.settings,
+                write_json=self._write_json,
+            ):
+                return
             if _handle_job_retry_post(
                 path=self.path,
                 payload=payload,
