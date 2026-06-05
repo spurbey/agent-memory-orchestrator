@@ -41,8 +41,15 @@ class PeerAgentLlmGateway:
             retrieval_bundle=retrieval_bundle,
             quality=quality,
             room_context=room_context,
+            room_context_char_limit=self.settings.peer_agent_answer_context_chars,
+            retrieval_char_limit=self.settings.peer_agent_answer_retrieval_chars,
+            answer_max_words=self.settings.peer_agent_answer_max_words,
         )
-        return self._local_json(prompt, schema=PEER_ANSWER_SCHEMA, num_predict=700)
+        return self._local_json(
+            prompt,
+            schema=PEER_ANSWER_SCHEMA,
+            num_predict=self.settings.peer_agent_answer_num_predict,
+        )
 
     def synthesize_final(
         self,

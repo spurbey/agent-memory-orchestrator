@@ -293,7 +293,7 @@ def _compact_request_group(message: dict[str, Any], metadata: dict[str, Any]) ->
         "type": "context_request_group",
         "from_node_id": str(message.get("from_node_id") or message.get("from") or ""),
         "to_node_ids": [],
-        "content": _clip(query, 800),
+        "content": _clip(query, 420),
         "citations": [],
         "confidence": None,
         "metadata": {
@@ -394,16 +394,77 @@ def _compact_message(message: dict[str, Any]) -> dict[str, Any]:
     }
     if "logical_request_id" in metadata:
         compact_metadata["logical_request_id"] = metadata["logical_request_id"]
+    message_type = str(message.get("type") or "")
     return {
         "message_id": str(message.get("message_id") or ""),
-        "type": str(message.get("type") or ""),
+        "type": message_type,
         "from_node_id": str(message.get("from_node_id") or message.get("from") or ""),
         "to_node_ids": list(normalize_recipients(message.get("to_node_ids") or message.get("to"))),
-        "content": _clip(str(message.get("content") or ""), 800),
+        "content": _compact_message_content(message, metadata, message_type=message_type),
         "citations": list(message.get("citations") or [])[:5] if isinstance(message.get("citations"), list) else [],
         "confidence": message.get("confidence"),
         "metadata": compact_metadata,
     }
+
+
+def _compact_message_content(message: dict[str, Any], metadata: dict[str, Any], *, message_type: str) -> str:
+    content = str(message.get("content") or "").strip()
+    if message_type != "context_response":
+        return _clip(content, 420)
+    if len(content) <= 220 and "Answer from repository memory:" not in content:
+        return content
+    support = metadata.get("support") if isinstance(metadata.get("support"), list) else []
+    support_bits = _portable_support_bits(support)
+    mode = str(metadata.get("mode") or "").strip()
+    answer_grade = metadata.get("answer_grade")
+    confidence = message.get("confidence")
+    prefix_parts = []
+    if mode:
+        prefix_parts.append(f"mode={mode}")
+    if confidence is not None:
+        prefix_parts.append(f"confidence={confidence}")
+    if answer_grade is not None:
+        prefix_parts.append(f"answer_grade={bool(answer_grade)}")
+    prefix = " ".join(prefix_parts)
+    excerpt = _response_excerpt(content)
+    if support_bits:
+        support_text = "; ".join(support_bits[:4])
+        text = f"{prefix}: {excerpt} support={support_text}".strip(": ")
+    else:
+        text = f"{prefix}: {excerpt}".strip(": ")
+    return _clip(text, 360)
+
+
+def _response_excerpt(content: str) -> str:
+    text = " ".join(str(content or "").split())
+    boilerplate = (
+        "Answer from repository memory: Use this as retrieval context for synthesis, not final prose.",
+        "Answer from repository memory:",
+        "Use this as retrieval context for synthesis, not final prose.",
+    )
+    for marker in boilerplate:
+        if text.startswith(marker):
+            text = text[len(marker) :].strip()
+    return _clip(text, 140)
+
+
+def _portable_support_bits(support: list[Any]) -> list[str]:
+    bits: list[str] = []
+    for item in support:
+        if not isinstance(item, dict):
+            continue
+        shared_ref = item.get("shared_ref") if isinstance(item.get("shared_ref"), dict) else {}
+        ref_bits = []
+        for key in ("commit", "path", "symbol"):
+            value = str(shared_ref.get(key) or "").strip()
+            if value:
+                ref_bits.append(f"{key}={_clip(value, 80)}")
+        claim = str(item.get("claim") or "").strip()
+        if ref_bits:
+            bits.append(",".join(ref_bits))
+        elif claim:
+            bits.append(f"claim={_clip(claim, 80)}")
+    return bits
 
 
 def _render_context_text(pack: PeerContextPack) -> str:

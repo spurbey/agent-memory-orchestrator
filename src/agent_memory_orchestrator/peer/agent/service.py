@@ -558,6 +558,9 @@ class PeerAgentService:
                     mode = RESPONSE_LLM_ANSWER
                 except Exception as exc:
                     timing["llm_error"] = type(exc).__name__
+                    error_detail = str(exc).strip()
+                    if error_detail:
+                        timing["llm_error_detail"] = error_detail[:240]
                     if self.settings.peer_agent_allow_retrieval_only_responses:
                         mode = RESPONSE_RETRIEVAL_BUNDLE
                         content = content or "Retrieval bundle attached."

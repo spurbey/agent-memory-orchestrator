@@ -173,22 +173,39 @@ def test_peer_answer_prompt_uses_rendered_context_without_raw_layer_dump() -> No
         },
         quality={"answer_grade": True, "confidence": 0.88, "citation_count": 1, "intent_match": True, "gaps": []},
         room_context={
-            "context_text": (
-                "Layer 1 - Room Brief\n"
-                "Topic: responsive button\n\n"
-                "Layer 2 - Rolling Summary\n"
-                "- Waiting for design and frontend answers.\n\n"
-                "Layer 3A - Active Room Discussion\n"
-                "- [context_request] initiator-amo -> designer-amo,frontend-amo: explain responsive button\n\n"
-                "Layer 3B - Recent Tagged Peer Exchanges\n"
-                "- [context_request] initiator-amo -> designer-amo: what did design change?"
-            ),
-            "layers": {"room_md": "# should not be dumped"},
+            "context_text": '"layers": {"raw": "should not be dumped"}',
+            "layers": {
+                "room_md": (
+                    "# AMO Peer Investigation Room\n\n"
+                    "room_id: room_1\n"
+                    "initiator: initiator-amo\n\n"
+                    "## Topic\nresponsive button\n\n"
+                    "## Participants\n- initiator-amo\n- designer-amo\n\n"
+                    "## Context Window Contract\nverbose contract should not be dumped"
+                ),
+                "rolling_summary_md": "- Waiting for design and frontend answers.",
+                "active_recent_messages": [
+                    {
+                        "type": "context_request_group",
+                        "from_node_id": "initiator-amo",
+                        "to_node_ids": ["designer-amo", "frontend-amo"],
+                        "content": "explain responsive button",
+                    }
+                ],
+                "pairwise_recent_messages": [
+                    {
+                        "type": "context_request",
+                        "from_node_id": "initiator-amo",
+                        "to_node_ids": ["designer-amo"],
+                        "content": "what did design change?",
+                    }
+                ],
+            },
         },
     )
 
     assert "Layer 3A - Active Room Discussion" in prompt
-    assert "Layer 3B - Recent Tagged Peer Exchanges" in prompt
+    assert "Layer 3B - Tagged Initiator/Peer Exchange" in prompt
     assert "Mobile CTA became full width" in prompt
     assert "path=docs/design/button.md" in prompt
     assert '"layers"' not in prompt
@@ -196,6 +213,57 @@ def test_peer_answer_prompt_uses_rendered_context_without_raw_layer_dump() -> No
     assert "local_ref" not in prompt
     assert "WP-PRIVATE" not in prompt
     assert "E-PRIVATE" not in prompt
+    assert "verbose contract should not be dumped" not in prompt
+
+
+def test_peer_answer_prompt_compacts_prior_retrieval_responses() -> None:
+    long_response = (
+        "Answer from repository memory:\nUse this as retrieval context for synthesis, not final prose.\n"
+        "Relevant work and discussion:\n"
+        + "old retrieval prose " * 120
+    )
+
+    prompt = peer_answer_prompt(
+        query="What changed in peer-agent context?",
+        retrieval_bundle={
+            "answer": {"text": "Layer 3A now carries active request/response discussion."},
+            "support": [
+                {
+                    "claim": "Layer 3A carries active discussion.",
+                    "shared_ref": {"commit": "abc1234", "path": "src/domain/peer/rooms.py"},
+                }
+            ],
+        },
+        quality={"answer_grade": True, "confidence": 0.9, "citation_count": 1, "intent_match": True, "gaps": []},
+        room_context={
+            "layers": {
+                "room_md": "room_id: room_1\ninitiator: initiator-amo\n## Topic\npeer context",
+                "rolling_summary_md": "- Summary exists.",
+                "active_recent_messages": [
+                    {
+                        "type": "context_response",
+                        "from_node_id": "sumit-laptop",
+                        "to_node_ids": ["friend-laptop"],
+                        "content": long_response,
+                        "metadata": {"mode": "retrieval_bundle", "answer_grade": False},
+                    }
+                ],
+                "pairwise_recent_messages": [
+                    {
+                        "type": "context_response",
+                        "from_node_id": "sumit-laptop",
+                        "to_node_ids": ["friend-laptop"],
+                        "content": long_response,
+                        "metadata": {"mode": "retrieval_bundle", "answer_grade": False},
+                    }
+                ],
+            }
+        },
+    )
+
+    assert len(prompt) < 3000
+    assert prompt.count("old retrieval prose") <= 4
+    assert "commit=abc1234" in prompt
 
 
 def test_peer_agent_llm_ready_accepts_installed_ollama_model(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
