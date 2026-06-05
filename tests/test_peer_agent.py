@@ -31,6 +31,20 @@ def test_peer_agent_local_high_quality_returns_local_only_without_room(tmp_path:
     assert store.list_rooms() == []
 
 
+def test_peer_agent_discuss_local_high_quality_returns_without_room(tmp_path: Path) -> None:
+    settings = make_settings(tmp_path)
+    store = PeerStore(settings)
+    store.init_config(node_id="zenbook-amo")
+    svc = PeerAgentService(settings, peer_service=PeerService(settings, store=store), graph=FakeGraph(good_retrieval()))
+
+    result = svc.discuss(query="what was the local first architecture decision", timeout_seconds=1)
+
+    assert result["mode"] == "local_only"
+    assert result["room_id"] == ""
+    assert result["lifecycle"]["automated"] is True
+    assert store.list_rooms() == []
+
+
 def test_peer_agent_low_quality_creates_room_and_context_request(tmp_path: Path) -> None:
     settings = make_settings(tmp_path)
     store = PeerStore(settings)
@@ -155,6 +169,197 @@ def test_peer_agent_ask_room_carries_initiator_summary_after_summary_exists(tmp_
     metadata = context_messages[0]["payload"]["metadata"]
     assert metadata["room_summary_version"] == 1
     assert "Designer answered the first three turns." in metadata["room_summary_md"]
+
+
+def test_peer_agent_ask_room_does_not_finalize_from_stale_prior_response(tmp_path: Path) -> None:
+    settings = make_settings(tmp_path)
+    store = PeerStore(settings)
+    store.init_config(node_id="zenbook-amo")
+    store.add_peer(PeerNode(node_id="poco-amo", peer_id="12D3KooWPeer", capabilities=("graph_retrieval",)))
+    room = store.create_room(
+        topic="debug peer room",
+        participants=["zenbook-amo", "poco-amo"],
+        initiator_node_id="zenbook-amo",
+    )
+    append_completed_turn(store, room["room_id"], 1)
+    netd = FakeNetdClient()
+    svc = PeerAgentService(settings, peer_service=PeerService(settings, store=store, netd_client=netd))
+    state = svc.state.load(room["room_id"])
+    state["agent_managed"] = True
+    state["status"] = "open"
+    svc.state.save(room["room_id"], state)
+
+    svc.ask_room(room_id=room["room_id"], peer_ids=["poco-amo"], query="turn 2 question", timeout_seconds=60)
+    maintenance = svc._process_initiator_room_locked(room["room_id"])
+
+    assert maintenance
+    state = svc.state.load(room["room_id"])
+    assert state["status"] == "open"
+    assert state["final"] == {}
+
+
+def test_peer_agent_ask_room_wait_summarizes_before_next_followup(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    settings = make_settings(tmp_path)
+    store = PeerStore(settings)
+    store.init_config(node_id="zenbook-amo")
+    store.add_peer(PeerNode(node_id="poco-amo", peer_id="12D3KooWPeer", capabilities=("graph_retrieval",)))
+    room = store.create_room(
+        topic="responsive button discussion",
+        participants=["zenbook-amo", "poco-amo"],
+        initiator_node_id="zenbook-amo",
+    )
+    netd = FakeNetdClient()
+    llm = FakeLlm()
+    svc = PeerAgentService(settings, peer_service=PeerService(settings, store=store, netd_client=netd), llm=llm)
+    state = svc.state.load(room["room_id"])
+    state["agent_managed"] = True
+    state["status"] = "open"
+    svc.state.save(room["room_id"], state)
+    for index in range(1, 3):
+        append_completed_turn(store, room["room_id"], index)
+
+    def fake_wait(room_id: str, *, request_ids: list[str], timeout_seconds: float) -> list[dict[str, Any]]:
+        del timeout_seconds
+        request_id = request_ids[0]
+        request_message = [
+            message
+            for message in store.get_room(room_id)["messages"]
+            if (message.get("metadata") or {}).get("request_id") == request_id
+        ][-1]
+        response = {
+            "message_id": "msg_response_waited_3",
+            "type": CONTEXT_RESPONSE,
+            "from": "poco-amo",
+            "from_node_id": "poco-amo",
+            "to": ["zenbook-amo"],
+            "to_node_ids": ["zenbook-amo"],
+            "content": "turn 3 answer",
+            "metadata": {
+                "request_id": request_id,
+                "parent_message_id": request_message["message_id"],
+                "mode": RESPONSE_RETRIEVAL_BUNDLE,
+                "answer_grade": True,
+                "finalizable": True,
+            },
+        }
+        store.append_message(room_id, response)
+        return [{"message_id": response["message_id"], "request_id": request_id, "content": response["content"]}]
+
+    monkeypatch.setattr(svc, "_wait_for_request_responses", fake_wait)
+
+    result = svc.ask_room(
+        room_id=room["room_id"],
+        peer_ids=["poco-amo"],
+        query="turn 3 question",
+        timeout_seconds=5,
+        wait_for_response=True,
+    )
+
+    assert result["response_count"] == 1
+    assert any(item.get("summary_updated") for item in result["post_response_maintenance"])
+    assert llm.summary_calls == 1
+    state = svc.state.load(room["room_id"])
+    assert state["summary"]["summary_version"] == 1
+    assert state["summary"]["summarized_until_request_count"] == 3
+
+    svc.ask_room(room_id=room["room_id"], peer_ids=["poco-amo"], query="turn 4 question", timeout_seconds=0)
+
+    context_messages = [item["message"] for item in netd.sent if item["message"]["type"] == CONTEXT_REQUEST]
+    metadata = context_messages[-1]["payload"]["metadata"]
+    assert metadata["room_summary_version"] == 1
+    assert "Test summary." in metadata["room_summary_md"]
+
+
+def test_peer_agent_discuss_runs_bounded_planner_loop_with_summary_handoff(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = make_settings(tmp_path)
+    store = PeerStore(settings)
+    store.init_config(node_id="zenbook-amo")
+    store.add_peer(PeerNode(node_id="poco-amo", peer_id="12D3KooWPeer", capabilities=("graph_retrieval",)))
+    netd = FakeNetdClient()
+    llm = FakeLlm()
+    svc = PeerAgentService(
+        settings,
+        peer_service=PeerService(settings, store=store, netd_client=netd),
+        graph=FakeGraph(low_retrieval()),
+        llm=llm,
+    )
+    plans = [
+        {"action": "ask_peer", "peer_ids": ["poco-amo"], "query": "turn 2 follow-up", "reason": "need startup detail", "confidence": 0.82},
+        {"action": "ask_peer", "peer_ids": ["poco-amo"], "query": "turn 3 follow-up", "reason": "need context detail", "confidence": 0.82},
+        {"action": "ask_peer", "peer_ids": ["poco-amo"], "query": "turn 4 follow-up", "reason": "need validation detail", "confidence": 0.82},
+        {"action": "finalize", "peer_ids": [], "query": "", "reason": "enough peer context", "confidence": 0.9},
+    ]
+
+    def fake_plan_room_continuation(**kwargs: Any) -> dict[str, Any]:
+        del kwargs
+        llm.plan_calls += 1
+        return plans.pop(0)
+
+    def fake_wait(room_id: str, *, request_ids: list[str], timeout_seconds: float) -> list[dict[str, Any]]:
+        del timeout_seconds
+        responses = []
+        room_messages = store.get_room(room_id)["messages"]
+        for request_id in request_ids:
+            request_message = [
+                message
+                for message in room_messages
+                if (message.get("metadata") or {}).get("request_id") == request_id
+            ][-1]
+            response = {
+                "message_id": f"msg_response_{len(responses)}_{request_id}",
+                "type": CONTEXT_RESPONSE,
+                "from": "poco-amo",
+                "from_node_id": "poco-amo",
+                "to": ["zenbook-amo"],
+                "to_node_ids": ["zenbook-amo"],
+                "content": f"answer for {request_id}",
+                "confidence": 0.9,
+                "citations": ["commit:test"],
+                "metadata": {
+                    "request_id": request_id,
+                    "parent_message_id": request_message["message_id"],
+                    "mode": RESPONSE_RETRIEVAL_BUNDLE,
+                    "answer_grade": True,
+                    "finalizable": True,
+                    "support": [{"claim": f"support for {request_id}", "shared_ref": {"commit": "test"}}],
+                    "retrieval_bundle": {"answer": {"text": f"answer for {request_id}"}},
+                    "timing": {"total_ms": 1},
+                },
+            }
+            store.append_message(room_id, response)
+            responses.append({"message_id": response["message_id"], "request_id": request_id, "content": response["content"]})
+        return responses
+
+    monkeypatch.setattr(llm, "plan_room_continuation", fake_plan_room_continuation)
+    monkeypatch.setattr(svc, "_wait_for_request_responses", fake_wait)
+
+    result = svc.discuss(
+        query="Discuss peer relay setup and context lifecycle.",
+        peer_ids=["poco-amo"],
+        timeout_seconds=5,
+        max_turns=4,
+    )
+
+    assert result["ok"] is True
+    assert result["lifecycle"]["turn_count"] == 4
+    assert result["reason"] == "planner_finalized"
+    assert llm.plan_calls == 4
+    assert llm.summary_calls == 1
+    room = store.get_room(result["room_id"])
+    messages = room["messages"]
+    request_messages = [message for message in messages if message["type"] == CONTEXT_REQUEST]
+    assert len(request_messages) == 4
+    assert len([message for message in messages if message["type"] == CONTEXT_RESPONSE]) == 4
+    assert len([message for message in messages if message["type"] == "summary_update"]) == 1
+    assert len([message for message in messages if message["type"] == "final_synthesis"]) == 1
+    assert request_messages[-1]["metadata"]["room_summary_version"] == 1
+    assert "Test summary." in request_messages[-1]["metadata"]["room_summary_md"]
+    state = svc.state.load(result["room_id"])
+    assert state["status"] == "finalized"
+    assert state["planner_loop_active"] is False
 
 
 def test_peer_answer_prompt_uses_rendered_context_without_raw_layer_dump() -> None:
@@ -729,14 +934,17 @@ def test_peer_agent_mcp_contracts_are_registered(tmp_path: Path) -> None:
 
     contracts = service.tool_contracts()
     result = service.peer_memory_ask(query="hello", timeout_seconds=0)
+    discussed = service.peer_memory_discuss(query="hello", timeout_seconds=0, max_turns=2)
     followup = service.peer_room_ask(room_id="room_1", query="follow up")
     continued = service.peer_room_continue(room_id="room_1")
 
     assert "peer_memory_ask" in MCP_MEMORY_TOOL_CONTRACTS
+    assert "peer_memory_discuss" in contracts["tools"]
     assert "peer_room_ask" in contracts["tools"]
     assert "peer_room_continue" in contracts["tools"]
     assert "peer_room_messages" in contracts["tools"]
     assert result["mode"] == "retrieval_only"
+    assert discussed["mode"] == "peer_discussion"
     assert followup["mode"] == "room_followup"
     assert continued["action"] == "wait"
 
@@ -987,6 +1195,9 @@ class FakeLlm:
 class FakePeerAgent:
     def ask(self, **kwargs: Any) -> dict[str, Any]:
         return {"ok": True, "mode": "retrieval_only", "answer": "fake", "room_id": "", "local_quality": {}, "peer_responses": [], "citations": [], "timing": {}}
+
+    def discuss(self, **kwargs: Any) -> dict[str, Any]:
+        return {"ok": True, "mode": "peer_discussion", "answer": "fake", "room_id": "room_1", "lifecycle": {"turn_count": kwargs.get("max_turns", 0)}}
 
     def status(self, room_id: str) -> dict[str, Any]:
         return {"ok": True, "room_id": room_id}
