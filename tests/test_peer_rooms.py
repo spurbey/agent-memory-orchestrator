@@ -33,7 +33,7 @@ def test_peer_room_invite_creates_three_layer_context_files(tmp_path: Path) -> N
     assert "why did graph_service.py change?" in room_md
     assert "Layer 1: this room.md brief" in room_md
     assert "Layer 2: initiator-owned rolling_summary.md" in room_md
-    assert "Layer 3A: compact group-visible room exchanges" in room_md
+    assert "Layer 3A: active initiator-led request/response discussion" in room_md
     assert "Layer 3B: tagged initiator-peer exchanges" in room_md
     assert "Peers auto-respond only when tagged" in room_md
 
