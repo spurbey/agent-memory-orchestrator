@@ -15,8 +15,13 @@ venv/
 # Build artifacts
 build/
 dist/
+node_modules/
+apps/*/.tmp-*.log
+apps/*/.vite-*.log
 *.egg-info/
 src/agent_memory_orchestrator/bin/*/amo-peer-netd*
+apps/*/src-tauri/target/
+apps/*/src-tauri/gen/
 
 # Local runtime data
 .data/
