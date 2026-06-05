@@ -136,6 +136,7 @@ class PeerAgentStateStore:
             "peer_requests": [],
             "active_request_ids": [],
             "active_logical_request_id": "",
+            "planner_loop_active": False,
             "processed_message_ids": [],
             "processed_request_ids": [],
             "sent_response_for_request_ids": [],
