@@ -132,6 +132,71 @@ def test_peer_agent_ask_room_can_wait_for_target_response(tmp_path: Path) -> Non
     assert result["timing"]["wait_ms"] >= 0
 
 
+def test_peer_agent_ask_room_carries_initiator_summary_after_summary_exists(tmp_path: Path) -> None:
+    settings = make_settings(tmp_path)
+    store = PeerStore(settings)
+    store.init_config(node_id="zenbook-amo")
+    store.add_peer(PeerNode(node_id="poco-amo", peer_id="12D3KooWPeer", capabilities=("graph_retrieval",)))
+    room = store.create_room(topic="debug peer room", participants=["poco-amo"])
+    netd = FakeNetdClient()
+    svc = PeerAgentService(settings, peer_service=PeerService(settings, store=store, netd_client=netd))
+    PeerService(settings, store=store).update_summary(
+        room["room_id"],
+        summary_md="# Rolling Summary\n\n## Current Understanding\n\n- Designer answered the first three turns.",
+    )
+    state = svc.state.load(room["room_id"])
+    state["summary"]["summary_version"] = 1
+    svc.state.save(room["room_id"], state)
+
+    svc.ask_room(room_id=room["room_id"], peer_ids=["poco-amo"], query="What should we ask next?", timeout_seconds=0)
+
+    context_messages = [item["message"] for item in netd.sent if item["message"]["type"] == CONTEXT_REQUEST]
+    metadata = context_messages[0]["payload"]["metadata"]
+    assert metadata["room_summary_version"] == 1
+    assert "Designer answered the first three turns." in metadata["room_summary_md"]
+
+
+def test_peer_answer_prompt_uses_rendered_context_without_raw_layer_dump() -> None:
+    prompt = peer_answer_prompt(
+        query="From design memory, what changed to make the button responsive?",
+        retrieval_bundle={
+            "answer": {"text": "Designer memory says mobile CTA became full width."},
+            "support": [
+                {
+                    "claim": "Mobile CTA became full width while desktop stayed compact.",
+                    "local_ref": {"packet_id": "WP-PRIVATE", "evidence_id": "E-PRIVATE"},
+                    "shared_ref": {"path": "docs/design/button.md", "symbol": "Responsive CTA"},
+                    "source_peer": "designer-amo",
+                }
+            ],
+        },
+        quality={"answer_grade": True, "confidence": 0.88, "citation_count": 1, "intent_match": True, "gaps": []},
+        room_context={
+            "context_text": (
+                "Layer 1 - Room Brief\n"
+                "Topic: responsive button\n\n"
+                "Layer 2 - Rolling Summary\n"
+                "- Waiting for design and frontend answers.\n\n"
+                "Layer 3A - Active Room Discussion\n"
+                "- [context_request] initiator-amo -> designer-amo,frontend-amo: explain responsive button\n\n"
+                "Layer 3B - Recent Tagged Peer Exchanges\n"
+                "- [context_request] initiator-amo -> designer-amo: what did design change?"
+            ),
+            "layers": {"room_md": "# should not be dumped"},
+        },
+    )
+
+    assert "Layer 3A - Active Room Discussion" in prompt
+    assert "Layer 3B - Recent Tagged Peer Exchanges" in prompt
+    assert "Mobile CTA became full width" in prompt
+    assert "path=docs/design/button.md" in prompt
+    assert '"layers"' not in prompt
+    assert '"context_text"' not in prompt
+    assert "local_ref" not in prompt
+    assert "WP-PRIVATE" not in prompt
+    assert "E-PRIVATE" not in prompt
+
+
 def test_peer_agent_watch_returns_llm_answer_when_peer_ollama_available(tmp_path: Path) -> None:
     settings = make_settings(tmp_path, peer_agent_allow_retrieval_only_responses=False)
     store = peer_room_with_request(tmp_path, local_node="poco-amo")
