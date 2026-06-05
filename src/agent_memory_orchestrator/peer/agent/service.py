@@ -114,6 +114,7 @@ class PeerAgentService:
         )
         deliveries = []
         logical_request_id = f"q_{stable_json_hash({'room_id': room_id, 'query': safe_query})[:16]}"
+        summary_metadata = _summary_metadata_for_request(room=room, state=state)
         for peer in peers:
             request_id = f"req_{stable_json_hash({'room_id': room_id, 'peer': peer.node_id, 'query': safe_query})[:16]}"
             metadata = {
@@ -135,6 +136,7 @@ class PeerAgentService:
                 "disclosure_boundary": room.get("share_boundary") or self.peer.store.load_config().share_boundary(),
                 "raw_evidence_requested": False,
             }
+            metadata.update(summary_metadata)
             delivery = self.peer.send_message_to_peer(
                 peer_id=peer.node_id,
                 room_id=room_id,
@@ -217,6 +219,7 @@ class PeerAgentService:
         if not str(state.get("original_query") or "").strip():
             state["original_query"] = str(room.get("topic") or safe_query)
         peer_requests = state.get("peer_requests") if isinstance(state.get("peer_requests"), list) else []
+        summary_metadata = _summary_metadata_for_request(room=room, state=state)
         deliveries: list[dict[str, Any]] = []
         for peer in peers:
             request_id = f"req_{stable_json_hash({'logical_request_id': logical_request_id, 'peer': peer.node_id})[:16]}"
@@ -239,6 +242,7 @@ class PeerAgentService:
                 "disclosure_boundary": room.get("share_boundary") or config.share_boundary(),
                 "raw_evidence_requested": False,
             }
+            metadata.update(summary_metadata)
             delivery = self.peer.send_message_to_peer(
                 peer_id=peer.node_id,
                 room_id=safe_room_id,
@@ -688,6 +692,7 @@ class PeerAgentService:
         state = self.state.load(room_id)
         if state.get("status") == "finalized":
             return None
+        initiator = str(room.get("initiator_node_id") or "")
         messages = [
             message
             for message in room.get("messages", [])
@@ -699,13 +704,15 @@ class PeerAgentService:
         summary_state = state.get("summary") if isinstance(state.get("summary"), dict) else {}
         if last_message_id and summary_state.get("summarized_until_message_id") == last_message_id:
             return None
-        total_chars = sum(len(str(message.get("content") or "")) for message in messages)
-        if total_chars < self.settings.peer_agent_summary_token_limit * 4:
+        completed_requests = _completed_logical_request_count(messages, initiator=initiator)
+        summarized_until = _safe_int(summary_state.get("summarized_until_request_count"))
+        if completed_requests < summarized_until + 3:
             return None
         result = self.summarize(room_id)
         state = self.state.load(room_id)
         summary_state = state.get("summary") if isinstance(state.get("summary"), dict) else {}
         summary_state["summarized_until_message_id"] = last_message_id
+        summary_state["summarized_until_request_count"] = completed_requests
         state["summary"] = summary_state
         self.state.save(room_id, state)
         return {"ok": True, "room_id": room_id, "summary_updated": True, "summary": result}
@@ -989,3 +996,58 @@ class PeerAgentService:
     def _ensure_enabled(self) -> None:
         if not self.settings.peer_agent_enabled:
             raise RuntimeError("peer-agent is disabled by AMO_PEER_AGENT_ENABLED")
+
+
+def _completed_logical_request_count(messages: list[dict[str, Any]], *, initiator: str) -> int:
+    request_groups: dict[str, set[str]] = {}
+    answered_request_ids: set[str] = set()
+    for message in messages:
+        message_type = str(message.get("type") or "")
+        metadata = message.get("metadata") if isinstance(message.get("metadata"), dict) else {}
+        if message_type == CONTEXT_REQUEST and str(message.get("from_node_id") or message.get("from") or "") == initiator:
+            request_id = str(metadata.get("request_id") or message.get("message_id") or "").strip()
+            if not request_id:
+                continue
+            logical_key = _logical_request_key(message, metadata)
+            request_groups.setdefault(logical_key, set()).add(request_id)
+        elif message_type == CONTEXT_RESPONSE:
+            for field in ("request_id", "parent_message_id"):
+                answered_id = str(metadata.get(field) or "").strip()
+                if answered_id:
+                    answered_request_ids.add(answered_id)
+    return sum(1 for request_ids in request_groups.values() if request_ids and request_ids.issubset(answered_request_ids))
+
+
+def _logical_request_key(message: dict[str, Any], metadata: dict[str, Any]) -> str:
+    for field in ("logical_request_id", "query"):
+        value = str(metadata.get(field) or "").strip()
+        if value:
+            return value
+    content = str(message.get("content") or "").strip()
+    return content or str(message.get("message_id") or "")
+
+
+def _safe_int(value: Any) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _summary_metadata_for_request(*, room: dict[str, Any], state: dict[str, Any]) -> dict[str, Any]:
+    summary_state = state.get("summary") if isinstance(state.get("summary"), dict) else {}
+    summary_version = _safe_int(summary_state.get("summary_version"))
+    summary_md = str(room.get("rolling_summary_md") or "").strip()
+    if summary_version <= 0 or not summary_md:
+        return {}
+    return {
+        "room_summary_version": summary_version,
+        "room_summary_md": _clip_metadata_text(summary_md, 3000),
+    }
+
+
+def _clip_metadata_text(text: str, limit: int) -> str:
+    value = str(text or "").strip()
+    if len(value) <= limit:
+        return value
+    return value[: max(0, limit - 15)].rstrip() + "...<clipped>"
