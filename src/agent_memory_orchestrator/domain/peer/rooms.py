@@ -19,6 +19,7 @@ class PeerContextPack:
     room_roster: tuple[dict[str, Any], ...]
     open_questions: tuple[dict[str, Any], ...]
     group_recent_messages: tuple[dict[str, Any], ...]
+    active_recent_messages: tuple[dict[str, Any], ...]
     pairwise_recent_messages: tuple[dict[str, Any], ...]
     recent_messages: tuple[dict[str, Any], ...]
     policy_projection: dict[str, Any]
@@ -35,6 +36,7 @@ class PeerContextPack:
                 "room_roster": list(self.room_roster),
                 "open_questions": list(self.open_questions),
                 "group_recent_messages": list(self.group_recent_messages),
+                "active_recent_messages": list(self.active_recent_messages),
                 "pairwise_recent_messages": list(self.pairwise_recent_messages),
                 "recent_messages": list(self.recent_messages),
             },
@@ -50,7 +52,15 @@ def build_context_pack(*, room: dict[str, Any], viewer_node_id: str, config: Pee
     role = "initiator" if viewer_node_id == initiator else "peer"
     messages = [item for item in room.get("messages", []) if isinstance(item, dict)]
     roster = tuple(_participant_roster(room=room, viewer_node_id=viewer_node_id, config=config))
+    rolling_summary_md = _rolling_summary_for_view(
+        room=room,
+        messages=messages,
+        viewer_node_id=viewer_node_id,
+        initiator=initiator,
+        role=role,
+    )
     group_recent = tuple(_compact_message(item) for item in _group_visible_messages(messages)[-4:])
+    active_recent = tuple(_active_room_discussion_messages(messages, initiator=initiator)[-2:])
     if role == "initiator":
         pairwise_recent = tuple(_initiator_orchestration_messages(messages, initiator=initiator)[-8:])
     else:
@@ -69,10 +79,11 @@ def build_context_pack(*, room: dict[str, Any], viewer_node_id: str, config: Pee
         viewer_node_id=viewer_node_id,
         role=role,
         room_md=str(room.get("room_md") or ""),
-        rolling_summary_md=str(room.get("rolling_summary_md") or ""),
+        rolling_summary_md=rolling_summary_md,
         room_roster=roster,
         open_questions=open_questions,
         group_recent_messages=group_recent,
+        active_recent_messages=active_recent,
         pairwise_recent_messages=pairwise_recent,
         recent_messages=recent,
         policy_projection=PeerPolicy(config).llm_projection(),
@@ -87,6 +98,7 @@ def build_context_pack(*, room: dict[str, Any], viewer_node_id: str, config: Pee
         room_roster=pack.room_roster,
         open_questions=pack.open_questions,
         group_recent_messages=pack.group_recent_messages,
+        active_recent_messages=pack.active_recent_messages,
         pairwise_recent_messages=pack.pairwise_recent_messages,
         recent_messages=pack.recent_messages,
         policy_projection=pack.policy_projection,
@@ -129,6 +141,37 @@ def _group_visible_messages(messages: list[dict[str, Any]]) -> list[dict[str, An
         if _is_group_visible(message):
             out.append(message)
     return out
+
+
+def _rolling_summary_for_view(
+    *,
+    room: dict[str, Any],
+    messages: list[dict[str, Any]],
+    viewer_node_id: str,
+    initiator: str,
+    role: str,
+) -> str:
+    local_summary = str(room.get("rolling_summary_md") or "")
+    if role == "initiator":
+        return local_summary
+    shared_summary = _latest_shared_summary(messages, viewer_node_id=viewer_node_id, initiator=initiator)
+    return shared_summary or local_summary
+
+
+def _latest_shared_summary(messages: list[dict[str, Any]], *, viewer_node_id: str, initiator: str) -> str:
+    for message in reversed(messages):
+        if str(message.get("type") or "") != "context_request":
+            continue
+        if str(message.get("from_node_id") or message.get("from") or "") != initiator:
+            continue
+        recipients = normalize_recipients(message.get("to_node_ids") or message.get("to"))
+        if viewer_node_id not in recipients:
+            continue
+        metadata = message.get("metadata") if isinstance(message.get("metadata"), dict) else {}
+        summary_md = str(metadata.get("room_summary_md") or "").strip()
+        if summary_md:
+            return summary_md
+    return ""
 
 
 def _is_group_visible(message: dict[str, Any]) -> bool:
@@ -191,6 +234,45 @@ def _initiator_orchestration_messages(messages: list[dict[str, Any]], *, initiat
         if message_type == "peer_message" and (sender == initiator or initiator in recipients or not recipients):
             out.append(_compact_message(message))
     return out
+
+
+def _active_room_discussion_messages(messages: list[dict[str, Any]], *, initiator: str) -> list[dict[str, Any]]:
+    """Return the short room-wide discussion window, independent of viewer.
+
+    Layer 3A is intentionally not room metadata and not arbitrary notes. It is
+    the latest initiator-led request/response flow so every agent knows what is
+    currently being discussed before applying its own Layer 3B pairwise view.
+    """
+
+    out: list[dict[str, Any]] = []
+    request_groups: dict[str, dict[str, Any]] = {}
+    for message in messages:
+        if not is_conversation_message(message):
+            continue
+        if _is_local_only(message):
+            continue
+        message_type = str(message.get("type") or "")
+        if message_type not in {"context_request", "context_response"}:
+            continue
+        metadata = message.get("metadata") if isinstance(message.get("metadata"), dict) else {}
+        sender = str(message.get("from_node_id") or message.get("from") or "")
+        recipients = normalize_recipients(message.get("to_node_ids") or message.get("to"))
+        if message_type == "context_request" and sender == initiator:
+            key = _logical_request_key(message, metadata)
+            group = request_groups.get(key)
+            if group is None:
+                group = _compact_request_group(message, metadata)
+                request_groups[key] = group
+                out.append(group)
+            _merge_request_group(group, recipients, metadata)
+        elif message_type == "context_response" and sender != initiator and (initiator in recipients or not recipients):
+            out.append(_compact_message(message))
+    return out
+
+
+def _is_local_only(message: dict[str, Any]) -> bool:
+    metadata = message.get("metadata") if isinstance(message.get("metadata"), dict) else {}
+    return bool(metadata.get("local_only"))
 
 
 def _logical_request_key(message: dict[str, Any], metadata: dict[str, Any]) -> str:
@@ -340,9 +422,8 @@ def _render_context_text(pack: PeerContextPack) -> str:
         gap_text = f" gaps={question.get('open_gaps')}" if question.get("open_gaps") else ""
         question_lines.append(f"- {question.get('request_id')}: {question.get('query')} to={to_text}{gap_text}")
     question_text = "\n".join(question_lines) if question_lines else "- No open questions."
-    group_text = _render_messages(pack.group_recent_messages, empty="- No recent group-visible exchanges.")
+    active_text = _render_messages(pack.active_recent_messages, empty="- No active room discussion yet.")
     pairwise_text = _render_messages(pack.pairwise_recent_messages, empty="- No recent tagged peer exchange.")
-    recent_text = _render_messages(pack.recent_messages, empty="- No recent scoped exchanges.")
     pairwise_label = (
         "Layer 3B - Recent Peer-Orchestration Exchanges"
         if pack.role == "initiator"
@@ -358,12 +439,10 @@ def _render_context_text(pack: PeerContextPack) -> str:
         f"{pack.rolling_summary_md.strip()}\n\n"
         "Open Questions\n"
         f"{question_text}\n\n"
-        "Layer 3A - Recent Group-visible Exchanges\n"
-        f"{group_text}\n\n"
+        "Layer 3A - Active Room Discussion\n"
+        f"{active_text}\n\n"
         f"{pairwise_label}\n"
         f"{pairwise_text}\n\n"
-        f"Active Scoped View ({pack.role})\n"
-        f"{recent_text}\n\n"
         "Policy Projection\n"
         f"- viewer_node_id: {pack.viewer_node_id}\n"
         f"- role: {pack.role}\n"

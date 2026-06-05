@@ -10,6 +10,7 @@ import pytest
 from agent_memory_orchestrator.core.config import Settings
 from agent_memory_orchestrator.runtime.mcp.tools import MCP_MEMORY_TOOL_CONTRACTS, MemoryMcpToolService
 from agent_memory_orchestrator.peer.agent import PeerAgentService
+from agent_memory_orchestrator.peer.agent.prompts import peer_answer_prompt
 from agent_memory_orchestrator.peer.agent.schemas import CONTEXT_REQUEST, CONTEXT_RESPONSE, RESPONSE_RETRIEVAL_BUNDLE
 from agent_memory_orchestrator.peer.models import PeerNode
 from agent_memory_orchestrator.peer.service import PeerService
@@ -129,6 +130,71 @@ def test_peer_agent_ask_room_can_wait_for_target_response(tmp_path: Path) -> Non
     assert result["response_count"] == 0
     assert result["peer_responses"] == []
     assert result["timing"]["wait_ms"] >= 0
+
+
+def test_peer_agent_ask_room_carries_initiator_summary_after_summary_exists(tmp_path: Path) -> None:
+    settings = make_settings(tmp_path)
+    store = PeerStore(settings)
+    store.init_config(node_id="zenbook-amo")
+    store.add_peer(PeerNode(node_id="poco-amo", peer_id="12D3KooWPeer", capabilities=("graph_retrieval",)))
+    room = store.create_room(topic="debug peer room", participants=["poco-amo"])
+    netd = FakeNetdClient()
+    svc = PeerAgentService(settings, peer_service=PeerService(settings, store=store, netd_client=netd))
+    PeerService(settings, store=store).update_summary(
+        room["room_id"],
+        summary_md="# Rolling Summary\n\n## Current Understanding\n\n- Designer answered the first three turns.",
+    )
+    state = svc.state.load(room["room_id"])
+    state["summary"]["summary_version"] = 1
+    svc.state.save(room["room_id"], state)
+
+    svc.ask_room(room_id=room["room_id"], peer_ids=["poco-amo"], query="What should we ask next?", timeout_seconds=0)
+
+    context_messages = [item["message"] for item in netd.sent if item["message"]["type"] == CONTEXT_REQUEST]
+    metadata = context_messages[0]["payload"]["metadata"]
+    assert metadata["room_summary_version"] == 1
+    assert "Designer answered the first three turns." in metadata["room_summary_md"]
+
+
+def test_peer_answer_prompt_uses_rendered_context_without_raw_layer_dump() -> None:
+    prompt = peer_answer_prompt(
+        query="From design memory, what changed to make the button responsive?",
+        retrieval_bundle={
+            "answer": {"text": "Designer memory says mobile CTA became full width."},
+            "support": [
+                {
+                    "claim": "Mobile CTA became full width while desktop stayed compact.",
+                    "local_ref": {"packet_id": "WP-PRIVATE", "evidence_id": "E-PRIVATE"},
+                    "shared_ref": {"path": "docs/design/button.md", "symbol": "Responsive CTA"},
+                    "source_peer": "designer-amo",
+                }
+            ],
+        },
+        quality={"answer_grade": True, "confidence": 0.88, "citation_count": 1, "intent_match": True, "gaps": []},
+        room_context={
+            "context_text": (
+                "Layer 1 - Room Brief\n"
+                "Topic: responsive button\n\n"
+                "Layer 2 - Rolling Summary\n"
+                "- Waiting for design and frontend answers.\n\n"
+                "Layer 3A - Active Room Discussion\n"
+                "- [context_request] initiator-amo -> designer-amo,frontend-amo: explain responsive button\n\n"
+                "Layer 3B - Recent Tagged Peer Exchanges\n"
+                "- [context_request] initiator-amo -> designer-amo: what did design change?"
+            ),
+            "layers": {"room_md": "# should not be dumped"},
+        },
+    )
+
+    assert "Layer 3A - Active Room Discussion" in prompt
+    assert "Layer 3B - Recent Tagged Peer Exchanges" in prompt
+    assert "Mobile CTA became full width" in prompt
+    assert "path=docs/design/button.md" in prompt
+    assert '"layers"' not in prompt
+    assert '"context_text"' not in prompt
+    assert "local_ref" not in prompt
+    assert "WP-PRIVATE" not in prompt
+    assert "E-PRIVATE" not in prompt
 
 
 def test_peer_agent_watch_returns_llm_answer_when_peer_ollama_available(tmp_path: Path) -> None:
@@ -530,6 +596,39 @@ def test_peer_agent_does_not_write_initiator_api_key_to_room_files(tmp_path: Pat
     assert "INITIATOR_API_KEY" not in room_text
 
 
+def test_peer_agent_summarizes_after_three_completed_logical_requests(tmp_path: Path) -> None:
+    settings = make_settings(tmp_path)
+    store = PeerStore(settings)
+    store.init_config(node_id="zenbook-amo")
+    room = store.create_room(
+        topic="responsive button discussion",
+        participants=["zenbook-amo", "poco-amo"],
+        initiator_node_id="zenbook-amo",
+    )
+    llm = FakeLlm()
+    svc = PeerAgentService(settings, peer_service=PeerService(settings, store=store), llm=llm)
+    state = svc.state.load(room["room_id"])
+    state["agent_managed"] = True
+    state["status"] = "open"
+    svc.state.save(room["room_id"], state)
+
+    for index in range(1, 3):
+        append_completed_turn(store, room["room_id"], index)
+
+    assert svc._maybe_summarize_initiator_room(store.get_room(room["room_id"])) is None
+    assert llm.summary_calls == 0
+
+    append_completed_turn(store, room["room_id"], 3)
+    result = svc._maybe_summarize_initiator_room(store.get_room(room["room_id"]))
+
+    assert result and result["summary_updated"] is True
+    assert llm.summary_calls == 1
+    state = svc.state.load(room["room_id"])
+    assert state["summary"]["summarized_until_request_count"] == 3
+    assert svc._maybe_summarize_initiator_room(store.get_room(room["room_id"])) is None
+    assert llm.summary_calls == 1
+
+
 def test_peer_agent_mcp_contracts_are_registered(tmp_path: Path) -> None:
     service = MemoryMcpToolService(make_settings(tmp_path), peer_agent=FakePeerAgent())
 
@@ -545,6 +644,41 @@ def test_peer_agent_mcp_contracts_are_registered(tmp_path: Path) -> None:
     assert result["mode"] == "retrieval_only"
     assert followup["mode"] == "room_followup"
     assert continued["action"] == "wait"
+
+
+def append_completed_turn(store: PeerStore, room_id: str, index: int) -> None:
+    request_id = f"req_turn_{index}"
+    store.append_message(
+        room_id,
+        {
+            "message_id": f"msg_request_{index}",
+            "type": CONTEXT_REQUEST,
+            "from": "zenbook-amo",
+            "from_node_id": "zenbook-amo",
+            "to": ["poco-amo"],
+            "to_node_ids": ["poco-amo"],
+            "content": f"turn {index} question",
+            "metadata": {
+                "request_id": request_id,
+                "logical_request_id": f"q_turn_{index}",
+                "query": f"turn {index} question",
+                "target_peer_id": "poco-amo",
+            },
+        },
+    )
+    store.append_message(
+        room_id,
+        {
+            "message_id": f"msg_response_{index}",
+            "type": CONTEXT_RESPONSE,
+            "from": "poco-amo",
+            "from_node_id": "poco-amo",
+            "to": ["zenbook-amo"],
+            "to_node_ids": ["zenbook-amo"],
+            "content": f"turn {index} answer",
+            "metadata": {"request_id": request_id},
+        },
+    )
 
 
 def peer_room_with_request(
@@ -724,6 +858,7 @@ class FakeLlm:
         self.peer_calls = 0
         self.final_calls = 0
         self.plan_calls = 0
+        self.summary_calls = 0
 
     def local_ollama_ready(self, **kwargs: Any) -> bool:
         return self.local_ready
@@ -750,6 +885,7 @@ class FakeLlm:
         return self.plan_action
 
     def summarize_room(self, **kwargs: Any) -> dict[str, Any]:
+        self.summary_calls += 1
         return {"summary_md": "# Rolling Summary\n\n## Current Understanding\n\n- Test summary."}
 
 

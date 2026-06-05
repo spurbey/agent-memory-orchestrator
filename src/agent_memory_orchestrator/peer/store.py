@@ -499,7 +499,7 @@ class PeerStore:
             "## Context Window Contract\n"
             "- Layer 1: this room.md brief.\n"
             "- Layer 2: initiator-owned rolling_summary.md.\n"
-            "- Layer 3A: compact group-visible room exchanges.\n"
+            "- Layer 3A: active initiator-led request/response discussion.\n"
             "- Layer 3B: tagged initiator-peer exchanges for the active peer.\n"
             "- Peers auto-respond only when tagged by the initiator.\n\n"
             "## Desired Output\n"
