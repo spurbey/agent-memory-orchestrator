@@ -65,6 +65,31 @@ Allowed mutation: may send exactly one `context_response` for the tagged `reques
 
 Fallback: if local Ollama is unavailable or generation fails, AMO sends `retrieval_bundle` when `peer_agent_allow_retrieval_only_responses=true`; otherwise it sends `low_confidence`.
 
+Responder prompt budget is configurable so small devices can stay responsive without forcing high-end devices into a low-detail prompt. The peer response still includes the redacted `retrieval_bundle`, so initiator-side synthesis can use detailed support even when the peer's drafted `answer` is concise.
+
+Recommended low-resource defaults:
+
+```json
+{
+  "peer_agent_answer_context_chars": 1050,
+  "peer_agent_answer_retrieval_chars": 950,
+  "peer_agent_answer_max_words": 90,
+  "peer_agent_answer_num_predict": 180
+}
+```
+
+Recommended high-quality profile for stronger local GPUs:
+
+```json
+{
+  "peer_agent_answer_context_chars": 2600,
+  "peer_agent_answer_retrieval_chars": 2200,
+  "peer_agent_answer_max_words": 220,
+  "peer_agent_answer_num_predict": 700,
+  "peer_agent_timeout_seconds": 120
+}
+```
+
 ## Contract 2: Initiator Room Continuation Planner
 
 Owner: initiator device.
