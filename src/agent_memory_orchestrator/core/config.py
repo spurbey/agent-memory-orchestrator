@@ -92,6 +92,10 @@ class Settings:
     peer_agent_model: str = ""
     peer_agent_endpoint: str = ""
     peer_agent_timeout_seconds: float = 45.0
+    peer_agent_answer_context_chars: int = 1050
+    peer_agent_answer_retrieval_chars: int = 950
+    peer_agent_answer_max_words: int = 90
+    peer_agent_answer_num_predict: int = 180
     peer_agent_api_provider: str = ""
     peer_agent_api_base_url: str = ""
     peer_agent_api_model: str = ""
@@ -158,6 +162,10 @@ class Settings:
         peer_agent_model = str(_setting(config, "peer_agent_model", qwen_model)).strip()
         peer_agent_endpoint = str(_setting(config, "peer_agent_endpoint", qwen_endpoint)).strip().rstrip("/")
         peer_agent_timeout_seconds = float(_setting(config, "peer_agent_timeout_seconds", "45"))
+        peer_agent_answer_context_chars = int(_setting(config, "peer_agent_answer_context_chars", "1050"))
+        peer_agent_answer_retrieval_chars = int(_setting(config, "peer_agent_answer_retrieval_chars", "950"))
+        peer_agent_answer_max_words = int(_setting(config, "peer_agent_answer_max_words", "90"))
+        peer_agent_answer_num_predict = int(_setting(config, "peer_agent_answer_num_predict", "180"))
         peer_agent_api_provider = str(_setting(config, "peer_agent_api_provider", "")).strip().lower()
         peer_agent_api_base_url = str(_setting(config, "peer_agent_api_base_url", "")).strip().rstrip("/")
         peer_agent_api_model = str(_setting(config, "peer_agent_api_model", "")).strip()
@@ -248,6 +256,13 @@ class Settings:
             raise ValueError("AMO_PEER_AGENT_ENDPOINT must be an HTTP URL")
         if peer_agent_timeout_seconds <= 0:
             raise ValueError("AMO_PEER_AGENT_TIMEOUT_SECONDS must be positive")
+        if min(
+            peer_agent_answer_context_chars,
+            peer_agent_answer_retrieval_chars,
+            peer_agent_answer_max_words,
+            peer_agent_answer_num_predict,
+        ) <= 0:
+            raise ValueError("AMO_PEER_AGENT_ANSWER_* budget settings must be positive")
         if peer_agent_api_provider not in {"", "openai_compatible"}:
             raise ValueError("AMO_PEER_AGENT_API_PROVIDER must be empty or openai_compatible")
         if peer_agent_api_provider and not peer_agent_api_base_url.startswith(("http://", "https://")):
@@ -329,6 +344,10 @@ class Settings:
             peer_agent_model=peer_agent_model,
             peer_agent_endpoint=peer_agent_endpoint,
             peer_agent_timeout_seconds=peer_agent_timeout_seconds,
+            peer_agent_answer_context_chars=peer_agent_answer_context_chars,
+            peer_agent_answer_retrieval_chars=peer_agent_answer_retrieval_chars,
+            peer_agent_answer_max_words=peer_agent_answer_max_words,
+            peer_agent_answer_num_predict=peer_agent_answer_num_predict,
             peer_agent_api_provider=peer_agent_api_provider,
             peer_agent_api_base_url=peer_agent_api_base_url,
             peer_agent_api_model=peer_agent_api_model,
