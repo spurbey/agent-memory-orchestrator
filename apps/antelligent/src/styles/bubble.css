@@ -1,0 +1,71 @@
+﻿body:has(.ant-bubble) {
+  min-height: 64px;
+  background: transparent;
+}
+
+.ant-bubble {
+  position: relative;
+  width: 58px;
+  height: 58px;
+  margin: 3px;
+  display: grid;
+  place-items: center;
+  border: 1px solid rgba(255, 79, 74, 0.42);
+  border-radius: 20px;
+  background:
+    radial-gradient(circle at 34% 24%, rgba(255, 255, 255, 0.22), transparent 18%),
+    linear-gradient(145deg, rgba(45, 22, 24, 0.96), rgba(17, 19, 22, 0.94));
+  box-shadow:
+    0 14px 30px rgba(0, 0, 0, 0.44),
+    0 0 0 5px rgba(255, 79, 74, 0.08),
+    inset 0 1px 0 rgba(255, 255, 255, 0.12);
+  overflow: hidden;
+}
+
+.bubble-signal {
+  position: absolute;
+  right: 9px;
+  bottom: 9px;
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--signal);
+  box-shadow: 0 0 14px var(--signal);
+}
+
+.bubble-signal:after {
+  content: "";
+  position: absolute;
+  inset: -7px;
+  border: 1px solid rgba(0, 219, 233, 0.42);
+  border-radius: 999px;
+  animation: bubble-ping 1.8s ease-out infinite;
+}
+
+.bubble-ant {
+  position: relative;
+  display: grid;
+  place-items: center;
+}
+
+.bubble-ant .ant-svg {
+  width: 32px;
+  height: 24px;
+}
+
+@keyframes bubble-ping {
+  from {
+    opacity: 0.72;
+    transform: scale(0.72);
+  }
+  to {
+    opacity: 0;
+    transform: scale(1.7);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bubble-signal:after {
+    animation: none;
+  }
+}
