@@ -531,6 +531,7 @@ def test_context_pack_uses_pairwise_recent_messages_for_peer(tmp_path: Path) -> 
         room_id=room["room_id"],
         from_node_id="zenbook-amo",
         to_node_ids=["poco-amo", "ui-amo"],
+        message_type="peer_message",
         content="Shared room note: compare graph retrieval and UI memory.",
         metadata={"audience": "group"},
     )
@@ -538,12 +539,20 @@ def test_context_pack_uses_pairwise_recent_messages_for_peer(tmp_path: Path) -> 
         room_id=room["room_id"],
         from_node_id="zenbook-amo",
         to_node_ids=["poco-amo"],
+        message_type="context_request",
         content="Can you check graph retrieval memory?",
+        metadata={
+            "logical_request_id": "q_graph_retrieval",
+            "request_id": "req_poco_graph",
+            "query": "Can you check graph retrieval memory?",
+            "target_peer_id": "poco-amo",
+        },
     )
     svc.append_message(
         room_id=room["room_id"],
         from_node_id="ui-amo",
         to_node_ids=["zenbook-amo"],
+        message_type="peer_message",
         content="Unrelated UI reply should not enter poco context.",
     )
     svc.append_message(
@@ -554,6 +563,7 @@ def test_context_pack_uses_pairwise_recent_messages_for_peer(tmp_path: Path) -> 
         content="I found WP0030.",
         citations=["WP0030"],
         confidence=0.86,
+        metadata={"request_id": "req_poco_graph"},
     )
 
     pack = svc.context_pack(room["room_id"], viewer_node_id="poco-amo")["context"]
@@ -562,11 +572,16 @@ def test_context_pack_uses_pairwise_recent_messages_for_peer(tmp_path: Path) -> 
     assert "route low-confidence memory question" in pack["layers"]["room_md"]
     roster_ids = {item["node_id"] for item in pack["layers"]["room_roster"]}
     assert roster_ids == {"poco-amo", "ui-amo", "zenbook-amo"}
-    assert "Shared room note" in pack["context_text"]
+    assert "Shared room note" not in pack["context_text"]
     assert any("Shared room note" in item["content"] for item in pack["layers"]["group_recent_messages"])
+    assert "Layer 3A - Active Room Discussion" in pack["context_text"]
     assert "Can you check graph retrieval memory?" in pack["context_text"]
     assert "I found WP0030." in pack["context_text"]
     assert "Unrelated UI reply" not in pack["context_text"]
+    assert [item["content"] for item in pack["layers"]["active_recent_messages"]] == [
+        "Can you check graph retrieval memory?",
+        "I found WP0030.",
+    ]
     assert pack["policy_projection"]["share_boundary"]
 
 
@@ -674,6 +689,36 @@ def test_context_pack_excludes_answered_context_requests_from_open_questions(tmp
 
     assert [item["request_id"] for item in initiator_pack["layers"]["open_questions"]] == ["req_pending"]
     assert [item["request_id"] for item in peer_pack["layers"]["open_questions"]] == ["req_pending"]
+
+
+def test_context_pack_uses_initiator_shared_summary_for_peer(tmp_path: Path) -> None:
+    settings = make_settings(tmp_path / "peer")
+    store = PeerStore(settings)
+    store.init_config(node_id="poco-amo")
+    room = store.create_room(
+        topic="responsive button discussion",
+        participants=["zenbook-amo", "poco-amo"],
+        initiator_node_id="zenbook-amo",
+    )
+    svc = PeerService(settings, store=store)
+    svc.append_message(
+        room_id=room["room_id"],
+        from_node_id="zenbook-amo",
+        to_node_ids=["poco-amo"],
+        message_type="context_request",
+        content="What should we ask next?",
+        metadata={
+            "request_id": "req_after_summary",
+            "query": "What should we ask next?",
+            "room_summary_version": 1,
+            "room_summary_md": "# Rolling Summary\n\n- Initiator already combined the first three peer answers.",
+        },
+    )
+
+    pack = svc.context_pack(room["room_id"], viewer_node_id="poco-amo")["context"]
+
+    assert "Initiator already combined the first three peer answers." in pack["layers"]["rolling_summary_md"]
+    assert "Initiator already combined the first three peer answers." in pack["context_text"]
 
 
 def make_settings(tmp_path: Path) -> Settings:
