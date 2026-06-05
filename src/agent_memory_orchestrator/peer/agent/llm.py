@@ -95,7 +95,7 @@ class PeerAgentLlmGateway:
         model = self.settings.peer_agent_model or self.settings.qwen_model
         if not endpoint or not model:
             return False
-        return _ollama_model_loaded(endpoint.rstrip("/"), model, timeout_seconds=timeout_seconds)
+        return _ollama_model_available(endpoint.rstrip("/"), model, timeout_seconds=timeout_seconds)
 
     def provider_configured(self) -> bool:
         if self.settings.peer_agent_api_provider != "openai_compatible":
@@ -181,9 +181,21 @@ class PeerAgentLlmGateway:
         return parsed
 
 
-def _ollama_model_loaded(endpoint: str, model: str, *, timeout_seconds: float) -> bool:
+def _ollama_model_available(endpoint: str, model: str, *, timeout_seconds: float) -> bool:
+    return _ollama_model_list_contains(
+        f"{endpoint}/api/ps",
+        model,
+        timeout_seconds=timeout_seconds,
+    ) or _ollama_model_list_contains(
+        f"{endpoint}/api/tags",
+        model,
+        timeout_seconds=timeout_seconds,
+    )
+
+
+def _ollama_model_list_contains(url: str, model: str, *, timeout_seconds: float) -> bool:
     try:
-        with urllib.request.urlopen(f"{endpoint}/api/ps", timeout=timeout_seconds) as response:  # noqa: S310
+        with urllib.request.urlopen(url, timeout=timeout_seconds) as response:  # noqa: S310
             payload = json.loads(response.read().decode("utf-8"))
     except (OSError, TimeoutError, urllib.error.URLError, json.JSONDecodeError):
         return False
