@@ -37,22 +37,33 @@ def _retrieval_only_answer(local_result: Any, responses: list[dict[str, Any]]) -
 
 
 def _deterministic_summary(context: dict[str, Any]) -> str:
-    room = context.get("room") if isinstance(context.get("room"), dict) else {}
     layers = context.get("layers") if isinstance(context.get("layers"), dict) else {}
-    recent = layers.get("recent_messages") if isinstance(layers.get("recent_messages"), list) else []
+    room_md = str(layers.get("room_md") or "").strip()
+    recent = layers.get("active_recent_messages") if isinstance(layers.get("active_recent_messages"), list) else []
+    open_questions = layers.get("open_questions") if isinstance(layers.get("open_questions"), list) else []
     lines = [
         "# Rolling Summary",
         "",
         "## Current Understanding",
         "",
-        f"- Topic: {room.get('topic') or context.get('topic') or 'peer room'}",
-        f"- Recent messages considered: {len(recent)}",
+        f"- Topic: {_topic_from_room_md(room_md) or context.get('room_id') or 'peer room'}",
+        f"- Active exchanges considered: {len(recent)}",
         "",
         "## Open Questions",
         "",
-        "- Pending peer-agent finalization.",
+        f"- {len(open_questions)} pending peer question(s)." if open_questions else "- No pending peer questions.",
     ]
     return "\n".join(lines)
+
+
+def _topic_from_room_md(room_md: str) -> str:
+    lines = [line.strip() for line in str(room_md or "").splitlines()]
+    for index, line in enumerate(lines):
+        if line.lower().startswith("topic:"):
+            return line.split(":", 1)[1].strip()
+        if line.lower().startswith("## topic") and index + 1 < len(lines):
+            return lines[index + 1].strip()
+    return ""
 
 
 def _room_summary(room: dict[str, Any]) -> dict[str, Any]:
