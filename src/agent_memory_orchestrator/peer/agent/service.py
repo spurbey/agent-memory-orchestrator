@@ -110,13 +110,17 @@ class PeerAgentService:
                 "local_quality": local_quality.as_dict(),
                 "deadline_at": deadline_at,
                 "peer_requests": [],
+                "active_request_ids": [],
+                "active_logical_request_id": "",
             }
         )
         deliveries = []
         logical_request_id = f"q_{stable_json_hash({'room_id': room_id, 'query': safe_query})[:16]}"
+        active_request_ids: list[str] = []
         summary_metadata = _summary_metadata_for_request(room=room, state=state)
         for peer in peers:
             request_id = f"req_{stable_json_hash({'room_id': room_id, 'peer': peer.node_id, 'query': safe_query})[:16]}"
+            active_request_ids.append(request_id)
             metadata = {
                 "schema_version": 1,
                 "agent_room_schema_version": 1,
@@ -153,6 +157,8 @@ class PeerAgentService:
                     "delivery": delivery.get("delivery", {}),
                 }
             )
+        state["active_request_ids"] = active_request_ids
+        state["active_logical_request_id"] = logical_request_id
         self.state.save(room_id, state)
         if timeout <= 0:
             return self._room_result(
@@ -221,8 +227,10 @@ class PeerAgentService:
         peer_requests = state.get("peer_requests") if isinstance(state.get("peer_requests"), list) else []
         summary_metadata = _summary_metadata_for_request(room=room, state=state)
         deliveries: list[dict[str, Any]] = []
+        active_request_ids: list[str] = []
         for peer in peers:
             request_id = f"req_{stable_json_hash({'logical_request_id': logical_request_id, 'peer': peer.node_id})[:16]}"
+            active_request_ids.append(request_id)
             metadata = {
                 "schema_version": 1,
                 "agent_room_schema_version": 1,
@@ -263,6 +271,8 @@ class PeerAgentService:
                 }
             )
         state["peer_requests"] = peer_requests
+        state["active_request_ids"] = active_request_ids
+        state["active_logical_request_id"] = logical_request_id
         self.state.save(safe_room_id, state)
         result = {
             "ok": True,
@@ -284,6 +294,9 @@ class PeerAgentService:
             )
             result["peer_responses"] = responses
             result["response_count"] = len(responses)
+            maintenance = self._process_initiator_room_locked(safe_room_id, timeout_seconds=1.0)
+            if maintenance:
+                result["post_response_maintenance"] = maintenance
             result["timing"] = {
                 **result["timing"],
                 "wait_ms": _elapsed_ms(wait_started),
@@ -368,6 +381,23 @@ class PeerAgentService:
             "processed": processed,
             "processed_count": len(processed),
         }
+
+    def _process_initiator_room_locked(self, room_id: str, *, timeout_seconds: float = 0.0) -> list[dict[str, Any]]:
+        deadline = time.monotonic() + max(0.0, timeout_seconds)
+        while True:
+            with self.state.room_lock(room_id) as lock_acquired:
+                if lock_acquired:
+                    try:
+                        room = self.peer.store.get_room(room_id)
+                    except FileNotFoundError:
+                        return []
+                    config = self.peer.store.load_config()
+                    if str(room.get("initiator_node_id") or "") != config.node_id:
+                        return []
+                    return self._process_initiator_room(room)
+            if time.monotonic() >= deadline:
+                return [{"ok": True, "room_id": room_id, "skipped": True, "reason": "room_locked"}]
+            time.sleep(0.05)
 
     def watch_forever(
         self,
@@ -683,7 +713,7 @@ class PeerAgentService:
         if summary_result:
             results.append(summary_result)
         if best_finalizable_response(
-            self._peer_responses(room_id),
+            _active_peer_responses(self._peer_responses(room_id), state=state),
             strong_confidence=self.settings.peer_agent_strong_confidence,
         ) is not None:
             self._finalize_room(room_id, reason="first_peer_response", lock_held=True)
@@ -1028,6 +1058,13 @@ def _logical_request_key(message: dict[str, Any], metadata: dict[str, Any]) -> s
             return value
     content = str(message.get("content") or "").strip()
     return content or str(message.get("message_id") or "")
+
+
+def _active_peer_responses(responses: list[dict[str, Any]], *, state: dict[str, Any]) -> list[dict[str, Any]]:
+    active_request_ids = {str(item).strip() for item in state.get("active_request_ids", []) if str(item).strip()}
+    if not active_request_ids:
+        return responses
+    return [response for response in responses if str(response.get("request_id") or "").strip() in active_request_ids]
 
 
 def _safe_int(value: Any) -> int:
