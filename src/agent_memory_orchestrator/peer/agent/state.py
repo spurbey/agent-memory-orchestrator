@@ -145,6 +145,7 @@ class PeerAgentStateStore:
             "summary": {
                 "summary_version": 0,
                 "summarized_until_message_id": "",
+                "summarized_until_request_count": 0,
                 "last_summary_at": "",
             },
             "final": {},
