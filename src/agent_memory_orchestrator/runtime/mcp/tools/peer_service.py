@@ -22,6 +22,25 @@ class PeerToolMixin:
             timeout_seconds=timeout_seconds,
         )
 
+    def peer_memory_discuss(
+        self,
+        *,
+        query: str,
+        session_id: str = "",
+        min_confidence: float = 0.72,
+        timeout_seconds: float = 45,
+        max_turns: int = 4,
+        peer_ids: list[str] | None = None,
+    ) -> dict[str, Any]:
+        return self._peer_agent_service().discuss(
+            query=_require_text(query, "query"),
+            peer_ids=peer_ids,
+            session_id=session_id,
+            min_confidence=min_confidence,
+            timeout_seconds=timeout_seconds,
+            max_turns=max_turns,
+        )
+
     def peer_room_status(self, *, room_id: str) -> dict[str, Any]:
         return self._peer_agent_service().status(_require_text(room_id, "room_id"))
 

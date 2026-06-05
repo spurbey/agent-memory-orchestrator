@@ -71,6 +71,11 @@ MCP_MEMORY_TOOL_CONTRACTS: dict[str, dict[str, Any]] = {
         "required": ["query"],
         "returns": ["mode", "answer", "room_id", "local_quality", "peer_responses", "citations", "timing"],
     },
+    "peer_memory_discuss": {
+        "description": "Run an automated bounded peer-agent room discussion until planner finalization, timeout, or max turns.",
+        "required": ["query"],
+        "returns": ["mode", "answer", "room_id", "local_quality", "peer_responses", "citations", "lifecycle", "timing"],
+    },
     "peer_room_status": {
         "description": "Inspect peer-agent room lifecycle and idempotency state.",
         "required": ["room_id"],
