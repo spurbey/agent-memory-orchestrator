@@ -1,0 +1,72 @@
+﻿@import url("https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap");
+
+:root {
+  color-scheme: dark;
+  --bg: #111316;
+  --surface: rgba(30, 32, 35, 0.62);
+  --surface-strong: rgba(40, 42, 45, 0.78);
+  --surface-soft: rgba(255, 255, 255, 0.035);
+  --ink: #e7e8ec;
+  --muted: #a9adba;
+  --faint: #727889;
+  --line: rgba(255, 255, 255, 0.075);
+  --line-soft: rgba(255, 255, 255, 0.045);
+  --signal: #00dbe9;
+  --signal-soft: rgba(0, 219, 233, 0.12);
+  --blue: #b8c3ff;
+  --red: #ff4f4a;
+  --red-soft: rgba(255, 79, 74, 0.16);
+  --amber: #f0c86a;
+  --bad: #ff8b84;
+  --shadow: 0 22px 54px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  --sans: "Geist", "Segoe UI", "Aptos", sans-serif;
+  --mono: "JetBrains Mono", "Cascadia Mono", Consolas, monospace;
+}
+
+* { box-sizing: border-box; }
+html, body, #app { min-height: 100%; }
+body {
+  margin: 0;
+  color: var(--ink);
+  font: 14px/1.45 var(--sans);
+  background:
+    radial-gradient(circle at 48% 32%, rgba(255, 255, 255, 0.04), transparent 32rem),
+    radial-gradient(circle at 78% 12%, rgba(0, 219, 233, 0.08), transparent 28rem),
+    linear-gradient(140deg, #0d0f12, #1d2024 52%, #101216);
+}
+button, textarea, input { font: inherit; }
+button { cursor: pointer; }
+button:disabled { cursor: not-allowed; opacity: 0.5; }
+textarea, input, button { outline: none; }
+h1, h2, h3, p { margin: 0; }
+h1, h2, h3 { letter-spacing: -0.035em; line-height: 1.08; }
+
+.eyebrow {
+  margin: 0 0 6px;
+  color: var(--signal);
+  font: 700 10px/1 var(--mono);
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+
+.status-pill {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--muted);
+  background: rgba(18, 20, 23, 0.58);
+  font: 700 11px var(--mono);
+  text-transform: uppercase;
+}
+.status-pill.good { color: var(--signal); border-color: rgba(0, 219, 233, 0.34); }
+.status-pill.warn { color: var(--amber); border-color: rgba(240, 200, 106, 0.32); }
+.status-pill.bad { color: var(--bad); border-color: rgba(255, 139, 132, 0.36); }
+
+::-webkit-scrollbar { width: 5px; height: 5px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: rgba(169, 173, 186, 0.22); border-radius: 999px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(0, 219, 233, 0.36); }
+
