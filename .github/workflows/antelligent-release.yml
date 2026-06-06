@@ -15,7 +15,7 @@ on:
         description: Mark release as prerelease
         required: true
         type: boolean
-        default: true
+        default: false
   push:
     tags:
       - "antelligent-v*"
@@ -56,14 +56,14 @@ jobs:
           if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
             release_tag="${GITHUB_REF_NAME}"
             version="${release_tag#antelligent-v}"
-            prerelease="true"
+            prerelease="false"
           else
             version="${INPUT_VERSION}"
             release_tag="${INPUT_RELEASE_TAG}"
             if [[ -z "${release_tag}" ]]; then
               release_tag="antelligent-v${version}"
             fi
-            prerelease="${INPUT_PRERELEASE:-true}"
+            prerelease="${INPUT_PRERELEASE:-false}"
           fi
           base_url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${release_tag}"
           echo "version=${version}" >> "$GITHUB_OUTPUT"
