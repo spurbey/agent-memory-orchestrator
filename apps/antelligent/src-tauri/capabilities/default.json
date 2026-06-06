@@ -3,5 +3,9 @@
   "identifier": "default",
   "description": "Default Antelligent desktop capability.",
   "windows": ["bubble", "panel"],
-  "permissions": ["core:default", "core:window:allow-set-position"]
+  "permissions": [
+    "core:default",
+    "core:window:allow-set-position",
+    "core:window:allow-start-dragging"
+  ]
 }
