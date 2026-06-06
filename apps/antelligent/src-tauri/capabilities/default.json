@@ -3,5 +3,5 @@
   "identifier": "default",
   "description": "Default Antelligent desktop capability.",
   "windows": ["bubble", "panel"],
-  "permissions": ["core:default"]
+  "permissions": ["core:default", "core:window:allow-set-position"]
 }
