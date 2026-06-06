@@ -9,18 +9,19 @@ use crate::config;
 
 const SPAWN_COOLDOWN: Duration = Duration::from_secs(8);
 
-pub fn ensure_daemon_started() {
+pub fn ensure_daemon_started() -> Result<(), String> {
     if daemon_reachable() || !spawn_allowed() {
-        return;
+        return Ok(());
     }
     let Some(daemon) = config::daemon_command() else {
-        return;
+        return Ok(());
     };
     let mut command = Command::new(daemon.program);
     command.args(daemon.args);
     command.env("AMO_HOME", config::amo_home());
     hide_console(&mut command);
-    let _ = command.spawn();
+    command.spawn().map_err(|err| err.to_string())?;
+    Ok(())
 }
 
 fn spawn_allowed() -> bool {

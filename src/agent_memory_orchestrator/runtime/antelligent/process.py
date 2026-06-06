@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import signal
 import subprocess
 from pathlib import Path
@@ -126,8 +127,8 @@ def _pid_exists(pid: int) -> bool:
 
 def _process_matches_antelligent(settings: Settings, pid: int) -> bool:
     exe = installed_executable(settings)
-    expected = str(exe.resolve()).lower() if exe and exe.exists() else ""
     if is_windows():
+        expected = str(exe.resolve()).lower() if exe and exe.exists() else ""
         command = [
             "powershell",
             "-NoProfile",
@@ -139,9 +140,22 @@ def _process_matches_antelligent(settings: Settings, pid: int) -> bool:
         return bool(expected and actual and actual == expected)
     result = subprocess.run(["ps", "-p", str(pid), "-o", "command="], text=True, capture_output=True, check=False)
     command_line = result.stdout.strip()
-    if expected and expected in command_line.lower():
-        return True
-    return "antelligent" in command_line.lower()
+    if not exe or not exe.exists() or not command_line:
+        return False
+    try:
+        argv = shlex.split(command_line)
+    except ValueError:
+        return False
+    if not argv:
+        return False
+    expected_path = exe.resolve()
+    argv0 = Path(argv[0])
+    if argv0.is_absolute():
+        try:
+            return argv0.resolve() == expected_path
+        except OSError:
+            return False
+    return argv0.name.lower() == expected_path.name.lower()
 
 
 def _safe_unlink(path: Path) -> None:

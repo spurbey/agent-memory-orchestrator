@@ -12,6 +12,7 @@ from .paths import APP_NAME, is_macos, is_windows, paths_for
 
 RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 LAUNCH_AGENT_LABEL = "com.agent-memory-orchestrator.antelligent"
+LAUNCHCTL_TIMEOUT_SECONDS = 10
 
 
 def install_startup(settings: Settings) -> dict[str, Any]:
@@ -87,8 +88,12 @@ def _install_macos_launch_agent(settings: Settings, exe: Path) -> dict[str, Any]
     plist = macos_launch_agent_plist(settings, exe)
     with path.open("wb") as handle:
         plistlib.dump(plist, handle)
-    subprocess.run(["launchctl", "bootout", _launchd_domain(), str(path)], text=True, capture_output=True, check=False)
-    result = subprocess.run(["launchctl", "bootstrap", _launchd_domain(), str(path)], text=True, capture_output=True, check=False)
+    bootout = _run_launchctl(["launchctl", "bootout", _launchd_domain(), str(path)], path)
+    if isinstance(bootout, dict):
+        return bootout
+    result = _run_launchctl(["launchctl", "bootstrap", _launchd_domain(), str(path)], path)
+    if isinstance(result, dict):
+        return result
     return {
         "ok": result.returncode == 0,
         "platform": "darwin",
@@ -104,7 +109,9 @@ def _install_macos_launch_agent(settings: Settings, exe: Path) -> dict[str, Any]
 
 def _uninstall_macos_launch_agent() -> dict[str, Any]:
     path = _launch_agent_path()
-    result = subprocess.run(["launchctl", "bootout", _launchd_domain(), str(path)], text=True, capture_output=True, check=False)
+    result = _run_launchctl(["launchctl", "bootout", _launchd_domain(), str(path)], path)
+    if isinstance(result, dict):
+        return result
     removed = False
     if path.exists():
         path.unlink()
@@ -121,6 +128,26 @@ def _uninstall_macos_launch_agent() -> dict[str, Any]:
 
 def _launch_agent_path() -> Path:
     return Path.home() / "Library" / "LaunchAgents" / f"{LAUNCH_AGENT_LABEL}.plist"
+
+
+def _run_launchctl(command: list[str], path: Path) -> subprocess.CompletedProcess[str] | dict[str, Any]:
+    try:
+        return subprocess.run(
+            command,
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=LAUNCHCTL_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired:
+        return {
+            "ok": False,
+            "platform": "darwin",
+            "method": "launch-agent",
+            "plist_path": str(path),
+            "error": "launchctl_timeout",
+            "timeout_seconds": LAUNCHCTL_TIMEOUT_SECONDS,
+        }
 
 
 def windows_run_command(exe: Path) -> str:
