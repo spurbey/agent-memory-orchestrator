@@ -1,0 +1,225 @@
+name: Antelligent Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Antelligent version to publish
+        required: true
+        default: 0.1.0
+      release_tag:
+        description: Optional release tag. Defaults to antelligent-v<version>.
+        required: false
+        default: ""
+      prerelease:
+        description: Mark release as prerelease
+        required: true
+        type: boolean
+        default: false
+  push:
+    tags:
+      - "antelligent-v*"
+
+permissions:
+  contents: write
+
+jobs:
+  prepare:
+    name: Prepare release metadata
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+      release_tag: ${{ steps.meta.outputs.release_tag }}
+      minimum_amo_version: ${{ steps.meta.outputs.minimum_amo_version }}
+      base_url: ${{ steps.meta.outputs.base_url }}
+      prerelease: ${{ steps.meta.outputs.prerelease }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Resolve release metadata
+        id: meta
+        shell: bash
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+          INPUT_RELEASE_TAG: ${{ inputs.release_tag }}
+          INPUT_PRERELEASE: ${{ inputs.prerelease }}
+        run: |
+          set -euo pipefail
+          minimum_amo_version=$(python - <<'PY'
+          import tomllib
+          from pathlib import Path
+          data = tomllib.loads(Path('pyproject.toml').read_text(encoding='utf-8'))
+          print(data['project']['version'])
+          PY
+          )
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            release_tag="${GITHUB_REF_NAME}"
+            version="${release_tag#antelligent-v}"
+            prerelease="false"
+          else
+            version="${INPUT_VERSION}"
+            release_tag="${INPUT_RELEASE_TAG}"
+            if [[ -z "${release_tag}" ]]; then
+              release_tag="antelligent-v${version}"
+            fi
+            prerelease="${INPUT_PRERELEASE:-false}"
+          fi
+          base_url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${release_tag}"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "release_tag=${release_tag}" >> "$GITHUB_OUTPUT"
+          echo "minimum_amo_version=${minimum_amo_version}" >> "$GITHUB_OUTPUT"
+          echo "base_url=${base_url}" >> "$GITHUB_OUTPUT"
+          echo "prerelease=${prerelease}" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Build ${{ matrix.label }}
+    needs: prepare
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: windows-amd64
+            os: windows-latest
+            platform: windows
+            arch: amd64
+            target: x86_64-pc-windows-msvc
+            build_args: --no-bundle
+          - label: darwin-amd64
+            os: macos-15-intel
+            platform: darwin
+            arch: amd64
+            target: x86_64-apple-darwin
+            build_args: --bundles app --no-sign
+          - label: darwin-arm64
+            os: macos-15
+            platform: darwin
+            arch: arm64
+            target: aarch64-apple-darwin
+            build_args: --bundles app --no-sign
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: apps/antelligent/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: apps/antelligent
+        run: npm ci
+
+      - name: Install Rust target
+        run: rustup target add ${{ matrix.target }}
+
+      - name: Build Antelligent
+        working-directory: apps/antelligent
+        run: npx tauri build --target ${{ matrix.target }} ${{ matrix.build_args }}
+
+      - name: Package portable artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/package_antelligent_artifact.py \
+            --platform "${{ matrix.platform }}" \
+            --arch "${{ matrix.arch }}" \
+            --target "${{ matrix.target }}" \
+            --version "${{ needs.prepare.outputs.version }}" \
+            --minimum-amo-version "${{ needs.prepare.outputs.minimum_amo_version }}" \
+            --base-url "${{ needs.prepare.outputs.base_url }}" \
+            --output-dir dist/antelligent
+
+      - name: Upload release artifact candidate
+        uses: actions/upload-artifact@v4
+        with:
+          name: antelligent-${{ matrix.label }}
+          path: dist/antelligent/*
+          if-no-files-found: error
+
+  publish:
+    name: Publish Antelligent release
+    needs: [prepare, build]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Download artifact candidates
+        uses: actions/download-artifact@v4
+        with:
+          pattern: antelligent-*
+          path: release-assets
+          merge-multiple: true
+
+      - name: Build combined manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          version = "${{ needs.prepare.outputs.version }}"
+          minimum = "${{ needs.prepare.outputs.minimum_amo_version }}"
+          root = Path('release-assets')
+          artifacts = []
+          for path in sorted(root.glob('*.manifest-fragment.json')):
+            payload = json.loads(path.read_text(encoding='utf-8'))
+            artifacts.extend(payload.get('artifacts', []))
+          expected = {('windows', 'amd64'), ('darwin', 'amd64'), ('darwin', 'arm64')}
+          actual = {(item.get('platform'), item.get('arch')) for item in artifacts}
+          missing = sorted(expected - actual)
+          if missing:
+            raise SystemExit(f'missing Antelligent release artifacts: {missing}')
+          manifest = {
+            'version': version,
+            'minimum_amo_version': minimum,
+            'artifacts': sorted(artifacts, key=lambda item: (item['platform'], item['arch'])),
+          }
+          (root / 'antelligent-manifest.json').write_text(json.dumps(manifest, indent=2) + '\n', encoding='utf-8')
+          PY
+
+      - name: Publish release assets
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.prepare.outputs.release_tag }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+          PRERELEASE: ${{ needs.prepare.outputs.prerelease }}
+        run: |
+          set -euo pipefail
+          assets=(
+            release-assets/antelligent-windows-amd64.zip
+            release-assets/antelligent-darwin-amd64.tar.gz
+            release-assets/antelligent-darwin-arm64.tar.gz
+            release-assets/antelligent-manifest.json
+          )
+          notes="Portable unsigned Antelligent desktop artifacts for AMO. Install with: amo-cli antelligent install --version ${VERSION}"
+          if gh release view "${RELEASE_TAG}" >/dev/null 2>&1; then
+            gh release upload "${RELEASE_TAG}" "${assets[@]}" --clobber
+            update_payload="$(mktemp)"
+            VERSION="${VERSION}" PRERELEASE="${PRERELEASE}" UPDATE_NOTES="${notes}" python - <<'PY' > "${update_payload}"
+          import json
+          import os
+          import sys
+          json.dump(
+              {
+                  "name": f"Antelligent {os.environ['VERSION']}",
+                  "body": os.environ["UPDATE_NOTES"],
+                  "prerelease": os.environ["PRERELEASE"] == "true",
+              },
+              sys.stdout,
+          )
+          PY
+            api_url="$(gh release view "${RELEASE_TAG}" --json apiUrl --jq .apiUrl)"
+            gh api --method PATCH "${api_url#https://api.github.com}" --input "${update_payload}" >/dev/null
+          else
+            args=(--title "Antelligent ${VERSION}" --notes "${notes}")
+            if [[ "${PRERELEASE}" == "true" ]]; then
+              args+=(--prerelease)
+            fi
+            gh release create "${RELEASE_TAG}" "${assets[@]}" "${args[@]}"
+          fi

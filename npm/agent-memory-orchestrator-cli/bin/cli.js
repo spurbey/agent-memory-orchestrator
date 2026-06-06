@@ -22,6 +22,8 @@ const VALUE_FLAGS = new Set([
   "--reranker-model",
   "--qwen-model",
   "--python-command",
+  "--antelligent-version",
+  "--antelligent-artifact",
 ]);
 
 function printUsage() {
@@ -39,10 +41,13 @@ Wrapper flags:
   --with-models         Inject sentence-transformers and faiss-cpu into the pipx app.
   --with-slack          Inject websocket-client into the pipx app.
   --with-all-extras     Enable all optional runtime extras.
+  --with-antelligent    Install the Antelligent desktop companion through amo-cli.
+  --antelligent-startup Enable Antelligent at user login.
 
 Examples:
   npx -y agent-memory-orchestrator-cli -- install --target codex --preset cpu-balanced --qwen-model qwen3:1.7b
   npx -y agent-memory-orchestrator-cli -- install --with-models --download-models --target all
+  npx -y agent-memory-orchestrator-cli -- install --target all --with-antelligent --antelligent-startup
   npx -y agent-memory-orchestrator-cli -- install --with-slack --target claude
   npx -y agent-memory-orchestrator-cli -- doctor --target codex
   `);
