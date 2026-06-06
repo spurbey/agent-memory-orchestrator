@@ -1,6 +1,22 @@
 use rand::{rngs::OsRng, RngCore};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::{env, fs, path::PathBuf};
+
+#[derive(Clone, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct LaunchConfig {
+    pub amo_home: Option<String>,
+    pub daemon_url: Option<String>,
+    pub daemon_command: Option<DaemonCommand>,
+    pub ui_token_path: Option<String>,
+}
+
+#[derive(Clone, Deserialize)]
+pub struct DaemonCommand {
+    pub program: String,
+    #[serde(default)]
+    pub args: Vec<String>,
+}
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -16,21 +32,66 @@ pub fn backend_info() -> Result<BackendInfo, String> {
     })
 }
 
+pub fn launch_config() -> Option<LaunchConfig> {
+    let path = launch_config_path();
+    let content = fs::read_to_string(path).ok()?;
+    serde_json::from_str(&content).ok()
+}
+
 pub fn daemon_base_url() -> String {
-    env::var("ANTELLIGENT_DAEMON_URL")
-        .or_else(|_| env::var("AMO_DAEMON_URL"))
-        .unwrap_or_else(|_| "http://127.0.0.1:8765".to_string())
+    launch_config()
+        .and_then(|config| config.daemon_url)
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| env::var("ANTELLIGENT_DAEMON_URL").ok())
+        .or_else(|| env::var("AMO_DAEMON_URL").ok())
+        .unwrap_or_else(|| "http://127.0.0.1:8765".to_string())
+}
+
+pub fn daemon_command() -> Option<DaemonCommand> {
+    launch_config().and_then(|config| config.daemon_command)
 }
 
 pub fn amo_home() -> PathBuf {
+    if let Some(value) = launch_config().and_then(|config| config.amo_home) {
+        if !value.trim().is_empty() {
+            return PathBuf::from(value);
+        }
+    }
     if let Ok(value) = env::var("AMO_HOME") {
         return PathBuf::from(value);
     }
     home_dir().join(".agent-memory-orchestrator")
 }
 
+pub fn launch_config_path() -> PathBuf {
+    if let Ok(value) = env::var("ANTELLIGENT_CONFIG") {
+        return PathBuf::from(value);
+    }
+    if let Ok(value) = env::var("AMO_HOME") {
+        return PathBuf::from(value)
+            .join(".ui")
+            .join("antelligent.launch.json");
+    }
+    home_dir()
+        .join(".agent-memory-orchestrator")
+        .join(".ui")
+        .join("antelligent.launch.json")
+}
+
 pub fn token_path() -> PathBuf {
+    if let Some(value) = launch_config().and_then(|config| config.ui_token_path) {
+        if !value.trim().is_empty() {
+            return PathBuf::from(value);
+        }
+    }
     amo_home().join(".ui").join("antelligent.token")
+}
+
+pub fn pid_path() -> PathBuf {
+    amo_home()
+        .join("apps")
+        .join("antelligent")
+        .join("antelligent.pid")
 }
 
 fn ensure_token() -> Result<String, String> {

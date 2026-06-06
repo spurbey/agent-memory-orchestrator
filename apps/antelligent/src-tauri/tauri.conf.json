@@ -43,7 +43,7 @@
     }
   },
   "bundle": {
-    "active": true,
-    "targets": ["msi", "dmg"]
+    "active": false,
+    "targets": []
   }
 }
