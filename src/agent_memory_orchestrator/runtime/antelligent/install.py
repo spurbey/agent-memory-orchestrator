@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -40,9 +41,10 @@ def install_antelligent(
             sha256="",
             executable_relpath="",
         )
-    actual_sha = verify_sha256(archive_path, artifact.sha256)
+    actual_sha = verify_sha256(archive_path, artifact.sha256, required=artifact_path is None)
 
-    extract_dir = temp_dir("antelligent-extract-")
+    paths.app_dir.parent.mkdir(parents=True, exist_ok=True)
+    extract_dir = Path(tempfile.mkdtemp(prefix="antelligent-extract-", dir=str(paths.app_dir.parent)))
     extract_artifact(archive_path, extract_dir)
     executable_relpath = artifact.executable_relpath or _find_executable_relpath(extract_dir)
     executable = extract_dir / executable_relpath
@@ -50,21 +52,26 @@ def install_antelligent(
         raise FileNotFoundError(f"Antelligent executable not found in artifact: {executable_relpath}")
 
     previous_dir = paths.app_dir.with_name(paths.app_dir.name + ".previous")
-    if paths.app_dir.exists():
-        if not force and not _looks_like_antelligent_install(paths.app_dir):
-            raise FileExistsError(f"refusing to replace non-Antelligent directory: {paths.app_dir}")
+    if paths.app_dir.exists() and not force and not _looks_like_antelligent_install(paths.app_dir):
+        _remove_path(extract_dir)
+        raise FileExistsError(f"refusing to replace non-Antelligent directory: {paths.app_dir}")
+    try:
+        if paths.app_dir.exists():
+            if previous_dir.exists():
+                shutil.rmtree(previous_dir)
+            paths.app_dir.replace(previous_dir)
+        shutil.move(str(extract_dir), str(paths.app_dir))
+        installed_executable = paths.app_dir / executable_relpath
+        if not installed_executable.exists():
+            raise FileNotFoundError(f"installed Antelligent executable missing: {installed_executable}")
         if previous_dir.exists():
             shutil.rmtree(previous_dir)
-        paths.app_dir.replace(previous_dir)
-    paths.app_dir.parent.mkdir(parents=True, exist_ok=True)
-    shutil.move(str(extract_dir), str(paths.app_dir))
-    installed_executable = paths.app_dir / executable_relpath
-    if not installed_executable.exists():
-        if previous_dir.exists() and not paths.app_dir.exists():
+    except Exception:
+        _remove_path(paths.app_dir)
+        if previous_dir.exists():
             previous_dir.replace(paths.app_dir)
-        raise FileNotFoundError(f"installed Antelligent executable missing: {installed_executable}")
-    if previous_dir.exists():
-        shutil.rmtree(previous_dir)
+        _remove_path(extract_dir)
+        raise
 
     metadata = {
         "ok": True,
@@ -145,6 +152,13 @@ def _looks_like_antelligent_install(path: Path) -> bool:
 def _cleanup_temp(path: Path, should_remove: bool) -> None:
     if should_remove and path.exists():
         shutil.rmtree(path, ignore_errors=True)
+
+
+def _remove_path(path: Path) -> None:
+    if path.is_dir():
+        shutil.rmtree(path, ignore_errors=True)
+    elif path.exists():
+        path.unlink()
 
 
 __all__ = ["install_antelligent", "install_metadata", "installed_executable", "uninstall_antelligent"]

@@ -32,8 +32,10 @@ pub fn run() {
             hide_panel
         ])
         .setup(|app| {
-            let _ = pid::write_pid();
-            supervisor::ensure_daemon_started();
+            pid::write_pid().map_err(|err| std::io::Error::new(std::io::ErrorKind::Other, err))?;
+            if let Err(err) = supervisor::ensure_daemon_started() {
+                eprintln!("Antelligent daemon supervisor failed: {err}");
+            }
             tray::install(app.handle())?;
             window::place_bubble(app.handle());
             Ok(())
