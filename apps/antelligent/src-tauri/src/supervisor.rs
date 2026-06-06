@@ -1,19 +1,41 @@
 use std::{
     net::{SocketAddr, TcpStream},
     process::Command,
-    time::Duration,
+    sync::{Mutex, OnceLock},
+    time::{Duration, Instant},
 };
 
 use crate::config;
 
+const SPAWN_COOLDOWN: Duration = Duration::from_secs(8);
+
 pub fn ensure_daemon_started() {
-    if daemon_reachable() {
+    if daemon_reachable() || !spawn_allowed() {
         return;
     }
-    let mut command = Command::new("amo-daemon");
+    let Some(daemon) = config::daemon_command() else {
+        return;
+    };
+    let mut command = Command::new(daemon.program);
+    command.args(daemon.args);
     command.env("AMO_HOME", config::amo_home());
     hide_console(&mut command);
     let _ = command.spawn();
+}
+
+fn spawn_allowed() -> bool {
+    static LAST_SPAWN: OnceLock<Mutex<Option<Instant>>> = OnceLock::new();
+    let mut last = LAST_SPAWN.get_or_init(|| Mutex::new(None)).lock().ok();
+    let Some(ref mut last) = last else {
+        return false;
+    };
+    if let Some(when) = **last {
+        if when.elapsed() < SPAWN_COOLDOWN {
+            return false;
+        }
+    }
+    **last = Some(Instant::now());
+    true
 }
 
 fn daemon_reachable() -> bool {

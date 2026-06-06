@@ -1,4 +1,5 @@
 mod config;
+mod pid;
 mod supervisor;
 mod tray;
 mod window;
@@ -22,12 +23,16 @@ fn hide_panel(app: tauri::AppHandle) -> Result<(), String> {
 
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+            let _ = window::show_panel(app);
+        }))
         .invoke_handler(tauri::generate_handler![
             backend_info,
             show_panel,
             hide_panel
         ])
         .setup(|app| {
+            let _ = pid::write_pid();
             supervisor::ensure_daemon_started();
             tray::install(app.handle())?;
             window::place_bubble(app.handle());

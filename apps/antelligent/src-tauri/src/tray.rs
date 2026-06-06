@@ -4,7 +4,7 @@ use tauri::{
     AppHandle,
 };
 
-use crate::window;
+use crate::{pid, window};
 
 pub fn install(app: &AppHandle) -> tauri::Result<()> {
     let show = MenuItem::with_id(app, "show", "Show Antelligent", true, None::<&str>)?;
@@ -21,7 +21,10 @@ pub fn install(app: &AppHandle) -> tauri::Result<()> {
             "hide" => {
                 let _ = window::hide_panel(app);
             }
-            "quit" => app.exit(0),
+            "quit" => {
+                pid::clear_pid();
+                app.exit(0);
+            }
             _ => {}
         })
         .on_tray_icon_event(|tray, event| {

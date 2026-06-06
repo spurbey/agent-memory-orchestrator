@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import argparse
 import json
@@ -7,6 +7,8 @@ import sys
 from ...infrastructure.kuzu import GraphBackendUnavailable
 from ...infrastructure.llm import QwenUnavailable
 from ..daemon.client import DaemonUnavailable
+from .commands.antelligent import add_antelligent_subcommands as _add_antelligent_subcommands
+from .commands.antelligent import handle_antelligent_command as _handle_antelligent_command
 from .commands.bootstrap import add_bootstrap_subcommands as _add_bootstrap_subcommands
 from .commands.bootstrap import handle_bootstrap_command as _handle_bootstrap_command
 from .commands.debug import add_debug_subcommands as _add_debug_subcommands
@@ -69,6 +71,8 @@ def _build_parser() -> argparse.ArgumentParser:
 
     _add_orchestration_subcommands(sub)
 
+    _add_antelligent_subcommands(sub)
+
     return parser
 
 
@@ -120,6 +124,10 @@ def main(argv: list[str] | None = None) -> int:
         orchestration_status = _handle_orchestration_command(args, emit=_print)
         if orchestration_status is not None:
             return orchestration_status
+
+        antelligent_status = _handle_antelligent_command(args, emit=_print)
+        if antelligent_status is not None:
+            return antelligent_status
 
         parser.error(f"unknown command: {args.command}")
         return 2
