@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 import sys
 from pathlib import Path
 from typing import Any
@@ -13,7 +14,8 @@ SCHEMA_VERSION = 1
 
 
 def build_launch_config(settings: Settings, *, python_executable: str | None = None) -> dict[str, Any]:
-    program = str(Path(python_executable or sys.executable).resolve())
+    """Build launch config. python_executable must resolve to an existing executable."""
+    program = _resolve_python_executable(python_executable or sys.executable)
     settings.home.mkdir(parents=True, exist_ok=True)
     token = ensure_antelligent_token(settings)
     paths = paths_for(settings)
@@ -33,6 +35,19 @@ def build_launch_config(settings: Settings, *, python_executable: str | None = N
         "ui_token_path": str(paths.token_path),
         "token_ready": bool(token),
     }
+
+
+def _resolve_python_executable(value: str) -> str:
+    candidate = Path(value)
+    if not candidate.is_absolute():
+        resolved = shutil.which(value)
+        if not resolved:
+            raise ValueError(f"Python executable not found on PATH: {value}")
+        candidate = Path(resolved)
+    candidate = candidate.resolve()
+    if not candidate.exists():
+        raise ValueError(f"Python executable does not exist: {candidate}")
+    return str(candidate)
 
 
 def write_launch_config(settings: Settings, *, python_executable: str | None = None) -> dict[str, Any]:

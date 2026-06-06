@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import tarfile
 import zipfile
 from argparse import Namespace
 from pathlib import Path
@@ -10,12 +11,13 @@ from pathlib import Path
 import pytest
 
 from agent_memory_orchestrator.core.config import Settings
-from agent_memory_orchestrator.runtime.antelligent.artifacts import Artifact, download_artifact, load_manifest, select_artifact, verify_sha256
+from agent_memory_orchestrator.runtime.antelligent.artifacts import Artifact, download_artifact, extract_artifact, load_manifest, select_artifact, verify_sha256
 from agent_memory_orchestrator.runtime.antelligent.install import install_antelligent, installed_executable
 from agent_memory_orchestrator.runtime.antelligent.launch_config import write_launch_config
 from agent_memory_orchestrator.runtime.antelligent.paths import executable_name, paths_for
 from agent_memory_orchestrator.runtime.antelligent.process import status_antelligent, stop_antelligent
 from agent_memory_orchestrator.runtime.antelligent.startup import macos_launch_agent_plist, windows_run_command
+from agent_memory_orchestrator.runtime.cli.commands import antelligent as antelligent_command
 from agent_memory_orchestrator.runtime.cli.commands import install as install_command
 
 
@@ -66,6 +68,39 @@ def test_verify_sha256_rejects_mismatch(tmp_path: Path) -> None:
         verify_sha256(artifact, "0" * 64)
 
 
+def test_remote_artifacts_require_sha256(tmp_path: Path) -> None:
+    artifact = tmp_path / "app.zip"
+    artifact.write_text("payload", encoding="utf-8")
+    manifest = {
+        "version": "0.1.0",
+        "artifacts": [
+            {
+                "platform": "windows",
+                "arch": "amd64",
+                "url": "https://example.invalid/antelligent.zip",
+                "executable_relpath": "antelligent.exe",
+            }
+        ],
+    }
+
+    with pytest.raises(ValueError, match="sha256"):
+        select_artifact(manifest, platform_name="windows", arch="amd64")
+    with pytest.raises(ValueError, match="SHA256 is required"):
+        verify_sha256(artifact, "", required=True)
+    with pytest.raises(ValueError, match="sha256"):
+        download_artifact(
+            Artifact(
+                version="0.1.0",
+                platform="windows",
+                arch="amd64",
+                url="https://example.invalid/antelligent.zip",
+                sha256="",
+                executable_relpath="antelligent.exe",
+            ),
+            tmp_path / "antelligent.zip",
+        )
+
+
 def test_remote_artifact_sources_must_use_https(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="manifest URL must use HTTPS"):
         load_manifest("http://example.invalid/manifest.json")
@@ -81,6 +116,17 @@ def test_remote_artifact_sources_must_use_https(tmp_path: Path) -> None:
             ),
             tmp_path / "antelligent.zip",
         )
+
+
+def test_tar_extraction_rejects_unsupported_members(tmp_path: Path) -> None:
+    archive_path = tmp_path / "bad.tar.gz"
+    with tarfile.open(archive_path, "w:gz") as archive:
+        member = tarfile.TarInfo("bad-fifo")
+        member.type = tarfile.FIFOTYPE
+        archive.addfile(member)
+
+    with pytest.raises(ValueError, match="unsupported tar member"):
+        extract_artifact(archive_path, tmp_path / "out")
 
 
 def test_install_from_local_artifact_writes_metadata_and_launch_config(
@@ -201,3 +247,26 @@ def test_amo_install_rejects_antelligent_startup_without_install(tmp_path: Path)
 
     assert status == 2
     assert emitted == [{"ok": False, "error": "--antelligent-startup requires --with-antelligent"}]
+
+
+def test_antelligent_install_command_fails_when_nested_startup_fails(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(antelligent_command, "install_antelligent", lambda *_args, **_kwargs: {"ok": True})
+    monkeypatch.setattr(antelligent_command, "install_startup", lambda *_args, **_kwargs: {"ok": False, "error": "startup_failed"})
+    emitted: list[object] = []
+    args = Namespace(
+        command="antelligent",
+        antelligent_command="install",
+        amo_home=tmp_path / "amo",
+        version="latest",
+        artifact=None,
+        manifest=None,
+        force=False,
+        install_startup=True,
+        start=False,
+    )
+
+    status = antelligent_command.handle_antelligent_command(args, emit=emitted.append)
+
+    assert status == 1
+    assert emitted[-1]["ok"] is False
+    assert emitted[-1]["startup"]["error"] == "startup_failed"

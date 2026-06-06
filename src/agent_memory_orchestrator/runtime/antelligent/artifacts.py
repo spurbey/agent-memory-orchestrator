@@ -11,6 +11,7 @@ from pathlib import Path
 from tarfile import TarFile
 from tarfile import open as tar_open
 from typing import Any
+from urllib.parse import urlparse
 
 from .paths import arch_key, platform_key
 
@@ -48,12 +49,16 @@ def select_artifact(manifest: dict[str, Any], *, platform_name: str | None = Non
         item_version = str(item.get("version") or manifest_version)
         if version and version != "latest" and item_version != version:
             continue
+        url = str(item.get("url") or "")
+        sha256 = str(item.get("sha256") or "")
+        if _is_remote_url(url) and not sha256:
+            raise ValueError("remote Antelligent artifacts must include sha256")
         return Artifact(
             version=item_version,
             platform=wanted_platform,
             arch=wanted_arch,
-            url=str(item.get("url") or ""),
-            sha256=str(item.get("sha256") or ""),
+            url=url,
+            sha256=sha256,
             executable_relpath=str(item.get("executable_relpath") or ""),
             minimum_amo_version=str(item.get("minimum_amo_version") or manifest.get("minimum_amo_version") or ""),
         )
@@ -67,6 +72,8 @@ def download_artifact(artifact: Artifact, dest: Path) -> Path:
     if artifact.url.startswith("http://"):
         raise ValueError("Antelligent artifact URL must use HTTPS")
     if artifact.url.startswith("https://"):
+        if not artifact.sha256:
+            raise ValueError("remote Antelligent artifacts must include sha256")
         with urllib.request.urlopen(artifact.url, timeout=120) as response:  # noqa: S310 - release artifact URL from manifest.
             dest.write_bytes(response.read())
         return dest
@@ -85,8 +92,10 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
-def verify_sha256(path: Path, expected: str) -> str:
+def verify_sha256(path: Path, expected: str, *, required: bool = False) -> str:
     actual = sha256_file(path)
+    if required and not expected:
+        raise ValueError("Antelligent artifact SHA256 is required")
     if expected and actual.lower() != expected.lower():
         raise ValueError(f"Antelligent artifact SHA256 mismatch: expected {expected}, got {actual}")
     return actual
@@ -117,14 +126,21 @@ def _safe_extract_zip(archive: zipfile.ZipFile, dest: Path) -> None:
 
 def _safe_extract_tar(archive: TarFile, dest: Path) -> None:
     root = dest.resolve()
-    members = archive.getmembers()
-    for member in members:
+    members = []
+    for member in archive.getmembers():
         target = (dest / member.name).resolve()
         if root != target and root not in target.parents:
             raise ValueError(f"unsafe tar member path: {member.name}")
         if member.islnk() or member.issym():
             raise ValueError(f"refusing symlink in Antelligent artifact: {member.name}")
+        if not (member.isdir() or member.isreg()):
+            raise ValueError(f"refusing unsupported tar member in Antelligent artifact: {member.name}")
+        members.append(member)
     archive.extractall(dest, members=members)
+
+
+def _is_remote_url(value: str) -> bool:
+    return urlparse(value).scheme in {"http", "https"}
 
 
 def temp_dir(prefix: str = "antelligent-") -> Path:

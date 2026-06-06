@@ -22,7 +22,9 @@ pub fn install(app: &AppHandle) -> tauri::Result<()> {
                 let _ = window::hide_panel(app);
             }
             "quit" => {
-                pid::clear_pid();
+                if let Err(err) = pid::clear_pid() {
+                    eprintln!("Antelligent failed to clear PID file: {err}");
+                }
                 app.exit(0);
             }
             _ => {}

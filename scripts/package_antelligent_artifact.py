@@ -7,6 +7,7 @@ import tarfile
 import zipfile
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 APP_BUNDLE_NAME = "Antelligent.app"
 CRATE_BINARY = "antelligent"
@@ -49,6 +50,7 @@ def package_artifact(
     output_dir: Path,
     base_url: str,
 ) -> dict[str, Any]:
+    _require_https_base_url(base_url)
     output_dir.mkdir(parents=True, exist_ok=True)
     if platform_name == "windows":
         source = _windows_executable(target_root, target)
@@ -139,6 +141,12 @@ def sha256_file(path: Path) -> str:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _require_https_base_url(value: str) -> None:
+    parsed = urlparse(value)
+    if parsed.scheme != "https" or not parsed.netloc:
+        raise ValueError("Antelligent release base_url must use HTTPS")
 
 
 if __name__ == "__main__":
