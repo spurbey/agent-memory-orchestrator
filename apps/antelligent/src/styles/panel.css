@@ -7,7 +7,7 @@
 .app-window {
   width: 100%;
   height: calc(100vh - 40px);
-  min-height: 680px;
+  min-height: 0;
   display: grid;
   grid-template-columns: 64px minmax(0, 1fr);
   overflow: hidden;
@@ -16,6 +16,16 @@
   background: rgba(17, 19, 22, 0.66);
   box-shadow: var(--shadow);
   backdrop-filter: blur(24px);
+  transform-origin: 34px 34px;
+}
+
+.app-window.opening {
+  animation: panel-open 220ms cubic-bezier(0.2, 0.9, 0.2, 1) both;
+}
+
+.app-window.closing {
+  pointer-events: none;
+  animation: panel-close 170ms cubic-bezier(0.4, 0, 0.7, 0.2) forwards;
 }
 
 .side-rail {
@@ -44,7 +54,8 @@
 .rail-brand {
   margin-bottom: 18px;
   color: var(--red);
-  background: rgba(255, 79, 74, 0.09);
+  background: transparent;
+  cursor: grab;
 }
 
 .rail-item:hover,
@@ -70,8 +81,8 @@
 }
 
 .ant-svg {
-  width: 29px;
-  height: 22px;
+  width: 22px;
+  height: 34px;
   overflow: visible;
 }
 
@@ -80,14 +91,14 @@
 .ant-svg circle {
   fill: none;
   stroke: var(--red);
-  stroke-width: 3;
+  stroke-width: 2.1;
   stroke-linecap: round;
   stroke-linejoin: round;
 }
 
 .ant-svg ellipse,
 .ant-svg circle {
-  fill: rgba(255, 79, 74, 0.24);
+  fill: none;
 }
 
 .stage {
@@ -107,6 +118,13 @@
   border-bottom: 1px solid var(--line);
   background: rgba(17, 19, 22, 0.34);
   backdrop-filter: blur(18px);
+  cursor: grab;
+  user-select: none;
+}
+
+.top-bar:active,
+.rail-brand:active {
+  cursor: grabbing;
 }
 
 .top-title h1 {
@@ -560,7 +578,7 @@ textarea:focus {
 
   .app-window {
     height: calc(100vh - 16px);
-    min-height: 620px;
+    min-height: 0;
   }
 
   .chat-layout {
@@ -584,9 +602,50 @@ textarea:focus {
   .top-bar {
     align-items: flex-start;
     flex-direction: column;
+    gap: 12px;
+  }
+
+  .top-actions {
+    justify-content: flex-start;
   }
 
   .retrieval-composer {
     grid-template-columns: 1fr;
+  }
+}
+
+@keyframes panel-open {
+  from {
+    opacity: 0;
+    transform: scale(0.08) translate3d(-18px, -18px, 0);
+    filter: blur(12px);
+  }
+  62% {
+    opacity: 1;
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translate3d(0, 0, 0);
+    filter: blur(0);
+  }
+}
+
+@keyframes panel-close {
+  from {
+    opacity: 1;
+    transform: scale(1) translate3d(0, 0, 0);
+    filter: blur(0);
+  }
+  to {
+    opacity: 0;
+    transform: scale(0.08) translate3d(-18px, -18px, 0);
+    filter: blur(12px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .app-window.opening,
+  .app-window.closing {
+    animation: none;
   }
 }

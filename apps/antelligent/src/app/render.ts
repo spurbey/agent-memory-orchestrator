@@ -306,7 +306,7 @@ function navButton(view: AppView, label: string, icon: string): string {
 }
 
 function antIcon(): string {
-  return `<svg class="ant-svg" viewBox="0 0 64 42" role="img" aria-label="Ant"><path d="M21 21h22"/><ellipse cx="17" cy="21" rx="10" ry="9"/><ellipse cx="33" cy="21" rx="9" ry="8"/><circle cx="48" cy="21" r="7"/><path d="M46 15c3-8 9-10 12-8M46 27c3 8 9 10 12 8"/><path d="M27 17 14 5M27 25 14 37M36 16 31 3M36 26 31 39M42 17 54 7M42 25 54 35"/></svg>`;
+  return `<svg class="ant-svg" viewBox="0 0 42 64" role="img" aria-label="Ant"><path d="M21 18v28"/><ellipse cx="21" cy="15" rx="7" ry="9"/><ellipse cx="21" cy="31" rx="8" ry="10"/><ellipse cx="21" cy="49" rx="7" ry="9"/><path d="M17 8C11 1 7 2 4 5M25 8c6-7 10-6 13-3"/><path d="M15 25 5 18M27 25l10-7M14 33 3 35M28 33l11 2M15 41 6 51M27 41l9 10"/></svg>`;
 }
 
 function railIcon(name: string): string {
