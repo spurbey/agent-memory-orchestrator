@@ -9,6 +9,9 @@ const root = document.querySelector<HTMLDivElement>("#app");
 
 if (!root) throw new Error("missing #app");
 
+document.documentElement.dataset.mode = mode;
+document.body.dataset.mode = mode;
+
 if (mode === "bubble") {
   mountBubble(root);
 } else {
