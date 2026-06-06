@@ -27,8 +27,8 @@ pub fn hide_panel(app: &AppHandle) -> Result<(), String> {
         let _ = bubble.show();
         let _ = bubble.set_focus();
     }
-    panel.hide().map_err(|err| err.to_string())?;
     reset_panel_visual(&panel);
+    panel.hide().map_err(|err| err.to_string())?;
     Ok(())
 }
 

@@ -79,7 +79,10 @@ export class AntelligentController {
     }
     panel.classList.remove("opening");
     panel.classList.add("closing");
-    window.setTimeout(() => invoke("hide_panel").catch(() => undefined), 170);
+    window.setTimeout(() => {
+      panel.classList.remove("closing", "opening");
+      invoke("hide_panel").catch(() => undefined);
+    }, 170);
   }
 
   private async boot(): Promise<void> {
