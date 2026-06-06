@@ -1,10 +1,11 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import argparse
 import json
 import os
 import sys
 from collections.abc import Callable
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -20,6 +21,7 @@ from ....install.service import uninstall as uninstall_targets
 from ....infrastructure.llm import download_models
 from ....memory import MemoryService
 from ....application.pipeline.storage_lifecycle import initialize_fresh_production_storage
+from ...antelligent import install_antelligent, install_startup, start_antelligent
 
 INSTALL_COMMANDS = ("install", "doctor", "uninstall")
 
@@ -97,6 +99,14 @@ def add_install_subcommands(sub: Any) -> None:
     )
     install.add_argument("--download-models", action="store_true", help="Download selected local models during install.")
     install.add_argument("--skip-init-db", action="store_true", help="Do not initialize the AMO SQLite database.")
+    install.add_argument("--with-antelligent", action="store_true", help="Install the Antelligent desktop companion.")
+    install.add_argument(
+        "--antelligent-startup",
+        action="store_true",
+        help="Enable Antelligent at user login. Requires --with-antelligent.",
+    )
+    install.add_argument("--antelligent-version", default="latest", help="Antelligent artifact version to install.")
+    install.add_argument("--antelligent-artifact", type=Path, help="Install Antelligent from a local artifact.")
     install.add_argument("--dry-run", action="store_true", help="Show planned changes without writing files.")
     install.add_argument("--yes", action="store_true", help="Apply without interactive confirmation.")
     install.add_argument("--json", action="store_true", help="Print machine-readable install details.")
@@ -230,6 +240,17 @@ def format_install_result(payload: dict) -> str:
         lines.append("")
         lines.append(f"Model cache: {'ready' if model_result.get('ok') else 'check required'}")
 
+    antelligent = payload.get("antelligent")
+    if antelligent:
+        lines.append("")
+        lines.append(f"Antelligent: {'ready' if antelligent.get('ok') else 'check required'}")
+        if antelligent.get("install", {}).get("app_dir"):
+            lines.append(f"- App: {antelligent['install'].get('app_dir')}")
+        if antelligent.get("startup"):
+            lines.append(f"- Startup: {'enabled' if antelligent['startup'].get('ok') else 'failed'}")
+        if antelligent.get("start"):
+            lines.append(f"- Launch: {'started' if antelligent['start'].get('ok') else 'failed'}")
+
     lines.extend(
         [
             "",
@@ -255,6 +276,19 @@ def _operation_label(operation: dict) -> str:
     return labels.get(str(operation.get("target", "")), str(operation.get("target", "config")))
 
 
+@contextmanager
+def _temporary_amo_home(amo_home: str):
+    previous = os.environ.get("AMO_HOME")
+    os.environ["AMO_HOME"] = amo_home
+    try:
+        yield
+    finally:
+        if previous is None:
+            os.environ.pop("AMO_HOME", None)
+        else:
+            os.environ["AMO_HOME"] = previous
+
+
 def handle_install_command(
     args: Any,
     *,
@@ -263,6 +297,13 @@ def handle_install_command(
 ) -> int | None:
     """Run installer, doctor, and uninstall CLI commands."""
     if args.command == "install":
+        if args.antelligent_startup and not args.with_antelligent:
+            payload = {"ok": False, "error": "--antelligent-startup requires --with-antelligent"}
+            if args.json:
+                emit(payload)
+            else:
+                emit_text(payload["error"])
+            return 2
         options = InstallOptions(
             target=args.target,
             user_home=args.user_home,
@@ -306,8 +347,8 @@ def handle_install_command(
         init_graph = None
         init_production = None
         if not args.skip_init_db:
-            os.environ["AMO_HOME"] = plan["amo_home"]
-            init_settings = Settings.load()
+            with _temporary_amo_home(plan["amo_home"]):
+                init_settings = Settings.load()
             svc = MemoryService(init_settings)
             try:
                 svc.init_db()
@@ -329,6 +370,32 @@ def handle_install_command(
                         "error": str(exc),
                         "note": "Existing non-empty graph/retrieval stores need explicit reset-production or adopt-production.",
                     }
+        antelligent_result = None
+        if args.with_antelligent:
+            try:
+                with _temporary_amo_home(plan["amo_home"]):
+                    antelligent_settings = Settings.load()
+                install_result = install_antelligent(
+                    antelligent_settings,
+                    version=args.antelligent_version,
+                    artifact_path=args.antelligent_artifact,
+                    python_executable=sys.executable,
+                    force=args.force,
+                )
+                antelligent_result = {"ok": True, "install": install_result}
+                if args.antelligent_startup:
+                    antelligent_result["startup"] = install_startup(antelligent_settings)
+                antelligent_result["start"] = start_antelligent(antelligent_settings)
+                if args.antelligent_startup and not antelligent_result["startup"].get("ok"):
+                    antelligent_result["ok"] = False
+                if not antelligent_result["start"].get("ok"):
+                    antelligent_result["ok"] = False
+            except Exception as exc:
+                antelligent_result = {
+                    "ok": False,
+                    "error": str(exc),
+                    "note": "AMO install completed before Antelligent setup failed.",
+                }
         payload = {
             "ok": True,
             "plan": summary,
@@ -337,6 +404,7 @@ def handle_install_command(
             "init_db": init_result,
             "init_graph": init_graph,
             "init_production": init_production,
+            "antelligent": antelligent_result,
         }
         if args.json:
             emit(payload)
