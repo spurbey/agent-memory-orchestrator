@@ -42,8 +42,8 @@ pub fn daemon_base_url() -> String {
     launch_config()
         .and_then(|config| config.daemon_url)
         .filter(|value| !value.trim().is_empty())
-        .or_else(|| env::var("ANTELLIGENT_DAEMON_URL").ok())
-        .or_else(|| env::var("AMO_DAEMON_URL").ok())
+        .or_else(|| non_empty_env("ANTELLIGENT_DAEMON_URL"))
+        .or_else(|| non_empty_env("AMO_DAEMON_URL"))
         .unwrap_or_else(|| "http://127.0.0.1:8765".to_string())
 }
 
@@ -57,17 +57,17 @@ pub fn amo_home() -> PathBuf {
             return PathBuf::from(value);
         }
     }
-    if let Ok(value) = env::var("AMO_HOME") {
+    if let Some(value) = non_empty_env("AMO_HOME") {
         return PathBuf::from(value);
     }
     home_dir().join(".agent-memory-orchestrator")
 }
 
 pub fn launch_config_path() -> PathBuf {
-    if let Ok(value) = env::var("ANTELLIGENT_CONFIG") {
+    if let Some(value) = non_empty_env("ANTELLIGENT_CONFIG") {
         return PathBuf::from(value);
     }
-    if let Ok(value) = env::var("AMO_HOME") {
+    if let Some(value) = non_empty_env("AMO_HOME") {
         return PathBuf::from(value)
             .join(".ui")
             .join("antelligent.launch.json");
@@ -120,4 +120,8 @@ fn home_dir() -> PathBuf {
         .or_else(|_| env::var("HOME"))
         .map(PathBuf::from)
         .unwrap_or_else(|_| PathBuf::from("."))
+}
+
+fn non_empty_env(name: &str) -> Option<String> {
+    env::var(name).ok().filter(|value| !value.trim().is_empty())
 }

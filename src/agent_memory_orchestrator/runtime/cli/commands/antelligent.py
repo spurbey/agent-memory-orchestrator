@@ -58,8 +58,12 @@ def handle_antelligent_command(args: Any, *, emit: Callable[[object], None]) -> 
         )
         if args.install_startup:
             result["startup"] = install_startup(settings)
+            if not result["startup"].get("ok"):
+                result["ok"] = False
         if args.start:
             result["start"] = start_antelligent(settings)
+            if not result["start"].get("ok"):
+                result["ok"] = False
         emit(result)
         return 0 if result.get("ok") else 1
     if command == "start":
