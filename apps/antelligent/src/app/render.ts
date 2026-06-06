@@ -193,10 +193,8 @@ function renderRoomCard(room: AgentRoom): string {
 
 function renderMessage(message: RoomMessage, localId: string, room: AgentRoom): string {
   const sender = message.from_node_id || message.from || "agent";
-  const isInitiator = Boolean(room.initiator_node_id && sender === room.initiator_node_id);
   const isLocal = Boolean(localId && sender === localId);
-  const isInitiatorTurn = isLocal || isInitiator || message.type === "context_request" || message.type === "final_synthesis";
-  const side = isInitiatorTurn ? " self" : "";
+  const side = isLocal ? " self" : "";
   const mode = String(message.metadata?.mode || message.type || "message");
   const confidence = confidenceLabel(message.confidence);
   const targetNames = message.to_node_ids?.length ? `<span>to ${escapeHtml(message.to_node_ids.join(", "))}</span>` : "";
@@ -223,7 +221,7 @@ function contextDrawer(state: AppState, room: AgentRoom): string {
 
 function taskBanner(room: AgentRoom): string {
   const task = room.agent_state?.original_query || room.topic || room.room_id;
-  return `<div class="task-card"><span class="task-icon">${railIcon("retrieval")}</span><p><strong>Task</strong>${escapeHtml(task)}</p></div>`;
+  return `<div class="task-card"><span class="task-icon">${railIcon("retrieval")}</span><p><strong>Task</strong>${escapeHtml(task)}</p><button id="exitRoom" class="ghost-btn compact" type="button">Back to Rooms</button></div>`;
 }
 
 function emptyRoom(room: AgentRoom): string {

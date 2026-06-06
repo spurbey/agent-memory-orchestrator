@@ -37,6 +37,7 @@ export class AntelligentController {
   }
 
   private bindShell(): void {
+    lockPanelDocumentScroll();
     enableWindowDrag(".app-window");
     enableWindowDrag(".rail-brand", { allowInteractive: true });
     qs<HTMLButtonElement>("#hidePanel")?.addEventListener("click", () => this.hidePanel());
@@ -56,6 +57,7 @@ export class AntelligentController {
       if (roomId) void this.selectRoom(roomId);
     });
     qs<HTMLButtonElement>("#openRoomsTab")?.addEventListener("click", () => this.setView("rooms"));
+    qs<HTMLButtonElement>("#exitRoom")?.addEventListener("click", () => this.leaveRoom());
     qs<HTMLFormElement>("#roomComposer")?.addEventListener("submit", event => {
       event.preventDefault();
       void this.sendRoomQuestion();
@@ -68,6 +70,14 @@ export class AntelligentController {
 
   private setView(view: AppView): void {
     this.state.view = view;
+    this.renderAll();
+  }
+
+  private leaveRoom(): void {
+    this.state.selectedRoomId = "";
+    this.state.messages = [];
+    this.state.context = null;
+    this.state.view = "rooms";
     this.renderAll();
   }
 
@@ -262,4 +272,47 @@ function enableWindowDrag(selector: string, options: { allowInteractive?: boolea
       { once: true },
     );
   });
+}
+
+function lockPanelDocumentScroll(): void {
+  const scrollTargets = ".agent-conversation, .rooms-list-large, .context-drawer, .retrieval-thread";
+  const resetRootScroll = () => {
+    window.scrollTo(0, 0);
+    document.documentElement.scrollTop = 0;
+    document.body.scrollTop = 0;
+  };
+
+  resetRootScroll();
+  window.addEventListener("scroll", resetRootScroll, { passive: true });
+  document.addEventListener(
+    "wheel",
+    event => {
+      const target = event.target instanceof Element ? event.target : null;
+      const scroller = target?.closest(scrollTargets) as HTMLElement | null;
+      if (!scroller) {
+        event.preventDefault();
+        resetRootScroll();
+        return;
+      }
+
+      const maxScrollTop = scroller.scrollHeight - scroller.clientHeight;
+      if (maxScrollTop <= 0) {
+        event.preventDefault();
+        resetRootScroll();
+        return;
+      }
+
+      const nextScrollTop = Math.max(0, Math.min(maxScrollTop, scroller.scrollTop + event.deltaY));
+      if (nextScrollTop === scroller.scrollTop) {
+        event.preventDefault();
+        resetRootScroll();
+        return;
+      }
+
+      event.preventDefault();
+      scroller.scrollTop = nextScrollTop;
+      resetRootScroll();
+    },
+    { passive: false },
+  );
 }
