@@ -4,7 +4,9 @@ from .args import add_peer_netd_start_args
 from .args import add_peer_netd_watch_service_args
 from .args import add_peer_subcommands
 from .handlers import handle_peer_command
+from .handlers import install_peer_netd_artifact
 from .handlers import install_peer_netd_service
+from .handlers import load_managed_relay_profile
 from .handlers import peer_netd_service_status
 from .handlers import peer_server_main
 from .handlers import uninstall_peer_netd_service
@@ -21,7 +23,9 @@ __all__ = [
     "add_peer_netd_watch_service_args",
     "add_peer_subcommands",
     "handle_peer_command",
+    "install_peer_netd_artifact",
     "install_peer_netd_service",
+    "load_managed_relay_profile",
     "peer_netd_service_status",
     "peer_invite_from_setup_args",
     "peer_netd_options_from_args",

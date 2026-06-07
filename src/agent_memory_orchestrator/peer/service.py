@@ -188,7 +188,7 @@ class PeerService:
             "ok": True,
             "invite": invite,
             "invite_code": encode_invite_code(invite),
-            "next_step": "Send invite_code or the invite JSON to the peer. The peer runs peer accept-invite.",
+            "next_step": "Send invite_code to the peer. The peer runs amo-cli peer join.",
         }
 
     def accept_peer_invite(

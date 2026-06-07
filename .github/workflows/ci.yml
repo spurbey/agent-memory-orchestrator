@@ -113,18 +113,12 @@ jobs:
         working-directory: peer-netd
         run: go build -trimpath -o ../.tmp/amo-peer-netd ./cmd/amo-peer-netd
 
-  peer-netd-package:
-    name: peer-netd packaged binary smoke
+  peer-public-package:
+    name: peer public package smoke
     runs-on: ubuntu-latest
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
-
-      - name: Set up Go
-        uses: actions/setup-go@v6
-        with:
-          go-version: "1.24.6"
-          cache-dependency-path: peer-netd/go.sum
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -132,34 +126,45 @@ jobs:
           python-version: "3.12"
           cache: pip
 
-      - name: Build packaged peer-netd binaries for primary desktop targets
-        run: |
-          python scripts/build_peer_netd_binaries.py --target linux/amd64 --target windows/amd64 --target darwin/amd64 --target darwin/arm64
-
       - name: Build Python package
         run: |
           python -m pip install --upgrade pip
           python -m pip install build
           python -m build
 
-      - name: Verify wheel includes peer-netd binary
+      - name: Verify public packages exclude private peer runtime artifacts
         shell: python
         run: |
-          import sys
+          import tarfile
           import zipfile
           from pathlib import Path
 
-          wheels = sorted(Path("dist").glob("*.whl"))
-          if not wheels:
-              raise SystemExit("no wheel built")
-          with zipfile.ZipFile(wheels[-1]) as wheel:
-              names = set(wheel.namelist())
-          expected = {
-              "agent_memory_orchestrator/bin/linux-amd64/amo-peer-netd",
-              "agent_memory_orchestrator/bin/windows-amd64/amo-peer-netd.exe",
-              "agent_memory_orchestrator/bin/darwin-amd64/amo-peer-netd",
-              "agent_memory_orchestrator/bin/darwin-arm64/amo-peer-netd",
-          }
-          missing = sorted(expected - names)
-          if missing:
-              raise SystemExit(f"missing packaged peer-netd binaries: {missing}")
+          patterns = (
+              "peer-netd/",
+              "go.mod",
+              "go.sum",
+              "agent_memory_orchestrator/bin/",
+              "amo-peer-netd.exe",
+              "infra/",
+              ".evidence/",
+              ".graph/",
+              ".data/",
+              ".tmp/",
+              ".amo-spool/",
+              "host.invite.json",
+              "friend-invite-code.txt",
+              "friends.txt",
+          )
+          archives = sorted(Path("dist").glob("*.whl")) + sorted(Path("dist").glob("*.tar.gz"))
+          if not archives:
+              raise SystemExit("no Python package archives built")
+          for archive in archives:
+              if archive.suffix == ".whl":
+                  with zipfile.ZipFile(archive) as handle:
+                      names = handle.namelist()
+              else:
+                  with tarfile.open(archive, "r:gz") as handle:
+                      names = handle.getnames()
+              hits = sorted({name for name in names for pattern in patterns if pattern in name})
+              if hits:
+                  raise SystemExit(f"public package leaked private peer/runtime artifact(s): {hits[:25]}")
