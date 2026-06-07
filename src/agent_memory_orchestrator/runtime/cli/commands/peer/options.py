@@ -78,12 +78,8 @@ def relay_values_from_args(args: argparse.Namespace, settings: Settings | None) 
 def peer_setup_next_commands(args: argparse.Namespace) -> list[str]:
     commands: list[str] = []
     if not getattr(args, "invite", "") and not getattr(args, "invite_code", ""):
-        commands.append(
-            "amo-cli peer create-invite --relay "
-            + (getattr(args, "relay_profile", "") or "<relay-profile>")
-            + " --auto-approve"
-        )
-    if getattr(args, "install_startup", False):
+        commands.append("amo-cli peer invite")
+    if _startup_enabled(args):
         commands.extend(
             [
                 "amo-cli peer netd service-status --with-watch",
@@ -98,6 +94,10 @@ def peer_setup_next_commands(args: argparse.Namespace) -> list[str]:
             ]
         )
     return commands
+
+
+def _startup_enabled(args: argparse.Namespace) -> bool:
+    return bool(getattr(args, "install_startup", False) or not getattr(args, "no_startup", False))
 
 
 def peer_invite_from_setup_args(args: argparse.Namespace) -> dict[str, Any] | None:
