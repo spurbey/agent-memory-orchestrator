@@ -32,26 +32,15 @@ aws sts get-caller-identity --profile amo-relay
 
 ## Deploy
 
-The deployment script creates the CloudFormation stack, waits for the EC2 instance to appear in SSM, reads `/opt/amo-relay/relay.json`, and prints the exact client commands.
+Relay deployment is private-operator work. The private peer runtime repo contains the CloudFormation template and deployment script. The script creates the stack, waits for the EC2 instance to appear in SSM, reads `/opt/amo-relay/relay.json`, and prints the exact relay multiaddr.
 
-```powershell
-.\scripts\deploy_amo_peer_relay_aws.ps1 `
-  -Profile amo-relay `
-  -Region ap-south-1 `
-  -StackName amo-peer-relay `
-  -Namespace amo-test
-```
+Run the private runtime repo deployment command with the relay AWS profile, target region, stack name, and rendezvous namespace. The command output must include the stable relay multiaddr and namespace used to sign `peer-relay-bootstrap.json`.
 
-If the current branch has unpushed commits, push the branch before deploying or pass `-RepositoryRef` with a pushed branch/tag/commit. The EC2 instance clones the repository from GitHub, so it cannot see local-only commits.
+Run this from the private runtime repository, not the public AMO repository. The EC2 instance should fetch private peer-netd release/source using private deployment credentials; do not expose the Go source or AWS deployment templates through public AMO package data.
 
 Optional private-beta hardening:
 
-```powershell
-.\scripts\deploy_amo_peer_relay_aws.ps1 `
-  -Profile amo-relay `
-  -Region ap-south-1 `
-  -RelayIngressCidr <your-public-ip>/32
-```
+Use the private deployment command's ingress option to narrow relay access where possible.
 
 ## Client Flow After Deploy
 
@@ -91,15 +80,21 @@ The public AMO package should get the default relay profile from signed bootstra
   "relay_profiles": [
     {
       "name": "amo-managed",
-      "addr": "<relay_multiaddr>",
-      "namespace": "<namespace>"
+      "relay_addr": "<relay_multiaddr>",
+      "rendezvous_addr": "<relay_multiaddr>",
+      "rendezvous_namespace": "<namespace>",
+      "auto_relay": true,
+      "hole_punching": true
     }
   ],
-  "signature": "<ed25519-signature>"
+  "signature": {
+    "algorithm": "ed25519",
+    "value": "<signature>"
+  }
 }
 ```
 
-Pin the verification public key in AMO. Rotate relay hosts by publishing a new signed bootstrap document; do not ask users to edit relay flags.
+Pin the verification public key in AMO. Rotate relay hosts by publishing a new signed `peer-relay-bootstrap.json` document to the public AMO release; do not ask users to edit relay flags.
 
 Advanced/debug equivalent without managed bootstrap:
 
