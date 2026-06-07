@@ -143,6 +143,8 @@ amo-cli peer --amo-home <amo_home> netd stop
 
 `peer setup` is the user-facing one-time path. It generates a stable internal node id, prompts for a display name when interactive, installs/verifies the signed `amo-peer-netd` sidecar, loads the managed relay profile when no invite or explicit relay is provided, starts the sidecar, and installs per-user startup entries for both peer netd and `peer-agent watch` by default.
 
+Use `peer setup --repair` when the sidecar binary, startup entry, or watcher startup is broken but the device already has trusted peers. Repair reuses the existing internal node id and peer config, forces signed sidecar verification/reinstall, restarts the sidecar, and rewrites startup/watch entries without deleting trust relationships.
+
 `peer enable`, `peer netd build`, raw relay flags, `create-invite`, and `accept-invite` remain advanced/debug commands. Public installs do not require Go. Private source builds are only enabled when `AMO_PEER_NETD_ALLOW_SOURCE_BUILD=1` is explicitly set.
 
 Delivered envelopes are persisted by default:
