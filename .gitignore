@@ -19,9 +19,16 @@ node_modules/
 apps/*/.tmp-*.log
 apps/*/.vite-*.log
 *.egg-info/
-src/agent_memory_orchestrator/bin/*/amo-peer-netd*
 apps/*/src-tauri/target/
 apps/*/src-tauri/gen/
+
+# Private peer runtime artifacts
+peer-netd/
+infra/aws/peer-relay/
+scripts/build_peer_netd_binaries.py
+scripts/deploy_amo_peer_relay_aws.ps1
+src/agent_memory_orchestrator/bin/*/amo-peer-netd*
+release-assets/
 
 # Local runtime data
 .data/

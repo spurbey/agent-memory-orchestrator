@@ -92,27 +92,6 @@ jobs:
         working-directory: apps/antelligent
         run: npx tauri build --debug --no-bundle
 
-  peer-netd:
-    name: peer-netd Go
-    runs-on: ubuntu-latest
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v4
-
-      - name: Set up Go
-        uses: actions/setup-go@v6
-        with:
-          go-version: "1.24.6"
-          cache-dependency-path: peer-netd/go.sum
-
-      - name: Test peer-netd
-        working-directory: peer-netd
-        run: go test ./...
-
-      - name: Build peer-netd
-        working-directory: peer-netd
-        run: go build -trimpath -o ../.tmp/amo-peer-netd ./cmd/amo-peer-netd
-
   peer-public-package:
     name: peer public package smoke
     runs-on: ubuntu-latest
