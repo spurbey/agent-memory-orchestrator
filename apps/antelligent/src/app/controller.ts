@@ -1,4 +1,5 @@
-﻿import { invoke } from "@tauri-apps/api/core";
+import { invoke } from "@tauri-apps/api/core";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { askRoom, chat, context, continueRoom, messages, rooms, status } from "../api/client";
 import { connectEvents } from "../api/events";
 import type { AntelligentEvent } from "../api/types";
@@ -8,7 +9,17 @@ import { createInitialState, type AppState, type AppView } from "./state";
 
 export function mountBubble(root: HTMLElement): void {
   renderBubble(root);
-  qs<HTMLButtonElement>("#openPanel")?.addEventListener("click", () => invoke("show_panel").catch(() => undefined));
+  enableWindowDrag("#openPanel", { allowInteractive: true });
+  qs<HTMLButtonElement>("#openPanel")?.addEventListener("click", () => {
+    const bubble = qs<HTMLButtonElement>("#openPanel");
+    if (bubble?.dataset.dragSuppress === "true") return;
+    bubble?.classList.add("is-launching");
+    window.setTimeout(() => {
+      invoke("show_panel")
+        .catch(() => undefined)
+        .finally(() => bubble?.classList.remove("is-launching"));
+    }, 80);
+  });
 }
 
 export class AntelligentController {
@@ -26,7 +37,10 @@ export class AntelligentController {
   }
 
   private bindShell(): void {
-    qs<HTMLButtonElement>("#hidePanel")?.addEventListener("click", () => invoke("hide_panel").catch(() => undefined));
+    lockPanelDocumentScroll();
+    enableWindowDrag(".app-window");
+    enableWindowDrag(".rail-brand", { allowInteractive: true });
+    qs<HTMLButtonElement>("#hidePanel")?.addEventListener("click", () => this.hidePanel());
     qs<HTMLButtonElement>("#refreshAll")?.addEventListener("click", () => void this.boot());
     document.querySelectorAll<HTMLButtonElement>("[data-view]").forEach(button => {
       button.addEventListener("click", () => this.setView((button.dataset.view || "retrieval") as AppView));
@@ -43,6 +57,7 @@ export class AntelligentController {
       if (roomId) void this.selectRoom(roomId);
     });
     qs<HTMLButtonElement>("#openRoomsTab")?.addEventListener("click", () => this.setView("rooms"));
+    qs<HTMLButtonElement>("#exitRoom")?.addEventListener("click", () => this.leaveRoom());
     qs<HTMLFormElement>("#roomComposer")?.addEventListener("submit", event => {
       event.preventDefault();
       void this.sendRoomQuestion();
@@ -56,6 +71,28 @@ export class AntelligentController {
   private setView(view: AppView): void {
     this.state.view = view;
     this.renderAll();
+  }
+
+  private leaveRoom(): void {
+    this.state.selectedRoomId = "";
+    this.state.messages = [];
+    this.state.context = null;
+    this.state.view = "rooms";
+    this.renderAll();
+  }
+
+  private hidePanel(): void {
+    const panel = document.querySelector<HTMLElement>(".app-window");
+    if (!panel || window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+      void invoke("hide_panel").catch(() => undefined);
+      return;
+    }
+    panel.classList.remove("opening");
+    panel.classList.add("closing");
+    window.setTimeout(() => {
+      panel.classList.remove("closing", "opening");
+      invoke("hide_panel").catch(() => undefined);
+    }, 170);
   }
 
   private async boot(): Promise<void> {
@@ -195,4 +232,87 @@ export class AntelligentController {
     clearTimeout(this.reconnectTimer);
     this.reconnectTimer = null;
   }
+}
+
+function enableWindowDrag(selector: string, options: { allowInteractive?: boolean } = {}): void {
+  const target = document.querySelector<HTMLElement>(selector);
+  if (!target) return;
+  target.addEventListener("pointerdown", event => {
+    if (event.button !== 0) return;
+    if (!options.allowInteractive && (event.target as HTMLElement).closest("button, textarea, input, a")) return;
+    const startX = event.clientX;
+    const startY = event.clientY;
+    const appWindow = getCurrentWindow();
+    let dragging = false;
+    const cleanup = () => {
+      document.removeEventListener("pointermove", onMove);
+      document.removeEventListener("pointerup", cleanup);
+    };
+    const onMove = (moveEvent: PointerEvent) => {
+      if (dragging) return;
+      const distance = Math.hypot(moveEvent.clientX - startX, moveEvent.clientY - startY);
+      if (distance < 4) return;
+      dragging = true;
+      target.dataset.dragSuppress = "true";
+      target.classList.add("is-dragging");
+      void appWindow.startDragging().catch(() => undefined);
+      cleanup();
+      window.setTimeout(() => {
+        target.classList.remove("is-dragging");
+        delete target.dataset.dragSuppress;
+      }, 300);
+    };
+    document.addEventListener("pointermove", onMove);
+    document.addEventListener(
+      "pointerup",
+      () => {
+        if (!dragging) target.classList.remove("is-dragging");
+        cleanup();
+      },
+      { once: true },
+    );
+  });
+}
+
+function lockPanelDocumentScroll(): void {
+  const scrollTargets = ".agent-conversation, .rooms-list-large, .context-drawer, .retrieval-thread";
+  const resetRootScroll = () => {
+    window.scrollTo(0, 0);
+    document.documentElement.scrollTop = 0;
+    document.body.scrollTop = 0;
+  };
+
+  resetRootScroll();
+  window.addEventListener("scroll", resetRootScroll, { passive: true });
+  document.addEventListener(
+    "wheel",
+    event => {
+      const target = event.target instanceof Element ? event.target : null;
+      const scroller = target?.closest(scrollTargets) as HTMLElement | null;
+      if (!scroller) {
+        event.preventDefault();
+        resetRootScroll();
+        return;
+      }
+
+      const maxScrollTop = scroller.scrollHeight - scroller.clientHeight;
+      if (maxScrollTop <= 0) {
+        event.preventDefault();
+        resetRootScroll();
+        return;
+      }
+
+      const nextScrollTop = Math.max(0, Math.min(maxScrollTop, scroller.scrollTop + event.deltaY));
+      if (nextScrollTop === scroller.scrollTop) {
+        event.preventDefault();
+        resetRootScroll();
+        return;
+      }
+
+      event.preventDefault();
+      scroller.scrollTop = nextScrollTop;
+      resetRootScroll();
+    },
+    { passive: false },
+  );
 }

@@ -1,13 +1,17 @@
 .panel-shell {
-  width: 100vw;
-  height: 100vh;
+  position: fixed;
+  inset: 0;
+  width: auto;
+  height: auto;
+  min-height: 0;
   padding: 20px;
+  overflow: hidden;
 }
 
 .app-window {
   width: 100%;
   height: calc(100vh - 40px);
-  min-height: 680px;
+  min-height: 0;
   display: grid;
   grid-template-columns: 64px minmax(0, 1fr);
   overflow: hidden;
@@ -16,9 +20,20 @@
   background: rgba(17, 19, 22, 0.66);
   box-shadow: var(--shadow);
   backdrop-filter: blur(24px);
+  transform-origin: 34px 34px;
+}
+
+.app-window.opening {
+  animation: panel-open 220ms cubic-bezier(0.2, 0.9, 0.2, 1) both;
+}
+
+.app-window.closing {
+  pointer-events: none;
+  animation: panel-close 170ms cubic-bezier(0.4, 0, 0.7, 0.2) forwards;
 }
 
 .side-rail {
+  min-height: 0;
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -44,7 +59,8 @@
 .rail-brand {
   margin-bottom: 18px;
   color: var(--red);
-  background: rgba(255, 79, 74, 0.09);
+  background: transparent;
+  cursor: grab;
 }
 
 .rail-item:hover,
@@ -70,8 +86,8 @@
 }
 
 .ant-svg {
-  width: 29px;
-  height: 22px;
+  width: 22px;
+  height: 34px;
   overflow: visible;
 }
 
@@ -80,20 +96,22 @@
 .ant-svg circle {
   fill: none;
   stroke: var(--red);
-  stroke-width: 3;
+  stroke-width: 2.1;
   stroke-linecap: round;
   stroke-linejoin: round;
 }
 
 .ant-svg ellipse,
 .ant-svg circle {
-  fill: rgba(255, 79, 74, 0.24);
+  fill: none;
 }
 
 .stage {
   min-width: 0;
+  min-height: 0;
   display: grid;
   grid-template-rows: auto minmax(0, 1fr) auto;
+  overflow: hidden;
   background: linear-gradient(135deg, rgba(17, 19, 22, 0.38), rgba(30, 32, 35, 0.58));
 }
 
@@ -107,6 +125,13 @@
   border-bottom: 1px solid var(--line);
   background: rgba(17, 19, 22, 0.34);
   backdrop-filter: blur(18px);
+  cursor: grab;
+  user-select: none;
+}
+
+.top-bar:active,
+.rail-brand:active {
+  cursor: grabbing;
 }
 
 .top-title h1 {
@@ -163,6 +188,7 @@
 }
 
 .view-root {
+  height: 100%;
   min-height: 0;
   overflow: hidden;
 }
@@ -279,10 +305,12 @@ textarea:focus {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 270px;
   gap: 18px;
+  overflow: hidden;
   padding: 18px 22px 14px;
 }
 
 .chat-main {
+  height: 100%;
   min-height: 0;
   display: grid;
   grid-template-rows: auto minmax(0, 1fr) auto;
@@ -292,9 +320,10 @@ textarea:focus {
 .task-card {
   max-width: 720px;
   margin: 0 auto 4px;
-  display: flex;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
   gap: 10px;
-  align-items: flex-start;
+  align-items: center;
   padding: 9px 12px;
   border-radius: 10px;
   color: #cdd7ff;
@@ -306,6 +335,7 @@ textarea:focus {
   display: grid;
   gap: 2px;
   font-size: 13px;
+  min-width: 0;
 }
 
 .task-card strong {
@@ -323,6 +353,7 @@ textarea:focus {
 .context-drawer {
   min-height: 0;
   overflow: auto;
+  overscroll-behavior: contain;
   padding: 2px 0;
 }
 
@@ -408,7 +439,10 @@ textarea:focus {
 
 .rooms-screen {
   height: 100%;
-  overflow: auto;
+  min-height: 0;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  overflow: hidden;
   padding: 28px 24px;
 }
 
@@ -432,10 +466,16 @@ textarea:focus {
 }
 
 .rooms-list-large {
+  min-height: 0;
   max-width: 760px;
+  width: 100%;
   margin: 0 auto;
   display: grid;
+  align-content: start;
   gap: 8px;
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding-right: 4px;
 }
 
 .room-row {
@@ -560,7 +600,7 @@ textarea:focus {
 
   .app-window {
     height: calc(100vh - 16px);
-    min-height: 620px;
+    min-height: 0;
   }
 
   .chat-layout {
@@ -584,9 +624,50 @@ textarea:focus {
   .top-bar {
     align-items: flex-start;
     flex-direction: column;
+    gap: 12px;
+  }
+
+  .top-actions {
+    justify-content: flex-start;
   }
 
   .retrieval-composer {
     grid-template-columns: 1fr;
+  }
+}
+
+@keyframes panel-open {
+  from {
+    opacity: 0;
+    transform: scale(0.08) translate3d(-18px, -18px, 0);
+    filter: blur(12px);
+  }
+  62% {
+    opacity: 1;
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translate3d(0, 0, 0);
+    filter: blur(0);
+  }
+}
+
+@keyframes panel-close {
+  from {
+    opacity: 1;
+    transform: scale(1) translate3d(0, 0, 0);
+    filter: blur(0);
+  }
+  to {
+    opacity: 0;
+    transform: scale(0.08) translate3d(-18px, -18px, 0);
+    filter: blur(12px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .app-window.opening,
+  .app-window.closing {
+    animation: none;
   }
 }
