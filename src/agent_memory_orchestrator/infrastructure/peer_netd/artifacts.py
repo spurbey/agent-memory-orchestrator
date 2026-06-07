@@ -22,7 +22,7 @@ DEFAULT_PEER_NETD_MANIFEST_URL = (
     "https://github.com/spurbey/agent-memory-orchestrator/releases/latest/download/peer-netd-manifest.json"
 )
 PEER_NETD_SIGNATURE_ALGORITHM = "ed25519"
-PEER_NETD_SIGNATURE_PUBLIC_KEY_B64 = "JHcvQEQ7Y7IhikKWy8QGHYoFfbgFEyhLZIV9/cYl/04="
+PEER_NETD_SIGNATURE_PUBLIC_KEY_B64 = "0L/qCZ/swQcGBE+/rBypk3ret84LMlWNnlJcczA44IE="
 SUPPORTED_PEER_NETD_PLATFORMS = {"windows-amd64", "darwin-amd64", "darwin-arm64"}
 REQUIRED_PEER_NETD_FLAGS = ("identity-key", "advertise-addr")
 REQUIRED_PEER_NETD_PROTOCOL_CAPABILITIES = ("remote_peer_id",)
