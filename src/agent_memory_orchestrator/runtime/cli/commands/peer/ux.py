@@ -54,8 +54,9 @@ def read_invite_code(requested: str = "", *, yes: bool = False) -> str:
 
 def format_setup_result(result: dict[str, Any]) -> str:
     peer = ((result.get("init") or {}).get("peer") or {}) if isinstance(result.get("init"), dict) else {}
+    action = "repair" if result.get("repair") else "setup"
     lines = [
-        "AMO peer setup complete." if result.get("ok") else "AMO peer setup needs attention.",
+        f"AMO peer {action} complete." if result.get("ok") else f"AMO peer {action} needs attention.",
         f"- Display name: {peer.get('display_name') or ''}",
         f"- Internal node id: {peer.get('node_id') or result.get('node_id') or ''}",
     ]

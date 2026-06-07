@@ -535,6 +535,70 @@ def test_peer_setup_generates_internal_node_id_and_uses_managed_relay(tmp_path: 
     assert options.rendezvous_namespace == "amo-prod"
 
 
+def test_peer_setup_repair_reinstalls_sidecar_and_preserves_trusted_peers(tmp_path: Path, capsys, monkeypatch) -> None:
+    assert main(["peer", "--amo-home", str(tmp_path), "init", "--node-id", "node-a", "--display-name", "Node A"]) == 0
+    capsys.readouterr()
+    assert (
+        main(
+            [
+                "peer",
+                "--amo-home",
+                str(tmp_path),
+                "add",
+                "--node-id",
+                "friend",
+                "--peer-id",
+                "12D3KooWFriend",
+                "--display-name",
+                "Friend Laptop",
+            ]
+        )
+        == 0
+    )
+    capsys.readouterr()
+    install_calls = []
+
+    def fake_install(*_args, **kwargs) -> dict:
+        install_calls.append(kwargs)
+        return {"ok": True, "installed": True, "binary": "sidecar"}
+
+    monkeypatch.setattr(PeerNetdRuntime, "start", lambda self, options, *, build_if_missing=True: {"ok": True})
+    monkeypatch.setattr(peer_cli_module, "install_peer_netd_artifact", fake_install)
+    monkeypatch.setattr(peer_cli_module, "install_peer_netd_service", lambda *args, **kwargs: {"ok": True})
+    monkeypatch.setattr(
+        peer_cli_module,
+        "load_managed_relay_profile",
+        lambda *_args, **_kwargs: ManagedRelayProfile(
+            name="amo-managed",
+            relay_addr="/dns4/relay.example.com/tcp/4001/p2p/12D3KooWRelay",
+            rendezvous_addr="/dns4/relay.example.com/tcp/4001/p2p/12D3KooWRelay",
+            rendezvous_namespace="amo-prod",
+        ),
+    )
+
+    code = main(
+        [
+            "peer",
+            "--amo-home",
+            str(tmp_path),
+            "setup",
+            "--repair",
+            "--yes",
+            "--json",
+        ]
+    )
+    payload = json.loads(capsys.readouterr().out)
+    config = json.loads((tmp_path / ".peer" / "peers.json").read_text(encoding="utf-8"))
+
+    assert code == 0
+    assert payload["ok"] is True
+    assert payload["repair"] is True
+    assert payload["node_id"] == "node-a"
+    assert install_calls[0]["force"] is True
+    assert [peer["node_id"] for peer in config["peers"]] == ["friend"]
+    assert config["display_name"] == "Node A"
+
+
 def test_peer_invite_public_wrapper_outputs_code_json_for_automation(tmp_path: Path, capsys, monkeypatch) -> None:
     relay_addr = "/ip4/203.0.113.10/tcp/4001/p2p/12D3KooWRelay"
     circuit_addr = relay_addr + "/p2p-circuit/p2p/12D3KooWNodeA"
