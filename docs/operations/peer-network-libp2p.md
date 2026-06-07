@@ -9,8 +9,11 @@ AMO should minimize hosted infrastructure, but it cannot pretend the public inte
 The final UX should hide those details:
 
 ```text
-amo-cli peer enable
-amo-cli peer join <trust-group-or-invite>
+npx -y agent-memory-orchestrator-cli -- install --target codex --preset cpu-balanced --with-peer
+amo-cli peer setup
+amo-cli peer invite
+amo-cli peer join
+amo-cli peer-agent ask --peer "<display name>" --query "<question>"
 ```
 
 After that, AMO should run a local peer sidecar in the background. Joining future rooms should not require user action unless policy requires approval.
@@ -78,7 +81,7 @@ scripts/
 
 `cards.py` builds and imports peer-card JSON so users do not manually copy libp2p ids and multiaddrs into commands.
 
-`doctor.py` produces the operator readiness report for peer identity, packaged `peer-netd` source, binary/build state, sidecar health, trusted peers, and shared-secret environment variables.
+`doctor.py` produces the operator readiness report for peer identity, verified sidecar state, sidecar health, trusted peers, and shared-secret environment variables.
 
 `service.py` owns peer-room, invite, and message orchestration. It does not own
 low-level network normalization or binary lifecycle details.
@@ -96,13 +99,13 @@ posting helper isolated.
 sidecar, writes PID/API/log state under `AMO_HOME/.peer/netd`, and refuses
 unsafe managed starts where the local API port is dynamic.
 
-`netd_binary.py` locates repo or packaged `peer-netd` source, discovers packaged
-prebuilt binaries, builds the Go binary into `AMO_HOME/.peer/bin`, installs a
-packaged binary when available, and verifies required sidecar capabilities.
+`netd_binary.py` locates verified sidecar binaries, keeps private source-build
+fallback behind `AMO_PEER_NETD_ALLOW_SOURCE_BUILD=1`, installs binaries into
+`AMO_HOME/.peer/bin`, and verifies required sidecar capabilities.
 
 Managed starts persist the libp2p private key at `AMO_HOME/.peer/netd/identity.key` by default. This keeps peer IDs and relay multiaddrs stable across restarts.
 
-`netd_service.py` plans OS startup integration. It returns a Windows Scheduled Task plan or user-systemd unit plan by default, and only mutates the host when `--apply` is explicitly used.
+`netd_service.py` plans OS startup integration. Interactive public setup applies per-user startup by default on Windows and macOS; advanced netd service commands can still return a plan before mutation.
 
 `agent/service.py` owns the bot-to-bot ask/watch/finalize loop. Supporting
 modules keep the service smaller: `selection.py` selects trusted peers,
@@ -110,29 +113,27 @@ modules keep the service smaller: `selection.py` selects trusted peers,
 grade, `schemas.py` defines redacted room message payloads, and `state.py`
 persists peer-agent room state.
 
-`scripts/build_peer_netd_binaries.py` builds release binaries into `src/agent_memory_orchestrator/bin/<goos-goarch>/`. Wheel/package builds include those files when present, so normal users do not need Go once release packaging generates platform binaries.
+Private release automation builds signed sidecar artifacts for `windows-amd64`, `darwin-amd64`, and `darwin-arm64`. Public AMO installs them through the signed manifest/sha256/capability contract, so normal users do not need Go.
 
 ## Managed User Flow
 
 The intended user path is AMO-owned, not Tailscale-owned:
 
 ```powershell
-amo-cli peer --amo-home <amo_home> init --node-id zenbook-amo
-amo-cli peer --amo-home <amo_home> doctor
-$env:AMO_PEER_NETD_SECRET="<shared-secret>"
-amo-cli peer --amo-home <amo_home> enable `
-  --node-id zenbook-amo `
-  --api 127.0.0.1:8788 `
-  --shared-secret-env AMO_PEER_NETD_SECRET `
-  --require-signature
+npx -y agent-memory-orchestrator-cli -- install --target codex --preset cpu-balanced --with-peer
+amo-cli peer --amo-home <amo_home> setup
+amo-cli peer --amo-home <amo_home> invite
+amo-cli peer --amo-home <amo_home> join
+amo-cli peer-agent --amo-home <amo_home> ask --peer "<display name>" --query "<question>"
 ```
 
 Operational commands:
 
 ```powershell
 amo-cli peer --amo-home <amo_home> doctor --strict
-amo-cli peer --amo-home <amo_home> netd build
-amo-cli peer --amo-home <amo_home> netd start --node-id zenbook-amo
+amo-cli peer --amo-home <amo_home> setup
+amo-cli peer --amo-home <amo_home> invite
+amo-cli peer --amo-home <amo_home> join
 amo-cli peer --amo-home <amo_home> netd status
 amo-cli peer-agent --amo-home <amo_home> watch
 amo-cli peer --amo-home <amo_home> netd stop
@@ -140,9 +141,11 @@ amo-cli peer --amo-home <amo_home> netd stop
 
 `peer doctor` is the first diagnostic command for a new machine. It separates blocking install/config failures from normal next steps like starting the sidecar or importing peer cards.
 
-`peer enable` is the low-level normal path. It uses a packaged prebuilt sidecar when available, otherwise builds the sidecar if Go is available, starts it, waits for `/health`, and returns the peer id/listen addresses. It also verifies that an existing sidecar binary supports the current required flags before launch; stale binaries are replaced from a packaged binary or rebuilt from source. Packaged installs include the Go sidecar source so users do not need a repo clone just to build `amo-peer-netd`.
+`peer setup` is the user-facing one-time path. It generates a stable internal node id, prompts for a display name when interactive, installs/verifies the signed `amo-peer-netd` sidecar, loads the managed relay profile when no invite or explicit relay is provided, starts the sidecar, and installs per-user startup entries for both peer netd and `peer-agent watch` by default.
 
-`peer setup` is the user-facing one-time path. It initializes the peer identity, expands a saved relay profile, starts the sidecar, can accept an invite, and can install per-user startup entries for both peer netd and `peer-agent watch`.
+Use `peer setup --repair` when the sidecar binary, startup entry, or watcher startup is broken but the device already has trusted peers. Repair reuses the existing internal node id and peer config, forces signed sidecar verification/reinstall, restarts the sidecar, and rewrites startup/watch entries without deleting trust relationships.
+
+`peer enable`, `peer netd build`, raw relay flags, `create-invite`, and `accept-invite` remain advanced/debug commands. Public installs do not require Go. Private source builds are only enabled when `AMO_PEER_NETD_ALLOW_SOURCE_BUILD=1` is explicitly set.
 
 Delivered envelopes are persisted by default:
 
@@ -157,25 +160,22 @@ For active participation, run `peer-agent watch` beside the sidecar. It continuo
 Startup planning:
 
 ```powershell
-amo-cli peer --amo-home <amo_home> netd install-service --node-id zenbook-amo
-amo-cli peer --amo-home <amo_home> netd install-service --node-id zenbook-amo --with-watch
-amo-cli peer --amo-home <amo_home> netd install-service --node-id zenbook-amo --with-watch --apply
+amo-cli peer --amo-home <amo_home> setup
 amo-cli peer --amo-home <amo_home> netd service-status --with-watch
 amo-cli peer --amo-home <amo_home> netd uninstall-service --with-watch --apply
 ```
 
-The default is a plan, not mutation. On Windows the apply path creates per-user Scheduled Tasks at logon. On macOS it writes user `launchd` LaunchAgents. On Linux it writes user systemd units and enables them. Use `--with-watch` for the normal bot-participation setup: one startup entry keeps `amo-peer-netd` online, and the second runs `peer-agent watch` so trusted room invites, memory requests, responses, summaries, and finalization are processed without manual polling.
+Interactive setup mutates startup by default. On Windows it creates per-user Scheduled Tasks at logon. On macOS it writes user `launchd` LaunchAgents. Use `--no-startup` for debug-only setup. Linux startup is out of scope for the current public peer sidecar phase.
 
 Short relay setup:
 
 ```powershell
-amo-cli peer --amo-home <home_a> relay save --name amo-test --addr <relay_multiaddr> --namespace amo-test
-amo-cli peer --amo-home <home_a> setup --node-id node-a --display-name "Node A" --relay amo-test --install-startup
-amo-cli peer --amo-home <home_a> create-invite --auto-approve --relay amo-test --out node-a.invite.json
-amo-cli peer --amo-home <home_b> setup --node-id node-b --display-name "Node B" --invite node-a.invite.json --install-startup
+amo-cli peer --amo-home <home_a> setup
+amo-cli peer --amo-home <home_a> invite
+amo-cli peer --amo-home <home_b> join
 ```
 
-The accepting setup command reads the invite's rendezvous fields, saves the relay profile locally, starts its sidecar through that relay, then accepts the invite and sends the join request back when the initiator is reachable.
+`peer invite` prints a shareable `amo-peer-invite:...` code with expiry and trust instructions. `peer join` prompts for the friend's display name and invite code, saves the relay profile from the invite, starts its sidecar through that relay, accepts the invite, and sends the join request back when the initiator is reachable.
 
 After startup is installed on both devices, repeated usage should stay at the bot level:
 
@@ -209,12 +209,12 @@ amo-cli peer --amo-home <home_a> import-card --file node-b.card.json
 For lower-friction onboarding, use an invite code/bundle:
 
 ```powershell
-amo-cli peer --amo-home <home_a> create-invite --auto-approve --out node-a.invite.json
-amo-cli peer --amo-home <home_b> accept-invite --file node-a.invite.json
+amo-cli peer --amo-home <home_a> invite
+amo-cli peer --amo-home <home_b> join
 amo-cli peer-agent --amo-home <home_a> watch --max-iterations 1
 ```
 
-The invite wraps the inviter's public peer card, recommended trust level, one-time invite token, and a card hash. It never contains a shared-secret value. If both sidecars are running, `accept-invite` sends a `peer_join_request` back to the inviter. With `--auto-approve`, the inviter imports the accepting peer after token validation. Without `--auto-approve`, review the request explicitly:
+The invite wraps the inviter's public peer card, recommended trust level, one-time invite token, and a card hash. It never contains a shared-secret value and does not share memory automatically. If both sidecars are running, `peer join` sends a `peer_join_request` back to the inviter. With the default auto-approval invite, the inviter imports the accepting peer after token validation. Without auto approval, review the request explicitly:
 
 ```powershell
 amo-cli peer --amo-home <home_a> join-requests --status pending
@@ -252,7 +252,7 @@ remote sidecar verifies envelope
 remote AMO reads /messages and processes room response
 ```
 
-The current implementation supports explicit multiaddr dialing, peer-card export/import, invite bundle/code trust exchange, packaged sidecar source discovery, packaged prebuilt binary discovery, readiness diagnostics, static bootstrap dialing, LAN mDNS, managed process start/stop, persistent sidecar inbox, watched peer-agent draining, sidecar-backed room invites/messages, relay reservation, an AMO rendezvous stream protocol, and OS startup planning for both netd and the AMO peer-agent watcher.
+The current implementation supports explicit multiaddr dialing, peer-card export/import, invite bundle/code trust exchange, signed sidecar artifact install, packaged prebuilt binary discovery, readiness diagnostics, static bootstrap dialing, LAN mDNS, managed process start/stop, persistent sidecar inbox, watched peer-agent draining, sidecar-backed room invites/messages, relay reservation, an AMO rendezvous stream protocol, and OS startup planning for both netd and the AMO peer-agent watcher.
 
 Incoming room invites and messages remain local-policy gated. Invites require a trusted initiator under `trusted_only`; messages require a trusted configured sender that is already a room participant. If a peer has `shared_secret_env` configured, netd-delivered messages from that peer must be authenticated or AMO rejects them before mutating room state.
 
@@ -282,11 +282,13 @@ signed room message is delivered to the private peer
 
 Relay nodes should be treated as transport utilities. They should be rate-limited and monitored, but they should not read AMO memory or own room state.
 
-## Public Relay/Rendezvous Deployment
+## Operator Relay/Rendezvous Deployment
 
 For peers on different routers or subnets, run one small always-on helper node. This is the AMO equivalent of the minimum Tailscale control-plane replacement: it does discovery and relay only, not memory or room state.
 
-On a public VPS or always-on machine with inbound TCP open:
+In public product mode users do not run this command. AMO loads the managed relay profile from signed bootstrap metadata during `peer setup` or from an invite during `peer join`.
+
+Operator/debug command on a public VPS or always-on machine with inbound TCP open:
 
 ```powershell
 amo-cli peer relay start `
@@ -298,24 +300,24 @@ amo-cli peer relay start `
 
 Use `/dns4/<domain>/tcp/4001` instead of `/ip4/<public_ip>/tcp/4001` if DNS is stable. The command starts `amo-peer-netd` with rendezvous, relay service, NAT service, and public reachability defaults. It prints the relay multiaddr that clients should use.
 
-On each user device, save a relay profile once, then start local peer netd with the short profile name:
+Advanced local debug path with a manually saved relay profile:
 
 ```powershell
 amo-cli peer relay save --name amo-team --addr <relay_multiaddr> --namespace <team_namespace>
-amo-cli peer setup --node-id <device_node_id> --relay amo-team --install-startup
+amo-cli peer setup --relay amo-team
 ```
 
-Then create invites with the same relay profile:
+Then create invites:
 
 ```powershell
-amo-cli peer create-invite --auto-approve --relay amo-team --out host.invite.json
+amo-cli peer invite
 ```
 
 The important ordering is: start the local sidecar through the relay, confirm `peer netd status` shows `relay_addrs`, then create or accept invites. The peer card inside the invite/response will include `/p2p-circuit` relay addresses, so the join request can return even when direct LAN dialing fails. The long-form `--static-relay --auto-relay --hole-punching --rendezvous-*` flags remain available for debugging and automation.
 
 For production operations, run at least two helper nodes and pass both as `--static-relay` values. Monitor process liveness, open TCP port reachability, relay reservation failures, and bandwidth. The helper should reject broad public access later with invite/group-level admission rules; until then, treat it as a private beta service.
 
-AWS deployment automation lives in `docs/operations/aws-peer-relay.md` and `infra/aws/peer-relay/cloudformation.yaml`. It creates the small EC2/EIP/SSM helper node and prints the relay/rendezvous flags clients should use.
+AWS deployment automation is operator/private-runtime material. `docs/operations/aws-peer-relay.md` explains the server role and the signed-bootstrap public client boundary.
 
 ## Why libp2p, Not Tailscale
 
@@ -341,8 +343,8 @@ These nodes should not store memory, raw evidence, or LLM prompts. They only mov
 - CLI tests verify `peer netd status` uses `--amo-home`, `peer doctor` reports readiness, and `peer enable` rejects dynamic API ports before building.
 - CLI tests verify libp2p peer config, peer-card export/import, inbox polling/watch behavior, and startup service planning.
 - Peer-room policy tests verify untrusted senders, non-participant senders, and unsigned netd messages for secret-required peers are rejected.
-- Wheel install smoke verifies packaged installs contain the `peer-netd` Go source tree and `PeerNetdRuntime` can discover it outside the repo.
-- Prebuilt wheel smoke verifies a generated `amo-peer-netd` binary is included in the wheel and discovered by installed runtime.
+- Public package smoke verifies Go source, relay infra, runtime DBs, evidence, invites, and debug archives are excluded from wheel/sdist.
+- Sidecar artifact tests verify signed Windows/macOS `amo-peer-netd` artifacts install through the manifest + SHA256 + size + capability contract.
 - Go store tests verify delivered envelopes persist to JSONL and reload after restart.
 - Binary smoke starts three real sidecar processes: rendezvous, node A, and node B. A/B register, B discovers A, B sends a signed response, and A receives it.
 - Binary relay smoke starts three real sidecar processes: relay, private node A, and node B. A reserves a relay slot, B dials A's `/p2p-circuit` address, B sends a signed response, and A receives it.

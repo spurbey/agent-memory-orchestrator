@@ -38,6 +38,13 @@ _update-notifier-last-checked
 *.db
 *.sqlite
 *.sqlite3
+amo-peer-debug-*/
+amo-peer-debug-*.zip
+amo-peer-llm-*.zip
+*.invite.json
+host.invite.json
+friend-invite-code.txt
+friends.txt
 
 # Local/private extension algorithms
 .local-extensions/

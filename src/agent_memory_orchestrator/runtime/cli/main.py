@@ -101,7 +101,7 @@ def main(argv: list[str] | None = None) -> int:
         if connector_status is not None:
             return connector_status
 
-        peer_status = _handle_peer_command(args, emit=_print, emit_line=_print_line)
+        peer_status = _handle_peer_command(args, emit=_print, emit_line=_print_line, emit_text=print)
         if peer_status is not None:
             return peer_status
 

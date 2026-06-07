@@ -55,44 +55,26 @@ Optional private-beta hardening:
 
 ## Client Flow After Deploy
 
-Use the script output once to save a relay profile. After that users should use the short profile name, not paste the long relay flags every time.
+Normal users should not paste relay flags, choose node ids, or install Go. Publish the relay profile through the signed AMO bootstrap metadata, then use the product commands:
 
 ```powershell
-amo-cli peer relay save `
-  --name amo-test `
-  --addr "<relay_multiaddr>" `
-  --namespace "<namespace>"
+npx -y agent-memory-orchestrator-cli -- install --target codex --preset cpu-balanced --with-peer
+amo-cli peer setup
+amo-cli peer invite
 ```
 
-Initiator one-time setup:
+The accepting device uses the same install path and joins from the invite code:
 
 ```powershell
-amo-cli peer setup `
-  --node-id <your-device-node-id> `
-  --display-name "<Your Device>" `
-  --relay amo-test `
-  --install-startup
+npx -y agent-memory-orchestrator-cli -- install --target codex --preset cpu-balanced --with-peer
+amo-cli peer join
 ```
 
-Create an invite. Prefer sending the printed `amo-peer-invite:...` code. The invite includes the rendezvous hint so the accepting device can configure itself without a manually returned peer card.
+`peer setup` prompts for a display name, generates a stable internal node id, installs/verifies the signed sidecar, loads the managed relay profile, starts peer networking, and installs startup entries for both `amo-peer-netd` and `peer-agent watch` by default.
 
-```powershell
-amo-cli peer create-invite --auto-approve --relay amo-test
-```
+`peer invite` prints a shareable `amo-peer-invite:...` code with expiry, trust notes, and friend instructions. The invite carries relay hints so `peer join` can configure the accepting device without a manually returned `.card.json`.
 
-Accepting device one-time setup:
-
-```powershell
-amo-cli peer setup `
-  --node-id <friend-device-node-id> `
-  --display-name "<Friend Device>" `
-  --invite-code "<amo-peer-invite:...>" `
-  --install-startup
-```
-
-With the relay reachable, `peer setup --invite-code` starts the sidecar through the relay, accepts the invite, and sends the join request back to the initiator over libp2p instead of requiring a manually returned `.card.json`.
-
-After both devices have `--install-startup`, normal use is only:
+After both devices have completed setup/join, normal use is only:
 
 ```powershell
 amo-cli peer-agent ask --query "<question>"
@@ -100,7 +82,26 @@ amo-cli peer-agent ask --query "<question>"
 
 The asking bot creates the room, sends context requests, waits for peer-agent responses, and synthesizes the answer. The other device only needs its OS session and AMO startup watcher running.
 
-Advanced/debug equivalent without a saved profile:
+## Managed Relay Bootstrap
+
+The public AMO package should get the default relay profile from signed bootstrap metadata, not from user-entered flags. The bootstrap profile should contain:
+
+```json
+{
+  "relay_profiles": [
+    {
+      "name": "amo-managed",
+      "addr": "<relay_multiaddr>",
+      "namespace": "<namespace>"
+    }
+  ],
+  "signature": "<ed25519-signature>"
+}
+```
+
+Pin the verification public key in AMO. Rotate relay hosts by publishing a new signed bootstrap document; do not ask users to edit relay flags.
+
+Advanced/debug equivalent without managed bootstrap:
 
 ```powershell
 amo-cli peer enable `
@@ -111,6 +112,8 @@ amo-cli peer enable `
   --rendezvous-addr "<relay_multiaddr>" `
   --rendezvous-namespace "<namespace>"
 ```
+
+Keep these flags in operator/debug docs only. They are not the public user flow.
 
 ## Check Server Health
 
@@ -140,6 +143,8 @@ aws cloudformation delete-stack `
 - Narrow `RelayIngressCidr` where possible.
 - Keep relay/rendezvous separate from AMO memory. It should move signed transport envelopes only.
 - Add bandwidth and abuse controls before public release.
+- Keep AWS relay deployment scripts, relay runbooks, and `peer-netd` source in the private runtime repo/package.
+- The public package should install only verified Windows/macOS sidecar artifacts and should fail as `peer_sidecar_unavailable` when the artifact is unavailable.
 
 ## References
 

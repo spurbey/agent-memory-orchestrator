@@ -4,6 +4,7 @@ import os
 from typing import Any
 
 from ..core.config import Settings
+from .netd_binary import source_build_allowed
 from .netd_runtime import PeerNetdRuntime
 from .store import PeerStore
 
@@ -16,10 +17,11 @@ def peer_doctor(settings: Settings) -> dict[str, Any]:
     config_exists = store.config_path.exists()
     config = store.load_config()
     status = runtime.status()
-    source_dir = runtime.source_dir()
     binary_path = runtime.resolve_binary()
     binary_capabilities = runtime.binary_capabilities(binary_path) if binary_path.exists() else {}
-    go_path = runtime.go_path()
+    dev_source_build = source_build_allowed()
+    source_dir = runtime.source_dir() if dev_source_build else None
+    go_path = runtime.go_path() if dev_source_build else ""
 
     checks: list[dict[str, Any]] = []
 
@@ -40,39 +42,42 @@ def peer_doctor(settings: Settings) -> dict[str, Any]:
             "peer_identity",
             "fail",
             "peer identity has not been initialized",
-            'amo-cli peer init --node-id <device-name> --display-name "<Device Name>"',
+            "amo-cli peer setup",
         )
 
-    source_ok = (source_dir / "go.mod").exists() and (source_dir / "cmd" / "amo-peer-netd" / "main.go").exists()
-    if source_ok:
-        add_check("netd_source", "pass", f"found peer-netd source at {source_dir}")
-    else:
-        add_check(
-            "netd_source",
-            "fail",
-            f"peer-netd source not found at {source_dir}",
-            "reinstall/update agent-memory-orchestrator-cli so packaged peer-netd sources are available",
-        )
+    if dev_source_build:
+        source_ok = bool(source_dir and (source_dir / "go.mod").exists() and (source_dir / "cmd" / "amo-peer-netd" / "main.go").exists())
+        if source_ok:
+            add_check("netd_source", "pass", f"private dev source build enabled at {source_dir}")
+        else:
+            add_check(
+                "netd_source",
+                "warn",
+                f"private dev source build is enabled but source was not found at {source_dir}",
+                "unset AMO_PEER_NETD_ALLOW_SOURCE_BUILD or provide private peer-netd source",
+            )
 
-    if binary_path.exists() and not binary_capabilities.get("missing_required_flags"):
+    missing_binary_requirements = [
+        *[str(item) for item in binary_capabilities.get("missing_required_flags", [])],
+        *[f"protocol:{item}" for item in binary_capabilities.get("missing_protocol_capabilities", [])],
+    ]
+    if binary_path.exists() and not missing_binary_requirements:
         add_check("netd_binary", "pass", f"found compatible sidecar binary at {binary_path}")
-    elif binary_path.exists() and go_path:
-        missing_flags = ", ".join(str(item) for item in binary_capabilities.get("missing_required_flags", []))
+    elif binary_path.exists() and dev_source_build and go_path:
         add_check(
             "netd_binary",
             "warn",
-            f"sidecar binary is stale or incompatible at {binary_path}; missing flags: {missing_flags}",
+            f"sidecar binary is stale or incompatible at {binary_path}; missing: {', '.join(missing_binary_requirements)}",
             "amo-cli peer netd build",
         )
     elif binary_path.exists():
-        missing_flags = ", ".join(str(item) for item in binary_capabilities.get("missing_required_flags", []))
         add_check(
             "netd_binary",
             "fail",
-            f"sidecar binary is stale or incompatible at {binary_path}; missing flags: {missing_flags}",
-            "install Go 1.22+ or reinstall/update AMO with a prebuilt amo-peer-netd binary",
+            f"sidecar binary is stale or incompatible at {binary_path}; missing: {', '.join(missing_binary_requirements)}",
+            "run the installer with --with-peer to install a signed amo-peer-netd sidecar",
         )
-    elif go_path:
+    elif dev_source_build and go_path:
         add_check(
             "netd_binary",
             "warn",
@@ -83,8 +88,8 @@ def peer_doctor(settings: Settings) -> dict[str, Any]:
         add_check(
             "netd_binary",
             "fail",
-            "sidecar binary is missing and Go is not on PATH",
-            "install Go 1.22+ or install a package that includes a prebuilt amo-peer-netd binary",
+            "signed amo-peer-netd sidecar is missing",
+            "run the installer with --with-peer",
         )
 
     if status.get("running") and status.get("api_ok"):
@@ -101,7 +106,7 @@ def peer_doctor(settings: Settings) -> dict[str, Any]:
             "netd_runtime",
             "warn",
             "sidecar is not running",
-            f"amo-cli peer enable --node-id {config.node_id}",
+            "amo-cli peer setup",
         )
 
     if config.peers:
@@ -111,7 +116,7 @@ def peer_doctor(settings: Settings) -> dict[str, Any]:
             "trusted_peers",
             "warn",
             "no trusted peers imported yet",
-            "amo-cli peer accept-invite --file <peer.invite.json> --response-out <device>.card.json",
+            "amo-cli peer invite or amo-cli peer join",
         )
 
     missing_secret_envs = sorted(
@@ -141,7 +146,7 @@ def peer_doctor(settings: Settings) -> dict[str, Any]:
         "warning_count": sum(1 for check in checks if check["status"] == "warn"),
         "node_id": config.node_id,
         "config_path": str(store.config_path),
-        "source_dir": str(source_dir),
+        "source_dir": str(source_dir or ""),
         "binary": str(binary_path),
         "binary_capabilities": binary_capabilities,
         "go": go_path,
@@ -151,20 +156,20 @@ def peer_doctor(settings: Settings) -> dict[str, Any]:
     }
 
 
-def _next_commands(node_id: str, *, config_exists: bool, ready: bool) -> list[str]:
+def _next_commands(_node_id: str, *, config_exists: bool, ready: bool) -> list[str]:
     if ready:
         return [
-            "amo-cli peer create-invite --out <device>.invite.json",
-            'amo-cli peer open-room --topic "<topic>" --peer <peer-node-id>',
+            "amo-cli peer invite",
+            'amo-cli peer-agent ask --peer "<display name>" --query "<question>"',
         ]
     if not config_exists:
         return [
-            'amo-cli peer init --node-id <device-name> --display-name "<Device Name>"',
-            "amo-cli peer enable --node-id <device-name>",
-            "amo-cli peer create-invite --out <device>.invite.json",
+            "amo-cli peer setup",
+            "amo-cli peer invite",
+            "amo-cli peer join",
         ]
     return [
-        f"amo-cli peer enable --node-id {node_id}",
-        "amo-cli peer create-invite --out <device>.invite.json",
-        "amo-cli peer accept-invite --file <peer.invite.json> --response-out <device>.card.json",
+        "amo-cli peer setup",
+        "amo-cli peer invite",
+        "amo-cli peer join",
     ]
