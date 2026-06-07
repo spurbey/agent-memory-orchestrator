@@ -18,7 +18,7 @@ Install for Claude and Codex:
 npx -y agent-memory-orchestrator-cli -- install --target all --preset cpu-balanced --qwen-model qwen3:1.7b
 ```
 
-If `npx` resolves `agent-memory-orchestrator-cli@0.1.1`, that registry package is too old for this command shape. Publish/use `0.1.4` or newer.
+If `npx` resolves `agent-memory-orchestrator-cli@0.1.1`, that registry package is too old for this command shape. Publish/use `0.1.6` or newer for peer sidecar install support.
 
 The wrapper automatically skips Python versions that are too new for AMO's Kuzu
 dependency and asks `pipx` to create the AMO app with Python 3.10, 3.11, 3.12,
@@ -54,6 +54,7 @@ from the same install.
 | `--qwen-model <model>` | Ollama Qwen model written to config |
 | `--with-models` | Install embedding/vector extras |
 | `--with-slack` | Install Slack Socket Mode extras |
+| `--with-peer` | Install and verify the signed Windows/macOS peer networking sidecar |
 | `--download-models` | Intentionally cache selected models once |
 | `--dry-run` | Show planned changes only |
 | `--yes` | Apply without confirmation |
