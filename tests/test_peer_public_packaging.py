@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+import subprocess
 import tarfile
 import zipfile
 from pathlib import Path
@@ -21,6 +22,10 @@ def test_public_package_excludes_peer_netd_go_source_and_infra() -> None:
     manifest = (root / "MANIFEST.in").read_text(encoding="utf-8")
 
     assert "peer-netd" not in data_files
+    assert _tracked_paths(root, "peer-netd") == []
+    assert _tracked_paths(root, "infra") == []
+    assert _tracked_paths(root, "scripts/build_peer_netd_binaries.py") == []
+    assert _tracked_paths(root, "scripts/deploy_amo_peer_relay_aws.ps1") == []
     assert "bin/*/amo-peer-netd" not in package_data.get(
         "agent_memory_orchestrator", []
     )
@@ -30,6 +35,10 @@ def test_public_package_excludes_peer_netd_go_source_and_infra() -> None:
     assert "prune peer-netd" in manifest
     assert "prune infra" in manifest
     assert "prune src/agent_memory_orchestrator/bin" in manifest
+
+    gitignore = (root / ".gitignore").read_text(encoding="utf-8")
+    assert "peer-netd/" in gitignore
+    assert "infra/aws/peer-relay/" in gitignore
 
 
 def test_peer_sidecar_distribution_is_windows_macos_only() -> None:
@@ -97,3 +106,16 @@ def _archive_names(path: Path) -> list[str]:
             return handle.namelist()
     with tarfile.open(path, "r:gz") as handle:
         return handle.getnames()
+
+
+def _tracked_paths(root: Path, pathspec: str) -> list[str]:
+    if not (root / ".git").exists():
+        return []
+    result = subprocess.run(
+        ["git", "ls-files", "--", pathspec],
+        cwd=root,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return [line.strip() for line in result.stdout.splitlines() if line.strip()]

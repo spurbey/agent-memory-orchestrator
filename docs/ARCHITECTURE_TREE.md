@@ -112,11 +112,12 @@ runtime/mcp/tools/peer.py or runtime/cli/commands/peer/
 -> peer/agent/service.py
 -> peer/service.py
 -> peer/netd_client.py
--> peer-netd Go sidecar through infrastructure/peer_netd/
+-> verified peer-netd sidecar through infrastructure/peer_netd/
 ```
 
 Python owns memory, policy, room state, context assembly, and retrieval. The Go
-sidecar owns network transport only.
+sidecar owns network transport only. Its source and relay infrastructure live
+outside the public repo; public AMO installs verified Windows/macOS artifacts.
 
 ### Connector Flow
 
