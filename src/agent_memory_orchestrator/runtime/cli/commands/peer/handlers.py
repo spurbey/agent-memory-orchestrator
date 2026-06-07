@@ -53,22 +53,25 @@ def _ensure_sidecar(settings: Settings, args: argparse.Namespace) -> dict[str, o
     if getattr(args, "skip_sidecar_install", False):
         return None
     runtime = PeerNetdRuntime(settings)
-    try:
-        binary = runtime.prepare_binary(build_if_missing=False)
-        return {
-            "ok": True,
-            "installed": False,
-            "reason": "local_sidecar_ready",
-            "binary": str(binary),
-            "capabilities": runtime.binary_capabilities(binary),
-        }
-    except Exception:
-        pass
+    force_install = bool(getattr(args, "repair", False))
+    if not force_install:
+        try:
+            binary = runtime.prepare_binary(build_if_missing=False)
+            return {
+                "ok": True,
+                "installed": False,
+                "reason": "local_sidecar_ready",
+                "binary": str(binary),
+                "capabilities": runtime.binary_capabilities(binary),
+            }
+        except Exception:
+            pass
     installer = _root_compat_hook("install_peer_netd_artifact", install_peer_netd_artifact)
     return installer(
         settings,
         manifest_source=getattr(args, "peer_netd_manifest", "") or None,
         version=getattr(args, "peer_netd_version", "latest") or "latest",
+        force=force_install,
     )
 
 
@@ -197,6 +200,7 @@ def handle_peer_command(
             )
             payload = {
                 "ok": setup_ok,
+                "repair": bool(getattr(args, "repair", False)),
                 "node_id": args.node_id,
                 "init": init_result,
                 "sidecar": sidecar_result,

@@ -186,6 +186,11 @@ def add_peer_subcommands(sub: Any) -> None:
     peer_setup.add_argument("--peer-netd-version", default="latest", help="peer-netd artifact version to install.")
     peer_setup.add_argument("--managed-relay-bootstrap", default="", help="Signed managed relay bootstrap metadata URL/path.")
     peer_setup.add_argument("--no-managed-relay", action="store_true", help="Do not load AMO's managed relay profile.")
+    peer_setup.add_argument(
+        "--repair",
+        action="store_true",
+        help="Reverify/reinstall the sidecar and rewrite startup/watch entries without changing trust relationships.",
+    )
     peer_setup.add_argument("--skip-sidecar-install", action="store_true", help=argparse.SUPPRESS)
     peer_setup.add_argument("--yes", action="store_true", help="Use defaults for non-interactive setup prompts.")
     peer_setup.add_argument("--json", action="store_true", help="Print machine-readable setup details.")
