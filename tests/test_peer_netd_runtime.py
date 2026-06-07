@@ -168,6 +168,13 @@ def test_peer_netd_runtime_installs_packaged_binary(tmp_path: Path) -> None:
     assert installed.read_bytes() == b"fake-binary"
 
 
+def test_peer_netd_runtime_missing_public_sidecar_fails_without_go_hint(tmp_path: Path) -> None:
+    runtime = PeerNetdRuntime(make_settings(tmp_path / "home"), repo_root=tmp_path / "repo")
+
+    with pytest.raises(PeerNetdRuntimeError, match="peer_sidecar_unavailable"):
+        runtime.prepare_binary(build_if_missing=True)
+
+
 def test_peer_netd_runtime_reads_and_clears_state(tmp_path: Path) -> None:
     runtime = PeerNetdRuntime(make_settings(tmp_path))
     state = {

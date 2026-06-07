@@ -20,6 +20,7 @@ from agent_memory_orchestrator.peer.netd_binary import packaged_binary_path
 from agent_memory_orchestrator.peer.netd_binary import protocol_capabilities
 from agent_memory_orchestrator.peer.netd_binary import resolve_binary
 from agent_memory_orchestrator.peer.netd_binary import source_dir
+from agent_memory_orchestrator.peer.netd_binary import source_build_allowed
 from agent_memory_orchestrator.peer.netd_binary import source_dir_candidates
 from agent_memory_orchestrator.peer.netd_client import PeerNetdClient, PeerNetdError
 from agent_memory_orchestrator.peer.netd_errors import PeerNetdRuntimeError
@@ -180,6 +181,7 @@ class PeerNetdRuntime:
         }
 
     def prepare_binary(self, *, build_if_missing: bool = True) -> Path:
+        allow_source_build = bool(build_if_missing and source_build_allowed())
         binary = self.resolve_binary()
         packaged = self.packaged_binary_path()
         if packaged is not None and binary.resolve() == packaged.resolve():
@@ -187,8 +189,11 @@ class PeerNetdRuntime:
         elif not binary.exists():
             if packaged is not None:
                 binary = self.install_packaged_binary(packaged, binary)
-            elif not build_if_missing:
-                raise PeerNetdRuntimeError(f"peer-netd binary not found: {binary}")
+            elif not allow_source_build:
+                raise PeerNetdRuntimeError(
+                    "peer_sidecar_unavailable: signed amo-peer-netd sidecar is not installed"
+                    f" ({binary}); run install with --with-peer or provide AMO_PEER_NETD_BIN"
+                )
             else:
                 self.build(binary)
         elif not binary.is_file():
@@ -205,11 +210,11 @@ class PeerNetdRuntime:
                 return self.install_packaged_binary(packaged, binary)
 
         missing = ", ".join(_missing_binary_requirements(capabilities))
-        if not build_if_missing:
+        if not allow_source_build:
             raise PeerNetdRuntimeError(
-                "peer-netd binary is stale or incompatible"
-                f" (missing flags: {missing}); run amo-cli peer netd build or reinstall/update AMO"
-        )
+                "peer_sidecar_unavailable: peer-netd binary is stale or incompatible"
+                f" (missing: {missing}); run install with --with-peer or provide a current signed sidecar"
+            )
         self.build(binary)
         rebuilt = self.binary_capabilities(binary)
         if _missing_binary_requirements(rebuilt):
