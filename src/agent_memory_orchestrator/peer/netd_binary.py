@@ -13,11 +13,22 @@ from agent_memory_orchestrator.peer.netd_platform import binary_name
 from agent_memory_orchestrator.peer.netd_platform import platform_binary_dir_name
 
 
+def source_build_allowed() -> bool:
+    return os.getenv("AMO_PEER_NETD_ALLOW_SOURCE_BUILD", "").strip().lower() in {"1", "true", "yes", "on"}
+
+
 def build_binary(*, source_dir: Path, target: Path, go_path: str) -> dict[str, Any]:
+    if not source_build_allowed():
+        raise PeerNetdRuntimeError(
+            "peer_sidecar_unavailable: source build is disabled for public installs; "
+            "install a signed amo-peer-netd sidecar or set AMO_PEER_NETD_ALLOW_SOURCE_BUILD=1 for private development"
+        )
     if not source_dir.exists():
-        raise PeerNetdRuntimeError(f"peer-netd source directory not found: {source_dir}")
+        raise PeerNetdRuntimeError(f"peer_sidecar_unavailable: peer-netd source directory not found: {source_dir}")
     if not go_path:
-        raise PeerNetdRuntimeError("Go toolchain not found; install Go or set PATH before building peer-netd")
+        raise PeerNetdRuntimeError(
+            "peer_sidecar_unavailable: Go toolchain not found for explicit private peer-netd source build"
+        )
 
     target.parent.mkdir(parents=True, exist_ok=True)
     result = subprocess.run(
