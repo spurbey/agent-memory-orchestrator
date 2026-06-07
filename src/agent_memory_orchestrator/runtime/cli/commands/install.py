@@ -18,6 +18,7 @@ from ....install.service import apply_install_plan
 from ....install.service import build_install_plan
 from ....install.service import doctor as install_doctor
 from ....install.service import uninstall as uninstall_targets
+from ....infrastructure.peer_netd import install_peer_netd_artifact
 from ....infrastructure.llm import download_models
 from ....memory import MemoryService
 from ....application.pipeline.storage_lifecycle import initialize_fresh_production_storage
@@ -99,6 +100,9 @@ def add_install_subcommands(sub: Any) -> None:
     )
     install.add_argument("--download-models", action="store_true", help="Download selected local models during install.")
     install.add_argument("--skip-init-db", action="store_true", help="Do not initialize the AMO SQLite database.")
+    install.add_argument("--with-peer", action="store_true", help="Install and verify the signed peer networking sidecar.")
+    install.add_argument("--peer-netd-manifest", default="", help="Signed peer-netd artifact manifest URL/path.")
+    install.add_argument("--peer-netd-version", default="latest", help="peer-netd artifact version to install.")
     install.add_argument("--with-antelligent", action="store_true", help="Install the Antelligent desktop companion.")
     install.add_argument(
         "--antelligent-startup",
@@ -251,6 +255,13 @@ def format_install_result(payload: dict) -> str:
         if antelligent.get("start"):
             lines.append(f"- Launch: {'started' if antelligent['start'].get('ok') else 'failed'}")
 
+    peer = payload.get("peer")
+    if peer:
+        lines.append("")
+        lines.append(f"Peer networking sidecar: {'ready' if peer.get('ok') else 'check required'}")
+        if peer.get("install", {}).get("binary"):
+            lines.append(f"- Binary: {peer['install'].get('binary')}")
+
     lines.extend(
         [
             "",
@@ -297,7 +308,7 @@ def handle_install_command(
 ) -> int | None:
     """Run installer, doctor, and uninstall CLI commands."""
     if args.command == "install":
-        if args.antelligent_startup and not args.with_antelligent:
+        if getattr(args, "antelligent_startup", False) and not getattr(args, "with_antelligent", False):
             payload = {"ok": False, "error": "--antelligent-startup requires --with-antelligent"}
             if args.json:
                 emit(payload)
@@ -396,6 +407,24 @@ def handle_install_command(
                     "error": str(exc),
                     "note": "AMO install completed before Antelligent setup failed.",
                 }
+        peer_result = None
+        if getattr(args, "with_peer", False):
+            try:
+                with _temporary_amo_home(plan["amo_home"]):
+                    peer_settings = Settings.load()
+                peer_install = install_peer_netd_artifact(
+                    peer_settings,
+                    manifest_source=getattr(args, "peer_netd_manifest", "") or None,
+                    version=getattr(args, "peer_netd_version", "latest") or "latest",
+                    force=args.force,
+                )
+                peer_result = {"ok": True, "install": peer_install}
+            except Exception as exc:
+                peer_result = {
+                    "ok": False,
+                    "error": str(exc),
+                    "note": "AMO install completed before peer sidecar setup failed.",
+                }
         payload = {
             "ok": True,
             "plan": summary,
@@ -405,12 +434,13 @@ def handle_install_command(
             "init_graph": init_graph,
             "init_production": init_production,
             "antelligent": antelligent_result,
+            "peer": peer_result,
         }
         if args.json:
             emit(payload)
         else:
             emit_text(format_install_result(payload))
-        return 0
+        return 1 if peer_result and not peer_result.get("ok") else 0
 
     if args.command == "doctor":
         result = install_doctor(target=args.target, user_home=args.user_home, amo_home=args.amo_home)
