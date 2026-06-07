@@ -12,7 +12,7 @@ from urllib.parse import urlparse
 DEFAULT_RELAY_BOOTSTRAP_URL = (
     "https://github.com/spurbey/agent-memory-orchestrator/releases/latest/download/peer-relay-bootstrap.json"
 )
-RELAY_BOOTSTRAP_SIGNATURE_PUBLIC_KEY_B64 = "JHcvQEQ7Y7IhikKWy8QGHYoFfbgFEyhLZIV9/cYl/04="
+RELAY_BOOTSTRAP_SIGNATURE_PUBLIC_KEY_B64 = "0L/qCZ/swQcGBE+/rBypk3ret84LMlWNnlJcczA44IE="
 
 
 @dataclass(frozen=True, slots=True)
