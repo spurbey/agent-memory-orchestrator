@@ -7,6 +7,8 @@ import sys
 from collections.abc import Callable
 
 from .....core.config import Settings
+from .....infrastructure.peer_netd import install_peer_netd_artifact
+from .....infrastructure.peer_netd import load_managed_relay_profile
 from .....peer import PeerService
 from .....peer.agent import PeerAgentService
 from .....peer.doctor import peer_doctor
@@ -26,6 +28,12 @@ from .options import peer_relay_options_from_args
 from .options import peer_setup_next_commands
 from .options import relay_values_from_args
 from .options import with_relay_next_steps
+from .ux import format_invite_result
+from .ux import format_join_result
+from .ux import format_setup_result
+from .ux import read_invite_code
+from .ux import resolve_display_name
+from .ux import resolve_internal_node_id
 from .watch import _watch_peer_agent
 from .watch import _watch_peer_netd_inbox
 
@@ -37,11 +45,113 @@ def _root_compat_hook(name: str, default: Callable) -> Callable:
     return getattr(peer_module, name, default)
 
 
+def _startup_enabled(args: argparse.Namespace) -> bool:
+    return bool(getattr(args, "install_startup", False) or not getattr(args, "no_startup", False))
+
+
+def _ensure_sidecar(settings: Settings, args: argparse.Namespace) -> dict[str, object] | None:
+    if getattr(args, "skip_sidecar_install", False):
+        return None
+    runtime = PeerNetdRuntime(settings)
+    try:
+        binary = runtime.prepare_binary(build_if_missing=False)
+        return {
+            "ok": True,
+            "installed": False,
+            "reason": "local_sidecar_ready",
+            "binary": str(binary),
+            "capabilities": runtime.binary_capabilities(binary),
+        }
+    except Exception:
+        pass
+    installer = _root_compat_hook("install_peer_netd_artifact", install_peer_netd_artifact)
+    return installer(
+        settings,
+        manifest_source=getattr(args, "peer_netd_manifest", "") or None,
+        version=getattr(args, "peer_netd_version", "latest") or "latest",
+    )
+
+
+def _save_relay_from_invite(store: PeerStore, args: argparse.Namespace, invite: dict[str, object] | None) -> dict[str, object] | None:
+    saved_profile = None
+    if invite and not getattr(args, "relay_addr", "") and not getattr(args, "relay_profile", ""):
+        card = invite.get("card") if isinstance(invite.get("card"), dict) else {}
+        relay_addr = str(card.get("rendezvous_addr") or "").strip()
+        namespace = str(card.get("rendezvous_namespace") or "").strip()
+        if relay_addr and namespace:
+            saved_profile = store.save_relay_profile(
+                name=getattr(args, "profile_name", "") or namespace,
+                relay_addr=relay_addr,
+                rendezvous_addr=relay_addr,
+                rendezvous_namespace=namespace,
+            )
+            args.relay_profile = str(saved_profile["name"])
+    if getattr(args, "relay_addr", ""):
+        profile_name = getattr(args, "profile_name", "") or getattr(args, "relay_profile", "") or "default"
+        saved_profile = store.save_relay_profile(
+            name=profile_name,
+            relay_addr=args.relay_addr,
+            rendezvous_addr=getattr(args, "rendezvous_addr", ""),
+            rendezvous_namespace=getattr(args, "namespace", "") or getattr(args, "rendezvous_namespace", ""),
+        )
+        args.relay_profile = profile_name
+    return saved_profile
+
+
+def _save_managed_relay_if_needed(store: PeerStore, args: argparse.Namespace) -> dict[str, object] | None:
+    if getattr(args, "no_managed_relay", False):
+        return None
+    if getattr(args, "relay_profile", "") or getattr(args, "relay_addr", ""):
+        return None
+    loader = _root_compat_hook("load_managed_relay_profile", load_managed_relay_profile)
+    profile = loader(getattr(args, "managed_relay_bootstrap", "") or None)
+    saved = store.save_relay_profile(**profile.to_dict())
+    args.relay_profile = str(saved["name"])
+    return saved
+
+
+def _expand_relay_profile(store: PeerStore, args: argparse.Namespace) -> dict[str, object] | None:
+    if not getattr(args, "relay_profile", ""):
+        return None
+    relay_profile = store.get_relay_profile(args.relay_profile)
+    if not getattr(args, "rendezvous_addr", ""):
+        args.rendezvous_addr = str(relay_profile.get("rendezvous_addr") or relay_profile.get("relay_addr") or "")
+    if not getattr(args, "rendezvous_namespace", ""):
+        args.rendezvous_namespace = str(relay_profile.get("rendezvous_namespace") or "")
+    if not getattr(args, "static_relay", []):
+        args.static_relay = [str(relay_profile.get("relay_addr") or "")]
+    if relay_profile.get("auto_relay", True):
+        args.auto_relay = True
+    if relay_profile.get("hole_punching", True):
+        args.hole_punching = True
+    return relay_profile
+
+
+def _install_startup_if_enabled(settings: Settings, launch: object, args: argparse.Namespace) -> dict[str, object] | None:
+    if not _startup_enabled(args):
+        return None
+    return _root_compat_hook("install_peer_netd_service", install_peer_netd_service)(
+        settings,
+        launch,
+        PeerNetdServiceOptions(
+            service_name=args.service_name,
+            apply=True,
+            with_watcher=True,
+            watch_service_name=getattr(args, "watch_service_name", ""),
+        ),
+    )
+
+
+def _human_output(args: argparse.Namespace) -> bool:
+    return not getattr(args, "json", False) and sys.stdout.isatty()
+
+
 def handle_peer_command(
     args: argparse.Namespace,
     *,
     emit: Callable[[object], None],
     emit_line: Callable[[object], None],
+    emit_text: Callable[[str], None] | None = None,
 ) -> int | None:
     """Run peer and peer-agent CLI commands."""
     if args.command == "peer":
@@ -64,74 +174,42 @@ def handle_peer_command(
             return 0
         if args.peer_command == "setup":
             store = PeerStore(settings)
-            saved_profile = None
             invite = peer_invite_from_setup_args(args)
-            if invite and not args.relay_addr and not args.relay_profile:
-                card = invite.get("card") if isinstance(invite.get("card"), dict) else {}
-                relay_addr = str(card.get("rendezvous_addr") or "").strip()
-                namespace = str(card.get("rendezvous_namespace") or "").strip()
-                if relay_addr and namespace:
-                    saved_profile = store.save_relay_profile(
-                        name=args.profile_name or namespace,
-                        relay_addr=relay_addr,
-                        rendezvous_addr=relay_addr,
-                        rendezvous_namespace=namespace,
-                    )
-                    args.relay_profile = str(saved_profile["name"])
-            if args.relay_addr:
-                profile_name = args.profile_name or args.relay_profile or "default"
-                saved_profile = store.save_relay_profile(
-                    name=profile_name,
-                    relay_addr=args.relay_addr,
-                    rendezvous_addr=args.rendezvous_addr,
-                    rendezvous_namespace=args.namespace or args.rendezvous_namespace,
-                )
-                args.relay_profile = profile_name
-            if args.relay_profile:
-                relay_profile = store.get_relay_profile(args.relay_profile)
-                if not args.rendezvous_addr:
-                    args.rendezvous_addr = str(relay_profile.get("rendezvous_addr") or relay_profile.get("relay_addr") or "")
-                if not args.rendezvous_namespace:
-                    args.rendezvous_namespace = str(relay_profile.get("rendezvous_namespace") or "")
-                if not args.static_relay:
-                    args.static_relay = [str(relay_profile.get("relay_addr") or "")]
-                if relay_profile.get("auto_relay", True):
-                    args.auto_relay = True
-                if relay_profile.get("hole_punching", True):
-                    args.hole_punching = True
+            args.node_id = resolve_internal_node_id(store, args.node_id)
+            args.display_name = resolve_display_name(store, args.display_name, yes=args.yes)
+            saved_profile = _save_relay_from_invite(store, args, invite)
+            managed_profile = None if saved_profile else _save_managed_relay_if_needed(store, args)
+            relay_profile = _expand_relay_profile(store, args)
             svc = PeerService(settings)
             init_result = svc.init_node(
                 node_id=args.node_id,
                 display_name=args.display_name,
                 capabilities=args.capability or None,
             )
+            sidecar_result = None if args.no_start else _ensure_sidecar(settings, args)
             launch = peer_netd_options_from_args(args, settings)
             netd_result = None if args.no_start else PeerNetdRuntime(settings).start(launch, build_if_missing=not args.no_build)
             accept_result = svc.accept_peer_invite(invite) if invite else None
-            startup_result = None
-            if args.install_startup:
-                startup_result = _root_compat_hook("install_peer_netd_service", install_peer_netd_service)(
-                    settings,
-                    launch,
-                    PeerNetdServiceOptions(
-                        service_name=args.service_name,
-                        apply=True,
-                        with_watcher=True,
-                        watch_service_name=args.watch_service_name,
-                    ),
-                )
-            setup_ok = all(item is None or bool(item.get("ok")) for item in (init_result, netd_result, accept_result, startup_result))
-            emit(
-                {
-                    "ok": setup_ok,
-                    "init": init_result,
-                    "relay_profile": saved_profile or (store.get_relay_profile(args.relay_profile) if args.relay_profile else None),
-                    "netd": netd_result,
-                    "accept_invite": accept_result,
-                    "startup": startup_result,
-                    "next_commands": peer_setup_next_commands(args),
-                }
+            startup_result = _install_startup_if_enabled(settings, launch, args)
+            setup_ok = all(
+                item is None or bool(item.get("ok"))
+                for item in (init_result, sidecar_result, netd_result, accept_result, startup_result)
             )
+            payload = {
+                "ok": setup_ok,
+                "node_id": args.node_id,
+                "init": init_result,
+                "sidecar": sidecar_result,
+                "relay_profile": saved_profile or managed_profile or relay_profile,
+                "netd": netd_result,
+                "accept_invite": accept_result,
+                "startup": startup_result,
+                "next_commands": peer_setup_next_commands(args),
+            }
+            if _human_output(args) and emit_text is not None:
+                emit_text(format_setup_result(payload))
+            else:
+                emit(payload)
             return 0 if setup_ok else 1
         if args.peer_command == "netd":
             runtime = PeerNetdRuntime(settings)
@@ -198,8 +276,8 @@ def handle_peer_command(
                         "ok": True,
                         "profile": profile,
                         "next_commands": [
-                            f"amo-cli peer enable --node-id <device-node-id> --relay {profile['name']}",
-                            f"amo-cli peer create-invite --auto-approve --relay {profile['name']} --out host.invite.json",
+                            f"amo-cli peer setup --relay {profile['name']}",
+                            "amo-cli peer invite",
                         ],
                     }
                 )
@@ -291,6 +369,22 @@ def handle_peer_command(
                 result["out"] = str(args.out)
             emit(result)
             return 0 if result.get("ok") else 1
+        if args.peer_command == "invite":
+            relay_values = relay_values_from_args(args, settings)
+            result = svc.create_peer_invite(
+                trust=args.trust,
+                label=args.label,
+                rendezvous_addr=relay_values["rendezvous_addr"],
+                rendezvous_namespace=relay_values["rendezvous_namespace"],
+                auto_approve=not args.manual_approval,
+                expires_minutes=args.expires_minutes,
+                max_uses=args.max_uses,
+            )
+            if _human_output(args) and emit_text is not None:
+                emit_text(format_invite_result(result) if result.get("ok") else str(result.get("error") or result))
+            else:
+                emit(result)
+            return 0 if result.get("ok") else 1
         if args.peer_command == "accept-invite":
             invite = decode_invite_code(args.code) if args.code else json.loads(args.file.read_text(encoding="utf-8"))
             if not isinstance(invite, dict):
@@ -306,6 +400,57 @@ def handle_peer_command(
                 result["response_out"] = str(args.response_out)
             emit(result)
             return 0 if result.get("ok") else 1
+        if args.peer_command == "join":
+            store = PeerStore(settings)
+            invite_code = read_invite_code(args.invite_code, yes=args.yes)
+            invite = decode_invite_code(invite_code)
+            args.node_id = resolve_internal_node_id(store, args.node_id)
+            args.display_name = resolve_display_name(store, args.display_name, yes=args.yes)
+            saved_profile = _save_relay_from_invite(store, args, invite)
+            relay_profile = _expand_relay_profile(store, args)
+            init_result = svc.init_node(
+                node_id=args.node_id,
+                display_name=args.display_name,
+                capabilities=None,
+            )
+            sidecar_result = None if args.no_start else _ensure_sidecar(settings, args)
+            launch = peer_netd_options_from_args(args, settings)
+            netd_result = None if args.no_start else PeerNetdRuntime(settings).start(launch, build_if_missing=not args.no_build)
+            accept_result = svc.accept_peer_invite(
+                invite,
+                trust=args.trust,
+                shared_secret_env=args.shared_secret_env,
+                send_join_request=True,
+            )
+            startup_result = _install_startup_if_enabled(settings, launch, args)
+            join_ok = all(
+                item is None or bool(item.get("ok"))
+                for item in (init_result, sidecar_result, netd_result, accept_result, startup_result)
+            )
+            payload = {
+                "ok": join_ok,
+                "node_id": args.node_id,
+                "init": init_result,
+                "sidecar": sidecar_result,
+                "relay_profile": saved_profile or relay_profile,
+                "netd": netd_result,
+                "accept_invite": accept_result,
+                "startup": startup_result,
+                "next_commands": [
+                    "amo-cli peer netd service-status --with-watch",
+                    'amo-cli peer-agent ask --peer "<friend display name>" --query "<question>"',
+                ]
+                if _startup_enabled(args)
+                else [
+                    "amo-cli peer-agent watch",
+                    'amo-cli peer-agent ask --peer "<friend display name>" --query "<question>"',
+                ],
+            }
+            if _human_output(args) and emit_text is not None:
+                emit_text(format_join_result(payload))
+            else:
+                emit(payload)
+            return 0 if join_ok else 1
         if args.peer_command == "join-requests":
             emit(svc.list_join_requests(status=args.status))
             return 0
