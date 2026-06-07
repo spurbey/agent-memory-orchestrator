@@ -38,17 +38,14 @@ Go amo-peer-netd
 
 This prevents the network layer from becoming a second memory system.
 
-## Current File Structure
+## Public/Private Runtime Boundary
 
 ```text
-peer-netd/
-  cmd/amo-peer-netd/main.go
-  internal/config/config.go
-  internal/localapi/server.go
-  internal/p2p/node.go
-  internal/protocol/protocol.go
-  internal/rendezvous/rendezvous.go
-  internal/store/store.go
+private peer runtime repo
+  peer-netd source
+  sidecar build and signing scripts
+  AWS relay deployment infra
+  release workflow for signed Windows/macOS sidecars
 
 src/agent_memory_orchestrator/peer/
   auth.py
@@ -76,7 +73,7 @@ src/agent_memory_orchestrator/peer/
     state.py
 
 scripts/
-  build_peer_netd_binaries.py
+  no public peer-netd build or deploy scripts
 ```
 
 `cards.py` builds and imports peer-card JSON so users do not manually copy libp2p ids and multiaddrs into commands.
@@ -99,9 +96,10 @@ posting helper isolated.
 sidecar, writes PID/API/log state under `AMO_HOME/.peer/netd`, and refuses
 unsafe managed starts where the local API port is dynamic.
 
-`netd_binary.py` locates verified sidecar binaries, keeps private source-build
-fallback behind `AMO_PEER_NETD_ALLOW_SOURCE_BUILD=1`, installs binaries into
-`AMO_HOME/.peer/bin`, and verifies required sidecar capabilities.
+`netd_binary.py` locates verified sidecar binaries, keeps explicit private-dev
+source-build fallback behind `AMO_PEER_NETD_ALLOW_SOURCE_BUILD=1`, installs
+binaries into `AMO_HOME/.peer/bin`, and verifies required sidecar capabilities.
+Normal public installs do not need Go or peer-netd source.
 
 Managed starts persist the libp2p private key at `AMO_HOME/.peer/netd/identity.key` by default. This keeps peer IDs and relay multiaddrs stable across restarts.
 
@@ -113,7 +111,7 @@ modules keep the service smaller: `selection.py` selects trusted peers,
 grade, `schemas.py` defines redacted room message payloads, and `state.py`
 persists peer-agent room state.
 
-Private release automation builds signed sidecar artifacts for `windows-amd64`, `darwin-amd64`, and `darwin-arm64`. Public AMO installs them through the signed manifest/sha256/capability contract, so normal users do not need Go.
+Private release automation builds signed sidecar artifacts for `windows-amd64`, `darwin-amd64`, and `darwin-arm64`. Public AMO installs them through the signed manifest/sha256/capability contract, so normal users do not need Go and the public repo does not expose peer-netd source.
 
 ## Managed User Flow
 
