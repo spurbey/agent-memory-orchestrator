@@ -54,7 +54,7 @@ def install_peer_netd_artifact(
 
     manifest = load_manifest(manifest_source)
     artifact = select_artifact(manifest, version=version)
-    target = settings.home / ".peer" / "bin" / binary_name()
+    target = settings.home / ".peer" / "bin" / artifact.binary_name
     if target.exists() and not force:
         capabilities = validate_binary_capabilities(target, artifact)
         if capabilities.get("ok"):
@@ -67,7 +67,7 @@ def install_peer_netd_artifact(
                 "capabilities": capabilities,
             }
 
-    download_path = Path(tempfile.mkdtemp(prefix="amo-peer-netd-")) / (artifact.binary_name or binary_name())
+    download_path = Path(tempfile.mkdtemp(prefix="amo-peer-netd-")) / artifact.binary_name
     try:
         downloaded = download_artifact(artifact, download_path)
         actual_sha256 = verify_sha256(downloaded, artifact.sha256, required=True)
@@ -253,9 +253,10 @@ def sha256_file(path: Path) -> str:
 
 
 def _artifact_from_item(item: dict[str, Any], *, manifest_version: str, manifest: dict[str, Any]) -> PeerNetdArtifact:
+    artifact_platform = str(item.get("platform") or "")
     return PeerNetdArtifact(
         version=str(item.get("version") or manifest_version),
-        platform=str(item.get("platform") or ""),
+        platform=artifact_platform,
         arch=str(item.get("arch") or ""),
         url=str(item.get("url") or ""),
         sha256=str(item.get("sha256") or ""),
@@ -265,9 +266,17 @@ def _artifact_from_item(item: dict[str, Any], *, manifest_version: str, manifest
         protocol_capabilities=tuple(
             str(value).strip() for value in item.get("protocol_capabilities", []) if str(value).strip()
         ),
-        binary_name=str(item.get("binary_name") or binary_name()),
+        binary_name=str(item.get("binary_name") or _artifact_binary_name(artifact_platform)),
         minimum_amo_version=str(item.get("minimum_amo_version") or manifest.get("minimum_amo_version") or ""),
     )
+
+
+def _artifact_binary_name(platform_name: str) -> str:
+    if platform_name == "windows":
+        return "amo-peer-netd.exe"
+    if platform_name in {"darwin", "linux"}:
+        return "amo-peer-netd"
+    return binary_name()
 
 
 def _signature_value(value: Any) -> str:
