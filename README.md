@@ -1,231 +1,238 @@
 # Agent Memory Orchestrator
 
 <p align="center">
-  <strong>Local-first memory and reasoning graph for coding agents.</strong><br>
-  AMO captures what happened, links it to code and commits, and lets Claude, Codex, and other agents retrieve the right context only when asked.
+  <strong>Your coding agents should not start from zero every session.</strong><br>
+  AMO is a local-first memory, reasoning, and coordination layer for Codex, Claude, Antelligent, Slack, and trusted peer agents.
 </p>
 
 <p align="center">
   <a href="./LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-0f766e.svg"></a>
-  <img alt="Python 3.10-3.13" src="https://img.shields.io/badge/python-3.10--3.13-2563eb.svg">
-  <img alt="Local first" src="https://img.shields.io/badge/local--first-yes-16a34a.svg">
-  <img alt="Production GraphRAG" src="https://img.shields.io/badge/GraphRAG-production-7c3aed.svg">
+  <img alt="Local first" src="https://img.shields.io/badge/local--first-agent%20memory-16a34a.svg">
+  <img alt="MCP" src="https://img.shields.io/badge/MCP-agent%20tools-2563eb.svg">
+  <img alt="GraphRAG" src="https://img.shields.io/badge/GraphRAG-reasoning%20graph-7c3aed.svg">
+  <img alt="Peer agents" src="https://img.shields.io/badge/peer%20agents-trusted%20rooms-0f766e.svg">
+  <img alt="Antelligent" src="https://img.shields.io/badge/Antelligent-desktop%20companion-f97316.svg">
 </p>
 
 ---
 
-## What It Is
+## Why AMO Exists
 
-Agent Memory Orchestrator, or AMO, is a local memory layer for AI coding work.
+AI coding agents are powerful, but most of their work still disappears at the edge of a session.
 
-It turns agent sessions into a queryable graph of:
+A teammate asks why a file changed. A new Codex thread needs the decision that Claude made yesterday. A Slack thread contains the missing context. A peer agent already solved the same problem on another machine. Git can show the diff, but it usually cannot tell the story: what the user wanted, what evidence mattered, what decision was made, what code it touched, and whether that reasoning is still current.
 
-- user problems and decisions
-- evidence and transcript references
-- commits, files, code hunks, symbols, and tests
-- reasoning nodes that explain why code changed
-- retrieval-ready context with packet, commit, evidence, and code citations
+Agent Memory Orchestrator keeps that story local and usable.
 
-AMO is not another chat history dump. The production graph treats Git and code as the factual spine, then uses local LLM extraction only to enrich the why.
+AMO captures coding work as evidence, turns closed sessions into reasoning memory, links that memory to commits and code, and exposes it through MCP, CLI, a local control room, Antelligent, connectors, and trusted peer-agent rooms. The result is not a bigger chat log. It is a working memory layer for agents that need continuity.
 
-## Why It Exists
+## What AMO Gives Your Agents
 
-AI coding sessions lose context fast. Git can show what changed, but not why the agent chose that change, what evidence supported it, or which later code/version depends on it.
+<table>
+  <tr>
+    <td width="33%"><strong>Local Memory</strong><br>Durable evidence, decisions, code changes, session context, and graph memory stay on the device first.</td>
+    <td width="33%"><strong>Reasoning Graph</strong><br>Ask why code changed and get answers grounded in commits, evidence, files, and code support.</td>
+    <td width="33%"><strong>Explicit Retrieval</strong><br>Agents retrieve memory only when asked through MCP, CLI, dashboard, or peer-agent flows.</td>
+  </tr>
+  <tr>
+    <td><strong>Antelligent</strong><br>A desktop companion surface that keeps AMO visible and reachable while agents work.</td>
+    <td><strong>Peer Agents</strong><br>Trusted agents can exchange policy-gated context over the internet after invite and join.</td>
+    <td><strong>Connectors</strong><br>Slack can become evidence and answers today. More work surfaces can plug into the same local memory layer.</td>
+  </tr>
+  <tr>
+    <td><strong>MCP Server</strong><br>Codex, Claude, and local agents can call stable AMO tools instead of scraping files or replaying chat.</td>
+    <td><strong>Skill Checkpoints</strong><br>Useful workflows can be marked, extracted, reviewed, and turned into reusable local skills.</td>
+    <td><strong>Control Room</strong><br>A local dashboard shows sessions, jobs, retrieval, graph state, and operational health.</td>
+  </tr>
+</table>
 
-AMO keeps that chain local and searchable:
+## How It Works
 
 ```mermaid
 flowchart LR
-  A[Agent hooks and transcripts] --> B[Raw evidence ledger]
-  B --> C[Commit-backed work packets]
-  C --> D[Reasoning nodes]
-  C --> E[Git hunks and CodeNodes]
-  D --> F[Kuzu graph]
-  E --> F
-  F --> G[BM25 + vector + graph retrieval]
-  G --> H[Cross-encoder rerank]
-  H --> I[Answer with citations]
+  A[Codex, Claude, local agents] --> B[AMO local core]
+  C[Slack and work connectors] --> B
+  D[Antelligent desktop companion] --> B
+
+  B --> E[Evidence and session memory]
+  E --> F[Reasoning graph]
+  F --> G[Retrieval and context]
+
+  G --> H[MCP tools]
+  G --> I[Control room]
+  G --> J[CLI]
+  G --> K[Trusted peer rooms]
+
+  K --> L[Other AMO agents]
+  H --> A
 ```
 
-## Quick Start
+At a high level, AMO runs a Python local runtime with a daemon, MCP server, hooks, local storage, and optional local model providers. It keeps graph truth in Kuzu, ledgers in SQLite, and rebuildable vector search in FAISS when model extras are installed. Those are implementation choices; the product behavior is simpler: agents ask AMO for the memory they need, and AMO returns context with provenance.
 
-Prerequisites:
+## Start In Five Minutes
 
-- Python 3.10, 3.11, 3.12, or 3.13
-- Node.js 18+
-- pipx
-- Ollama for local Qwen reasoning
+Install AMO for Codex:
 
 ```bash
-ollama pull qwen3.5:9b
-npx -y agent-memory-orchestrator-cli -- install --target codex --preset cpu-balanced --qwen-model qwen3.5:9b
+npx -y agent-memory-orchestrator-cli@latest -- install --target codex --preset cpu-balanced --qwen-model qwen3.5:9b
 amo-cli doctor --target codex
 amo-daemon
 ```
 
-The `npx` installer automatically chooses a compatible Python for `pipx` and skips
-Python 3.14 when it would force Kuzu to build from source. If a machine has no
-Python 3.10-3.13 interpreter, install Python 3.13 and rerun the same command.
-
-Fresh installs initialize an empty production graph marker automatically. The destructive
-`reset-production` command is only for machines that already have existing graph/retrieval
-data and need an explicit backup-first cleanup.
-
-Open the local UI:
-
-```text
-http://127.0.0.1:8765
-http://127.0.0.1:8765/graph
-```
-
-Ask the graph directly:
+Install for both Codex and Claude:
 
 ```bash
-amo-cli graph-search --query "why did retry logic change?"
-```
-
-<details>
-<summary>Install from source instead</summary>
-
-```bash
-git clone https://github.com/spurbey/agent-memory-orchestrator.git
-cd agent-memory-orchestrator
-python -m venv .venv
-. .venv/bin/activate
-pip install -e ".[dev,models]"
-amo-cli init-db
-amo-cli init-graph
-amo-cli init-production
+npx -y agent-memory-orchestrator-cli@latest -- install --target all --preset cpu-balanced --qwen-model qwen3.5:9b
+amo-cli doctor --target all
 amo-daemon
 ```
 
-Windows PowerShell activation:
+Open the local control room:
 
-```powershell
-.\.venv\Scripts\Activate.ps1
+```text
+http://127.0.0.1:8765
 ```
+
+Ask AMO directly:
+
+```bash
+amo-cli graph-retrieve --query "why did retry logic change?"
+```
+
+<details>
+<summary>Recommended local model setup</summary>
+
+AMO is local-first. For local Qwen reasoning, install Ollama and pull a Qwen model:
+
+```bash
+ollama pull qwen3.5:9b
+```
+
+The installer supports smaller local profiles too. Use the model that fits the machine.
 
 </details>
 
-<details>
-<summary>Run indexed GraphRAG retrieval</summary>
+## Use It With Your Agents
 
-Build graph retrieval docs, embed them, then retrieve with vector and cross-encoder reranking:
+AMO is designed to sit beside agents, not replace them.
+
+Through MCP, agents can ask for current context, decision history, work history, raw evidence when explicitly requested, merge status, or peer-agent help. A normal agent flow looks like this:
+
+```text
+User asks agent a question
+-> agent asks AMO for relevant memory
+-> AMO retrieves local reasoning context
+-> agent answers with better continuity
+```
+
+Useful questions:
+
+```text
+Why did we change graph retrieval?
+What decision did we make about peer setup?
+Which commits touched the Qwen reasoning path?
+What did the last agent already validate?
+Ask my teammate's agent if they solved this integration issue.
+```
+
+The important boundary: hooks capture evidence, but they do not silently inject memory into every prompt. Retrieval is explicit.
+
+## Antelligent
+
+Antelligent is the desktop companion for AMO. It is meant to make the local agent-memory layer visible while work is happening: a companion surface for status, control, and quick access rather than another chat silo.
+
+Install AMO with Antelligent support:
 
 ```bash
-amo-cli graph-retrieval-build
-amo-cli graph-retrieval-embed --model BAAI/bge-m3
-AMO_RERANKER_BACKEND=cross-encoder amo-cli graph-retrieve --query "why did this code change?" --require-vector
+npx -y agent-memory-orchestrator-cli@latest -- install --target codex --preset cpu-balanced --with-antelligent --antelligent-startup
+amo-cli antelligent status
 ```
 
-On Windows PowerShell:
+Use Antelligent when you want a persistent local surface for the memory system while Codex, Claude, connectors, and peer agents keep doing the actual work.
 
-```powershell
-$env:AMO_RERANKER_BACKEND="cross-encoder"
-amo-cli graph-retrieve --query "why did this code change?" --require-vector
+## Agent-To-Agent Collaboration
+
+AMO can connect trusted agents across devices. The user does the setup once; after that, agents can ask other agents for context through policy-gated rooms.
+
+On your machine:
+
+```bash
+npx -y agent-memory-orchestrator-cli@latest -- install --target codex --preset cpu-balanced --with-peer
+amo-cli peer setup
+amo-cli peer invite
 ```
+
+On your teammate's machine:
+
+```bash
+npx -y agent-memory-orchestrator-cli@latest -- install --target codex --preset cpu-balanced --with-peer
+amo-cli peer join
+```
+
+Then agents can ask trusted peer agents:
+
+```bash
+amo-cli peer-agent ask --peer "Teammate Laptop" --query "Did your agent already solve this migration issue?"
+```
+
+AMO handles the peer setup and internet reachability path so users do not manually configure servers or paste network flags. Memory is not shared automatically. Peer agents respond through trusted context requests, local policy, and bounded room state.
+
+<details>
+<summary>What a peer room is</summary>
+
+A peer room is a local-first coordination space between trusted AMO agents. Each device keeps its own memory. When one agent needs help, it can request a compact answer from a peer agent. The peer decides what context it can share, sends back a response with confidence and citations, and the initiating agent synthesizes the result.
 
 </details>
 
-<details>
-<summary>Connect Slack</summary>
+## Connectors
 
-Install the optional Slack Socket Mode runtime:
+Connectors let outside work surfaces become AMO evidence and answers.
 
-```bash
-npx -y agent-memory-orchestrator-cli -- install --target codex --preset cpu-balanced --qwen-model qwen3.5:9b --with-slack
-```
-
-Create or configure the Slack app locally:
+Slack is available today:
 
 ```bash
+npx -y agent-memory-orchestrator-cli@latest -- install --target codex --preset cpu-balanced --with-slack
 amo-cli slack setup-link
 amo-cli slack setup-wizard
 amo-cli slack run --reply-mode answer
 ```
 
-In `answer` mode, AMO only posts when the bot is mentioned. Normal captured messages become local evidence and can later be drained into the graph.
+In answer mode, AMO replies when the bot is mentioned. Captured messages can become local evidence for later reasoning and retrieval.
 
-Full guide: [Slack connector](./docs/integrations/slack.md).
+<details>
+<summary>Other surfaces</summary>
+
+The connector direction is broader than Slack: meetings, browser work, issue trackers, and other team surfaces can feed the same local evidence and retrieval system.
 
 </details>
 
-## How Retrieval Works
+## Privacy And Trust
 
-AMO production retrieval is layered for precision:
+AMO is built around local ownership.
 
-1. classify the query
-2. collect exact, BM25, and vector candidates
-3. fuse candidates with deterministic scoring
-4. expand only the top graph neighborhoods
-5. rerank the top candidates with a local cross-encoder when available
-6. answer with citations to packets, commits, evidence, and code nodes
+- Memory, evidence, graph state, retrieval ledgers, and peer-room state live locally by default.
+- Hosted or local models are providers, not owners of AMO state.
+- Hooks capture and fail open; they do not force hidden context into every agent prompt.
+- Peer networking establishes trusted agent communication, not automatic memory sharing.
+- Public installs use signed peer runtime artifacts on supported desktop platforms.
+- Credentials and connector tokens stay outside the repository.
 
-Storage is local:
+## What This Unlocks
 
-| Layer | Store | Purpose |
-| --- | --- | --- |
-| Raw evidence | JSONL / SQLite | Append-only capture and provenance |
-| Graph truth | Kuzu | Sessions, packets, reasoning, commits, code nodes, edges |
-| Retrieval ledger | SQLite FTS | Canonical retrieval documents and embedding metadata |
-| Vector cache | FAISS | Rebuildable fast vector search cache |
+AMO is for teams that want agents to compound instead of restart.
 
-## What Runs Automatically
+<table>
+  <tr>
+    <td width="50%"><strong>For solo builders</strong><br>Resume work with the decisions, evidence, and code history your agent already produced.</td>
+    <td width="50%"><strong>For teams</strong><br>Let trusted agents ask each other for context without dumping private memory into a shared server.</td>
+  </tr>
+  <tr>
+    <td><strong>For long-running products</strong><br>Keep a local reasoning trail for why important files, workflows, and integrations changed.</td>
+    <td><strong>For agent-heavy workflows</strong><br>Give Codex, Claude, Antelligent, Slack, and peer agents one local coordination layer.</td>
+  </tr>
+</table>
 
-Hooks capture evidence and fail open. They do not silently inject memory into every prompt.
-
-The daemon processes captured sessions in the background:
-
-```text
-hook JSONL capture
--> daemon drain
--> closed-session production job when the next session starts
--> reasoning evidence view and commit-backed packets
--> local Qwen reasoning extraction with deterministic review
--> session graph write and central version merge
--> retrieval document rebuild
--> small resumable embedding/FAISS refresh batch
-```
-
-The only raw-to-processing trigger is a new `session_start` for a different session. The daemon keeps the previous session's pending evidence in `.state/`, closes that session when the next one starts, then enqueues the closed-session production job. Write, git, test, stop, connector finalize, and "remember this" events remain evidence inside the eventual production job; they do not trigger processing by themselves. The automatic loop can be controlled with `auto_drain_enabled`, `auto_drain_interval_seconds`, `auto_drain_record_limit`, and `auto_embedding_batch_size` in `~/.agent-memory-orchestrator/config.json`.
-
-Retrieval is explicit through CLI or MCP tools such as:
-
-- `amo_graph_search`
-- `amo_current_context`
-- `amo_decision_history`
-- `amo_work_history`
-- `amo_raw_evidence`
-- `amo_merge_status`
-
-## Documentation
-
-- [Documentation map](./docs/README.md)
-- [Reasoning Graph](./docs/reasoning_graph/README.md)
-- [Local development](./docs/setup/local-development.md)
-- [Local models](./docs/setup/local-models.md)
-- [Retrieval pipeline](./docs/operations/retrieval.md)
-- [Slack connector](./docs/integrations/slack.md)
-- [Repository layout](./docs/development/REPO_LAYOUT.md)
-
-## Project Status
-
-AMO is an active local-first product. The current production direction is:
-
-- Git-backed work packets are the durable factual unit.
-- Reasoning nodes are extracted packet-wise and validated before graph promotion.
-- Code hunks, AST-derived CodeNodes, and symbol versions anchor code history.
-- Retrieval combines lexical, vector, graph expansion, and cross-encoder reranking.
-- The central graph merge/versioning path is still being hardened.
-
-## Contributing
-
-Start with [CONTRIBUTING.md](./CONTRIBUTING.md). Keep changes local-first, provenance-preserving, and covered by tests.
-
-```bash
-python -m pytest -q
-python -m ruff check src tests
-```
+The product goal is simple: every useful agent session should make the next session smarter.
 
 ## License
 
