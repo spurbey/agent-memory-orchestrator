@@ -42,6 +42,21 @@ def answer_structural_query(graph: StructuralHarnessGraph, request: HarnessQuery
     for anchor in anchors.resolved:
         if len(cards) >= max_cards:
             break
+        for dependency_card in _dependency_cards_for_anchor(
+            graph=graph,
+            request=request,
+            intent=intent_used,
+            anchor_node_id=anchor.node_id,
+            seen_cards=seen_cards,
+            seen_node_ids=seen_node_ids | selected_node_ids,
+        ):
+            cards.append(dependency_card)
+            selected_node_ids.update(evidence["node_id"] for evidence in dependency_card.evidence if "node_id" in evidence)
+            if len(cards) >= max_cards:
+                break
+    for anchor in anchors.resolved:
+        if len(cards) >= max_cards:
+            break
         node = node_by_id.get(anchor.node_id)
         if node is None or node.kind != "File":
             continue
@@ -122,6 +137,74 @@ def _child_cards_for_file_anchor(
             )
         )
     return tuple(out)
+
+
+def _dependency_cards_for_anchor(
+    *,
+    graph: StructuralHarnessGraph,
+    request: HarnessQueryRequest,
+    intent: str,
+    anchor_node_id: str,
+    seen_cards: set[str],
+    seen_node_ids: set[str],
+) -> tuple[HarnessCard, ...]:
+    node_by_id = graph.node_by_id()
+    anchor = node_by_id.get(anchor_node_id)
+    if anchor is None:
+        return ()
+    edge_kinds = {"IMPORTS"} if anchor.kind == "File" else {"CALLS"} if anchor.kind == "Symbol" else set()
+    if not edge_kinds:
+        return ()
+    out: list[HarnessCard] = []
+    edges = sorted(
+        (edge for edge in graph.outgoing(anchor_node_id) if edge.kind in edge_kinds),
+        key=lambda edge: (
+            edge.kind,
+            node_by_id.get(edge.target_id).label if node_by_id.get(edge.target_id) else edge.target_id,
+        ),
+    )
+    for edge in edges:
+        target = node_by_id.get(edge.target_id)
+        if target is None or target.id in seen_node_ids:
+            continue
+        card_id = harness_card_id(graph.repo_id, request.session_id, intent, (edge.source_id, edge.kind, edge.target_id))
+        if card_id in seen_cards:
+            continue
+        title, why, next_action = _dependency_card_text(anchor=anchor, target=target, edge_kind=edge.kind)
+        out.append(
+            HarnessCard(
+                card_id=card_id,
+                type="dependency",
+                title=title,
+                why=why,
+                evidence=(
+                    {"node_id": anchor.id, "kind": anchor.kind},
+                    {"node_id": target.id, "kind": target.kind},
+                    {"node_id": f"{edge.source_id}->{edge.kind}->{edge.target_id}", "kind": edge.kind},
+                ),
+                risk="Structural-only dependency; verify runtime behavior before broad edits.",
+                confidence=0.68,
+                next_action=next_action,
+            )
+        )
+    return tuple(out)
+
+
+def _dependency_card_text(*, anchor: object, target: object, edge_kind: str) -> tuple[str, str, str]:
+    anchor_label = str(getattr(anchor, "label", ""))
+    target_label = str(getattr(target, "label", ""))
+    target_path = str(getattr(target, "metadata", {}).get("path") or target_label)
+    if edge_kind == "IMPORTS":
+        return (
+            f"Check imported file {target_label}",
+            f"{anchor_label} imports {target_label} through a local structural import edge.",
+            f"Inspect {target_path} if the edit depends on imported behavior.",
+        )
+    return (
+        f"Check called symbol {target_label}",
+        f"{anchor_label} calls {target_label} through a conservative same-file call edge.",
+        f"Inspect {target_path} around {target_label} if changing the caller.",
+    )
 
 
 def _child_kind_rank(kind: str) -> int:
