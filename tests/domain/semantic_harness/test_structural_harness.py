@@ -212,6 +212,56 @@ def test_file_context_fills_budget_with_file_child_symbols_after_explicit_anchor
     assert response.cards[1].title == "Inspect AuthSession"
 
 
+def test_file_context_prioritizes_import_dependency_cards_before_child_symbol_fill() -> None:
+    graph = build_structural_graph(
+        "repo:test",
+        (
+            SourceFile(path="src/pkg/a.py", text="from .b import helper\n\ndef run():\n    return helper()\n"),
+            SourceFile(path="src/pkg/b.py", text="def helper():\n    return True\n"),
+        ),
+    )
+
+    response = answer_structural_query(
+        graph,
+        HarnessQueryRequest(
+            intent="file_context",
+            user_goal="inspect imported helper behavior",
+            files=("src/pkg/a.py",),
+            max_cards=3,
+        ),
+    )
+
+    assert [card.type for card in response.cards] == ["next_file", "dependency", "symbol_context"]
+    assert response.cards[1].title == "Check imported file src/pkg/b.py"
+    assert response.cards[1].evidence[2]["kind"] == "IMPORTS"
+
+
+def test_symbol_context_includes_call_dependency_cards() -> None:
+    graph = build_structural_graph(
+        "repo:test",
+        (
+            SourceFile(
+                path="src/pkg/a.py",
+                text="def run():\n    return helper()\n\ndef helper():\n    return True\n",
+            ),
+        ),
+    )
+
+    response = answer_structural_query(
+        graph,
+        HarnessQueryRequest(
+            intent="file_context",
+            user_goal="inspect run behavior",
+            symbols=("run",),
+            max_cards=2,
+        ),
+    )
+
+    assert [card.type for card in response.cards] == ["symbol_context", "dependency"]
+    assert response.cards[1].title == "Check called symbol helper"
+    assert response.cards[1].evidence[2]["kind"] == "CALLS"
+
+
 def test_structural_query_reports_unavailable_when_no_anchor_grounding_exists() -> None:
     graph = build_structural_graph("repo:test", (SourceFile(path="src/main.py", text="x = 1\n"),))
 
