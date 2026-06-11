@@ -307,6 +307,10 @@ def test_file_context_prioritizes_import_dependency_cards_before_child_symbol_fi
     assert [card.type for card in response.cards] == ["next_file", "dependency", "symbol_context"]
     assert response.cards[1].title == "Check imported file src/pkg/b.py"
     assert response.cards[1].evidence[2]["kind"] == "IMPORTS"
+    assert response.cards[1].evidence[2]["source_id"] == file_id("repo:test", "src/pkg/a.py")
+    assert response.cards[1].evidence[2]["target_id"] == file_id("repo:test", "src/pkg/b.py")
+    assert {"source_id": file_id("repo:test", "src/pkg/a.py"), "target_id": file_id("repo:test", "src/pkg/b.py"), "kind": "IMPORTS"} in response.trace["edges"]
+    assert response.trace["versions"]
 
 
 def test_symbol_context_includes_call_dependency_cards() -> None:
@@ -333,6 +337,12 @@ def test_symbol_context_includes_call_dependency_cards() -> None:
     assert [card.type for card in response.cards] == ["symbol_context", "dependency"]
     assert response.cards[1].title == "Check called symbol helper"
     assert response.cards[1].evidence[2]["kind"] == "CALLS"
+    assert {
+        "source_id": symbol_id("repo:test", "src/pkg/a.py", "run", "function"),
+        "target_id": symbol_id("repo:test", "src/pkg/a.py", "helper", "function"),
+        "kind": "CALLS",
+    } in response.trace["edges"]
+    assert response.trace["versions"]
 
 
 def test_structural_query_reports_unavailable_when_no_anchor_grounding_exists() -> None:
