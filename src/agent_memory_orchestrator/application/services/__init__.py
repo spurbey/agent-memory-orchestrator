@@ -13,6 +13,7 @@ __all__ = [
     "RETRIEVAL_EMBEDDING_KIND",
     "RetrievalQueryService",
     "SessionBoundaryService",
+    "StructuralHarnessService",
     "build_session_detail_fallback",
     "embed_missing_retrieval_documents",
     "retrieve_session_graph",
@@ -50,6 +51,10 @@ def __getattr__(name: str):
         from .session.boundary import SessionBoundaryService
 
         return SessionBoundaryService
+    if name == "StructuralHarnessService":
+        from .semantic_harness import StructuralHarnessService
+
+        return StructuralHarnessService
     if name == "build_session_detail_fallback":
         from .session.detail import build_session_detail_fallback
 
