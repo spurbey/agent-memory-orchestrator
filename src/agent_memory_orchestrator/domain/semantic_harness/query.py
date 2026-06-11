@@ -78,6 +78,7 @@ def answer_structural_query(graph: StructuralHarnessGraph, request: HarnessQuery
         warnings.append("structural_only:no_work_history_or_semantic_reasoning_attached")
     if anchors.unresolved:
         warnings.append("unresolved_anchors:" + ",".join(anchors.unresolved))
+    trace = _trace_for(graph=graph, anchors=anchors.resolved, cards=tuple(cards))
 
     return HarnessQueryResponse(
         status=status,
@@ -86,12 +87,7 @@ def answer_structural_query(graph: StructuralHarnessGraph, request: HarnessQuery
         intent_correction=None,
         cards=tuple(cards),
         next_actions=actions,
-        trace={
-            "nodes": [anchor.node_id for anchor in anchors.resolved],
-            "edges": [],
-            "versions": [],
-            "occurrences": [],
-        },
+        trace=trace,
         warnings=tuple(warnings),
     )
 
@@ -130,7 +126,11 @@ def _child_cards_for_file_anchor(
                 type="symbol_context" if child.kind == "Symbol" else "dependency",
                 title=f"Inspect {child.label}",
                 why=f"{child.label} is defined inside the anchored file and is available as structural context.",
-                evidence=({"node_id": file_node_id, "kind": "File"}, {"node_id": child.id, "kind": child.kind}),
+                evidence=(
+                    {"node_id": file_node_id, "kind": "File"},
+                    {"node_id": child.id, "kind": child.kind},
+                    {"source_id": file_node_id, "target_id": child.id, "kind": edge.kind},
+                ),
                 risk="Structural-only card; no work-history reason is attached in Phase 1.",
                 confidence=0.72,
                 next_action=f"Inspect {child.metadata.get('path') or child.label} around {child.label}.",
@@ -180,7 +180,7 @@ def _dependency_cards_for_anchor(
                 evidence=(
                     {"node_id": anchor.id, "kind": anchor.kind},
                     {"node_id": target.id, "kind": target.kind},
-                    {"node_id": f"{edge.source_id}->{edge.kind}->{edge.target_id}", "kind": edge.kind},
+                    {"source_id": edge.source_id, "target_id": edge.target_id, "kind": edge.kind},
                 ),
                 risk="Structural-only dependency; verify runtime behavior before broad edits.",
                 confidence=0.68,
@@ -257,6 +257,50 @@ def _next_action_for_card(card: HarnessCard) -> HarnessNextAction:
         reason=card.why,
         priority="recommended",
     )
+
+
+def _trace_for(
+    *,
+    graph: StructuralHarnessGraph,
+    anchors: tuple[ResolvedAnchor, ...],
+    cards: tuple[HarnessCard, ...],
+) -> dict[str, list[object]]:
+    node_ids: list[str] = []
+    edge_refs: list[dict[str, str]] = []
+    for anchor in anchors:
+        _append_unique(node_ids, anchor.node_id)
+    for card in cards:
+        for evidence in card.evidence:
+            if node_id := evidence.get("node_id"):
+                _append_unique(node_ids, node_id)
+            if source_id := evidence.get("source_id"):
+                target_id = evidence.get("target_id")
+                edge_kind = evidence.get("kind")
+                if target_id and edge_kind:
+                    edge_ref = {"source_id": source_id, "target_id": target_id, "kind": edge_kind}
+                    if edge_ref not in edge_refs:
+                        edge_refs.append(edge_ref)
+    version_ids = _version_ids_for(graph, tuple(node_ids))
+    return {
+        "nodes": node_ids,
+        "edges": edge_refs,
+        "versions": list(version_ids),
+        "occurrences": [],
+    }
+
+
+def _version_ids_for(graph: StructuralHarnessGraph, entity_node_ids: tuple[str, ...]) -> tuple[str, ...]:
+    entity_set = set(entity_node_ids)
+    version_ids: list[str] = []
+    for edge in graph.edges:
+        if edge.kind == "VERSION_OF" and edge.target_id in entity_set:
+            _append_unique(version_ids, edge.source_id)
+    return tuple(version_ids)
+
+
+def _append_unique(values: list[str], value: str) -> None:
+    if value not in values:
+        values.append(value)
 
 
 __all__ = ["answer_structural_query"]
