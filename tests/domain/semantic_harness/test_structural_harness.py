@@ -56,6 +56,78 @@ def helper():
     assert any(edge.kind == "DEFINES" for edge in graph.edges)
 
 
+def test_python_bootstrap_adds_local_import_edges() -> None:
+    repo_id = "repo:test"
+    graph = build_structural_graph(
+        repo_id,
+        (
+            SourceFile(path="src/pkg/a.py", text="from .b import helper\n\ndef run():\n    return helper()\n"),
+            SourceFile(path="src/pkg/b.py", text="def helper():\n    return True\n"),
+        ),
+    )
+
+    file_a = file_id(repo_id, "src/pkg/a.py")
+    file_b = file_id(repo_id, "src/pkg/b.py")
+    import_edges = [edge for edge in graph.edges if edge.kind == "IMPORTS"]
+
+    assert len(import_edges) == 1
+    assert import_edges[0].source_id == file_a
+    assert import_edges[0].target_id == file_b
+    assert import_edges[0].metadata["module"] == "pkg.b"
+    assert import_edges[0].metadata["imported_name"] == "helper"
+
+
+def test_python_bootstrap_resolves_init_relative_imports_to_sibling_module() -> None:
+    repo_id = "repo:test"
+    graph = build_structural_graph(
+        repo_id,
+        (
+            SourceFile(path="src/pkg/__init__.py", text="from .b import helper\n"),
+            SourceFile(path="src/pkg/b.py", text="def helper():\n    return True\n"),
+        ),
+    )
+
+    init_file = file_id(repo_id, "src/pkg/__init__.py")
+    sibling_file = file_id(repo_id, "src/pkg/b.py")
+    import_edges = [edge for edge in graph.edges if edge.kind == "IMPORTS"]
+
+    assert len(import_edges) == 1
+    assert import_edges[0].source_id == init_file
+    assert import_edges[0].target_id == sibling_file
+    assert import_edges[0].metadata["module"] == "pkg.b"
+
+
+def test_python_bootstrap_adds_conservative_same_file_call_edges() -> None:
+    repo_id = "repo:test"
+    graph = build_structural_graph(
+        repo_id,
+        (
+            SourceFile(
+                path="src/pkg/a.py",
+                text=(
+                    "class A:\n"
+                    "    def run(self):\n"
+                    "        self.local()\n"
+                    "        helper()\n"
+                    "    def local(self):\n"
+                    "        return True\n"
+                    "\n"
+                    "def helper():\n"
+                    "    return True\n"
+                ),
+            ),
+        ),
+    )
+
+    run_id = symbol_id(repo_id, "src/pkg/a.py", "A.run", "method")
+    local_id = symbol_id(repo_id, "src/pkg/a.py", "A.local", "method")
+    helper_id = symbol_id(repo_id, "src/pkg/a.py", "helper", "function")
+    call_edges = {(edge.source_id, edge.target_id, edge.metadata["resolution"]) for edge in graph.edges if edge.kind == "CALLS"}
+
+    assert (run_id, local_id, "self_method_same_class") in call_edges
+    assert (run_id, helper_id, "same_file_unique_name") in call_edges
+
+
 def test_exact_anchor_resolution_supports_files_symbols_and_partial_coverage() -> None:
     graph = build_structural_graph(
         "repo:test",
