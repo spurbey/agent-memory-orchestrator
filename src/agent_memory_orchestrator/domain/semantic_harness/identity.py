@@ -39,6 +39,11 @@ def harness_card_id(repo_id: str, session_id: str, intent: str, support_node_ids
     return f"hcard:{_safe_repo(repo_id)}:{_short_hash(stable, size=20)}"
 
 
+def version_id(entity_id: str, snapshot_id: str) -> str:
+    stable = "|".join([str(entity_id or ""), str(snapshot_id or "")])
+    return f"version:{_short_hash(stable, size=24)}"
+
+
 def _safe_repo(repo_id: str) -> str:
     return str(repo_id or "").strip() or "repo:unknown"
 
@@ -58,4 +63,5 @@ __all__ = [
     "normalize_file_path",
     "repo_id_for_root",
     "symbol_id",
+    "version_id",
 ]

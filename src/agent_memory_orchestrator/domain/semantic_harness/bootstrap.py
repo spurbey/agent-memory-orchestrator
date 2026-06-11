@@ -11,6 +11,7 @@ from .models import HarnessNode
 from .models import SourceFile
 from .models import StructuralHarnessGraph
 from .python_structure import add_python_structure
+from .versions import add_baseline_versions
 
 
 def build_structural_graph(repo_id: str, files: Iterable[SourceFile]) -> StructuralHarnessGraph:
@@ -52,6 +53,7 @@ def build_structural_graph(repo_id: str, files: Iterable[SourceFile]) -> Structu
             _add_markdown_regions(repo_id=repo_id, source=source, file_node_id=file_node_id, nodes=nodes, edges=edges)
         elif language in {"json", "toml", "yaml"}:
             _add_config_region(repo_id=repo_id, source=source, file_node_id=file_node_id, nodes=nodes, edges=edges, language=language)
+    add_baseline_versions(nodes=nodes, edges=edges)
     return StructuralHarnessGraph(repo_id=repo_id, nodes=tuple(nodes.values()), edges=tuple(edges))
 
 
