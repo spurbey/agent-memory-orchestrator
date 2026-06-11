@@ -14,6 +14,7 @@ from .identity import harness_card_id
 from .identity import normalize_file_path
 from .identity import repo_id_for_root
 from .identity import symbol_id
+from .identity import version_id
 from .models import HarnessCard
 from .models import HarnessEdge
 from .models import HarnessNextAction
@@ -43,4 +44,5 @@ __all__ = [
     "repo_id_for_root",
     "resolve_anchors",
     "symbol_id",
+    "version_id",
 ]

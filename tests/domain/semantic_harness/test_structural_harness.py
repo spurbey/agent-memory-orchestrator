@@ -9,6 +9,7 @@ from agent_memory_orchestrator.domain.semantic_harness import normalize_file_pat
 from agent_memory_orchestrator.domain.semantic_harness import resolve_anchors
 from agent_memory_orchestrator.domain.semantic_harness import symbol_id
 from agent_memory_orchestrator.domain.semantic_harness import answer_structural_query
+from agent_memory_orchestrator.domain.semantic_harness import version_id
 
 
 def test_harness_ids_are_deterministic_and_normalize_paths() -> None:
@@ -54,6 +55,27 @@ def helper():
     assert "Setup" in labels
     assert "CodeNode" not in kinds
     assert any(edge.kind == "DEFINES" for edge in graph.edges)
+
+
+def test_bootstrap_creates_baseline_version_nodes_for_structural_entities() -> None:
+    repo_id = "repo:test"
+    graph = build_structural_graph(
+        repo_id,
+        (
+            SourceFile(path="src/auth/session.py", text="class AuthSession:\n    def refresh(self):\n        return True\n"),
+            SourceFile(path="README.md", text="# Setup\n"),
+        ),
+    )
+
+    structural = [node for node in graph.nodes if node.kind in {"File", "Symbol", "CodeRegion"}]
+    versions = [node for node in graph.nodes if node.kind in {"FileVersion", "SymbolVersion", "CodeRegionVersion"}]
+    version_edges = [edge for edge in graph.edges if edge.kind == "VERSION_OF"]
+
+    assert len(versions) == len(structural)
+    assert len(version_edges) == len(structural)
+    assert version_id(file_id(repo_id, "src/auth/session.py"), "baseline:working-tree") in {node.id for node in versions}
+    assert all(edge.source_id.startswith("version:") for edge in version_edges)
+    assert all(edge.metadata["snapshot_id"] == "baseline:working-tree" for edge in version_edges)
 
 
 def test_python_bootstrap_adds_local_import_edges() -> None:
