@@ -2,6 +2,10 @@
 
 from .commit_update import CommitUpdateBuildResult
 from .commit_update import CommitUpdateService
+from .commit_update_eval import CommitUpdateEvalCase
+from .commit_update_eval import CommitUpdateEvalCaseResult
+from .commit_update_eval import CommitUpdateEvalReport
+from .commit_update_eval import CommitUpdateEvalService
 from .evaluation import StructuralEvalCase
 from .evaluation import StructuralEvalCaseResult
 from .evaluation import StructuralEvalReport
@@ -14,6 +18,10 @@ from .structural import StructuralRepoBootstrapResult
 
 __all__ = [
     "CommitUpdateBuildResult",
+    "CommitUpdateEvalCase",
+    "CommitUpdateEvalCaseResult",
+    "CommitUpdateEvalReport",
+    "CommitUpdateEvalService",
     "CommitUpdateService",
     "RepoBootstrapOptions",
     "RepoSourceSnapshot",
