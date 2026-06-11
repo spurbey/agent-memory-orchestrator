@@ -107,6 +107,39 @@ def test_structural_query_returns_compact_partial_structural_cards() -> None:
     assert response.trace["nodes"]
 
 
+def test_file_context_fills_budget_with_file_child_symbols_after_explicit_anchors() -> None:
+    graph = build_structural_graph(
+        "repo:test",
+        (
+            SourceFile(
+                path="src/auth/session.py",
+                text=(
+                    "class AuthSession:\n"
+                    "    def refresh(self):\n"
+                    "        return True\n"
+                    "\n"
+                    "def helper():\n"
+                    "    return AuthSession()\n"
+                ),
+            ),
+        ),
+    )
+
+    response = answer_structural_query(
+        graph,
+        HarnessQueryRequest(
+            intent="file_context",
+            user_goal="inspect auth session",
+            files=("src/auth/session.py",),
+            max_cards=3,
+        ),
+    )
+
+    assert response.status == "partial_structural"
+    assert [card.type for card in response.cards] == ["next_file", "symbol_context", "symbol_context"]
+    assert response.cards[1].title == "Inspect AuthSession"
+
+
 def test_structural_query_reports_unavailable_when_no_anchor_grounding_exists() -> None:
     graph = build_structural_graph("repo:test", (SourceFile(path="src/main.py", text="x = 1\n"),))
 
