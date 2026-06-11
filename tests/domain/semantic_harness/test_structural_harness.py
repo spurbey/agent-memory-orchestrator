@@ -150,6 +150,57 @@ def test_python_bootstrap_adds_conservative_same_file_call_edges() -> None:
     assert (run_id, helper_id, "same_file_unique_name") in call_edges
 
 
+def test_web_bootstrap_adds_js_ts_symbols_without_raw_ast_nodes() -> None:
+    repo_id = "repo:test"
+    graph = build_structural_graph(
+        repo_id,
+        (
+            SourceFile(
+                path="web/app.tsx",
+                text=(
+                    "export function loadUser() { return true }\n"
+                    "export const SignupButton = () => <button />\n"
+                    "class SessionStore {}\n"
+                ),
+            ),
+        ),
+    )
+
+    labels = {node.label for node in graph.nodes if node.kind == "Symbol"}
+    symbol_kinds = {node.label: node.metadata["symbol_kind"] for node in graph.nodes if node.kind == "Symbol"}
+    version_ids = {node.id for node in graph.nodes if node.kind == "SymbolVersion"}
+
+    assert {"loadUser", "SignupButton", "SessionStore"}.issubset(labels)
+    assert symbol_kinds["loadUser"] == "function"
+    assert symbol_kinds["SignupButton"] == "component"
+    assert symbol_kinds["SessionStore"] == "class"
+    assert "CodeNode" not in {node.kind for node in graph.nodes}
+    assert symbol_id(repo_id, "web/app.tsx", "SignupButton", "component") in {
+        edge.target_id for edge in graph.edges if edge.kind == "DEFINES"
+    }
+    assert version_ids
+
+
+def test_web_bootstrap_adds_css_and_html_code_regions() -> None:
+    graph = build_structural_graph(
+        "repo:test",
+        (
+            SourceFile(path="web/app.css", text=".signup-button, .primary {\n  color: green;\n}\n"),
+            SourceFile(path="web/index.html", text='<button id="signup" class="primary cta">Join</button>\n'),
+        ),
+    )
+
+    regions = {(node.label, node.metadata["region_kind"]) for node in graph.nodes if node.kind == "CodeRegion"}
+
+    assert (".signup-button, .primary", "css_selector") in regions
+    assert ("button#signup.primary.cta", "html_element") in regions
+    assert "Symbol" not in {
+        node.kind
+        for node in graph.nodes
+        if node.metadata.get("path") in {"web/app.css", "web/index.html"}
+    }
+
+
 def test_exact_anchor_resolution_supports_files_symbols_and_partial_coverage() -> None:
     graph = build_structural_graph(
         "repo:test",
