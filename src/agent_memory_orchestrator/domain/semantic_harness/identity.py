@@ -22,6 +22,21 @@ def file_id(repo_id: str, path: str | Path) -> str:
     return f"file:{_safe_repo(repo_id)}:{normalize_file_path(path)}"
 
 
+def commit_id(repo_id: str, sha: str) -> str:
+    normalized = str(sha or "").strip().lower()
+    return f"commit:{_safe_repo(repo_id)}:{normalized or 'unknown'}"
+
+
+def work_window_id(repo_id: str, session_id: str, sha: str) -> str:
+    stable = "|".join([_safe_repo(repo_id), str(session_id or ""), str(sha or "")])
+    return f"work_window:{_safe_repo(repo_id)}:{_short_hash(stable, size=20)}"
+
+
+def hunk_id(repo_id: str, sha: str, path: str | Path, old_start: int, new_start: int) -> str:
+    stable = "|".join([_safe_repo(repo_id), str(sha or ""), normalize_file_path(path), str(old_start), str(new_start)])
+    return f"hunk:{_safe_repo(repo_id)}:{_short_hash(stable, size=24)}"
+
+
 def symbol_id(repo_id: str, path: str | Path, qualified_name: str, symbol_kind: str) -> str:
     name = _normalize_name(qualified_name)
     kind = _normalize_name(symbol_kind)
@@ -58,10 +73,13 @@ def _short_hash(value: str, *, size: int) -> str:
 
 __all__ = [
     "code_region_id",
+    "commit_id",
     "file_id",
     "harness_card_id",
+    "hunk_id",
     "normalize_file_path",
     "repo_id_for_root",
     "symbol_id",
     "version_id",
+    "work_window_id",
 ]
