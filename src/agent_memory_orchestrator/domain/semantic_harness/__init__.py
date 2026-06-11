@@ -11,6 +11,7 @@ from .bootstrap import build_structural_graph
 from .commit_update import CommitWorkWindow
 from .commit_update import GraphUpdateDelta
 from .commit_update import build_commit_update_delta
+from .git_diff import parse_unified_diff_hunks
 from .hunk_mapping import CommitHunk
 from .hunk_mapping import HunkEntityMapping
 from .hunk_mapping import HunkRange
@@ -60,6 +61,7 @@ __all__ = [
     "hunk_id",
     "map_hunk_to_entities",
     "normalize_file_path",
+    "parse_unified_diff_hunks",
     "repo_id_for_root",
     "resolve_anchors",
     "symbol_id",
