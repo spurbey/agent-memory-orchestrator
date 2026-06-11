@@ -8,6 +8,10 @@ Qwen enrichment, vectors, and sidecar injection layer on top of this boundary.
 from .anchor_resolution import ResolvedAnchors
 from .anchor_resolution import resolve_anchors
 from .bootstrap import build_structural_graph
+from .hunk_mapping import CommitHunk
+from .hunk_mapping import HunkEntityMapping
+from .hunk_mapping import HunkRange
+from .hunk_mapping import map_hunk_to_entities
 from .identity import code_region_id
 from .identity import file_id
 from .identity import harness_card_id
@@ -32,6 +36,9 @@ __all__ = [
     "HarnessNode",
     "HarnessQueryRequest",
     "HarnessQueryResponse",
+    "CommitHunk",
+    "HunkEntityMapping",
+    "HunkRange",
     "ResolvedAnchors",
     "SourceFile",
     "StructuralHarnessGraph",
@@ -40,6 +47,7 @@ __all__ = [
     "code_region_id",
     "file_id",
     "harness_card_id",
+    "map_hunk_to_entities",
     "normalize_file_path",
     "repo_id_for_root",
     "resolve_anchors",

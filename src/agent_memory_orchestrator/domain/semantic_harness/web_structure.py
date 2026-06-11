@@ -108,7 +108,8 @@ def _add_css_regions(
     edges: list[HarnessEdge],
 ) -> None:
     path = normalize_file_path(source.path)
-    for line_no, line in enumerate(source.text.splitlines(), start=1):
+    lines = source.text.splitlines()
+    for line_no, line in enumerate(lines, start=1):
         match = _CSS_SELECTOR_RE.match(line)
         if not match:
             continue
@@ -127,7 +128,7 @@ def _add_css_regions(
                 "path": path,
                 "region_kind": "css_selector",
                 "line_start": line_no,
-                "line_end": line_no,
+                "line_end": _css_block_end(lines, start_index=line_no - 1),
                 "extractor": "regex_web_v1",
             },
         )
@@ -178,6 +179,13 @@ def _add_html_regions(
 
 def _function_symbol_kind(name: str) -> str:
     return "component" if name[:1].isupper() else "function"
+
+
+def _css_block_end(lines: list[str], *, start_index: int) -> int:
+    for idx in range(start_index, len(lines)):
+        if "}" in lines[idx]:
+            return idx + 1
+    return start_index + 1
 
 
 def _first_match(pattern: re.Pattern[str], value: str) -> str:
