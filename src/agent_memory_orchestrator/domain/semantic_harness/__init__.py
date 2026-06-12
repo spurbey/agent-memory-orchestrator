@@ -35,14 +35,23 @@ from .models import HarnessQueryResponse
 from .models import SourceFile
 from .models import StructuralHarnessGraph
 from .query import answer_structural_query
+from .store import EdgeKey
+from .store import GraphDeltaApplyResult
+from .store import HarnessGraphStore
+from .store import InMemoryHarnessGraphStore
+from .store import apply_graph_update_delta
 
 __all__ = [
+    "EdgeKey",
+    "GraphDeltaApplyResult",
     "HarnessCard",
     "HarnessEdge",
+    "HarnessGraphStore",
     "HarnessNextAction",
     "HarnessNode",
     "HarnessQueryRequest",
     "HarnessQueryResponse",
+    "InMemoryHarnessGraphStore",
     "CommitHunk",
     "CommitWorkWindow",
     "GraphUpdateDelta",
@@ -52,6 +61,7 @@ __all__ = [
     "SourceFile",
     "StructuralHarnessGraph",
     "answer_structural_query",
+    "apply_graph_update_delta",
     "build_structural_graph",
     "build_commit_update_delta",
     "code_region_id",
