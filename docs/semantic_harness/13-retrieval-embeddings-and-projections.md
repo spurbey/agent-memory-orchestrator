@@ -78,6 +78,21 @@ The first projection layer is deterministic and storage-neutral. It emits high-s
 }
 ```
 
+Projection sets wrap these documents with cache identity:
+
+```json
+{
+  "projection_id": "hproj:<hash>",
+  "projection_version": "semantic_harness_projection_v1",
+  "graph_snapshot_id": "gsnap:<repo_id>:<hash>",
+  "graph_schema_version": "semantic_harness_graph_v1",
+  "document_count": 42,
+  "document_ids_hash": "sha256"
+}
+```
+
+`projection_id` is derived from `projection_version + graph_snapshot_id`. It is the invalidation key for future BM25/vector caches. Document content hashes remain per-document integrity checks, not the structural graph identity.
+
 Default projected node kinds:
 
 ```text
