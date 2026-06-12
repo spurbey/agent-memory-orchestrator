@@ -77,7 +77,7 @@ Single public query shape for explicit coding-agent harness calls.
 
 ```json
 {
-  "type": "next_file|symbol_context|why_changed|risk|test_target|dependency|historical_relation",
+  "type": "next_file|symbol_context|why_changed|risk|test_target|dependency|historical_relation|doc_support",
   "title": "short action-oriented title",
   "why": "one sentence",
   "evidence": [

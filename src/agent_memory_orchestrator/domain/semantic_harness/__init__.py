@@ -11,6 +11,8 @@ from .bootstrap import build_structural_graph
 from .commit_update import CommitWorkWindow
 from .commit_update import GraphUpdateDelta
 from .commit_update import build_commit_update_delta
+from .doc_semantics import DocSemanticArtifact
+from .doc_semantics import add_doc_semantics
 from .git_diff import parse_unified_diff_hunks
 from .hunk_mapping import CommitHunk
 from .hunk_mapping import HunkEntityMapping
@@ -18,6 +20,8 @@ from .hunk_mapping import HunkRange
 from .hunk_mapping import map_hunk_to_entities
 from .identity import code_region_id
 from .identity import commit_id
+from .identity import doc_section_id
+from .identity import docstring_id
 from .identity import file_id
 from .identity import harness_card_id
 from .identity import hunk_id
@@ -61,6 +65,7 @@ __all__ = [
     "CommitHunk",
     "CommitWorkWindow",
     "CoChangeSeed",
+    "DocSemanticArtifact",
     "GraphUpdateDelta",
     "HunkEntityMapping",
     "HunkRange",
@@ -71,12 +76,15 @@ __all__ = [
     "StructuralHarnessGraph",
     "answer_structural_query",
     "apply_graph_update_delta",
+    "add_doc_semantics",
     "build_structural_graph",
     "build_commit_update_delta",
     "build_cochange_seed",
     "historical_relation_candidates",
     "code_region_id",
     "commit_id",
+    "doc_section_id",
+    "docstring_id",
     "file_id",
     "harness_card_id",
     "hunk_id",

@@ -151,6 +151,21 @@ strict relevance mode + no task-matching occurrence
 
 Each cited occurrence must expose `task_relevance` and `matched_terms` so false-positive review can tell whether the card was grounded in task text or only in aggregate structural history.
 
+Doc support checks:
+
+```text
+Markdown section with exact repo-relative file path
+-> DocSection MENTIONS_FILE File
+
+Python symbol docstring
+-> DocString DOCUMENTS_SYMBOL Symbol
+
+Exact symbol query with docstring
+-> doc_support card cites DocString and DOCUMENTS_SYMBOL edge
+```
+
+These checks must pass without embeddings or LLM calls. Fuzzy doc discovery is evaluated separately after vector projections exist.
+
 ## Concrete Replay Cases
 
 | Case | Fixture | Query | Expected Status | Must Pass |

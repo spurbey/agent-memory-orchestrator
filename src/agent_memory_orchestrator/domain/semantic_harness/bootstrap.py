@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 from collections.abc import Iterable
 
+from .doc_semantics import add_doc_semantics
 from .identity import code_region_id
 from .identity import file_id
 from .identity import normalize_file_path
@@ -64,6 +65,7 @@ def build_structural_graph(repo_id: str, files: Iterable[SourceFile]) -> Structu
                 nodes=nodes,
                 edges=edges,
             )
+    add_doc_semantics(repo_id=repo_id, sources=sources, nodes=nodes, edges=edges)
     add_baseline_versions(nodes=nodes, edges=edges)
     return StructuralHarnessGraph(repo_id=repo_id, nodes=tuple(nodes.values()), edges=tuple(edges))
 
