@@ -8,6 +8,7 @@ from .models import HarnessQueryRequest
 from .models import HarnessQueryResponse
 from .models import ResolvedAnchor
 from .models import StructuralHarnessGraph
+from .projection import HarnessProjectionDocument
 from .projection import build_projection_documents
 from .relations import HistoricalRelationCandidate
 from .relations import HistoricalRelationPolicy
@@ -119,13 +120,16 @@ def answer_structural_query(
 
     cards = list(_select_cards(candidate_cards, request=request, max_cards=max_cards))
     selected_node_ids = _card_node_ids(tuple(cards))
+    projection_documents: tuple[HarnessProjectionDocument, ...] | None = None
 
     lexical_used = False
     if len(cards) < max_cards:
+        projection_documents = build_projection_documents(graph)
         lexical_cards = _lexical_candidate_cards(
             graph=graph,
             request=request,
             intent=intent_used,
+            projection_documents=projection_documents,
             seen_cards=seen_cards,
             seen_node_ids=seen_node_ids | selected_node_ids,
             max_cards=candidate_limit,
@@ -138,10 +142,13 @@ def answer_structural_query(
 
     vector_used = False
     if len(cards) < max_cards and _should_use_vector_candidates(anchors.resolved, anchors.unresolved, lexical_used):
+        if projection_documents is None:
+            projection_documents = build_projection_documents(graph)
         vector_cards = _vector_candidate_cards(
             graph=graph,
             request=request,
             intent=intent_used,
+            projection_documents=projection_documents,
             seen_cards=seen_cards,
             seen_node_ids=seen_node_ids | selected_node_ids,
             max_cards=candidate_limit,
@@ -222,6 +229,7 @@ def _lexical_candidate_cards(
     graph: StructuralHarnessGraph,
     request: HarnessQueryRequest,
     intent: str,
+    projection_documents: tuple[HarnessProjectionDocument, ...],
     seen_cards: set[str],
     seen_node_ids: set[str],
     max_cards: int,
@@ -231,7 +239,7 @@ def _lexical_candidate_cards(
         return ()
     node_by_id = graph.node_by_id()
     hits = search_projection_documents(
-        build_projection_documents(graph),
+        projection_documents,
         query_text,
         options=LexicalRetrievalOptions(top_k=max_cards * 4),
     )
@@ -255,6 +263,7 @@ def _vector_candidate_cards(
     graph: StructuralHarnessGraph,
     request: HarnessQueryRequest,
     intent: str,
+    projection_documents: tuple[HarnessProjectionDocument, ...],
     seen_cards: set[str],
     seen_node_ids: set[str],
     max_cards: int,
@@ -264,7 +273,7 @@ def _vector_candidate_cards(
         return ()
     node_by_id = graph.node_by_id()
     hits = search_projection_documents_vector(
-        build_projection_documents(graph),
+        projection_documents,
         query_text,
         options=VectorRetrievalOptions(top_k=max_cards * 4),
     )
