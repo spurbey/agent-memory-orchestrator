@@ -59,6 +59,34 @@ def test_sqlite_graph_store_preserves_replace_semantics(tmp_path) -> None:
         assert persisted.metadata["reviewed"] is True
 
 
+def test_sqlite_graph_store_from_graph_replaces_stale_repo_rows(tmp_path) -> None:
+    db_path = tmp_path / "harness.sqlite"
+    first = build_structural_graph(
+        "repo:test",
+        (
+            SourceFile(path="src/main.py", text="def main():\n    return True\n"),
+            SourceFile(path="src/extra.py", text="def extra():\n    return True\n"),
+        ),
+    )
+    second = build_structural_graph(
+        "repo:test",
+        (SourceFile(path="src/main.py", text="def main():\n    return True\n"),),
+    )
+
+    with SQLiteHarnessGraphStore.from_graph(db_path, first):
+        pass
+    with SQLiteHarnessGraphStore.from_graph(db_path, second):
+        pass
+
+    with SQLiteHarnessGraphStore(db_path, "repo:test") as reopened:
+        persisted = reopened.to_graph()
+
+        assert {node.id for node in persisted.nodes} == {node.id for node in second.nodes}
+        assert {(edge.source_id, edge.target_id, edge.kind) for edge in persisted.edges} == {
+            (edge.source_id, edge.target_id, edge.kind) for edge in second.edges
+        }
+
+
 def test_sqlite_graph_store_applies_commit_delta_and_reopens(tmp_path) -> None:
     db_path = tmp_path / "harness.sqlite"
     repo_id = "repo:test"
