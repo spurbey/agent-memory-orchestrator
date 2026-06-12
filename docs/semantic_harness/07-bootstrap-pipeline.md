@@ -51,6 +51,35 @@ DocString -> DOCUMENTS_SYMBOL -> Symbol
 
 These links require exact repo-relative paths, parser-backed docstring ownership, or exact symbol labels. Embeddings and Qwen may later propose fuzzy doc links, but those proposals are not graph truth until deterministic review accepts them.
 
+## Conservative Cross-File Calls
+
+Bootstrap may add Python cross-file `CALLS` edges only when the target is parser-grounded and local to the repo.
+
+Allowed first-pass cases:
+
+```text
+from .module import helper
+helper()
+
+import package.module as mod
+mod.helper()
+```
+
+The target must resolve to exactly one top-level function or class in the imported file. The resolver records how the call was resolved, the imported name, the target path, and the observed call count.
+
+Skipped cases:
+
+```text
+wildcard imports
+dotted imports without alias when the local call name is ambiguous
+dynamic attributes
+third-party imports
+method attributes inside imported classes
+multiple same-name top-level targets
+```
+
+This keeps the bootstrap graph useful for harness traversal without inventing dependencies.
+
 ## Zero-History Behavior
 
 Without AMO history or prior work windows, the harness can still answer `edit_plan` and `file_context` from structural context.

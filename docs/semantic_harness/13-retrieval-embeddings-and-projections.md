@@ -129,6 +129,8 @@ doc_semantic_summary:
 
 Projection docs must not invent dependencies. If a cross-file call is not structurally resolved, the projection may include the imported file via `IMPORTS`, but it must not claim a `CALLS` relation.
 
+Cross-file `CALLS` are projection-safe only when they come from deterministic structural resolution. The first Python resolver supports local `from module import symbol` calls and aliased module calls such as `import package.module as mod; mod.symbol()`. It skips wildcard imports, dynamic attributes, third-party imports, class method attributes reached through a module alias, and dotted imports without an alias when the local name would be ambiguous.
+
 ## Doc Support Retrieval
 
 For exact file or symbol anchors, direct graph lookup should inspect deterministic doc edges before fuzzy retrieval:
