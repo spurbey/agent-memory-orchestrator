@@ -54,6 +54,46 @@ def test_projection_documents_preserve_doc_semantic_content_for_discovery() -> N
     assert any("AuthSession.refresh handles token renewal" in text for text in doc_text_by_kind["DocSection"])
 
 
+def test_symbol_projection_includes_graph_grounded_docstring_and_call_neighbors() -> None:
+    graph = build_structural_graph(
+        "repo:test",
+        (
+            SourceFile(
+                path="src/auth/session.py",
+                text='''def run_refresh():\n    return refresh_token()\n\n\ndef refresh_token():\n    """Refresh token before redirect checks."""\n    return True\n''',
+            ),
+        ),
+    )
+
+    docs = build_projection_documents(graph)
+    by_title = {doc.title: doc for doc in docs}
+
+    refresh_doc = by_title["Symbol refresh_token"]
+    run_doc = by_title["Symbol run_refresh"]
+
+    assert "docs: Refresh token before redirect checks." in refresh_doc.text
+    assert "called_by: run_refresh" in refresh_doc.text
+    assert "calls: refresh_token" in run_doc.text
+
+
+def test_file_projection_includes_defined_symbols_and_module_docstring() -> None:
+    graph = build_structural_graph(
+        "repo:test",
+        (
+            SourceFile(
+                path="src/auth/session.py",
+                text='''"""Session module handles token refresh."""\n\n\ndef refresh_token():\n    return True\n''',
+            ),
+        ),
+    )
+
+    docs = build_projection_documents(graph)
+    file_doc = next(doc for doc in docs if doc.doc_type == "file_summary")
+
+    assert "defined_symbols: refresh_token" in file_doc.text
+    assert "docs: Session module handles token refresh." in file_doc.text
+
+
 def test_projection_document_ids_and_hashes_are_deterministic() -> None:
     graph = build_structural_graph(
         "repo:test",
