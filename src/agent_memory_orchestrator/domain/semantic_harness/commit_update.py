@@ -16,6 +16,7 @@ from .identity import work_window_id
 from .models import HarnessEdge
 from .models import HarnessNode
 from .models import StructuralHarnessGraph
+from .relations import build_cochange_seed
 
 
 @dataclass(slots=True, frozen=True)
@@ -55,6 +56,8 @@ class GraphUpdateDelta:
     created_edges: tuple[HarnessEdge, ...]
     hunk_mappings: tuple[HunkEntityMapping, ...]
     semantic_review: dict[str, int]
+    updated_edge_weights: tuple[dict[str, Any], ...] = ()
+    created_relation_occurrences: tuple[HarnessNode, ...] = ()
     projection_refresh_required: bool = True
 
     def as_dict(self) -> dict[str, Any]:
@@ -65,6 +68,8 @@ class GraphUpdateDelta:
             "commit_id": self.commit_id,
             "created_nodes": [node.as_dict() for node in self.created_nodes],
             "created_edges": [edge.as_dict() for edge in self.created_edges],
+            "updated_edge_weights": list(self.updated_edge_weights),
+            "created_relation_occurrences": [node.as_dict() for node in self.created_relation_occurrences],
             "hunk_mappings": [mapping.as_dict() for mapping in self.hunk_mappings],
             "semantic_review": self.semantic_review,
             "projection_refresh_required": self.projection_refresh_required,
@@ -135,6 +140,15 @@ def build_commit_update_delta(graph: StructuralHarnessGraph, window: CommitWorkW
                 )
             if mapping.status == "mapped" and mapping.target_kind in {"Symbol", "CodeRegion"}:
                 _add_entity_version(window=window, mapping=mapping, graph=graph, nodes=nodes, edges=edges)
+    cochange = build_cochange_seed(
+        repo_id=window.repo_id,
+        work_window_id=work_node_id,
+        commit_id=commit_node_id,
+        mappings=tuple(mappings),
+    )
+    for occurrence in cochange.occurrence_nodes:
+        nodes[occurrence.id] = occurrence
+    edges.extend(cochange.edges)
     return GraphUpdateDelta(
         delta_id=_delta_id(work_node_id, commit_node_id),
         repo_id=window.repo_id,
@@ -144,6 +158,8 @@ def build_commit_update_delta(graph: StructuralHarnessGraph, window: CommitWorkW
         created_edges=_dedupe_edges(edges),
         hunk_mappings=tuple(mappings),
         semantic_review={"accepted": 0, "review_only": 0, "rejected": 0, "quarantined": 0},
+        updated_edge_weights=cochange.weight_updates,
+        created_relation_occurrences=cochange.occurrence_nodes,
         projection_refresh_required=True,
     )
 
