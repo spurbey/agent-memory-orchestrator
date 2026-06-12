@@ -18,6 +18,8 @@ from .retrieval import VectorRetrievalOptions
 from .retrieval import VectorRetrievalHit
 from .retrieval import search_projection_documents
 from .retrieval import search_projection_documents_vector
+from .selection import CardSelectionOptions
+from .selection import select_harness_cards
 
 
 SUPPORTED_INTENTS = {"edit_plan", "file_context"}
@@ -38,24 +40,23 @@ def answer_structural_query(
     anchors = resolve_anchors(graph, files=request.files, symbols=request.symbols)
     status = _status_for(anchors.resolved, anchors.unresolved)
     node_by_id = graph.node_by_id()
-    cards: list[HarnessCard] = []
+    candidate_cards: list[HarnessCard] = []
     seen_cards = set(request.already_seen_card_ids)
     seen_node_ids = set(request.already_seen_node_ids)
-    selected_node_ids: set[str] = set()
     max_cards = max(1, int(request.max_cards or 5))
+    candidate_limit = _candidate_limit(max_cards)
     for anchor in anchors.resolved:
         node = node_by_id.get(anchor.node_id)
         if node is None or node.id in seen_node_ids:
             continue
         card = _card_for_anchor(graph=graph, request=request, intent=intent_used, anchor=anchor)
-        if card.card_id in seen_cards or node.id in selected_node_ids:
+        if card.card_id in seen_cards:
             continue
-        cards.append(card)
-        selected_node_ids.add(node.id)
-        if len(cards) >= max_cards:
+        candidate_cards.append(card)
+        if len(candidate_cards) >= candidate_limit:
             break
     for anchor in anchors.resolved:
-        if len(cards) >= max_cards:
+        if len(candidate_cards) >= candidate_limit:
             break
         for doc_card in _doc_support_cards_for_anchor(
             graph=graph,
@@ -63,18 +64,13 @@ def answer_structural_query(
             intent=intent_used,
             anchor_node_id=anchor.node_id,
             seen_cards=seen_cards,
-            seen_node_ids=seen_node_ids | selected_node_ids,
+            seen_node_ids=seen_node_ids,
         ):
-            cards.append(doc_card)
-            selected_node_ids.update(
-                evidence["node_id"]
-                for evidence in doc_card.evidence
-                if evidence.get("kind") in {"DocSection", "DocString"}
-            )
-            if len(cards) >= max_cards:
+            candidate_cards.append(doc_card)
+            if len(candidate_cards) >= candidate_limit:
                 break
     for anchor in anchors.resolved:
-        if len(cards) >= max_cards:
+        if len(candidate_cards) >= candidate_limit:
             break
         for dependency_card in _dependency_cards_for_anchor(
             graph=graph,
@@ -82,14 +78,13 @@ def answer_structural_query(
             intent=intent_used,
             anchor_node_id=anchor.node_id,
             seen_cards=seen_cards,
-            seen_node_ids=seen_node_ids | selected_node_ids,
+            seen_node_ids=seen_node_ids,
         ):
-            cards.append(dependency_card)
-            selected_node_ids.update(evidence["node_id"] for evidence in dependency_card.evidence if "node_id" in evidence)
-            if len(cards) >= max_cards:
+            candidate_cards.append(dependency_card)
+            if len(candidate_cards) >= candidate_limit:
                 break
     for anchor in anchors.resolved:
-        if len(cards) >= max_cards:
+        if len(candidate_cards) >= candidate_limit:
             break
         for historical_card in _historical_relation_cards_for_anchor(
             graph=graph,
@@ -97,20 +92,15 @@ def answer_structural_query(
             intent=intent_used,
             anchor_node_id=anchor.node_id,
             seen_cards=seen_cards,
-            seen_node_ids=seen_node_ids | selected_node_ids,
+            seen_node_ids=seen_node_ids,
             seen_relation_ids=set(request.already_seen_relation_ids),
             policy=historical_relation_policy,
         ):
-            cards.append(historical_card)
-            selected_node_ids.update(
-                evidence["node_id"]
-                for evidence in historical_card.evidence
-                if evidence.get("kind") in {"Symbol", "CodeRegion", "File"}
-            )
-            if len(cards) >= max_cards:
+            candidate_cards.append(historical_card)
+            if len(candidate_cards) >= candidate_limit:
                 break
     for anchor in anchors.resolved:
-        if len(cards) >= max_cards:
+        if len(candidate_cards) >= candidate_limit:
             break
         node = node_by_id.get(anchor.node_id)
         if node is None or node.kind != "File":
@@ -121,12 +111,14 @@ def answer_structural_query(
             intent=intent_used,
             file_node_id=node.id,
             seen_cards=seen_cards,
-            seen_node_ids=seen_node_ids | selected_node_ids,
+            seen_node_ids=seen_node_ids,
         ):
-            cards.append(child_card)
-            selected_node_ids.update(evidence["node_id"] for evidence in child_card.evidence if evidence.get("kind") in {"Symbol", "CodeRegion"})
-            if len(cards) >= max_cards:
+            candidate_cards.append(child_card)
+            if len(candidate_cards) >= candidate_limit:
                 break
+
+    cards = list(_select_cards(candidate_cards, request=request, max_cards=max_cards))
+    selected_node_ids = _card_node_ids(tuple(cards))
 
     lexical_used = False
     if len(cards) < max_cards:
@@ -136,17 +128,13 @@ def answer_structural_query(
             intent=intent_used,
             seen_cards=seen_cards,
             seen_node_ids=seen_node_ids | selected_node_ids,
-            max_cards=max_cards - len(cards),
+            max_cards=candidate_limit,
         )
         if lexical_cards:
-            lexical_used = True
-            cards.extend(lexical_cards)
-            for lexical_card in lexical_cards:
-                selected_node_ids.update(
-                    evidence["node_id"]
-                    for evidence in lexical_card.evidence
-                    if "node_id" in evidence
-                )
+            candidate_cards.extend(lexical_cards)
+            cards = list(_select_cards(candidate_cards, request=request, max_cards=max_cards))
+            selected_node_ids = _card_node_ids(tuple(cards))
+            lexical_used = _has_lexical_card(tuple(cards))
 
     vector_used = False
     if len(cards) < max_cards and _should_use_vector_candidates(anchors.resolved, anchors.unresolved, lexical_used):
@@ -156,17 +144,12 @@ def answer_structural_query(
             intent=intent_used,
             seen_cards=seen_cards,
             seen_node_ids=seen_node_ids | selected_node_ids,
-            max_cards=max_cards - len(cards),
+            max_cards=candidate_limit,
         )
         if vector_cards:
-            vector_used = True
-            cards.extend(vector_cards)
-            for vector_card in vector_cards:
-                selected_node_ids.update(
-                    evidence["node_id"]
-                    for evidence in vector_card.evidence
-                    if "node_id" in evidence
-                )
+            candidate_cards.extend(vector_cards)
+            cards = list(_select_cards(candidate_cards, request=request, max_cards=max_cards))
+            vector_used = _has_vector_card(tuple(cards))
 
     actions = tuple(_next_action_for_card(card) for card in cards)
     if status == "unavailable" and (lexical_used or vector_used):
@@ -191,6 +174,39 @@ def answer_structural_query(
         trace=trace,
         warnings=tuple(warnings),
     )
+
+
+def _select_cards(candidates: list[HarnessCard], *, request: HarnessQueryRequest, max_cards: int) -> tuple[HarnessCard, ...]:
+    result = select_harness_cards(
+        tuple(candidates),
+        options=CardSelectionOptions(
+            max_cards=max_cards,
+            max_tokens=request.max_tokens,
+            already_seen_card_ids=request.already_seen_card_ids,
+            already_seen_node_ids=request.already_seen_node_ids,
+        ),
+    )
+    return result.selected
+
+
+def _candidate_limit(max_cards: int) -> int:
+    return max(8, max_cards * 4)
+
+
+def _card_node_ids(cards: tuple[HarnessCard, ...]) -> set[str]:
+    return {node_id for card in cards for evidence in card.evidence if (node_id := evidence.get("node_id"))}
+
+
+def _has_lexical_card(cards: tuple[HarnessCard, ...]) -> bool:
+    return any(
+        evidence.get("kind") == "ProjectionDocument" and not evidence.get("retrieval_source")
+        for card in cards
+        for evidence in card.evidence
+    )
+
+
+def _has_vector_card(cards: tuple[HarnessCard, ...]) -> bool:
+    return any(evidence.get("retrieval_source") == "vector" for card in cards for evidence in card.evidence)
 
 
 def _should_use_vector_candidates(resolved: tuple[ResolvedAnchor, ...], unresolved: tuple[str, ...], lexical_used: bool) -> bool:

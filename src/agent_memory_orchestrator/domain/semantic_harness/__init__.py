@@ -57,6 +57,11 @@ from .retrieval import hash_embed_text
 from .retrieval import search_projection_documents
 from .retrieval import search_projection_documents_vector
 from .retrieval import tokenize_text
+from .selection import CardSelectionOptions
+from .selection import CardSelectionResult
+from .selection import SuppressedCard
+from .selection import card_selection_score
+from .selection import select_harness_cards
 from .store import EdgeKey
 from .store import GraphDeltaApplyResult
 from .store import HarnessGraphStore
@@ -84,6 +89,8 @@ __all__ = [
     "CommitHunk",
     "CommitWorkWindow",
     "CoChangeSeed",
+    "CardSelectionOptions",
+    "CardSelectionResult",
     "DocSemanticArtifact",
     "GraphUpdateDelta",
     "HunkEntityMapping",
@@ -93,6 +100,7 @@ __all__ = [
     "ResolvedAnchors",
     "SourceFile",
     "StructuralHarnessGraph",
+    "SuppressedCard",
     "answer_structural_query",
     "apply_graph_update_delta",
     "add_doc_semantics",
@@ -109,6 +117,7 @@ __all__ = [
     "harness_card_id",
     "hunk_id",
     "hash_embed_text",
+    "card_selection_score",
     "map_hunk_to_entities",
     "normalize_file_path",
     "parse_unified_diff_hunks",
@@ -116,6 +125,7 @@ __all__ = [
     "resolve_anchors",
     "search_projection_documents",
     "search_projection_documents_vector",
+    "select_harness_cards",
     "should_show_historical_relation",
     "symbol_id",
     "tokenize_text",
