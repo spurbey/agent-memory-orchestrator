@@ -29,12 +29,22 @@ class SQLiteHarnessGraphStore:
     @classmethod
     def from_graph(cls, db_path: str | Path, graph: StructuralHarnessGraph) -> SQLiteHarnessGraphStore:
         store = cls(db_path, graph.repo_id)
-        with store._conn:
-            for node in graph.nodes:
-                store._write_node(node)
-            for edge in graph.edges:
-                store._write_edge(edge)
+        store.replace_graph(graph)
         return store
+
+    def replace_graph(self, graph: StructuralHarnessGraph) -> None:
+        if graph.repo_id != self.repo_id:
+            raise ValueError(f"repo_id_mismatch:{self.repo_id}!={graph.repo_id}")
+        with self._conn:
+            self._delete_repo_graph()
+            for node in graph.nodes:
+                self._write_node(node)
+            for edge in graph.edges:
+                self._write_edge(edge)
+
+    def _delete_repo_graph(self) -> None:
+        self._conn.execute("DELETE FROM semantic_harness_edges WHERE repo_id = ?", (self.repo_id,))
+        self._conn.execute("DELETE FROM semantic_harness_nodes WHERE repo_id = ?", (self.repo_id,))
 
     @property
     def repo_id(self) -> str:
