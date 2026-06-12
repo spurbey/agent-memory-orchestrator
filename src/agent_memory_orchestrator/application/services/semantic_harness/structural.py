@@ -5,10 +5,12 @@ from pathlib import Path
 
 from ....domain.semantic_harness import HarnessQueryRequest
 from ....domain.semantic_harness import HarnessQueryResponse
+from ....domain.semantic_harness import HarnessProjectionDocument
 from ....domain.semantic_harness import SourceFile
 from ....domain.semantic_harness import StructuralHarnessGraph
 from ....domain.semantic_harness import answer_structural_query
 from ....domain.semantic_harness import build_structural_graph
+from ....domain.semantic_harness import build_projection_documents
 from ....domain.semantic_harness import repo_id_for_root
 from .repository import RepoBootstrapOptions
 from .repository import read_repo_source_files
@@ -53,6 +55,9 @@ class StructuralHarnessService:
 
     def query(self, graph: StructuralHarnessGraph, request: HarnessQueryRequest) -> HarnessQueryResponse:
         return answer_structural_query(graph, request)
+
+    def projection_documents(self, graph: StructuralHarnessGraph) -> tuple[HarnessProjectionDocument, ...]:
+        return build_projection_documents(graph)
 
 
 __all__ = ["StructuralHarnessService", "StructuralRepoBootstrapResult"]

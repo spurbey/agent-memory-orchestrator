@@ -64,6 +64,11 @@ def harness_card_id(repo_id: str, session_id: str, intent: str, support_node_ids
     return f"hcard:{_safe_repo(repo_id)}:{_short_hash(stable, size=20)}"
 
 
+def projection_doc_id(repo_id: str, source_node_id: str, doc_type: str) -> str:
+    stable = "|".join([_safe_repo(repo_id), str(source_node_id or ""), _normalize_name(doc_type)])
+    return f"pdoc:{_safe_repo(repo_id)}:{_short_hash(stable, size=24)}"
+
+
 def version_id(entity_id: str, snapshot_id: str) -> str:
     stable = "|".join([str(entity_id or ""), str(snapshot_id or "")])
     return f"version:{_short_hash(stable, size=24)}"
@@ -90,6 +95,7 @@ __all__ = [
     "harness_card_id",
     "hunk_id",
     "normalize_file_path",
+    "projection_doc_id",
     "repo_id_for_root",
     "symbol_id",
     "version_id",

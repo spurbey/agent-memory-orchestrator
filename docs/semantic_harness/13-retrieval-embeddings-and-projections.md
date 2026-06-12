@@ -56,6 +56,50 @@ Embed high-signal summaries:
 
 Do not embed raw AST flood as product retrieval memory.
 
+## Projection Document Contract
+
+The first projection layer is deterministic and storage-neutral. It emits high-signal records from graph truth:
+
+```json
+{
+  "doc_id": "pdoc:<repo_id>:<hash>",
+  "repo_id": "repo:...",
+  "source_node_id": "symbol:...",
+  "source_kind": "File|Symbol|DocSection|DocString",
+  "doc_type": "file_summary|symbol_summary|doc_semantic_summary",
+  "title": "short indexed title",
+  "text": "compact indexed body",
+  "content_hash": "sha256",
+  "metadata": {
+    "path": "src/...",
+    "status": "active",
+    "projection_source": "semantic_harness_graph"
+  }
+}
+```
+
+Default projected node kinds:
+
+```text
+File
+Symbol
+DocSection
+DocString
+```
+
+Do not project these in the bootstrap slice:
+
+```text
+FileVersion
+SymbolVersion
+CodeRegionVersion
+Hunk
+RelationOccurrence
+raw AST/debug nodes
+```
+
+Those may get specialized projections later, after evals prove they are useful and not noisy.
+
 ## Doc Support Retrieval
 
 For exact file or symbol anchors, direct graph lookup should inspect deterministic doc edges before fuzzy retrieval:

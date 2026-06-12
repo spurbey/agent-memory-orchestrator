@@ -166,6 +166,22 @@ Exact symbol query with docstring
 
 These checks must pass without embeddings or LLM calls. Fuzzy doc discovery is evaluated separately after vector projections exist.
 
+Projection document checks:
+
+```text
+bootstrap graph with File, Symbol, DocSection, DocString
+-> projection docs include file_summary, symbol_summary, doc_semantic_summary
+
+projection source kinds
+-> only File, Symbol, DocSection, DocString in bootstrap slice
+
+projection content
+-> includes exact path, qualified symbol name, docstring text, and doc section excerpt
+
+forbidden bootstrap projection
+-> no FileVersion, SymbolVersion, Hunk, RelationOccurrence, or raw AST/debug node docs
+```
+
 ## Concrete Replay Cases
 
 | Case | Fixture | Query | Expected Status | Must Pass |
