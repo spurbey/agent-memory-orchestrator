@@ -148,6 +148,39 @@ These produce compact `doc_support` cards. They do not require vector search. Ve
 
 Vector candidates are not truth. If a vector hit cannot be grounded to typed graph evidence, return `low_confidence` or omit the card.
 
+## Lexical Retrieval MVP
+
+The first retrieval implementation is BM25-style lexical search over projection documents. It is intentionally storage-neutral and deterministic.
+
+Input:
+
+```text
+query text from user_goal, anchors, errors, and recent tool result
+projection documents generated from graph truth
+```
+
+Output:
+
+```text
+ranked LexicalRetrievalHit records
+matched terms
+raw score
+normalized score
+source_node_id
+```
+
+Rules:
+
+```text
+exact anchor cards are selected before lexical candidates
+lexical hits must ground through source_node_id to an existing graph node
+ungrounded hits are dropped
+lexical cards are candidate-discovery cards, not final truth
+vague goals with grounded lexical hits return partial_structural in the structural-only phase
+```
+
+The scorer tokenizes identifiers, paths, docs, and summaries, applies BM25-style term weighting, and gives small deterministic boosts to high-signal document classes such as `symbol_summary`. It does not use vectors, LLMs, or graph mutation.
+
 ## Projection Health
 
 Projection metadata must record source graph version, embedding model, document content hash, vector count, and readiness status.
