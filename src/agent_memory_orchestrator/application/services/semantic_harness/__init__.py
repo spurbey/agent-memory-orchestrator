@@ -20,6 +20,11 @@ from .retrieval_eval import RetrievalEvalCase
 from .retrieval_eval import RetrievalEvalCaseResult
 from .retrieval_eval import RetrievalEvalReport
 from .retrieval_eval import RetrievalHarnessEvalService
+from .runtime import HarnessGraphRepository
+from .runtime import HarnessRuntimeBootstrapResult
+from .runtime import HarnessRuntimeDeltaApplyResult
+from .runtime import InMemoryHarnessGraphRepository
+from .runtime import SemanticHarnessRuntimeService
 from .structural import StructuralHarnessService
 from .structural import StructuralRepoBootstrapResult
 
@@ -30,6 +35,10 @@ __all__ = [
     "CommitUpdateEvalReport",
     "CommitUpdateEvalService",
     "CommitUpdateService",
+    "HarnessGraphRepository",
+    "HarnessRuntimeBootstrapResult",
+    "HarnessRuntimeDeltaApplyResult",
+    "InMemoryHarnessGraphRepository",
     "InMemoryProjectionCache",
     "ProjectionCache",
     "ProjectionCacheStats",
@@ -45,5 +54,6 @@ __all__ = [
     "StructuralHarnessEvalService",
     "StructuralHarnessService",
     "StructuralRepoBootstrapResult",
+    "SemanticHarnessRuntimeService",
     "read_repo_source_files",
 ]
