@@ -39,7 +39,11 @@ from .models import HarnessQueryResponse
 from .models import SourceFile
 from .models import StructuralHarnessGraph
 from .projection import HarnessProjectionDocument
+from .projection import HarnessProjectionSet
+from .projection import DEFAULT_PROJECTION_VERSION
 from .projection import build_projection_documents
+from .projection import build_projection_set
+from .projection import projection_set_id
 from .query import answer_structural_query
 from .relations import CoChangeSeed
 from .relations import HistoricalRelationCandidate
@@ -62,6 +66,10 @@ from .selection import CardSelectionResult
 from .selection import SuppressedCard
 from .selection import card_selection_score
 from .selection import select_harness_cards
+from .snapshots import GRAPH_SCHEMA_VERSION
+from .snapshots import GraphSnapshotIdentity
+from .snapshots import graph_snapshot_id
+from .snapshots import graph_snapshot_identity
 from .store import EdgeKey
 from .store import GraphDeltaApplyResult
 from .store import HarnessGraphStore
@@ -70,6 +78,7 @@ from .store import apply_graph_update_delta
 
 __all__ = [
     "EdgeKey",
+    "DEFAULT_PROJECTION_VERSION",
     "GraphDeltaApplyResult",
     "HASH_COSINE_METHOD",
     "HarnessCard",
@@ -78,6 +87,7 @@ __all__ = [
     "HarnessNextAction",
     "HarnessNode",
     "HarnessProjectionDocument",
+    "HarnessProjectionSet",
     "HarnessQueryRequest",
     "HarnessQueryResponse",
     "InMemoryHarnessGraphStore",
@@ -93,6 +103,8 @@ __all__ = [
     "CardSelectionResult",
     "DocSemanticArtifact",
     "GraphUpdateDelta",
+    "GRAPH_SCHEMA_VERSION",
+    "GraphSnapshotIdentity",
     "HunkEntityMapping",
     "HunkRange",
     "HistoricalRelationCandidate",
@@ -108,6 +120,7 @@ __all__ = [
     "build_commit_update_delta",
     "build_cochange_seed",
     "build_projection_documents",
+    "build_projection_set",
     "historical_relation_candidates",
     "code_region_id",
     "commit_id",
@@ -118,9 +131,12 @@ __all__ = [
     "hunk_id",
     "hash_embed_text",
     "card_selection_score",
+    "graph_snapshot_id",
+    "graph_snapshot_identity",
     "map_hunk_to_entities",
     "normalize_file_path",
     "parse_unified_diff_hunks",
+    "projection_set_id",
     "repo_id_for_root",
     "resolve_anchors",
     "search_projection_documents",

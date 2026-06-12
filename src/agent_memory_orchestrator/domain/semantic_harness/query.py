@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Callable
+
 from .anchor_resolution import resolve_anchors
 from .identity import harness_card_id
 from .models import HarnessCard
@@ -31,6 +33,7 @@ def answer_structural_query(
     request: HarnessQueryRequest,
     *,
     historical_relation_policy: HistoricalRelationPolicy = HistoricalRelationPolicy(),
+    projection_document_provider: Callable[[], tuple[HarnessProjectionDocument, ...]] | None = None,
 ) -> HarnessQueryResponse:
     intent_requested = str(request.intent or "").strip() or "file_context"
     intent_used = intent_requested if intent_requested in SUPPORTED_INTENTS else "file_context"
@@ -124,7 +127,7 @@ def answer_structural_query(
 
     lexical_used = False
     if len(cards) < max_cards:
-        projection_documents = build_projection_documents(graph)
+        projection_documents = _projection_documents_for_query(graph, projection_document_provider)
         lexical_cards = _lexical_candidate_cards(
             graph=graph,
             request=request,
@@ -143,7 +146,7 @@ def answer_structural_query(
     vector_used = False
     if len(cards) < max_cards and _should_use_vector_candidates(anchors.resolved, anchors.unresolved, lexical_used):
         if projection_documents is None:
-            projection_documents = build_projection_documents(graph)
+            projection_documents = _projection_documents_for_query(graph, projection_document_provider)
         vector_cards = _vector_candidate_cards(
             graph=graph,
             request=request,
@@ -181,6 +184,15 @@ def answer_structural_query(
         trace=trace,
         warnings=tuple(warnings),
     )
+
+
+def _projection_documents_for_query(
+    graph: StructuralHarnessGraph,
+    provider: Callable[[], tuple[HarnessProjectionDocument, ...]] | None,
+) -> tuple[HarnessProjectionDocument, ...]:
+    if provider is not None:
+        return provider()
+    return build_projection_documents(graph)
 
 
 def _select_cards(candidates: list[HarnessCard], *, request: HarnessQueryRequest, max_cards: int) -> tuple[HarnessCard, ...]:

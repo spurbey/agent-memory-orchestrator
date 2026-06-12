@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 from agent_memory_orchestrator.domain.semantic_harness import SourceFile
+from agent_memory_orchestrator.domain.semantic_harness import build_projection_set
 from agent_memory_orchestrator.domain.semantic_harness import build_projection_documents
 from agent_memory_orchestrator.domain.semantic_harness import build_structural_graph
+from agent_memory_orchestrator.domain.semantic_harness import graph_snapshot_id
 
 
 def test_projection_documents_include_only_high_signal_bootstrap_nodes() -> None:
@@ -122,3 +124,38 @@ def test_projection_document_ids_and_hashes_are_deterministic() -> None:
     assert [doc.doc_id for doc in first] == [doc.doc_id for doc in second]
     assert [doc.content_hash for doc in first] == [doc.content_hash for doc in second]
     assert all(len(doc.content_hash) == 64 for doc in first)
+
+
+def test_projection_set_identity_references_graph_snapshot_and_version() -> None:
+    graph = build_structural_graph(
+        "repo:test",
+        (SourceFile(path="src/main.py", text="def run():\n    return True\n"),),
+    )
+
+    projection = build_projection_set(graph)
+
+    assert projection.projection_version == "semantic_harness_projection_v1"
+    assert projection.graph_schema_version == "semantic_harness_graph_v1"
+    assert projection.graph_snapshot_id == graph_snapshot_id(graph)
+    assert projection.projection_id.startswith("hproj:")
+    assert projection.document_count == len(projection.documents)
+    assert projection.as_dict()["document_ids_hash"] == projection.document_ids_hash
+
+
+def test_projection_set_id_changes_with_projection_version_not_mutable_metadata() -> None:
+    first = build_structural_graph(
+        "repo:test",
+        (SourceFile(path="src/main.py", text="def run():\n    return True\n"),),
+    )
+    second = build_structural_graph(
+        "repo:test",
+        (SourceFile(path="src/main.py", text="def run():\n    return True\n"),),
+    )
+
+    current = build_projection_set(first)
+    same_structure = build_projection_set(second)
+    new_version = build_projection_set(second, projection_version="semantic_harness_projection_v2")
+
+    assert current.graph_snapshot_id == same_structure.graph_snapshot_id
+    assert current.projection_id == same_structure.projection_id
+    assert current.projection_id != new_version.projection_id

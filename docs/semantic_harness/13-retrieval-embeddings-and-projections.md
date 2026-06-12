@@ -78,6 +78,21 @@ The first projection layer is deterministic and storage-neutral. It emits high-s
 }
 ```
 
+Projection sets wrap these documents with cache identity:
+
+```json
+{
+  "projection_id": "hproj:<hash>",
+  "projection_version": "semantic_harness_projection_v1",
+  "graph_snapshot_id": "gsnap:<repo_id>:<hash>",
+  "graph_schema_version": "semantic_harness_graph_v1",
+  "document_count": 42,
+  "document_ids_hash": "sha256"
+}
+```
+
+`projection_id` is derived from `projection_version + graph_snapshot_id`. It is the invalidation key for future BM25/vector caches. Document content hashes remain per-document integrity checks, not the structural graph identity.
+
 Default projected node kinds:
 
 ```text
@@ -269,3 +284,30 @@ Suppressed reasons are retained for eval/debug. The normal response only returns
 ## Projection Health
 
 Projection metadata must record source graph version, embedding model, document content hash, vector count, and readiness status.
+
+## Service-Level Projection Cache
+
+The first cache is application-local and rebuildable:
+
+```text
+StructuralHarnessService
+-> InMemoryProjectionCache
+-> HarnessProjectionSet
+```
+
+Cache key:
+
+```text
+projection_id = hash(projection_version + graph_snapshot_id)
+```
+
+Rules:
+
+```text
+exact-anchor queries do not build projection docs when the card budget is already filled
+lexical/vector routes request projection docs lazily
+same graph_snapshot_id + projection_version reuses the in-memory projection set
+new structural graph shape creates a new graph_snapshot_id and projection_id
+```
+
+This cache is not durable truth. The future SQLite projection store should persist the same `projection_id`, `graph_snapshot_id`, `projection_version`, `document_ids_hash`, and document rows.

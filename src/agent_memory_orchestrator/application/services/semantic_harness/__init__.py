@@ -13,6 +13,9 @@ from .evaluation import StructuralHarnessEvalService
 from .repository import RepoBootstrapOptions
 from .repository import RepoSourceSnapshot
 from .repository import read_repo_source_files
+from .projection_cache import InMemoryProjectionCache
+from .projection_cache import ProjectionCache
+from .projection_cache import ProjectionCacheStats
 from .retrieval_eval import RetrievalEvalCase
 from .retrieval_eval import RetrievalEvalCaseResult
 from .retrieval_eval import RetrievalEvalReport
@@ -27,6 +30,9 @@ __all__ = [
     "CommitUpdateEvalReport",
     "CommitUpdateEvalService",
     "CommitUpdateService",
+    "InMemoryProjectionCache",
+    "ProjectionCache",
+    "ProjectionCacheStats",
     "RepoBootstrapOptions",
     "RepoSourceSnapshot",
     "RetrievalEvalCase",
