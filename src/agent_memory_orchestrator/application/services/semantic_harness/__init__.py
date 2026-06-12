@@ -13,6 +13,10 @@ from .evaluation import StructuralHarnessEvalService
 from .repository import RepoBootstrapOptions
 from .repository import RepoSourceSnapshot
 from .repository import read_repo_source_files
+from .retrieval_eval import RetrievalEvalCase
+from .retrieval_eval import RetrievalEvalCaseResult
+from .retrieval_eval import RetrievalEvalReport
+from .retrieval_eval import RetrievalHarnessEvalService
 from .structural import StructuralHarnessService
 from .structural import StructuralRepoBootstrapResult
 
@@ -25,6 +29,10 @@ __all__ = [
     "CommitUpdateService",
     "RepoBootstrapOptions",
     "RepoSourceSnapshot",
+    "RetrievalEvalCase",
+    "RetrievalEvalCaseResult",
+    "RetrievalEvalReport",
+    "RetrievalHarnessEvalService",
     "StructuralEvalCase",
     "StructuralEvalCaseResult",
     "StructuralEvalReport",
