@@ -51,6 +51,45 @@ When a commit touches related entities:
 - shared tests
 - relation kind reliability
 
+## Current Structural Score
+
+The structural MVP uses denominator-aware co-change strength:
+
+```text
+jaccard = cochange_count / either_changed_count
+
+stored_strength =
+  0.45 * cochange_jaccard
++ 0.20 * recency_score
++ 0.20 * validation_score
++ 0.15 * reason_quality_score
+```
+
+Until semantic enrichment exists:
+
+```text
+recency_score = 0.0
+validation_score = 0.0
+reason_quality_score = 0.0
+```
+
+This intentionally keeps early structural-only scores conservative.
+
+## Agent-Facing Historical Relation Gate
+
+Do not show a `historical_relation` card from strength alone. Small histories can produce a perfect Jaccard score by accident.
+
+Default gate:
+
+```text
+stored_strength >= 0.40
+cochange_count >= 3
+```
+
+The `cochange_count >= 3` requirement is part of the product contract. A single co-change, or two co-changes in a tiny repo history, must not be shown as high-confidence agent guidance.
+
+The thresholds must be configurable for evals and probes. Any non-default threshold must be visible in card evidence or eval output.
+
 ## Traversal Rule
 
 Retrieve aggregate edges for speed, then filter occurrences by task relevance. Cards should cite the few relevant occurrences, not the entire history.

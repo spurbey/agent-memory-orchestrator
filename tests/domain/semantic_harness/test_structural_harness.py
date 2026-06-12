@@ -1,7 +1,14 @@
 from __future__ import annotations
 
+from agent_memory_orchestrator.domain.semantic_harness import CommitHunk
+from agent_memory_orchestrator.domain.semantic_harness import CommitWorkWindow
 from agent_memory_orchestrator.domain.semantic_harness import HarnessQueryRequest
+from agent_memory_orchestrator.domain.semantic_harness import HistoricalRelationPolicy
+from agent_memory_orchestrator.domain.semantic_harness import HunkRange
+from agent_memory_orchestrator.domain.semantic_harness import InMemoryHarnessGraphStore
 from agent_memory_orchestrator.domain.semantic_harness import SourceFile
+from agent_memory_orchestrator.domain.semantic_harness import apply_graph_update_delta
+from agent_memory_orchestrator.domain.semantic_harness import build_commit_update_delta
 from agent_memory_orchestrator.domain.semantic_harness import build_structural_graph
 from agent_memory_orchestrator.domain.semantic_harness import file_id
 from agent_memory_orchestrator.domain.semantic_harness import harness_card_id
@@ -345,6 +352,70 @@ def test_symbol_context_includes_call_dependency_cards() -> None:
     assert response.trace["versions"]
 
 
+def test_historical_relation_card_requires_minimum_occurrences() -> None:
+    graph = _cochanged_auth_graph(("aaa111", "bbb222"))
+
+    response = answer_structural_query(
+        graph,
+        HarnessQueryRequest(
+            intent="file_context",
+            user_goal="edit login safely",
+            symbols=("login",),
+            max_cards=4,
+            session_id="s1",
+        ),
+    )
+
+    assert "historical_relation" not in {card.type for card in response.cards}
+
+
+def test_historical_relation_card_surfaces_after_conservative_gate() -> None:
+    graph = _cochanged_auth_graph(("aaa111", "bbb222", "ccc333"))
+
+    response = answer_structural_query(
+        graph,
+        HarnessQueryRequest(
+            intent="file_context",
+            user_goal="edit login safely",
+            symbols=("login",),
+            max_cards=4,
+            session_id="s1",
+        ),
+    )
+
+    historical = next(card for card in response.cards if card.type == "historical_relation")
+    edge_evidence = next(evidence for evidence in historical.evidence if evidence.get("kind") == "CO_CHANGED_WITH")
+
+    assert historical.title == "Inspect historically co-changed refresh"
+    assert "co-changed 3 times" in historical.why
+    assert edge_evidence["stored_strength"] == "0.45"
+    assert edge_evidence["cochange_count"] == "3"
+    assert edge_evidence["min_cochange_count"] == "3"
+    assert len(response.trace["occurrences"]) == 3
+    assert response.next_actions[1].target == symbol_id("repo:test", "src/auth.py", "refresh", "function")
+
+
+def test_historical_relation_threshold_is_configurable_for_eval() -> None:
+    graph = _cochanged_auth_graph(("aaa111", "bbb222"))
+
+    response = answer_structural_query(
+        graph,
+        HarnessQueryRequest(
+            intent="file_context",
+            user_goal="edit login safely",
+            symbols=("login",),
+            max_cards=4,
+            session_id="s1",
+        ),
+        historical_relation_policy=HistoricalRelationPolicy(min_cochange_count=2),
+    )
+
+    historical = next(card for card in response.cards if card.type == "historical_relation")
+    edge_evidence = next(evidence for evidence in historical.evidence if evidence.get("kind") == "CO_CHANGED_WITH")
+    assert edge_evidence["cochange_count"] == "2"
+    assert edge_evidence["min_cochange_count"] == "2"
+
+
 def test_structural_query_reports_unavailable_when_no_anchor_grounding_exists() -> None:
     graph = build_structural_graph("repo:test", (SourceFile(path="src/main.py", text="x = 1\n"),))
 
@@ -360,3 +431,47 @@ def test_structural_query_reports_unavailable_when_no_anchor_grounding_exists() 
     assert response.status == "unavailable"
     assert response.cards == ()
     assert "unresolved_anchors:file:src/missing.py" in response.warnings
+
+
+def _cochanged_auth_graph(shas: tuple[str, ...]):
+    repo_id = "repo:test"
+    graph = build_structural_graph(
+        repo_id,
+        (
+            SourceFile(
+                path="src/auth.py",
+                text=(
+                    "def login():\n"
+                    "    return True\n"
+                    "\n"
+                    "def refresh():\n"
+                    "    return True\n"
+                ),
+            ),
+        ),
+    )
+    store = InMemoryHarnessGraphStore.from_graph(graph)
+    for sha in shas:
+        delta = build_commit_update_delta(
+            graph,
+            CommitWorkWindow(
+                repo_id=repo_id,
+                session_id=f"session-{sha}",
+                commit_sha=sha,
+                commit_message="update auth pair",
+                hunks=(
+                    CommitHunk(
+                        file_path="src/auth.py",
+                        old_range=HunkRange(start=2, count=1),
+                        new_range=HunkRange(start=2, count=1),
+                    ),
+                    CommitHunk(
+                        file_path="src/auth.py",
+                        old_range=HunkRange(start=5, count=1),
+                        new_range=HunkRange(start=5, count=1),
+                    ),
+                ),
+            ),
+        )
+        apply_graph_update_delta(store, delta)
+    return store.to_graph()
