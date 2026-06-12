@@ -182,6 +182,44 @@ forbidden bootstrap projection
 -> no FileVersion, SymbolVersion, Hunk, RelationOccurrence, or raw AST/debug node docs
 ```
 
+## Retrieval Route Eval
+
+The retrieval MVP must report which route produced cards before vectors are added.
+
+Required route checks:
+
+```text
+exact file/symbol anchor + card budget filled
+-> exact graph card first
+-> lexical_used = false
+
+vague user goal with grounded projection hit
+-> lexical_used = true
+-> status = partial_structural in structural-only phase
+-> every card has graph node evidence
+
+vague user goal with no trusted projection hit
+-> status = unavailable
+-> lexical_used = false
+-> no cards
+```
+
+Report fields:
+
+```text
+expected_status
+actual_status
+lexical_used
+graph_grounded_card_count
+card_types
+card_titles
+next_action_targets
+warnings
+failure_reasons
+```
+
+The route eval is intentionally vector-free. Vector retrieval must later pass the same graph-grounding checks before any candidate becomes a card.
+
 ## Concrete Replay Cases
 
 | Case | Fixture | Query | Expected Status | Must Pass |
