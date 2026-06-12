@@ -218,6 +218,54 @@ confidence is capped below exact/lexical grounded cards
 unmatched vector queries return unavailable
 ```
 
+## Budget And Novelty Selection MVP
+
+All candidate routes feed one card selector before the agent sees output:
+
+```text
+exact file/symbol anchors
+doc_support cards
+dependency cards
+historical_relation cards
+lexical projection cards
+vector projection cards
+```
+
+The selector ranks candidates with a conservative weighted score:
+
+```text
+route priority: 0.45
+card type priority: 0.25
+card confidence: 0.22
+evidence density: 0.08
+```
+
+Route priority is deliberately asymmetric:
+
+```text
+exact anchor card: 1.00
+doc_support: 0.82
+historical_relation: 0.72
+dependency: 0.68
+lexical projection: 0.50
+vector projection: 0.38
+fallback structural card: 0.60
+```
+
+This means vector search can discover candidates, but it cannot displace exact file/symbol anchors or deterministic graph support unless the exact routes have no remaining budget-worthy card.
+
+The selector suppresses:
+
+```text
+already_seen_card
+already_seen_nodes
+duplicate_selected_nodes
+max_cards
+max_tokens
+```
+
+Suppressed reasons are retained for eval/debug. The normal response only returns selected cards, keeping agent-facing context compact.
+
 ## Projection Health
 
 Projection metadata must record source graph version, embedding model, document content hash, vector count, and readiness status.
