@@ -22,7 +22,7 @@ class HistoricalRelationPolicy:
 @dataclass(slots=True, frozen=True)
 class HistoricalOccurrenceMatch:
     node: HarnessNode
-    relevance_score: int
+    relevance_score: float
     matched_terms: tuple[str, ...]
     relevance_status: str
 
@@ -72,7 +72,7 @@ def historical_relation_candidates(
         if related is None:
             continue
         occurrence_matches = _occurrence_matches_for_edge(graph, edge, policy=policy, task_terms=task_terms)
-        if policy.require_task_relevant_occurrence and not any(match.relevance_score > 0 for match in occurrence_matches):
+        if policy.require_task_relevant_occurrence and not any(match.relevance_status == "task_match" for match in occurrence_matches):
             continue
         out.append(
             HistoricalRelationCandidate(
@@ -104,7 +104,7 @@ def _occurrence_matches_for_edge(
     edge: HarnessEdge,
     *,
     policy: HistoricalRelationPolicy,
-    task_terms: tuple[str, ...],
+    task_terms: tuple[_WeightedTaskTerm, ...],
 ) -> tuple[HistoricalOccurrenceMatch, ...]:
     node_by_id = graph.node_by_id()
     occurrence_ids = tuple(str(item) for item in edge.metadata.get("occurrence_ids", ()))
@@ -123,7 +123,7 @@ def _occurrence_matches_for_edge(
     return tuple(matches[: max(0, policy.max_occurrences_per_card)])
 
 
-def _occurrence_match(node: HarnessNode, task_terms: tuple[str, ...]) -> HistoricalOccurrenceMatch:
+def _occurrence_match(node: HarnessNode, task_terms: tuple[_WeightedTaskTerm, ...]) -> HistoricalOccurrenceMatch:
     metadata = node.metadata
     occurrence_terms = set(
         _terms_from_text(
@@ -140,17 +140,31 @@ def _occurrence_match(node: HarnessNode, task_terms: tuple[str, ...]) -> Histori
             )
         )
     )
-    matched_terms = tuple(term for term in task_terms if term in occurrence_terms)
+    matched = tuple(term for term in task_terms if term.text in occurrence_terms)
+    relevance_score = round(sum(term.weight for term in matched), 4)
     return HistoricalOccurrenceMatch(
         node=node,
-        relevance_score=len(matched_terms),
-        matched_terms=matched_terms,
-        relevance_status="task_match" if matched_terms else "structural_fallback",
+        relevance_score=relevance_score,
+        matched_terms=tuple(term.text for term in matched),
+        relevance_status=_relevance_status(relevance_score),
     )
 
 
-def _task_terms(task_text: str) -> tuple[str, ...]:
-    return _terms_from_text(task_text)
+@dataclass(slots=True, frozen=True)
+class _WeightedTaskTerm:
+    text: str
+    weight: float
+
+
+def _task_terms(task_text: str) -> tuple[_WeightedTaskTerm, ...]:
+    terms: list[_WeightedTaskTerm] = []
+    seen: set[str] = set()
+    for token in re.findall(r"[A-Za-z0-9_]+", task_text.lower()):
+        if len(token) < 3 or token in _STOP_TERMS or token in seen:
+            continue
+        seen.add(token)
+        terms.append(_WeightedTaskTerm(text=token, weight=_task_term_weight(token)))
+    return tuple(terms)
 
 
 def _terms_from_text(text: str) -> tuple[str, ...]:
@@ -162,6 +176,20 @@ def _terms_from_text(text: str) -> tuple[str, ...]:
         seen.add(token)
         terms.append(token)
     return tuple(terms)
+
+
+def _task_term_weight(token: str) -> float:
+    if token in _LOW_SIGNAL_TASK_TERMS:
+        return 0.25
+    return 1.0
+
+
+def _relevance_status(score: float) -> str:
+    if score >= 1.0:
+        return "task_match"
+    if score > 0.0:
+        return "weak_task_match"
+    return "structural_fallback"
 
 
 def _candidate_score(edge: HarnessEdge) -> float:
@@ -183,16 +211,96 @@ __all__ = [
 
 _STOP_TERMS = frozenset(
     {
+        "about",
+        "after",
+        "again",
+        "against",
+        "also",
         "and",
+        "any",
         "are",
+        "because",
+        "been",
+        "before",
+        "being",
         "but",
+        "can",
+        "could",
+        "did",
+        "does",
+        "doing",
+        "done",
+        "during",
+        "each",
         "for",
         "from",
+        "had",
+        "has",
+        "have",
         "how",
+        "its",
         "into",
+        "just",
+        "need",
+        "needs",
+        "not",
+        "now",
+        "our",
+        "out",
+        "over",
+        "see",
+        "should",
+        "than",
         "the",
         "this",
         "that",
+        "then",
+        "there",
+        "these",
+        "they",
+        "thing",
+        "those",
+        "through",
+        "too",
+        "was",
+        "were",
+        "what",
+        "when",
+        "where",
+        "which",
         "with",
+        "without",
+        "would",
+        "you",
+    }
+)
+
+_LOW_SIGNAL_TASK_TERMS = frozenset(
+    {
+        "add",
+        "added",
+        "build",
+        "change",
+        "changed",
+        "check",
+        "cleanup",
+        "create",
+        "edit",
+        "fix",
+        "fixed",
+        "get",
+        "handle",
+        "implement",
+        "inspect",
+        "make",
+        "patch",
+        "refactor",
+        "remove",
+        "set",
+        "support",
+        "update",
+        "updated",
+        "use",
+        "using",
     }
 )

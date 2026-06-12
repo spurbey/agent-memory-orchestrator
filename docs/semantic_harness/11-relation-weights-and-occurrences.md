@@ -99,8 +99,11 @@ Current occurrence relevance is lexical and conservative:
 ```text
 task terms = user goal + explicit anchors + recent tool result terms
 occurrence terms = reason + commit message + commit/work ids
-task_match = at least one normalized task token exactly matches a normalized occurrence token
+task_match = normalized task tokens match occurrence tokens with total weight >= 1.0
+weak_task_match = only low-signal task/action words matched
 structural_fallback = no lexical match, but aggregate edge passed the evidence gate
 ```
 
-Default behavior may still show a `historical_relation` card with structural-fallback occurrences when the aggregate relation passes the strength and count gates. Strict eval modes may require at least one `task_match` occurrence before showing the card.
+Low-signal action words such as `fix`, `update`, `change`, `use`, and `set` are not removed. They are downweighted. This preserves intent context without letting a generic word alone make a historical occurrence look task-relevant.
+
+Default behavior may still show a `historical_relation` card with structural-fallback or weak-task-match occurrences when the aggregate relation passes the strength and count gates. Strict eval modes may require at least one strong `task_match` occurrence before showing the card.

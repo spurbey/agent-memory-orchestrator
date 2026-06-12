@@ -621,6 +621,31 @@ def test_historical_relation_can_require_task_relevant_occurrence() -> None:
     assert "historical_relation" not in {card.type for card in response.cards}
 
 
+def test_historical_relation_does_not_treat_weak_action_word_as_task_match() -> None:
+    graph = _cochanged_auth_graph(
+        ("aaa111", "bbb222", "ccc333"),
+        messages={
+            "aaa111": "fix auth pair",
+            "bbb222": "fix auth pair",
+            "ccc333": "fix auth pair",
+        },
+    )
+
+    response = answer_structural_query(
+        graph,
+        HarnessQueryRequest(
+            intent="file_context",
+            user_goal="fix",
+            symbols=("login",),
+            max_cards=4,
+            session_id="s1",
+        ),
+        historical_relation_policy=HistoricalRelationPolicy(require_task_relevant_occurrence=True),
+    )
+
+    assert "historical_relation" not in {card.type for card in response.cards}
+
+
 def test_structural_query_reports_unavailable_when_no_anchor_grounding_exists() -> None:
     graph = build_structural_graph("repo:test", (SourceFile(path="src/main.py", text="x = 1\n"),))
 
