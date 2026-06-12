@@ -36,7 +36,11 @@ from .models import SourceFile
 from .models import StructuralHarnessGraph
 from .query import answer_structural_query
 from .relations import CoChangeSeed
+from .relations import HistoricalRelationCandidate
+from .relations import HistoricalRelationPolicy
 from .relations import build_cochange_seed
+from .relations import historical_relation_candidates
+from .relations import should_show_historical_relation
 from .store import EdgeKey
 from .store import GraphDeltaApplyResult
 from .store import HarnessGraphStore
@@ -60,6 +64,8 @@ __all__ = [
     "GraphUpdateDelta",
     "HunkEntityMapping",
     "HunkRange",
+    "HistoricalRelationCandidate",
+    "HistoricalRelationPolicy",
     "ResolvedAnchors",
     "SourceFile",
     "StructuralHarnessGraph",
@@ -68,6 +74,7 @@ __all__ = [
     "build_structural_graph",
     "build_commit_update_delta",
     "build_cochange_seed",
+    "historical_relation_candidates",
     "code_region_id",
     "commit_id",
     "file_id",
@@ -78,6 +85,7 @@ __all__ = [
     "parse_unified_diff_hunks",
     "repo_id_for_root",
     "resolve_anchors",
+    "should_show_historical_relation",
     "symbol_id",
     "version_id",
     "work_window_id",

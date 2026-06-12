@@ -110,6 +110,35 @@ expected_agent_action = inspect ranking.py first, then query.py if the behavior 
 - bad Qwen frame is quarantined and does not affect cards
 - card feedback records shown, acted_on, ignored, or invalidated
 
+## Historical Relation Card Gate
+
+`historical_relation` evals must check both strength and evidence count:
+
+```text
+stored_strength >= 0.40
+cochange_count >= 3
+```
+
+Required negative case:
+
+```text
+two perfect co-changes with Jaccard 1.0
+-> stored_strength = 0.45
+-> cochange_count = 2
+-> no historical_relation card
+```
+
+Required positive case:
+
+```text
+three perfect co-changes with Jaccard 1.0
+-> stored_strength = 0.45
+-> cochange_count = 3
+-> historical_relation card may be shown
+```
+
+If an eval lowers `min_cochange_count`, the report must include the non-default threshold. Hidden threshold changes invalidate the eval.
+
 ## Concrete Replay Cases
 
 | Case | Fixture | Query | Expected Status | Must Pass |
