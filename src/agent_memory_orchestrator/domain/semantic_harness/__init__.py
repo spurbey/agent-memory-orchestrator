@@ -47,6 +47,10 @@ from .relations import HistoricalRelationPolicy
 from .relations import build_cochange_seed
 from .relations import historical_relation_candidates
 from .relations import should_show_historical_relation
+from .retrieval import LexicalRetrievalHit
+from .retrieval import LexicalRetrievalOptions
+from .retrieval import search_projection_documents
+from .retrieval import tokenize_text
 from .store import EdgeKey
 from .store import GraphDeltaApplyResult
 from .store import HarnessGraphStore
@@ -65,6 +69,8 @@ __all__ = [
     "HarnessQueryRequest",
     "HarnessQueryResponse",
     "InMemoryHarnessGraphStore",
+    "LexicalRetrievalHit",
+    "LexicalRetrievalOptions",
     "CommitHunk",
     "CommitWorkWindow",
     "CoChangeSeed",
@@ -97,8 +103,10 @@ __all__ = [
     "parse_unified_diff_hunks",
     "repo_id_for_root",
     "resolve_anchors",
+    "search_projection_documents",
     "should_show_historical_relation",
     "symbol_id",
+    "tokenize_text",
     "version_id",
     "work_window_id",
 ]
