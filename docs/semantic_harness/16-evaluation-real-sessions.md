@@ -176,7 +176,7 @@ projection source kinds
 -> only File, Symbol, DocSection, DocString in bootstrap slice
 
 projection content
--> includes exact path, qualified symbol name, docstring text, and doc section excerpt
+-> includes exact path, qualified symbol name, docstring text, doc section excerpt, defined symbols, and direct call neighbors
 
 forbidden bootstrap projection
 -> no FileVersion, SymbolVersion, Hunk, RelationOccurrence, or raw AST/debug node docs

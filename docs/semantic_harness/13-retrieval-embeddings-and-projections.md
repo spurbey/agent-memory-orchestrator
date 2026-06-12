@@ -100,6 +100,35 @@ raw AST/debug nodes
 
 Those may get specialized projections later, after evals prove they are useful and not noisy.
 
+Projection text must be graph-grounded:
+
+```text
+file_summary:
+  path
+  language
+  file summary
+  defined symbol names
+  module/file docstring summaries
+
+symbol_summary:
+  qualified name
+  symbol kind
+  path
+  signature/source summary
+  attached symbol docstring summaries
+  directly called symbol names
+  direct caller symbol names
+
+doc_semantic_summary:
+  doc section/docstring title
+  path
+  doc kind
+  documented target when parser-backed
+  compact content excerpt
+```
+
+Projection docs must not invent dependencies. If a cross-file call is not structurally resolved, the projection may include the imported file via `IMPORTS`, but it must not claim a `CALLS` relation.
+
 ## Doc Support Retrieval
 
 For exact file or symbol anchors, direct graph lookup should inspect deterministic doc edges before fuzzy retrieval:
