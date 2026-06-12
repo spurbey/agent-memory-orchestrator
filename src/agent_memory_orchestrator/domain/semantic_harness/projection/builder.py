@@ -27,36 +27,35 @@ def build_projection_documents(
 
     include = set(include_kinds)
     node_by_id = graph.node_by_id()
-    graph_index = _ProjectionGraphIndex.from_graph(graph)
     docs = [
         doc
         for node in sorted(graph.nodes, key=lambda item: (item.kind, item.id))
         if node.kind in include
-        if (doc := _document_for_node(graph.repo_id, node, node_by_id, graph_index)) is not None
+        if (doc := _document_for_node(graph, node, node_by_id)) is not None
     ]
     return tuple(docs)
 
 
 def _document_for_node(
-    repo_id: str,
+    graph: StructuralHarnessGraph,
     node: HarnessNode,
     node_by_id: dict[str, HarnessNode],
-    graph_index: _ProjectionGraphIndex,
 ) -> HarnessProjectionDocument | None:
     if node.kind == "File":
-        return _file_doc(repo_id, node, graph_index)
+        return _file_doc(graph, node)
     if node.kind == "Symbol":
-        return _symbol_doc(repo_id, node, graph_index)
+        return _symbol_doc(graph, node)
     if node.kind in {"DocSection", "DocString"}:
-        return _doc_artifact_doc(repo_id, node, node_by_id)
+        return _doc_artifact_doc(graph.repo_id, node, node_by_id)
     return None
 
 
-def _file_doc(repo_id: str, node: HarnessNode, graph_index: _ProjectionGraphIndex) -> HarnessProjectionDocument:
+def _file_doc(graph: StructuralHarnessGraph, node: HarnessNode) -> HarnessProjectionDocument:
     path = str(node.metadata.get("path") or node.label)
     language = str(node.metadata.get("language") or "")
-    defined_symbols = _neighbor_labels(graph_index.outgoing(node.id, "DEFINES"), graph_index.node_by_id)
-    doc_summaries = _doc_summaries(graph_index.incoming(node.id, "DOCUMENTS_FILE"), graph_index.node_by_id)
+    node_by_id = graph.node_by_id()
+    defined_symbols = _neighbor_labels(graph.outgoing(node.id, kind="DEFINES"), node_by_id)
+    doc_summaries = _doc_summaries(graph.incoming(node.id, kind="DOCUMENTS_FILE"), node_by_id)
     title = f"File {path}"
     text = _compact_lines(
         (
@@ -68,17 +67,18 @@ def _file_doc(repo_id: str, node: HarnessNode, graph_index: _ProjectionGraphInde
             f"docs: {' | '.join(doc_summaries)}" if doc_summaries else "",
         )
     )
-    return _projection_doc(repo_id=repo_id, node=node, doc_type="file_summary", title=title, text=text)
+    return _projection_doc(repo_id=graph.repo_id, node=node, doc_type="file_summary", title=title, text=text)
 
 
-def _symbol_doc(repo_id: str, node: HarnessNode, graph_index: _ProjectionGraphIndex) -> HarnessProjectionDocument:
+def _symbol_doc(graph: StructuralHarnessGraph, node: HarnessNode) -> HarnessProjectionDocument:
     path = str(node.metadata.get("path") or "")
     qualified_name = str(node.metadata.get("qualified_name") or node.label)
     symbol_kind = str(node.metadata.get("symbol_kind") or "")
-    doc_summaries = _doc_summaries(graph_index.incoming(node.id, "DOCUMENTS_SYMBOL"), graph_index.node_by_id)
-    mentioned_by = _doc_summaries(graph_index.incoming(node.id, "MENTIONS_SYMBOL"), graph_index.node_by_id)
-    calls = _neighbor_labels(graph_index.outgoing(node.id, "CALLS"), graph_index.node_by_id)
-    called_by = _neighbor_labels(graph_index.incoming(node.id, "CALLS"), graph_index.node_by_id, source=True)
+    node_by_id = graph.node_by_id()
+    doc_summaries = _doc_summaries(graph.incoming(node.id, kind="DOCUMENTS_SYMBOL"), node_by_id)
+    mentioned_by = _doc_summaries(graph.incoming(node.id, kind="MENTIONS_SYMBOL"), node_by_id)
+    calls = _neighbor_labels(graph.outgoing(node.id, kind="CALLS"), node_by_id)
+    called_by = _neighbor_labels(graph.incoming(node.id, kind="CALLS"), node_by_id, source=True)
     title = f"Symbol {qualified_name}"
     text = _compact_lines(
         (
@@ -93,7 +93,7 @@ def _symbol_doc(repo_id: str, node: HarnessNode, graph_index: _ProjectionGraphIn
             f"called_by: {', '.join(called_by)}" if called_by else "",
         )
     )
-    return _projection_doc(repo_id=repo_id, node=node, doc_type="symbol_summary", title=title, text=text)
+    return _projection_doc(repo_id=graph.repo_id, node=node, doc_type="symbol_summary", title=title, text=text)
 
 
 def _doc_artifact_doc(
@@ -189,28 +189,6 @@ def _doc_summaries(
         if value:
             summaries.append(value[:220])
     return tuple(dict.fromkeys(summaries))[:limit]
-
-
-class _ProjectionGraphIndex:
-    def __init__(self, node_by_id: dict[str, HarnessNode], outgoing: dict[tuple[str, str], list[HarnessEdge]], incoming: dict[tuple[str, str], list[HarnessEdge]]) -> None:
-        self.node_by_id = node_by_id
-        self._outgoing = outgoing
-        self._incoming = incoming
-
-    @classmethod
-    def from_graph(cls, graph: StructuralHarnessGraph) -> _ProjectionGraphIndex:
-        outgoing: dict[tuple[str, str], list[HarnessEdge]] = {}
-        incoming: dict[tuple[str, str], list[HarnessEdge]] = {}
-        for edge in graph.edges:
-            outgoing.setdefault((edge.source_id, edge.kind), []).append(edge)
-            incoming.setdefault((edge.target_id, edge.kind), []).append(edge)
-        return cls(graph.node_by_id(), outgoing, incoming)
-
-    def outgoing(self, node_id: str, kind: str) -> tuple[HarnessEdge, ...]:
-        return tuple(self._outgoing.get((node_id, kind), ()))
-
-    def incoming(self, node_id: str, kind: str) -> tuple[HarnessEdge, ...]:
-        return tuple(self._incoming.get((node_id, kind), ()))
 
 
 __all__ = ["DEFAULT_PROJECTED_KINDS", "build_projection_documents"]
