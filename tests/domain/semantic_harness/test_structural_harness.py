@@ -416,6 +416,54 @@ def test_historical_relation_threshold_is_configurable_for_eval() -> None:
     assert edge_evidence["min_cochange_count"] == "2"
 
 
+def test_historical_relation_cites_task_relevant_occurrences_first() -> None:
+    graph = _cochanged_auth_graph(
+        ("aaa111", "bbb222", "ccc333"),
+        messages={
+            "aaa111": "cleanup auth pair",
+            "bbb222": "fix login redirect",
+            "ccc333": "refresh token maintenance",
+        },
+    )
+
+    response = answer_structural_query(
+        graph,
+        HarnessQueryRequest(
+            intent="file_context",
+            user_goal="fix login redirect",
+            symbols=("login",),
+            max_cards=4,
+            session_id="s1",
+        ),
+    )
+
+    historical = next(card for card in response.cards if card.type == "historical_relation")
+    occurrences = [evidence for evidence in historical.evidence if evidence.get("kind") == "RelationOccurrence"]
+
+    assert occurrences[0]["commit_id"] == "commit:repo:test:bbb222"
+    assert occurrences[0]["task_relevance"] == "task_match"
+    assert occurrences[0]["matched_terms"] == "fix,login,redirect"
+    assert any(evidence["task_relevance"] == "structural_fallback" for evidence in occurrences[1:])
+
+
+def test_historical_relation_can_require_task_relevant_occurrence() -> None:
+    graph = _cochanged_auth_graph(("aaa111", "bbb222", "ccc333"))
+
+    response = answer_structural_query(
+        graph,
+        HarnessQueryRequest(
+            intent="file_context",
+            user_goal="signin redirect",
+            symbols=("login",),
+            max_cards=4,
+            session_id="s1",
+        ),
+        historical_relation_policy=HistoricalRelationPolicy(require_task_relevant_occurrence=True),
+    )
+
+    assert "historical_relation" not in {card.type for card in response.cards}
+
+
 def test_structural_query_reports_unavailable_when_no_anchor_grounding_exists() -> None:
     graph = build_structural_graph("repo:test", (SourceFile(path="src/main.py", text="x = 1\n"),))
 
@@ -433,7 +481,7 @@ def test_structural_query_reports_unavailable_when_no_anchor_grounding_exists() 
     assert "unresolved_anchors:file:src/missing.py" in response.warnings
 
 
-def _cochanged_auth_graph(shas: tuple[str, ...]):
+def _cochanged_auth_graph(shas: tuple[str, ...], *, messages: dict[str, str] | None = None):
     repo_id = "repo:test"
     graph = build_structural_graph(
         repo_id,
@@ -458,7 +506,7 @@ def _cochanged_auth_graph(shas: tuple[str, ...]):
                 repo_id=repo_id,
                 session_id=f"session-{sha}",
                 commit_sha=sha,
-                commit_message="update auth pair",
+                commit_message=(messages or {}).get(sha, "update auth pair"),
                 hunks=(
                     CommitHunk(
                         file_path="src/auth.py",

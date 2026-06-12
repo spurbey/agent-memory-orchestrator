@@ -137,7 +137,12 @@ def _historical_relation_cards_for_anchor(
     if anchor is None:
         return ()
     out: list[HarnessCard] = []
-    for candidate in historical_relation_candidates(graph, anchor_node_id=anchor_node_id, policy=policy):
+    for candidate in historical_relation_candidates(
+        graph,
+        anchor_node_id=anchor_node_id,
+        task_text=_task_text_for(request),
+        policy=policy,
+    ):
         relation_key = f"{candidate.edge.source_id}|{candidate.edge.kind}|{candidate.edge.target_id}"
         if relation_key in seen_relation_ids or candidate.related_id in seen_node_ids:
             continue
@@ -199,7 +204,8 @@ def _historical_relation_card(
 
 def _historical_occurrence_evidence(candidate: HistoricalRelationCandidate) -> tuple[dict[str, str], ...]:
     out: list[dict[str, str]] = []
-    for occurrence in candidate.occurrence_nodes:
+    for match in candidate.occurrence_matches:
+        occurrence = match.node
         metadata = occurrence.metadata
         out.append(
             {
@@ -208,9 +214,24 @@ def _historical_occurrence_evidence(candidate: HistoricalRelationCandidate) -> t
                 "commit_id": str(metadata.get("commit_id") or ""),
                 "work_window_id": str(metadata.get("work_window_id") or ""),
                 "reason_status": str(metadata.get("reason_status") or "semantic_pending"),
+                "task_relevance": match.relevance_status,
+                "matched_terms": ",".join(match.matched_terms),
             }
         )
     return tuple(out)
+
+
+def _task_text_for(request: HarnessQueryRequest) -> str:
+    recent_tool_result = " ".join(str(value) for value in request.recent_tool_result.values())
+    return " ".join(
+        (
+            request.user_goal,
+            " ".join(request.files),
+            " ".join(request.symbols),
+            " ".join(request.errors),
+            recent_tool_result,
+        )
+    )
 
 
 def _child_cards_for_file_anchor(

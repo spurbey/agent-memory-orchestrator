@@ -139,6 +139,18 @@ three perfect co-changes with Jaccard 1.0
 
 If an eval lowers `min_cochange_count`, the report must include the non-default threshold. Hidden threshold changes invalidate the eval.
 
+Occurrence relevance checks:
+
+```text
+task-matching commit/reason occurrence
+-> cited before structural_fallback occurrences
+
+strict relevance mode + no task-matching occurrence
+-> no historical_relation card
+```
+
+Each cited occurrence must expose `task_relevance` and `matched_terms` so false-positive review can tell whether the card was grounded in task text or only in aggregate structural history.
+
 ## Concrete Replay Cases
 
 | Case | Fixture | Query | Expected Status | Must Pass |

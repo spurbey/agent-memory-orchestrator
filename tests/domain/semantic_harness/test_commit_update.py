@@ -157,4 +157,5 @@ def test_commit_update_delta_seeds_cochange_occurrence_for_multiple_mapped_entit
     assert len(cochange_edges) == 1
     assert occurrence_nodes[0].metadata["relation_kind"] == "CO_CHANGED_WITH"
     assert occurrence_nodes[0].metadata["reason_status"] == "semantic_pending"
+    assert occurrence_nodes[0].metadata["commit_message"] == "update auth flows"
     assert cochange_edges[0].metadata["occurrence_id"] == occurrence_nodes[0].id
