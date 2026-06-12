@@ -103,3 +103,20 @@ def test_structural_service_bootstrap_repo_includes_doc_support_cards(tmp_path) 
 
     assert "doc_support" in [card.type for card in response.cards]
     assert any(evidence.get("kind") == "DOCUMENTS_SYMBOL" for card in response.cards for evidence in card.evidence)
+
+
+def test_structural_service_builds_projection_documents_from_bootstrap_graph(tmp_path) -> None:
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "auth.py").write_text(
+        'def refresh_token():\n    """Refresh token before redirect handling."""\n    return True\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "README.md").write_text("# Auth\n\nUse src/auth.py for refresh_token behavior.\n", encoding="utf-8")
+
+    service = StructuralHarnessService()
+    result = service.bootstrap_repo(tmp_path, repo_id="repo:test")
+    docs = service.projection_documents(result.graph)
+
+    assert {"file_summary", "symbol_summary", "doc_semantic_summary"}.issubset({doc.doc_type for doc in docs})
+    assert any("Refresh token before redirect handling." in doc.text for doc in docs)
+    assert all(doc.metadata["projection_source"] == "semantic_harness_graph" for doc in docs)
