@@ -35,6 +35,8 @@ from .models import HarnessQueryResponse
 from .models import SourceFile
 from .models import StructuralHarnessGraph
 from .query import answer_structural_query
+from .relations import CoChangeSeed
+from .relations import build_cochange_seed
 from .store import EdgeKey
 from .store import GraphDeltaApplyResult
 from .store import HarnessGraphStore
@@ -54,6 +56,7 @@ __all__ = [
     "InMemoryHarnessGraphStore",
     "CommitHunk",
     "CommitWorkWindow",
+    "CoChangeSeed",
     "GraphUpdateDelta",
     "HunkEntityMapping",
     "HunkRange",
@@ -64,6 +67,7 @@ __all__ = [
     "apply_graph_update_delta",
     "build_structural_graph",
     "build_commit_update_delta",
+    "build_cochange_seed",
     "code_region_id",
     "commit_id",
     "file_id",

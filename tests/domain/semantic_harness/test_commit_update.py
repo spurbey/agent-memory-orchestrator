@@ -103,3 +103,58 @@ def test_commit_update_delta_keeps_review_only_mappings_from_creating_symbol_ver
         for edge in delta.created_edges
         if edge.kind == "MAPS_TO_SYMBOL"
     )
+    assert "RelationOccurrence" not in {node.kind for node in delta.created_nodes}
+    assert "CO_CHANGED_WITH" not in {edge.kind for edge in delta.created_edges}
+
+
+def test_commit_update_delta_seeds_cochange_occurrence_for_multiple_mapped_entities() -> None:
+    repo_id = "repo:test"
+    sha = "abcabc123123"
+    graph = build_structural_graph(
+        repo_id,
+        (
+            SourceFile(
+                path="src/auth.py",
+                text=(
+                    "def login():\n"
+                    "    return True\n"
+                    "\n"
+                    "def refresh():\n"
+                    "    return True\n"
+                ),
+            ),
+        ),
+    )
+
+    delta = build_commit_update_delta(
+        graph,
+        CommitWorkWindow(
+            repo_id=repo_id,
+            session_id="session-1",
+            commit_sha=sha,
+            commit_message="update auth flows",
+            hunks=(
+                CommitHunk(
+                    file_path="src/auth.py",
+                    old_range=HunkRange(start=2, count=1),
+                    new_range=HunkRange(start=2, count=1),
+                ),
+                CommitHunk(
+                    file_path="src/auth.py",
+                    old_range=HunkRange(start=5, count=1),
+                    new_range=HunkRange(start=5, count=1),
+                ),
+            ),
+        ),
+    )
+
+    occurrence_nodes = [node for node in delta.created_nodes if node.kind == "RelationOccurrence"]
+    cochange_edges = [edge for edge in delta.created_edges if edge.kind == "CO_CHANGED_WITH"]
+
+    assert len(occurrence_nodes) == 1
+    assert len(delta.created_relation_occurrences) == 1
+    assert len(delta.updated_edge_weights) == 1
+    assert len(cochange_edges) == 1
+    assert occurrence_nodes[0].metadata["relation_kind"] == "CO_CHANGED_WITH"
+    assert occurrence_nodes[0].metadata["reason_status"] == "semantic_pending"
+    assert cochange_edges[0].metadata["occurrence_id"] == occurrence_nodes[0].id
