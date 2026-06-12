@@ -76,6 +76,22 @@ def test_symbol_projection_includes_graph_grounded_docstring_and_call_neighbors(
     assert "calls: refresh_token" in run_doc.text
 
 
+def test_symbol_projection_includes_conservative_cross_file_call_neighbors() -> None:
+    graph = build_structural_graph(
+        "repo:test",
+        (
+            SourceFile(path="src/pkg/a.py", text="from .b import helper\n\ndef run():\n    return helper()\n"),
+            SourceFile(path="src/pkg/b.py", text="def helper():\n    return True\n"),
+        ),
+    )
+
+    docs = build_projection_documents(graph)
+    by_title = {doc.title: doc for doc in docs}
+
+    assert "calls: helper" in by_title["Symbol run"].text
+    assert "called_by: run" in by_title["Symbol helper"].text
+
+
 def test_file_projection_includes_defined_symbols_and_module_docstring() -> None:
     graph = build_structural_graph(
         "repo:test",

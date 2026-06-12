@@ -213,6 +213,74 @@ def test_python_bootstrap_adds_conservative_same_file_call_edges() -> None:
     assert (run_id, helper_id, "same_file_unique_name") in call_edges
 
 
+def test_python_bootstrap_adds_conservative_cross_file_call_edge_for_from_import() -> None:
+    repo_id = "repo:test"
+    graph = build_structural_graph(
+        repo_id,
+        (
+            SourceFile(path="src/pkg/a.py", text="from .b import helper\n\ndef run():\n    return helper()\n"),
+            SourceFile(path="src/pkg/b.py", text="def helper():\n    return True\n"),
+        ),
+    )
+
+    run_id = symbol_id(repo_id, "src/pkg/a.py", "run", "function")
+    helper_id = symbol_id(repo_id, "src/pkg/b.py", "helper", "function")
+    call_edges = {(edge.source_id, edge.target_id, edge.metadata["resolution"], edge.metadata["target_path"]) for edge in graph.edges if edge.kind == "CALLS"}
+
+    assert (run_id, helper_id, "imported_symbol_name", "src/pkg/b.py") in call_edges
+
+
+def test_python_bootstrap_adds_conservative_cross_file_call_edge_for_module_alias() -> None:
+    repo_id = "repo:test"
+    graph = build_structural_graph(
+        repo_id,
+        (
+            SourceFile(path="src/pkg/a.py", text="import pkg.b as b\n\ndef run():\n    return b.helper()\n"),
+            SourceFile(path="src/pkg/b.py", text="def helper():\n    return True\n"),
+        ),
+    )
+
+    run_id = symbol_id(repo_id, "src/pkg/a.py", "run", "function")
+    helper_id = symbol_id(repo_id, "src/pkg/b.py", "helper", "function")
+    call_edges = {(edge.source_id, edge.target_id, edge.metadata["resolution"], edge.metadata["imported_name"]) for edge in graph.edges if edge.kind == "CALLS"}
+
+    assert (run_id, helper_id, "imported_module_attribute", "b.helper") in call_edges
+
+
+def test_python_cross_file_call_resolver_does_not_invent_method_attribute_targets() -> None:
+    repo_id = "repo:test"
+    graph = build_structural_graph(
+        repo_id,
+        (
+            SourceFile(path="src/pkg/a.py", text="import pkg.b as b\n\ndef run():\n    return b.helper()\n"),
+            SourceFile(path="src/pkg/b.py", text="class Service:\n    def helper(self):\n        return True\n"),
+        ),
+    )
+
+    run_id = symbol_id(repo_id, "src/pkg/a.py", "run", "function")
+    service_helper_id = symbol_id(repo_id, "src/pkg/b.py", "Service.helper", "method")
+    call_edges = {(edge.source_id, edge.target_id, edge.kind) for edge in graph.edges}
+
+    assert (run_id, service_helper_id, "CALLS") not in call_edges
+
+
+def test_python_cross_file_call_resolver_skips_dotted_import_without_alias() -> None:
+    repo_id = "repo:test"
+    graph = build_structural_graph(
+        repo_id,
+        (
+            SourceFile(path="src/pkg/a.py", text="import pkg.b\n\ndef run():\n    return b.helper()\n"),
+            SourceFile(path="src/pkg/b.py", text="def helper():\n    return True\n"),
+        ),
+    )
+
+    run_id = symbol_id(repo_id, "src/pkg/a.py", "run", "function")
+    helper_id = symbol_id(repo_id, "src/pkg/b.py", "helper", "function")
+    call_edges = {(edge.source_id, edge.target_id, edge.kind) for edge in graph.edges}
+
+    assert (run_id, helper_id, "CALLS") not in call_edges
+
+
 def test_web_bootstrap_adds_js_ts_symbols_without_raw_ast_nodes() -> None:
     repo_id = "repo:test"
     graph = build_structural_graph(

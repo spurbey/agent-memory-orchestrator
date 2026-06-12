@@ -11,6 +11,7 @@ from .models import HarnessEdge
 from .models import HarnessNode
 from .models import SourceFile
 from .models import StructuralHarnessGraph
+from .python_cross_file_calls import add_python_cross_file_call_edges
 from .python_structure import add_python_structure
 from .versions import add_baseline_versions
 from .web_structure import JS_TS_LANGUAGES
@@ -65,6 +66,7 @@ def build_structural_graph(repo_id: str, files: Iterable[SourceFile]) -> Structu
                 nodes=nodes,
                 edges=edges,
             )
+    add_python_cross_file_call_edges(repo_id=repo_id, sources=sources, nodes=nodes, edges=edges)
     add_doc_semantics(repo_id=repo_id, sources=sources, nodes=nodes, edges=edges)
     add_baseline_versions(nodes=nodes, edges=edges)
     return StructuralHarnessGraph(repo_id=repo_id, nodes=tuple(nodes.values()), edges=tuple(edges))
