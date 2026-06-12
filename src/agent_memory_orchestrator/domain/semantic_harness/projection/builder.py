@@ -7,7 +7,11 @@ from ..identity import projection_doc_id
 from ..models import HarnessEdge
 from ..models import HarnessNode
 from ..models import StructuralHarnessGraph
+from ..snapshots import graph_snapshot_identity
+from .identity import DEFAULT_PROJECTION_VERSION
+from .identity import projection_set_id
 from .models import HarnessProjectionDocument
+from .models import HarnessProjectionSet
 
 
 DEFAULT_PROJECTED_KINDS = frozenset({"File", "Symbol", "DocSection", "DocString"})
@@ -34,6 +38,24 @@ def build_projection_documents(
         if (doc := _document_for_node(graph, node, node_by_id)) is not None
     ]
     return tuple(docs)
+
+
+def build_projection_set(
+    graph: StructuralHarnessGraph,
+    *,
+    include_kinds: Iterable[str] = DEFAULT_PROJECTED_KINDS,
+    projection_version: str = DEFAULT_PROJECTION_VERSION,
+) -> HarnessProjectionSet:
+    snapshot = graph_snapshot_identity(graph)
+    documents = build_projection_documents(graph, include_kinds=include_kinds)
+    return HarnessProjectionSet(
+        repo_id=graph.repo_id,
+        projection_id=projection_set_id(snapshot.graph_snapshot_id, projection_version=projection_version),
+        projection_version=projection_version,
+        graph_snapshot_id=snapshot.graph_snapshot_id,
+        graph_schema_version=snapshot.graph_schema_version,
+        documents=documents,
+    )
 
 
 def _document_for_node(
@@ -191,4 +213,4 @@ def _doc_summaries(
     return tuple(dict.fromkeys(summaries))[:limit]
 
 
-__all__ = ["DEFAULT_PROJECTED_KINDS", "build_projection_documents"]
+__all__ = ["DEFAULT_PROJECTED_KINDS", "build_projection_documents", "build_projection_set"]
