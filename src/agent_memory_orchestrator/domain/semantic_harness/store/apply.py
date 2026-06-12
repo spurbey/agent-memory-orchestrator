@@ -5,6 +5,7 @@ from typing import Any
 
 from ..commit_update import GraphUpdateDelta
 from ..models import HarnessEdge
+from ..models import HarnessNode
 from .interfaces import EdgeKey
 from .interfaces import HarnessGraphStore
 
@@ -14,6 +15,7 @@ class GraphDeltaApplyResult:
     delta_id: str
     status: str
     created_node_ids: tuple[str, ...]
+    updated_node_ids: tuple[str, ...]
     skipped_node_ids: tuple[str, ...]
     created_edge_keys: tuple[EdgeKey, ...]
     updated_edge_keys: tuple[EdgeKey, ...]
@@ -31,6 +33,7 @@ class GraphDeltaApplyResult:
             "status": self.status,
             "applied": self.applied,
             "created_node_ids": list(self.created_node_ids),
+            "updated_node_ids": list(self.updated_node_ids),
             "skipped_node_ids": list(self.skipped_node_ids),
             "created_edge_keys": [list(key) for key in self.created_edge_keys],
             "updated_edge_keys": [list(key) for key in self.updated_edge_keys],
@@ -61,6 +64,7 @@ def apply_graph_update_delta(
             delta_id=delta.delta_id,
             status="failed",
             created_node_ids=(),
+            updated_node_ids=(),
             skipped_node_ids=(),
             created_edge_keys=(),
             updated_edge_keys=(),
@@ -77,6 +81,8 @@ def apply_graph_update_delta(
         else:
             skipped_node_ids.append(node.id)
 
+    updated_node_ids = _update_changed_entity_stats(store, delta)
+
     created_edge_keys: list[EdgeKey] = []
     updated_edge_keys: list[EdgeKey] = []
     skipped_edge_keys: list[EdgeKey] = []
@@ -89,11 +95,12 @@ def apply_graph_update_delta(
             updated_edge_keys.append(key)
         else:
             skipped_edge_keys.append(key)
-    status = "applied" if created_node_ids or created_edge_keys or updated_edge_keys else "noop"
+    status = "applied" if created_node_ids or updated_node_ids or created_edge_keys or updated_edge_keys else "noop"
     return GraphDeltaApplyResult(
         delta_id=delta.delta_id,
         status=status,
         created_node_ids=tuple(created_node_ids),
+        updated_node_ids=updated_node_ids,
         skipped_node_ids=tuple(skipped_node_ids),
         created_edge_keys=tuple(created_edge_keys),
         updated_edge_keys=tuple(updated_edge_keys),
@@ -128,6 +135,7 @@ def _apply_cochange_edge(store: HarnessGraphStore, edge: HarnessEdge) -> str:
     work_window_id = str(edge.metadata.get("work_window_id") or "")
     if existing is None:
         normalized = _cochange_edge_with_metadata(
+            store=store,
             edge=edge,
             cochange_count=1,
             occurrence_ids=(occurrence_id,) if occurrence_id else (),
@@ -150,6 +158,7 @@ def _apply_cochange_edge(store: HarnessGraphStore, edge: HarnessEdge) -> str:
     updated_occurrences = _append_unique_tuple(occurrence_ids, occurrence_id)
     current_count = int(existing.metadata.get("cochange_count") or len(occurrence_ids) or 1)
     updated = _cochange_edge_with_metadata(
+        store=store,
         edge=existing,
         cochange_count=current_count + 1,
         occurrence_ids=updated_occurrences,
@@ -162,6 +171,7 @@ def _apply_cochange_edge(store: HarnessGraphStore, edge: HarnessEdge) -> str:
 
 def _cochange_edge_with_metadata(
     *,
+    store: HarnessGraphStore,
     edge: HarnessEdge,
     cochange_count: int,
     occurrence_ids: tuple[str, ...],
@@ -169,11 +179,26 @@ def _cochange_edge_with_metadata(
     work_window_ids: tuple[str, ...],
 ) -> HarnessEdge:
     confidence = round(float(edge.confidence or 0.0), 2)
-    stored_strength = _cochange_strength(cochange_count=cochange_count, confidence=confidence)
+    source_changed_count = _entity_changed_count(store, edge.source_id)
+    target_changed_count = _entity_changed_count(store, edge.target_id)
+    either_changed_count = max(1, source_changed_count + target_changed_count - cochange_count)
+    jaccard = round(cochange_count / either_changed_count, 4)
+    score_components = {
+        "cochange_jaccard": jaccard,
+        "recency_score": 0.0,
+        "validation_score": 0.0,
+        "reason_quality_score": 0.0,
+    }
+    stored_strength = _cochange_strength(score_components)
     metadata = dict(edge.metadata)
     metadata.update(
         {
             "cochange_count": cochange_count,
+            "source_changed_count": source_changed_count,
+            "target_changed_count": target_changed_count,
+            "either_changed_count": either_changed_count,
+            "jaccard": jaccard,
+            "score_components": score_components,
             "occurrence_ids": list(occurrence_ids),
             "commit_ids": list(commit_ids),
             "work_window_ids": list(work_window_ids),
@@ -182,6 +207,8 @@ def _cochange_edge_with_metadata(
     )
     metadata.pop("cochange_count_delta", None)
     metadata.pop("occurrence_id", None)
+    metadata.pop("commit_id", None)
+    metadata.pop("work_window_id", None)
     return HarnessEdge(
         source_id=edge.source_id,
         target_id=edge.target_id,
@@ -192,10 +219,70 @@ def _cochange_edge_with_metadata(
     )
 
 
-def _cochange_strength(*, cochange_count: int, confidence: float) -> float:
-    count_component = min(0.6, 0.2 + (max(1, cochange_count) * 0.1))
-    confidence_component = min(0.4, max(0.0, confidence) * 0.4)
-    return round(min(1.0, count_component + confidence_component), 2)
+def _update_changed_entity_stats(store: HarnessGraphStore, delta: GraphUpdateDelta) -> tuple[str, ...]:
+    changed_entities = _changed_entity_ids(delta)
+    updated: list[str] = []
+    for entity_id in changed_entities:
+        node = store.get_node(entity_id)
+        if node is None:
+            continue
+        stats = dict(node.metadata.get("change_stats") or {})
+        commit_ids = tuple(str(item) for item in stats.get("changed_commit_ids", ()))
+        if delta.commit_id in commit_ids:
+            continue
+        next_commit_ids = (*commit_ids, delta.commit_id)
+        stats.update(
+            {
+                "total_changed_count": len(next_commit_ids),
+                "changed_commit_ids": list(next_commit_ids),
+                "last_changed_commit": delta.commit_id,
+            }
+        )
+        metadata = dict(node.metadata)
+        metadata["change_stats"] = stats
+        store.replace_node(
+            HarnessNode(
+                id=node.id,
+                kind=node.kind,
+                label=node.label,
+                repo_id=node.repo_id,
+                status=node.status,
+                summary=node.summary,
+                metadata=metadata,
+            )
+        )
+        updated.append(node.id)
+    return tuple(updated)
+
+
+def _changed_entity_ids(delta: GraphUpdateDelta) -> tuple[str, ...]:
+    entity_ids = {
+        str(node.metadata.get("entity_id"))
+        for node in delta.created_nodes
+        if node.kind in {"FileVersion", "SymbolVersion", "CodeRegionVersion"} and node.metadata.get("entity_id")
+    }
+    return tuple(sorted(entity_ids))
+
+
+def _entity_changed_count(store: HarnessGraphStore, node_id: str) -> int:
+    node = store.get_node(node_id)
+    if node is None:
+        return 1
+    stats = dict(node.metadata.get("change_stats") or {})
+    return int(stats.get("total_changed_count") or 1)
+
+
+def _cochange_strength(score_components: dict[str, float]) -> float:
+    return round(
+        min(
+            1.0,
+            (0.45 * score_components["cochange_jaccard"])
+            + (0.20 * score_components["recency_score"])
+            + (0.20 * score_components["validation_score"])
+            + (0.15 * score_components["reason_quality_score"]),
+        ),
+        2,
+    )
 
 
 def _append_unique_tuple(values: tuple[str, ...], value: str) -> tuple[str, ...]:
