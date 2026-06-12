@@ -284,3 +284,30 @@ Suppressed reasons are retained for eval/debug. The normal response only returns
 ## Projection Health
 
 Projection metadata must record source graph version, embedding model, document content hash, vector count, and readiness status.
+
+## Service-Level Projection Cache
+
+The first cache is application-local and rebuildable:
+
+```text
+StructuralHarnessService
+-> InMemoryProjectionCache
+-> HarnessProjectionSet
+```
+
+Cache key:
+
+```text
+projection_id = hash(projection_version + graph_snapshot_id)
+```
+
+Rules:
+
+```text
+exact-anchor queries do not build projection docs when the card budget is already filled
+lexical/vector routes request projection docs lazily
+same graph_snapshot_id + projection_version reuses the in-memory projection set
+new structural graph shape creates a new graph_snapshot_id and projection_id
+```
+
+This cache is not durable truth. The future SQLite projection store should persist the same `projection_id`, `graph_snapshot_id`, `projection_version`, `document_ids_hash`, and document rows.
