@@ -1,0 +1,85 @@
+from __future__ import annotations
+
+import pytest
+
+from agent_memory_orchestrator.application.services.semantic_harness import SemanticHarnessRuntimeService
+from agent_memory_orchestrator.domain.semantic_harness import CommitHunk
+from agent_memory_orchestrator.domain.semantic_harness import CommitWorkWindow
+from agent_memory_orchestrator.domain.semantic_harness import HarnessQueryRequest
+from agent_memory_orchestrator.domain.semantic_harness import HunkRange
+from agent_memory_orchestrator.domain.semantic_harness import build_commit_update_delta
+
+
+def test_runtime_bootstrap_persists_graph_and_answers_query(tmp_path) -> None:
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "auth.py").write_text(
+        'def refresh_token():\n    """Refresh token before redirect."""\n    return True\n',
+        encoding="utf-8",
+    )
+
+    runtime = SemanticHarnessRuntimeService()
+    bootstrap = runtime.bootstrap_repo(tmp_path, repo_id="repo:test")
+    response = runtime.query(
+        "repo:test",
+        HarnessQueryRequest(
+            intent="file_context",
+            user_goal="inspect refresh token",
+            symbols=("refresh_token",),
+            max_cards=2,
+        ),
+    )
+
+    assert bootstrap.repo_id == "repo:test"
+    assert bootstrap.file_count == 1
+    assert bootstrap.graph_snapshot.node_count > 0
+    assert bootstrap.projection_document_count > 0
+    assert response.status == "partial_structural"
+    assert response.cards
+
+
+def test_runtime_query_returns_unavailable_for_missing_repo() -> None:
+    runtime = SemanticHarnessRuntimeService()
+
+    response = runtime.query(
+        "repo:missing",
+        HarnessQueryRequest(intent="edit_plan", user_goal="fix login"),
+    )
+
+    assert response.status == "unavailable"
+    assert response.cards == ()
+    assert response.warnings == ("repo_not_bootstrapped:repo:missing",)
+
+
+def test_runtime_apply_delta_updates_persisted_graph_and_projection(tmp_path) -> None:
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "auth.py").write_text("def login():\n    return False\n", encoding="utf-8")
+    runtime = SemanticHarnessRuntimeService()
+    bootstrap = runtime.bootstrap_repo(tmp_path, repo_id="repo:test")
+    graph = runtime.load_graph("repo:test")
+    if graph is None:
+        pytest.fail("runtime did not persist bootstrap graph")
+    delta = build_commit_update_delta(
+        graph,
+        CommitWorkWindow(
+            repo_id="repo:test",
+            session_id="session-1",
+            commit_sha="abc123456789",
+            commit_message="fix login",
+            hunks=(
+                CommitHunk(
+                    file_path="src/auth.py",
+                    old_range=HunkRange(start=2, count=1),
+                    new_range=HunkRange(start=2, count=1),
+                ),
+            ),
+        ),
+    )
+
+    applied = runtime.apply_delta(delta)
+    updated_graph = runtime.load_graph("repo:test")
+
+    assert applied.apply_result.status == "applied"
+    assert applied.graph_snapshot.graph_snapshot_id != bootstrap.graph_snapshot.graph_snapshot_id
+    assert applied.projection.graph_snapshot_id == applied.graph_snapshot.graph_snapshot_id
+    assert updated_graph is not None
+    assert delta.commit_id in {node.id for node in updated_graph.nodes}
