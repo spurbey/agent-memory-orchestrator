@@ -58,6 +58,17 @@ stored_strength >= 0.40
 cochange_count >= 3
 ```
 
+Task-specific occurrence filtering uses weighted lexical terms:
+
+```text
+strong domain/task term = 1.0
+low-signal action term such as fix/update/change/use/set = 0.25
+task_match requires matched weight >= 1.0
+weak_task_match means only low-signal action terms matched
+```
+
+Strict eval modes that require task-relevant occurrence must require `task_match`, not `weak_task_match`.
+
 ## Failure Modes
 
 Weak mappings create low-confidence occurrence but do not delete prior relation. Contradictory semantic reasons become review-only.
@@ -76,6 +87,7 @@ len(occurrence_ids) == cochange_count
 stored_strength is derivable from score_components
 two perfect co-changes do not show a historical_relation card by default
 three perfect co-changes can show a historical_relation card
+the word fix alone does not satisfy require_task_relevant_occurrence
 ```
 
 ## Worked Example

@@ -44,19 +44,50 @@ class StructuralHarnessGraph:
     repo_id: str
     nodes: tuple[HarnessNode, ...]
     edges: tuple[HarnessEdge, ...]
+    _node_by_id: dict[str, HarnessNode] = field(init=False, repr=False, compare=False)
+    _nodes_by_kind: dict[str, tuple[HarnessNode, ...]] = field(init=False, repr=False, compare=False)
+    _outgoing_by_source: dict[str, tuple[HarnessEdge, ...]] = field(init=False, repr=False, compare=False)
+    _outgoing_by_source_kind: dict[tuple[str, str], tuple[HarnessEdge, ...]] = field(init=False, repr=False, compare=False)
+    _incoming_by_target: dict[str, tuple[HarnessEdge, ...]] = field(init=False, repr=False, compare=False)
+    _incoming_by_target_kind: dict[tuple[str, str], tuple[HarnessEdge, ...]] = field(init=False, repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        nodes_by_kind: dict[str, list[HarnessNode]] = {}
+        outgoing_by_source: dict[str, list[HarnessEdge]] = {}
+        outgoing_by_source_kind: dict[tuple[str, str], list[HarnessEdge]] = {}
+        incoming_by_target: dict[str, list[HarnessEdge]] = {}
+        incoming_by_target_kind: dict[tuple[str, str], list[HarnessEdge]] = {}
+
+        for node in self.nodes:
+            nodes_by_kind.setdefault(node.kind, []).append(node)
+        for edge in self.edges:
+            outgoing_by_source.setdefault(edge.source_id, []).append(edge)
+            outgoing_by_source_kind.setdefault((edge.source_id, edge.kind), []).append(edge)
+            incoming_by_target.setdefault(edge.target_id, []).append(edge)
+            incoming_by_target_kind.setdefault((edge.target_id, edge.kind), []).append(edge)
+
+        object.__setattr__(self, "_node_by_id", {node.id: node for node in self.nodes})
+        object.__setattr__(self, "_nodes_by_kind", _freeze_node_index(nodes_by_kind))
+        object.__setattr__(self, "_outgoing_by_source", _freeze_edge_index(outgoing_by_source))
+        object.__setattr__(self, "_outgoing_by_source_kind", _freeze_edge_index(outgoing_by_source_kind))
+        object.__setattr__(self, "_incoming_by_target", _freeze_edge_index(incoming_by_target))
+        object.__setattr__(self, "_incoming_by_target_kind", _freeze_edge_index(incoming_by_target_kind))
 
     def node_by_id(self) -> dict[str, HarnessNode]:
-        return {node.id: node for node in self.nodes}
+        return self._node_by_id
 
     def nodes_by_kind(self, kind: str) -> tuple[HarnessNode, ...]:
-        return tuple(node for node in self.nodes if node.kind == kind)
+        return self._nodes_by_kind.get(kind, ())
 
     def outgoing(self, node_id: str, *, kind: str = "") -> tuple[HarnessEdge, ...]:
-        return tuple(
-            edge
-            for edge in self.edges
-            if edge.source_id == node_id and (not kind or edge.kind == kind)
-        )
+        if kind:
+            return self._outgoing_by_source_kind.get((node_id, kind), ())
+        return self._outgoing_by_source.get(node_id, ())
+
+    def incoming(self, node_id: str, *, kind: str = "") -> tuple[HarnessEdge, ...]:
+        if kind:
+            return self._incoming_by_target_kind.get((node_id, kind), ())
+        return self._incoming_by_target.get(node_id, ())
 
 
 @dataclass(slots=True, frozen=True)
@@ -150,6 +181,14 @@ class HarnessQueryResponse:
 
 def _asdict(obj: Any) -> dict[str, Any]:
     return {field_name: getattr(obj, field_name) for field_name in obj.__dataclass_fields__}  # type: ignore[attr-defined]
+
+
+def _freeze_node_index(index: dict[str, list[HarnessNode]]) -> dict[str, tuple[HarnessNode, ...]]:
+    return {key: tuple(value) for key, value in index.items()}
+
+
+def _freeze_edge_index(index: dict[Any, list[HarnessEdge]]) -> dict[Any, tuple[HarnessEdge, ...]]:
+    return {key: tuple(value) for key, value in index.items()}
 
 
 __all__ = [
