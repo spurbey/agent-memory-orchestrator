@@ -35,4 +35,37 @@ class HarnessProjectionDocument:
         }
 
 
-__all__ = ["HarnessProjectionDocument"]
+@dataclass(slots=True, frozen=True)
+class HarnessProjectionSet:
+    repo_id: str
+    projection_id: str
+    projection_version: str
+    graph_snapshot_id: str
+    graph_schema_version: str
+    documents: tuple[HarnessProjectionDocument, ...]
+
+    @property
+    def document_count(self) -> int:
+        return len(self.documents)
+
+    @property
+    def document_ids_hash(self) -> str:
+        stable = "\n".join(sorted(document.doc_id for document in self.documents))
+        return hashlib.sha256(stable.encode("utf-8")).hexdigest()
+
+    def as_dict(self, *, include_documents: bool = False) -> dict[str, Any]:
+        out: dict[str, Any] = {
+            "repo_id": self.repo_id,
+            "projection_id": self.projection_id,
+            "projection_version": self.projection_version,
+            "graph_snapshot_id": self.graph_snapshot_id,
+            "graph_schema_version": self.graph_schema_version,
+            "document_count": self.document_count,
+            "document_ids_hash": self.document_ids_hash,
+        }
+        if include_documents:
+            out["documents"] = [document.as_dict() for document in self.documents]
+        return out
+
+
+__all__ = ["HarnessProjectionDocument", "HarnessProjectionSet"]
