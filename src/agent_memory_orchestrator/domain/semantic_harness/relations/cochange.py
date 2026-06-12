@@ -20,6 +20,7 @@ def build_cochange_seed(
     repo_id: str,
     work_window_id: str,
     commit_id: str,
+    commit_message: str = "",
     mappings: tuple[HunkEntityMapping, ...],
 ) -> CoChangeSeed:
     """Create deterministic co-change relation evidence for one commit delta.
@@ -51,6 +52,7 @@ def build_cochange_seed(
                         "target_id": target_id,
                         "work_window_id": work_window_id,
                         "commit_id": commit_id,
+                        "commit_message": commit_message,
                         "reason": "",
                         "reason_status": "semantic_pending",
                         "confidence": _pair_confidence(source_id, target_id, mappings),

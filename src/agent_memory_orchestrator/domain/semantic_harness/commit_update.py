@@ -144,6 +144,7 @@ def build_commit_update_delta(graph: StructuralHarnessGraph, window: CommitWorkW
         repo_id=window.repo_id,
         work_window_id=work_node_id,
         commit_id=commit_node_id,
+        commit_message=window.commit_message,
         mappings=tuple(mappings),
     )
     for occurrence in cochange.occurrence_nodes:

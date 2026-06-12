@@ -93,3 +93,14 @@ The thresholds must be configurable for evals and probes. Any non-default thresh
 ## Traversal Rule
 
 Retrieve aggregate edges for speed, then filter occurrences by task relevance. Cards should cite the few relevant occurrences, not the entire history.
+
+Current occurrence relevance is lexical and conservative:
+
+```text
+task terms = user goal + explicit anchors + recent tool result terms
+occurrence terms = reason + commit message + commit/work ids
+task_match = at least one normalized task token exactly matches a normalized occurrence token
+structural_fallback = no lexical match, but aggregate edge passed the evidence gate
+```
+
+Default behavior may still show a `historical_relation` card with structural-fallback occurrences when the aggregate relation passes the strength and count gates. Strict eval modes may require at least one `task_match` occurrence before showing the card.
