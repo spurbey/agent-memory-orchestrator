@@ -4,6 +4,7 @@ from agent_memory_orchestrator.domain.semantic_harness import HarnessQueryReques
 from agent_memory_orchestrator.domain.semantic_harness import SourceFile
 from agent_memory_orchestrator.domain.semantic_harness import answer_structural_query
 from agent_memory_orchestrator.domain.semantic_harness import build_structural_graph
+from agent_memory_orchestrator.domain.semantic_harness import query as query_module
 
 
 def test_query_uses_lexical_projection_candidates_for_vague_goal_without_anchors() -> None:
@@ -95,3 +96,33 @@ def test_query_uses_vector_projection_when_lexical_has_no_grounded_candidate() -
     assert response.cards[0].evidence[1]["embedding_method"] == "hash_token_char_cosine_v1"
     assert "candidate_discovery:vector_projection" in response.warnings
     assert "candidate_discovery:lexical_projection" not in response.warnings
+
+
+def test_query_reuses_projection_documents_between_lexical_and_vector(monkeypatch) -> None:
+    graph = build_structural_graph(
+        "repo:test",
+        (SourceFile(path="src/main.py", text="def run():\n    return True\n"),),
+    )
+    calls = 0
+    real_build = query_module.build_projection_documents
+
+    def counting_build(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return real_build(*args, **kwargs)
+
+    monkeypatch.setattr(query_module, "build_projection_documents", counting_build)
+
+    response = answer_structural_query(
+        graph,
+        HarnessQueryRequest(
+            intent="edit_plan",
+            user_goal="billing invoice webhook",
+            max_cards=2,
+            session_id="s1",
+        ),
+    )
+
+    assert response.status == "unavailable"
+    assert response.cards == ()
+    assert calls == 1
