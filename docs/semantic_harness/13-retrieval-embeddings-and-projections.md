@@ -56,6 +56,19 @@ Embed high-signal summaries:
 
 Do not embed raw AST flood as product retrieval memory.
 
+## Doc Support Retrieval
+
+For exact file or symbol anchors, direct graph lookup should inspect deterministic doc edges before fuzzy retrieval:
+
+```text
+DocString DOCUMENTS_SYMBOL anchor
+DocString DOCUMENTS_FILE anchor
+DocSection MENTIONS_SYMBOL anchor
+DocSection MENTIONS_FILE anchor
+```
+
+These produce compact `doc_support` cards. They do not require vector search. Vector search may later discover candidate doc sections for vague feature names, but those candidates must be grounded to file/symbol graph evidence before they become cards.
+
 ## Candidate Trust
 
 Vector candidates are not truth. If a vector hit cannot be grounded to typed graph evidence, return `low_confidence` or omit the card.

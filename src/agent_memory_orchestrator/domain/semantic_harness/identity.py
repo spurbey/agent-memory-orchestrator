@@ -49,6 +49,16 @@ def code_region_id(repo_id: str, path: str | Path, region_key: str, region_kind:
     return f"code_region:{_safe_repo(repo_id)}:{normalize_file_path(path)}:{kind}:{key}"
 
 
+def doc_section_id(repo_id: str, path: str | Path, section_key: str, line_start: int) -> str:
+    stable = "|".join([_safe_repo(repo_id), normalize_file_path(path), _normalize_name(section_key), str(line_start)])
+    return f"doc_section:{_safe_repo(repo_id)}:{_short_hash(stable, size=24)}"
+
+
+def docstring_id(repo_id: str, path: str | Path, target_key: str, doc_kind: str) -> str:
+    stable = "|".join([_safe_repo(repo_id), normalize_file_path(path), _normalize_name(target_key), _normalize_name(doc_kind)])
+    return f"docstring:{_safe_repo(repo_id)}:{_short_hash(stable, size=24)}"
+
+
 def harness_card_id(repo_id: str, session_id: str, intent: str, support_node_ids: tuple[str, ...]) -> str:
     stable = "|".join([_safe_repo(repo_id), str(session_id or ""), str(intent or ""), *sorted(support_node_ids)])
     return f"hcard:{_safe_repo(repo_id)}:{_short_hash(stable, size=20)}"
@@ -74,6 +84,8 @@ def _short_hash(value: str, *, size: int) -> str:
 __all__ = [
     "code_region_id",
     "commit_id",
+    "doc_section_id",
+    "docstring_id",
     "file_id",
     "harness_card_id",
     "hunk_id",

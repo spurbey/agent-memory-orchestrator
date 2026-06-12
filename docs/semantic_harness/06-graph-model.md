@@ -46,6 +46,14 @@ Examples:
 
 One observed reason or event that contributed to a relation edge. Aggregate edge weight is stored separately from these occurrences.
 
+### DocSection
+
+A deterministic section extracted from repo documentation such as README and Markdown files. It stores heading, line range, and compact content excerpt. It is not produced by an LLM.
+
+### DocString
+
+A deterministic module, class, function, or method docstring extracted from source code. It documents the nearest file or symbol using parser-backed ownership.
+
 ### HarnessCard
 
 A card returned to an agent.
@@ -85,6 +93,10 @@ A provenance node preserving AMO source IDs, graph IDs, evidence refs, job IDs, 
 - `MOVED_TO`: entity moved file or scope.
 - `SPLIT_INTO`: entity split into multiple entities.
 - `MERGED_INTO`: entities merged.
+- `DOCUMENTS_FILE`: docstring documents a file/module.
+- `DOCUMENTS_SYMBOL`: docstring documents a symbol.
+- `MENTIONS_FILE`: doc section or docstring explicitly mentions a repo file path.
+- `MENTIONS_SYMBOL`: doc section or docstring explicitly mentions a known symbol label.
 - `SUPPORTS_CARD`: node or edge supports a harness card.
 - `IMPORTED_FROM_AMO`: harness node or edge links to AMO provenance.
 

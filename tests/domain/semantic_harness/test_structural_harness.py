@@ -10,6 +10,8 @@ from agent_memory_orchestrator.domain.semantic_harness import SourceFile
 from agent_memory_orchestrator.domain.semantic_harness import apply_graph_update_delta
 from agent_memory_orchestrator.domain.semantic_harness import build_commit_update_delta
 from agent_memory_orchestrator.domain.semantic_harness import build_structural_graph
+from agent_memory_orchestrator.domain.semantic_harness import doc_section_id
+from agent_memory_orchestrator.domain.semantic_harness import docstring_id
 from agent_memory_orchestrator.domain.semantic_harness import file_id
 from agent_memory_orchestrator.domain.semantic_harness import harness_card_id
 from agent_memory_orchestrator.domain.semantic_harness import normalize_file_path
@@ -62,6 +64,60 @@ def helper():
     assert "Setup" in labels
     assert "CodeNode" not in kinds
     assert any(edge.kind == "DEFINES" for edge in graph.edges)
+
+
+def test_bootstrap_attaches_markdown_doc_sections_to_exact_file_and_symbol_mentions() -> None:
+    repo_id = "repo:test"
+    graph = build_structural_graph(
+        repo_id,
+        (
+            SourceFile(
+                path="src/auth/session.py",
+                text="class AuthSession:\n    def refresh(self):\n        return True\n",
+            ),
+            SourceFile(
+                path="README.md",
+                text="# Auth Flow\n\nUse src/auth/session.py and AuthSession.refresh for token renewal.\n",
+            ),
+        ),
+    )
+
+    section_id = doc_section_id(repo_id, "README.md", "Auth Flow", 1)
+    file_node_id = file_id(repo_id, "src/auth/session.py")
+    class_node_id = symbol_id(repo_id, "src/auth/session.py", "AuthSession", "class")
+    symbol_node_id = symbol_id(repo_id, "src/auth/session.py", "AuthSession.refresh", "method")
+    edge_keys = {(edge.source_id, edge.target_id, edge.kind) for edge in graph.edges}
+    section = graph.node_by_id()[section_id]
+
+    assert section.kind == "DocSection"
+    assert section.metadata["heading"] == "Auth Flow"
+    assert (section_id, file_node_id, "MENTIONS_FILE") in edge_keys
+    assert (section_id, symbol_node_id, "MENTIONS_SYMBOL") in edge_keys
+    assert (section_id, class_node_id, "MENTIONS_SYMBOL") not in edge_keys
+
+
+def test_bootstrap_attaches_python_docstrings_to_symbols_without_llm() -> None:
+    repo_id = "repo:test"
+    graph = build_structural_graph(
+        repo_id,
+        (
+            SourceFile(
+                path="src/auth/session.py",
+                text='''"""Auth session module."""\n\nclass AuthSession:\n    def refresh(self):\n        """Refresh tokens before redirect checks."""\n        return True\n''',
+            ),
+        ),
+    )
+
+    module_doc_id = docstring_id(repo_id, "src/auth/session.py", "module", "module")
+    method_doc_id = docstring_id(repo_id, "src/auth/session.py", "AuthSession.refresh", "method")
+    file_node_id = file_id(repo_id, "src/auth/session.py")
+    symbol_node_id = symbol_id(repo_id, "src/auth/session.py", "AuthSession.refresh", "method")
+    edge_keys = {(edge.source_id, edge.target_id, edge.kind) for edge in graph.edges}
+
+    assert graph.node_by_id()[module_doc_id].kind == "DocString"
+    assert graph.node_by_id()[method_doc_id].summary == "Refresh tokens before redirect checks."
+    assert (module_doc_id, file_node_id, "DOCUMENTS_FILE") in edge_keys
+    assert (method_doc_id, symbol_node_id, "DOCUMENTS_SYMBOL") in edge_keys
 
 
 def test_bootstrap_creates_baseline_version_nodes_for_structural_entities() -> None:
@@ -257,6 +313,39 @@ def test_structural_query_returns_compact_partial_structural_cards() -> None:
     assert response.cards[0].evidence
     assert any("structural_only" in warning for warning in response.warnings)
     assert response.trace["nodes"]
+
+
+def test_query_returns_doc_support_card_for_symbol_docstring() -> None:
+    repo_id = "repo:test"
+    graph = build_structural_graph(
+        repo_id,
+        (
+            SourceFile(
+                path="src/auth/session.py",
+                text='''class AuthSession:\n    def refresh(self):\n        """Refresh tokens before redirect checks."""\n        return True\n''',
+            ),
+        ),
+    )
+
+    response = answer_structural_query(
+        graph,
+        HarnessQueryRequest(
+            intent="file_context",
+            user_goal="fix redirect after token refresh",
+            symbols=("AuthSession.refresh",),
+            max_cards=3,
+            session_id="s1",
+        ),
+    )
+
+    assert [card.type for card in response.cards[:2]] == ["symbol_context", "doc_support"]
+    doc_card = response.cards[1]
+    assert doc_card.title == "Use docs for AuthSession.refresh"
+    assert doc_card.evidence[0]["kind"] == "DocString"
+    assert doc_card.evidence[2]["kind"] == "DOCUMENTS_SYMBOL"
+    assert doc_card.confidence == 0.86
+    assert doc_card.evidence[0]["node_id"] in response.trace["nodes"]
+    assert response.next_actions[1].target == "src/auth/session.py"
 
 
 def test_file_context_fills_budget_with_file_child_symbols_after_explicit_anchors() -> None:

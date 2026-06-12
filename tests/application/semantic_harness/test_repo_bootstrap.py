@@ -75,3 +75,31 @@ def test_structural_service_bootstrap_repo_and_query_exact_anchor(tmp_path) -> N
     assert response.status == "partial_structural"
     assert [card.type for card in response.cards] == ["next_file", "symbol_context"]
     assert response.next_actions[0].action_type == "inspect_file"
+
+
+def test_structural_service_bootstrap_repo_includes_doc_support_cards(tmp_path) -> None:
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "auth.py").write_text(
+        'def refresh_token():\n    """Refresh token before redirect handling."""\n    return True\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "README.md").write_text(
+        "# Auth\n\nUse src/auth.py when changing refresh_token redirect handling.\n",
+        encoding="utf-8",
+    )
+
+    service = StructuralHarnessService()
+    result = service.bootstrap_repo(tmp_path, repo_id="repo:test")
+    response = service.query(
+        result.graph,
+        HarnessQueryRequest(
+            intent="file_context",
+            user_goal="fix redirect token refresh",
+            symbols=("refresh_token",),
+            max_cards=3,
+            session_id="s1",
+        ),
+    )
+
+    assert "doc_support" in [card.type for card in response.cards]
+    assert any(evidence.get("kind") == "DOCUMENTS_SYMBOL" for card in response.cards for evidence in card.evidence)

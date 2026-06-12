@@ -50,6 +50,25 @@ def answer_structural_query(
     for anchor in anchors.resolved:
         if len(cards) >= max_cards:
             break
+        for doc_card in _doc_support_cards_for_anchor(
+            graph=graph,
+            request=request,
+            intent=intent_used,
+            anchor_node_id=anchor.node_id,
+            seen_cards=seen_cards,
+            seen_node_ids=seen_node_ids | selected_node_ids,
+        ):
+            cards.append(doc_card)
+            selected_node_ids.update(
+                evidence["node_id"]
+                for evidence in doc_card.evidence
+                if evidence.get("kind") in {"DocSection", "DocString"}
+            )
+            if len(cards) >= max_cards:
+                break
+    for anchor in anchors.resolved:
+        if len(cards) >= max_cards:
+            break
         for dependency_card in _dependency_cards_for_anchor(
             graph=graph,
             request=request,
@@ -119,6 +138,71 @@ def answer_structural_query(
         trace=trace,
         warnings=tuple(warnings),
     )
+
+
+def _doc_support_cards_for_anchor(
+    *,
+    graph: StructuralHarnessGraph,
+    request: HarnessQueryRequest,
+    intent: str,
+    anchor_node_id: str,
+    seen_cards: set[str],
+    seen_node_ids: set[str],
+) -> tuple[HarnessCard, ...]:
+    node_by_id = graph.node_by_id()
+    anchor = node_by_id.get(anchor_node_id)
+    if anchor is None:
+        return ()
+    out: list[HarnessCard] = []
+    semantic_edges = sorted(
+        (
+            edge
+            for edge in graph.edges
+            if edge.target_id == anchor_node_id
+            and edge.kind in {"DOCUMENTS_FILE", "DOCUMENTS_SYMBOL", "MENTIONS_FILE", "MENTIONS_SYMBOL"}
+        ),
+        key=lambda edge: (_doc_edge_rank(edge.kind), -float(edge.confidence or 0.0), edge.source_id),
+    )
+    for edge in semantic_edges:
+        doc_node = node_by_id.get(edge.source_id)
+        if doc_node is None or doc_node.kind not in {"DocSection", "DocString"} or doc_node.id in seen_node_ids:
+            continue
+        card_id = harness_card_id(graph.repo_id, request.session_id, intent, (anchor_node_id, doc_node.id, edge.kind))
+        if card_id in seen_cards:
+            continue
+        out.append(_doc_support_card(anchor=anchor, doc_node=doc_node, edge=edge, card_id=card_id))
+    return tuple(out)
+
+
+def _doc_support_card(*, anchor: object, doc_node: object, edge: object, card_id: str) -> HarnessCard:
+    anchor_label = str(getattr(anchor, "label", ""))
+    doc_label = str(getattr(doc_node, "label", ""))
+    doc_path = str(getattr(doc_node, "metadata", {}).get("path") or doc_label)
+    edge_kind = str(getattr(edge, "kind", ""))
+    confidence = round(min(0.86, float(getattr(edge, "confidence", 0.0) or 0.0)), 2)
+    return HarnessCard(
+        card_id=card_id,
+        type="doc_support",
+        title=f"Use docs for {anchor_label}",
+        why=f"{doc_label} {edge_kind.lower().replace('_', ' ')} {anchor_label}.",
+        evidence=(
+            {"node_id": str(getattr(doc_node, "id", "")), "kind": str(getattr(doc_node, "kind", "")), "path": doc_path},
+            {"node_id": str(getattr(anchor, "id", "")), "kind": str(getattr(anchor, "kind", ""))},
+            {
+                "source_id": str(getattr(edge, "source_id", "")),
+                "target_id": str(getattr(edge, "target_id", "")),
+                "kind": edge_kind,
+                "confidence": f"{confidence:.2f}",
+            },
+        ),
+        risk="Doc-backed semantic support; verify code behavior before editing.",
+        confidence=confidence,
+        next_action=f"Read {doc_path} for documented constraints around {anchor_label}.",
+    )
+
+
+def _doc_edge_rank(kind: str) -> int:
+    return {"DOCUMENTS_SYMBOL": 0, "DOCUMENTS_FILE": 1, "MENTIONS_SYMBOL": 2, "MENTIONS_FILE": 3}.get(kind, 9)
 
 
 def _historical_relation_cards_for_anchor(
@@ -393,6 +477,16 @@ def _why_for(*, node_kind: str, node_label: str, reason: str) -> str:
 
 
 def _next_action_for_card(card: HarnessCard) -> HarnessNextAction:
+    if card.type == "doc_support":
+        target = card.title
+        if card.evidence:
+            target = card.evidence[0].get("path") or card.evidence[0].get("node_id", card.title)
+        return HarnessNextAction(
+            action_type="inspect_file",
+            target=target,
+            reason=card.why,
+            priority="recommended",
+        )
     if card.type == "historical_relation":
         target = card.evidence[1].get("node_id", card.title) if len(card.evidence) > 1 else card.title
         return HarnessNextAction(

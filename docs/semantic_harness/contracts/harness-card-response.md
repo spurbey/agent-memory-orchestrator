@@ -4,7 +4,7 @@
 
 ```json
 {
-  "type": "next_file|symbol_context|why_changed|risk|test_target|dependency|historical_relation",
+  "type": "next_file|symbol_context|why_changed|risk|test_target|dependency|historical_relation|doc_support",
   "title": "Inspect AuthSession.refresh_token",
   "why": "Changed in prior signin/session fixes and connected to login submit behavior.",
   "evidence": [
@@ -30,3 +30,4 @@
 - Cards with only vector evidence must not be `ready` cards.
 - Cards are stored as HarnessCard nodes for feedback.
 - Historical relation cards cite task-matching occurrences first and label structural fallback occurrences explicitly.
+- `doc_support` cards must cite a `DocSection` or `DocString` plus an exact `DOCUMENTS_*` or `MENTIONS_*` edge.
