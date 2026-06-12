@@ -31,6 +31,9 @@ class InMemoryHarnessGraphStore:
     def get_node(self, node_id: str) -> HarnessNode | None:
         return self._nodes.get(node_id)
 
+    def get_edge(self, source_id: str, target_id: str, kind: str) -> HarnessEdge | None:
+        return self._edges.get(_edge_key(source_id, target_id, kind))
+
     def node_exists(self, node_id: str) -> bool:
         return node_id in self._nodes
 
@@ -49,6 +52,9 @@ class InMemoryHarnessGraphStore:
             return False
         self._edges[key] = edge
         return True
+
+    def replace_edge(self, edge: HarnessEdge) -> None:
+        self._edges[_edge_key(edge.source_id, edge.target_id, edge.kind)] = edge
 
     def outgoing(self, node_id: str, *, kind: str = "") -> tuple[HarnessEdge, ...]:
         return tuple(

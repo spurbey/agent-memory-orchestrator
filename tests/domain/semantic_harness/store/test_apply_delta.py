@@ -56,6 +56,45 @@ def test_apply_delta_adds_commit_versions_and_edges_idempotently() -> None:
     assert len(updated.edges) == len(graph.edges) + len(delta.created_edges)
 
 
+def test_apply_delta_updates_existing_cochange_edge_with_new_occurrence() -> None:
+    repo_id = "repo:test"
+    graph = build_structural_graph(
+        repo_id,
+        (
+            SourceFile(
+                path="src/auth.py",
+                text=(
+                    "def login():\n"
+                    "    return True\n"
+                    "\n"
+                    "def refresh():\n"
+                    "    return True\n"
+                ),
+            ),
+        ),
+    )
+    store = InMemoryHarnessGraphStore.from_graph(graph)
+    first_delta = _two_symbol_delta(graph, repo_id=repo_id, sha="aaa111")
+    second_delta = _two_symbol_delta(graph, repo_id=repo_id, sha="bbb222")
+
+    first = apply_graph_update_delta(store, first_delta)
+    second = apply_graph_update_delta(store, second_delta)
+
+    assert first.status == "applied"
+    assert second.status == "applied"
+    cochange_edges = [
+        edge
+        for edge in store.to_graph().edges
+        if edge.kind == "CO_CHANGED_WITH"
+    ]
+    assert len(cochange_edges) == 1
+    assert second.updated_edge_keys == ((cochange_edges[0].source_id, cochange_edges[0].target_id, "CO_CHANGED_WITH"),)
+    assert cochange_edges[0].metadata["cochange_count"] == 2
+    assert len(cochange_edges[0].metadata["occurrence_ids"]) == 2
+    assert len(cochange_edges[0].metadata["commit_ids"]) == 2
+    assert cochange_edges[0].metadata["stored_strength"] == cochange_edges[0].weight
+
+
 def test_apply_delta_fails_before_write_when_edge_endpoint_is_missing() -> None:
     repo_id = "repo:test"
     graph = build_structural_graph(repo_id, (SourceFile(path="src/main.py", text="value = 1\n"),))
@@ -106,3 +145,27 @@ def test_apply_delta_rejects_repo_mismatch_before_write() -> None:
 
     assert result.status == "failed"
     assert result.failure_reasons == ("repo_id_mismatch:repo:a!=repo:b",)
+
+
+def _two_symbol_delta(graph, *, repo_id: str, sha: str):
+    return build_commit_update_delta(
+        graph,
+        CommitWorkWindow(
+            repo_id=repo_id,
+            session_id=f"session-{sha}",
+            commit_sha=sha,
+            commit_message="update auth pair",
+            hunks=(
+                CommitHunk(
+                    file_path="src/auth.py",
+                    old_range=HunkRange(start=2, count=1),
+                    new_range=HunkRange(start=2, count=1),
+                ),
+                CommitHunk(
+                    file_path="src/auth.py",
+                    old_range=HunkRange(start=5, count=1),
+                    new_range=HunkRange(start=5, count=1),
+                ),
+            ),
+        ),
+    )
