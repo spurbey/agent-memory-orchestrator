@@ -198,9 +198,15 @@ vague user goal with grounded projection hit
 -> status = partial_structural in structural-only phase
 -> every card has graph node evidence
 
+identifier-variant query where lexical has no grounded hit
+-> vector_used = true
+-> vector_backend = hash_token_char_cosine_v1
+-> every card has graph node evidence
+
 vague user goal with no trusted projection hit
 -> status = unavailable
 -> lexical_used = false
+-> vector_used = false
 -> no cards
 ```
 
@@ -210,6 +216,7 @@ Report fields:
 expected_status
 actual_status
 lexical_used
+vector_used
 graph_grounded_card_count
 card_types
 card_titles

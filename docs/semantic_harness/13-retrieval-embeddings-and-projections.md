@@ -181,6 +181,43 @@ vague goals with grounded lexical hits return partial_structural in the structur
 
 The scorer tokenizes identifiers, paths, docs, and summaries, applies BM25-style term weighting, and gives small deterministic boosts to high-signal document classes such as `symbol_summary`. It does not use vectors, LLMs, or graph mutation.
 
+## Vector Retrieval MVP
+
+The first vector implementation is deterministic hash-cosine over projection documents. It is not a model-quality replacement for learned embeddings; it is a local candidate source for smoke-tested semantic and identifier-variant discovery.
+
+Embedding method:
+
+```text
+hash_token_char_cosine_v1
+```
+
+Features:
+
+```text
+token features from normalized projection text
+character n-gram features for identifier variants
+compact identifier aliases such as sign_in_user -> signin and signinuser
+```
+
+Query behavior:
+
+```text
+exact anchors remain first
+lexical candidates are considered before vector candidates
+vector runs when anchors are absent/incomplete and lexical did not already produce grounded cards
+vector does not rescue a request where every explicit file/symbol anchor failed to resolve
+vector hits must ground through source_node_id to an existing graph node
+vector cards expose retrieval_source=vector and embedding_method
+```
+
+Vector cards remain conservative:
+
+```text
+status remains partial_structural in the structural-only phase
+confidence is capped below exact/lexical grounded cards
+unmatched vector queries return unavailable
+```
+
 ## Projection Health
 
 Projection metadata must record source graph version, embedding model, document content hash, vector count, and readiness status.

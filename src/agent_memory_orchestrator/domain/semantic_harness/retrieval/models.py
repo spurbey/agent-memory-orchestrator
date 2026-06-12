@@ -36,4 +36,45 @@ class LexicalRetrievalHit:
         }
 
 
-__all__ = ["LexicalRetrievalHit", "LexicalRetrievalOptions"]
+@dataclass(slots=True, frozen=True)
+class HashVectorOptions:
+    dimensions: int = 192
+    token_weight: float = 1.0
+    char_ngram_weight: float = 0.38
+    char_ngram_size: int = 3
+
+
+@dataclass(slots=True, frozen=True)
+class VectorRetrievalOptions:
+    top_k: int = 8
+    min_score: float = 0.16
+    embedding: HashVectorOptions = HashVectorOptions()
+
+
+@dataclass(slots=True, frozen=True)
+class VectorRetrievalHit:
+    document: HarnessProjectionDocument
+    score: float
+    matched_features: tuple[str, ...]
+    embedding_method: str
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "doc_id": self.document.doc_id,
+            "source_node_id": self.document.source_node_id,
+            "source_kind": self.document.source_kind,
+            "doc_type": self.document.doc_type,
+            "title": self.document.title,
+            "score": self.score,
+            "matched_features": list(self.matched_features),
+            "embedding_method": self.embedding_method,
+        }
+
+
+__all__ = [
+    "HashVectorOptions",
+    "LexicalRetrievalHit",
+    "LexicalRetrievalOptions",
+    "VectorRetrievalHit",
+    "VectorRetrievalOptions",
+]

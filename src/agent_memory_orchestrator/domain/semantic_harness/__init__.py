@@ -47,9 +47,15 @@ from .relations import HistoricalRelationPolicy
 from .relations import build_cochange_seed
 from .relations import historical_relation_candidates
 from .relations import should_show_historical_relation
+from .retrieval import HASH_COSINE_METHOD
+from .retrieval import HashVectorOptions
 from .retrieval import LexicalRetrievalHit
 from .retrieval import LexicalRetrievalOptions
+from .retrieval import VectorRetrievalHit
+from .retrieval import VectorRetrievalOptions
+from .retrieval import hash_embed_text
 from .retrieval import search_projection_documents
+from .retrieval import search_projection_documents_vector
 from .retrieval import tokenize_text
 from .store import EdgeKey
 from .store import GraphDeltaApplyResult
@@ -60,6 +66,7 @@ from .store import apply_graph_update_delta
 __all__ = [
     "EdgeKey",
     "GraphDeltaApplyResult",
+    "HASH_COSINE_METHOD",
     "HarnessCard",
     "HarnessEdge",
     "HarnessGraphStore",
@@ -69,8 +76,11 @@ __all__ = [
     "HarnessQueryRequest",
     "HarnessQueryResponse",
     "InMemoryHarnessGraphStore",
+    "HashVectorOptions",
     "LexicalRetrievalHit",
     "LexicalRetrievalOptions",
+    "VectorRetrievalHit",
+    "VectorRetrievalOptions",
     "CommitHunk",
     "CommitWorkWindow",
     "CoChangeSeed",
@@ -98,12 +108,14 @@ __all__ = [
     "file_id",
     "harness_card_id",
     "hunk_id",
+    "hash_embed_text",
     "map_hunk_to_entities",
     "normalize_file_path",
     "parse_unified_diff_hunks",
     "repo_id_for_root",
     "resolve_anchors",
     "search_projection_documents",
+    "search_projection_documents_vector",
     "should_show_historical_relation",
     "symbol_id",
     "tokenize_text",
