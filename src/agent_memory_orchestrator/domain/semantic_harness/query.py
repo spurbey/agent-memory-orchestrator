@@ -14,7 +14,10 @@ from .relations import HistoricalRelationPolicy
 from .relations import historical_relation_candidates
 from .retrieval import LexicalRetrievalOptions
 from .retrieval import LexicalRetrievalHit
+from .retrieval import VectorRetrievalOptions
+from .retrieval import VectorRetrievalHit
 from .retrieval import search_projection_documents
+from .retrieval import search_projection_documents_vector
 
 
 SUPPORTED_INTENTS = {"edit_plan", "file_context"}
@@ -145,13 +148,35 @@ def answer_structural_query(
                     if "node_id" in evidence
                 )
 
+    vector_used = False
+    if len(cards) < max_cards and _should_use_vector_candidates(anchors.resolved, anchors.unresolved, lexical_used):
+        vector_cards = _vector_candidate_cards(
+            graph=graph,
+            request=request,
+            intent=intent_used,
+            seen_cards=seen_cards,
+            seen_node_ids=seen_node_ids | selected_node_ids,
+            max_cards=max_cards - len(cards),
+        )
+        if vector_cards:
+            vector_used = True
+            cards.extend(vector_cards)
+            for vector_card in vector_cards:
+                selected_node_ids.update(
+                    evidence["node_id"]
+                    for evidence in vector_card.evidence
+                    if "node_id" in evidence
+                )
+
     actions = tuple(_next_action_for_card(card) for card in cards)
-    if status == "unavailable" and lexical_used:
+    if status == "unavailable" and (lexical_used or vector_used):
         status = "partial_structural"
     if status == "partial_structural":
         warnings.append("structural_only:no_work_history_or_semantic_reasoning_attached")
     if lexical_used:
         warnings.append("candidate_discovery:lexical_projection")
+    if vector_used:
+        warnings.append("candidate_discovery:vector_projection")
     if anchors.unresolved:
         warnings.append("unresolved_anchors:" + ",".join(anchors.unresolved))
     trace = _trace_for(graph=graph, anchors=anchors.resolved, cards=tuple(cards))
@@ -166,6 +191,14 @@ def answer_structural_query(
         trace=trace,
         warnings=tuple(warnings),
     )
+
+
+def _should_use_vector_candidates(resolved: tuple[ResolvedAnchor, ...], unresolved: tuple[str, ...], lexical_used: bool) -> bool:
+    if unresolved and not resolved:
+        return False
+    if resolved and not unresolved:
+        return False
+    return not lexical_used
 
 
 def _lexical_candidate_cards(
@@ -199,6 +232,78 @@ def _lexical_candidate_cards(
         if len(out) >= max_cards:
             break
     return tuple(out)
+
+
+def _vector_candidate_cards(
+    *,
+    graph: StructuralHarnessGraph,
+    request: HarnessQueryRequest,
+    intent: str,
+    seen_cards: set[str],
+    seen_node_ids: set[str],
+    max_cards: int,
+) -> tuple[HarnessCard, ...]:
+    query_text = _task_text_for(request)
+    if not query_text.strip() or max_cards <= 0:
+        return ()
+    node_by_id = graph.node_by_id()
+    hits = search_projection_documents_vector(
+        build_projection_documents(graph),
+        query_text,
+        options=VectorRetrievalOptions(top_k=max_cards * 4),
+    )
+    out: list[HarnessCard] = []
+    for hit in hits:
+        source_node = node_by_id.get(hit.document.source_node_id)
+        if source_node is None or source_node.id in seen_node_ids:
+            continue
+        card_id = harness_card_id(graph.repo_id, request.session_id, intent, ("vector_projection", hit.document.doc_id))
+        if card_id in seen_cards:
+            continue
+        out.append(_vector_candidate_card(source_node=source_node, hit=hit, card_id=card_id))
+        seen_node_ids.add(source_node.id)
+        if len(out) >= max_cards:
+            break
+    return tuple(out)
+
+
+def _vector_candidate_card(*, source_node: object, hit: VectorRetrievalHit, card_id: str) -> HarnessCard:
+    node_kind = str(getattr(source_node, "kind", ""))
+    node_label = str(getattr(source_node, "label", ""))
+    path = str(getattr(source_node, "metadata", {}).get("path") or node_label)
+    card_type = {
+        "File": "next_file",
+        "Symbol": "symbol_context",
+        "DocSection": "doc_support",
+        "DocString": "doc_support",
+    }.get(node_kind, "dependency")
+    confidence = round(min(0.62, 0.36 + hit.score * 0.32), 2)
+    features = ", ".join(hit.matched_features[:4])
+    why = "Vector projection matched graph-grounded summary features."
+    if features:
+        why = f"Vector projection matched graph-grounded features: {features}."
+    return HarnessCard(
+        card_id=card_id,
+        type=card_type,
+        title=f"Inspect {node_label}",
+        why=why,
+        evidence=(
+            {"node_id": str(getattr(source_node, "id", "")), "kind": node_kind, "path": path},
+            {
+                "doc_id": hit.document.doc_id,
+                "kind": "ProjectionDocument",
+                "source_kind": hit.document.source_kind,
+                "doc_type": hit.document.doc_type,
+                "retrieval_source": "vector",
+                "embedding_method": hit.embedding_method,
+                "score": f"{hit.score:.4f}",
+                "matched_features": ", ".join(hit.matched_features),
+            },
+        ),
+        risk="Vector candidate discovery only; inspect graph-grounded source before editing.",
+        confidence=confidence,
+        next_action=f"Open {path} and inspect {node_label} before editing.",
+    )
 
 
 def _lexical_candidate_card(*, source_node: object, hit: LexicalRetrievalHit, card_id: str) -> HarnessCard:

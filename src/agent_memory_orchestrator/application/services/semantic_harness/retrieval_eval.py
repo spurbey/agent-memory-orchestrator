@@ -17,6 +17,7 @@ class RetrievalEvalCase:
     request: HarnessQueryRequest
     expected_status: str
     expected_lexical_used: bool | None = None
+    expected_vector_used: bool | None = None
     expected_first_card_type: str = ""
     expected_first_card_title: str = ""
     required_card_types: tuple[str, ...] = ()
@@ -34,6 +35,7 @@ class RetrievalEvalCaseResult:
     expected_status: str
     actual_status: str
     lexical_used: bool
+    vector_used: bool
     graph_grounded_card_count: int
     card_types: tuple[str, ...]
     card_titles: tuple[str, ...]
@@ -49,6 +51,7 @@ class RetrievalEvalCaseResult:
             "expected_status": self.expected_status,
             "actual_status": self.actual_status,
             "lexical_used": self.lexical_used,
+            "vector_used": self.vector_used,
             "graph_grounded_card_count": self.graph_grounded_card_count,
             "card_types": list(self.card_types),
             "card_titles": list(self.card_titles),
@@ -91,6 +94,7 @@ class RetrievalHarnessEvalService:
     ) -> RetrievalEvalReport:
         bootstrap = self.harness.bootstrap_repo(repo_root, repo_id=repo_id, options=options)
         results = tuple(_run_case(self.harness, bootstrap.graph, case) for case in cases)
+        vector_used = any(result.vector_used for result in results)
         return RetrievalEvalReport(
             repo_root=str(bootstrap.repo_root),
             repo_id=bootstrap.graph.repo_id,
@@ -100,7 +104,9 @@ class RetrievalHarnessEvalService:
                 "phase": "retrieval_mvp",
                 "exact_anchor_first": True,
                 "lexical_candidate_discovery": True,
-                "vector_used": False,
+                "vector_candidate_discovery": True,
+                "vector_backend": "hash_token_char_cosine_v1",
+                "vector_used": vector_used,
                 "llm_used": False,
                 "candidates_must_ground_to_graph": True,
             },
@@ -117,6 +123,7 @@ def _run_case(
     card_titles = tuple(card.title for card in response.cards)
     next_action_targets = tuple(action.target for action in response.next_actions)
     lexical_used = "candidate_discovery:lexical_projection" in response.warnings
+    vector_used = "candidate_discovery:vector_projection" in response.warnings
     graph_grounded_card_count = _graph_grounded_card_count(graph, response)
     failures = _case_failures(
         case=case,
@@ -125,6 +132,7 @@ def _run_case(
         card_titles=card_titles,
         next_action_targets=next_action_targets,
         lexical_used=lexical_used,
+        vector_used=vector_used,
         graph_grounded_card_count=graph_grounded_card_count,
     )
     return RetrievalEvalCaseResult(
@@ -133,6 +141,7 @@ def _run_case(
         expected_status=case.expected_status,
         actual_status=response.status,
         lexical_used=lexical_used,
+        vector_used=vector_used,
         graph_grounded_card_count=graph_grounded_card_count,
         card_types=card_types,
         card_titles=card_titles,
@@ -151,6 +160,7 @@ def _case_failures(
     card_titles: tuple[str, ...],
     next_action_targets: tuple[str, ...],
     lexical_used: bool,
+    vector_used: bool,
     graph_grounded_card_count: int,
 ) -> list[str]:
     failures: list[str] = []
@@ -158,6 +168,8 @@ def _case_failures(
         failures.append(f"status:{response.status}!={case.expected_status}")
     if case.expected_lexical_used is not None and lexical_used is not case.expected_lexical_used:
         failures.append(f"lexical_used:{lexical_used}!={case.expected_lexical_used}")
+    if case.expected_vector_used is not None and vector_used is not case.expected_vector_used:
+        failures.append(f"vector_used:{vector_used}!={case.expected_vector_used}")
     if len(response.cards) < case.min_card_count:
         failures.append(f"card_count:{len(response.cards)}<min:{case.min_card_count}")
     if case.expected_first_card_type and (not card_types or card_types[0] != case.expected_first_card_type):
