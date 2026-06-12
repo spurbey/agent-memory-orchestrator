@@ -90,9 +90,55 @@ def test_apply_delta_updates_existing_cochange_edge_with_new_occurrence() -> Non
     assert len(cochange_edges) == 1
     assert second.updated_edge_keys == ((cochange_edges[0].source_id, cochange_edges[0].target_id, "CO_CHANGED_WITH"),)
     assert cochange_edges[0].metadata["cochange_count"] == 2
+    assert cochange_edges[0].metadata["source_changed_count"] == 2
+    assert cochange_edges[0].metadata["target_changed_count"] == 2
+    assert cochange_edges[0].metadata["either_changed_count"] == 2
+    assert cochange_edges[0].metadata["jaccard"] == 1.0
+    assert cochange_edges[0].metadata["score_components"] == {
+        "cochange_jaccard": 1.0,
+        "recency_score": 0.0,
+        "validation_score": 0.0,
+        "reason_quality_score": 0.0,
+    }
     assert len(cochange_edges[0].metadata["occurrence_ids"]) == 2
     assert len(cochange_edges[0].metadata["commit_ids"]) == 2
+    assert len(cochange_edges[0].metadata["occurrence_ids"]) == cochange_edges[0].metadata["cochange_count"]
+    assert cochange_edges[0].metadata["cochange_count"] <= cochange_edges[0].metadata["either_changed_count"]
+    assert cochange_edges[0].metadata["stored_strength"] == 0.45
     assert cochange_edges[0].metadata["stored_strength"] == cochange_edges[0].weight
+
+
+def test_apply_delta_cochange_strength_uses_entity_change_denominator() -> None:
+    repo_id = "repo:test"
+    graph = build_structural_graph(
+        repo_id,
+        (
+            SourceFile(
+                path="src/auth.py",
+                text=(
+                    "def login():\n"
+                    "    return True\n"
+                    "\n"
+                    "def refresh():\n"
+                    "    return True\n"
+                ),
+            ),
+        ),
+    )
+    store = InMemoryHarnessGraphStore.from_graph(graph)
+    apply_graph_update_delta(store, _single_login_delta(graph, repo_id=repo_id, sha="aaa111"))
+    apply_graph_update_delta(store, _two_symbol_delta(graph, repo_id=repo_id, sha="bbb222"))
+
+    cochange_edge = next(edge for edge in store.to_graph().edges if edge.kind == "CO_CHANGED_WITH")
+
+    assert cochange_edge.metadata["cochange_count"] == 1
+    assert cochange_edge.metadata["source_changed_count"] == 2
+    assert cochange_edge.metadata["target_changed_count"] == 1
+    assert cochange_edge.metadata["either_changed_count"] == 2
+    assert cochange_edge.metadata["jaccard"] == 0.5
+    assert cochange_edge.metadata["stored_strength"] == 0.23
+    assert cochange_edge.metadata["score_components"]["cochange_jaccard"] == 0.5
+    assert cochange_edge.metadata["score_components"]["reason_quality_score"] == 0.0
 
 
 def test_apply_delta_fails_before_write_when_edge_endpoint_is_missing() -> None:
@@ -165,6 +211,25 @@ def _two_symbol_delta(graph, *, repo_id: str, sha: str):
                     file_path="src/auth.py",
                     old_range=HunkRange(start=5, count=1),
                     new_range=HunkRange(start=5, count=1),
+                ),
+            ),
+        ),
+    )
+
+
+def _single_login_delta(graph, *, repo_id: str, sha: str):
+    return build_commit_update_delta(
+        graph,
+        CommitWorkWindow(
+            repo_id=repo_id,
+            session_id=f"session-{sha}",
+            commit_sha=sha,
+            commit_message="update login only",
+            hunks=(
+                CommitHunk(
+                    file_path="src/auth.py",
+                    old_range=HunkRange(start=2, count=1),
+                    new_range=HunkRange(start=2, count=1),
                 ),
             ),
         ),

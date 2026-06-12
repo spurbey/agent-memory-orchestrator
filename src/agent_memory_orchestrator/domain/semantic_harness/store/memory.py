@@ -46,6 +46,9 @@ class InMemoryHarnessGraphStore:
         self._nodes[node.id] = node
         return True
 
+    def replace_node(self, node: HarnessNode) -> None:
+        self._nodes[node.id] = node
+
     def upsert_edge(self, edge: HarnessEdge) -> bool:
         key = _edge_key(edge.source_id, edge.target_id, edge.kind)
         if key in self._edges:
