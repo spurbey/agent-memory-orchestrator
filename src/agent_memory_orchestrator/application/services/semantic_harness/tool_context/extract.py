@@ -34,6 +34,8 @@ PATH_SUFFIXES = {
     ".sql",
 }
 
+REPO_ROOT_SEGMENTS = ("src", "tests", "docs", "npm", "scripts", "apps")
+
 ERROR_PATTERNS = (
     "traceback",
     "assertionerror",
@@ -151,6 +153,8 @@ def _normalize_candidate_path(value: str, *, cwd: Path | None) -> str:
         return ""
     try:
         path = Path(cleaned)
+        if path.is_absolute() and cwd is None:
+            return ""
         if path.is_absolute() and cwd is not None:
             try:
                 cleaned = str(path.resolve().relative_to(cwd)).replace("\\", "/")
@@ -158,12 +162,30 @@ def _normalize_candidate_path(value: str, *, cwd: Path | None) -> str:
                 return ""
     except OSError:
         return ""
+    cleaned = _strip_workspace_prefix(cleaned)
+    lowered_cleaned = cleaned.lower()
+    if lowered_cleaned.startswith(("users/", "windows/", "program files/", "program files (x86)/")):
+        return ""
+    if "/appdata/" in lowered_cleaned or "/.codex/" in lowered_cleaned:
+        return ""
     if cleaned.startswith("../") or "/.git/" in cleaned or "/.codex/" in cleaned:
         return ""
     suffix = Path(cleaned).suffix.lower()
     if suffix not in PATH_SUFFIXES:
         return ""
     return normalize_file_path(cleaned)
+
+
+def _strip_workspace_prefix(value: str) -> str:
+    lowered = value.lower().lstrip("/")
+    if lowered.startswith(REPO_ROOT_SEGMENTS):
+        return value
+    for segment in REPO_ROOT_SEGMENTS:
+        marker = f"/{segment}/"
+        index = lowered.find(marker)
+        if index >= 0:
+            return value[index + 1 :]
+    return value
 
 
 def _python_symbols(text: str) -> list[str]:

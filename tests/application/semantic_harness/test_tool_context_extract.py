@@ -58,3 +58,43 @@ def test_extract_pytest_failure_files_and_errors() -> None:
     assert classify_tool_kind(captured) == "test_output"
     assert anchors.files == ("tests/test_auth.py",)
     assert anchors.errors == ("FAILED tests/test_auth.py::test_login - AssertionError: bad redirect",)
+
+
+def test_external_absolute_paths_are_not_repo_anchors_without_cwd() -> None:
+    captured = CapturedToolResult(
+        tool_name="shell_command",
+        tool_input={"command": r"Get-Content C:\Users\sumit\.codex\skills\SKILL.md"},
+        tool_response="# Skill\n",
+    )
+
+    anchors = extract_tool_result_anchors(captured)
+
+    assert anchors.files == ()
+
+
+def test_workspace_parent_prefix_is_stripped_to_repo_relative_path() -> None:
+    captured = CapturedToolResult(
+        tool_name="shell_command",
+        tool_input={"command": "Get-ChildItem"},
+        tool_response=(
+            r"C:\Users\sumit\Downloads\Dora\agent-memory-orchestrator"
+            r"\src\agent_memory_orchestrator\runtime\hook\launcher.py"
+        ),
+        cwd=r"C:\Users\sumit\Downloads\Dora",
+    )
+
+    anchors = extract_tool_result_anchors(captured)
+
+    assert anchors.files == ("src/agent_memory_orchestrator/runtime/hook/launcher.py",)
+
+
+def test_appdata_cache_paths_are_not_repo_anchors() -> None:
+    captured = CapturedToolResult(
+        tool_name="shell_command",
+        tool_input={"command": r"node C:\Users\sumit\.codex\skills\fetch.mjs"},
+        tool_response=r"C:\Users\sumit\AppData\Local\Temp\openai-docs-cache\codex-manual.md",
+    )
+
+    anchors = extract_tool_result_anchors(captured)
+
+    assert anchors.files == ()
