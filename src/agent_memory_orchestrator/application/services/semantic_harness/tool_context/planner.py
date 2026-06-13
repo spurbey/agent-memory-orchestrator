@@ -9,6 +9,7 @@ from agent_memory_orchestrator.application.services.semantic_harness.runtime imp
 from agent_memory_orchestrator.domain.semantic_harness import HarnessCard
 from agent_memory_orchestrator.domain.semantic_harness import HarnessQueryRequest
 from agent_memory_orchestrator.domain.semantic_harness import HarnessQueryResponse
+from agent_memory_orchestrator.domain.semantic_harness import resolve_anchors
 
 from .extract import classify_tool_kind
 from .extract import extract_tool_result_anchors
@@ -72,11 +73,7 @@ class ToolContextPlanner:
         parse_ms = _elapsed_ms(parse_start)
 
         query_start = time.perf_counter()
-        response = (
-            _no_anchor_response(request)
-            if not anchors.has_any
-            else self._runtime.query(repo_id, request)
-        )
+        response = self._response_for_overlay(repo_id=repo_id, request=request, anchors=anchors)
         query_ms = _elapsed_ms(query_start)
 
         decision_start = time.perf_counter()
@@ -142,6 +139,23 @@ class ToolContextPlanner:
             session_id=captured.session_id,
             already_seen_card_ids=already_seen_card_ids,
         )
+
+    def _response_for_overlay(
+        self,
+        *,
+        repo_id: str,
+        request: HarnessQueryRequest,
+        anchors: ToolResultAnchors,
+    ) -> HarnessQueryResponse:
+        if not anchors.has_any:
+            return _no_anchor_response(request)
+        graph = self._runtime.load_graph(repo_id)
+        if graph is None:
+            return _missing_graph_response(request, repo_id)
+        resolved = resolve_anchors(graph, files=request.files, symbols=request.symbols)
+        if not resolved.resolved:
+            return _ungrounded_anchor_response(request, unresolved=resolved.unresolved)
+        return self._runtime.query(repo_id, request)
 
 
 def _suppression_reasons(
@@ -236,6 +250,35 @@ def _no_anchor_response(request: HarnessQueryRequest) -> HarnessQueryResponse:
         next_actions=(),
         trace={"nodes": [], "edges": [], "versions": [], "occurrences": []},
         warnings=("no_extracted_anchors",),
+    )
+
+
+def _missing_graph_response(request: HarnessQueryRequest, repo_id: str) -> HarnessQueryResponse:
+    return HarnessQueryResponse(
+        status="unavailable",
+        intent_requested=request.intent,
+        intent_used=request.intent,
+        intent_correction=None,
+        cards=(),
+        next_actions=(),
+        trace={"nodes": [], "edges": [], "versions": [], "occurrences": []},
+        warnings=(f"repo_not_bootstrapped:{repo_id}",),
+    )
+
+
+def _ungrounded_anchor_response(request: HarnessQueryRequest, *, unresolved: tuple[str, ...]) -> HarnessQueryResponse:
+    warning = "ungrounded_tool_anchors"
+    if unresolved:
+        warning += ":" + ",".join(unresolved)
+    return HarnessQueryResponse(
+        status="unavailable",
+        intent_requested=request.intent,
+        intent_used=request.intent,
+        intent_correction=None,
+        cards=(),
+        next_actions=(),
+        trace={"nodes": [], "edges": [], "versions": [], "occurrences": []},
+        warnings=(warning,),
     )
 
 

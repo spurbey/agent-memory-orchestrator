@@ -72,6 +72,19 @@ def test_external_absolute_paths_are_not_repo_anchors_without_cwd() -> None:
     assert anchors.files == ()
 
 
+def test_external_skill_path_does_not_become_docs_anchor_with_cwd() -> None:
+    captured = CapturedToolResult(
+        tool_name="shell_command",
+        tool_input={"command": r"Get-Content C:\Users\sumit\.codex\skills\.system\openai-docs\SKILL.md"},
+        tool_response="# OpenAI docs skill\n",
+        cwd=r"C:\Users\sumit\Downloads\Dora",
+    )
+
+    anchors = extract_tool_result_anchors(captured)
+
+    assert anchors.files == ()
+
+
 def test_workspace_parent_prefix_is_stripped_to_repo_relative_path() -> None:
     captured = CapturedToolResult(
         tool_name="shell_command",
@@ -93,6 +106,30 @@ def test_appdata_cache_paths_are_not_repo_anchors() -> None:
         tool_name="shell_command",
         tool_input={"command": r"node C:\Users\sumit\.codex\skills\fetch.mjs"},
         tool_response=r"C:\Users\sumit\AppData\Local\Temp\openai-docs-cache\codex-manual.md",
+    )
+
+    anchors = extract_tool_result_anchors(captured)
+
+    assert anchors.files == ()
+
+
+def test_prose_mentions_are_not_file_anchors() -> None:
+    captured = CapturedToolResult(
+        tool_name="shell_command",
+        tool_input={"command": "Get-Content evidence.jsonl"},
+        tool_response="Implemented scraper/retry.py and discussed future fixes.",
+    )
+
+    anchors = extract_tool_result_anchors(captured)
+
+    assert anchors.files == ()
+
+
+def test_codex_manual_links_are_not_repo_anchors() -> None:
+    captured = CapturedToolResult(
+        tool_name="shell_command",
+        tool_input={"command": "Get-Content codex-manual.md"},
+        tool_response="See (/codex/mcp.md), (/codex/hooks.md), and .codex/config.toml.",
     )
 
     anchors = extract_tool_result_anchors(captured)

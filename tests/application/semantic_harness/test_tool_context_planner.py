@@ -68,6 +68,30 @@ def test_missing_graph_returns_unavailable_fast_and_suppresses() -> None:
     assert "status:unavailable" in decision.suppression_reasons
 
 
+def test_unresolved_tool_anchors_do_not_trigger_fallback_cards(tmp_path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "src").mkdir()
+    (repo / "src" / "auth.py").write_text("def login():\n    return True\n", encoding="utf-8")
+    runtime = SemanticHarnessRuntimeService()
+    runtime.bootstrap_repo(repo, repo_id="repo:test")
+
+    decision = ToolContextPlanner(runtime=runtime).plan(
+        repo_id="repo:test",
+        captured=CapturedToolResult(
+            tool_name="shell_command",
+            tool_input={"command": "Get-Content src/missing.py"},
+            tool_response="No such file or directory: src/missing.py",
+            cwd=str(repo),
+        ),
+    )
+
+    assert decision.harness_response["status"] == "unavailable"
+    assert decision.harness_response["cards"] == []
+    assert decision.harness_response["warnings"] == ["ungrounded_tool_anchors:file:src/missing.py"]
+    assert decision.would_attach is False
+
+
 def test_file_read_prefers_file_anchor_over_unresolved_content_symbols(tmp_path) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()

@@ -130,8 +130,8 @@ def _extract_paths(text: str, *, cwd: Path | None) -> list[str]:
     paths: list[str] = []
     patterns = (
         r"(?P<path>[A-Za-z]:[\\/][^\s'\"<>|]+)",
-        r"(?P<path>(?:src|tests|docs|npm|scripts|agent-memory-orchestrator)[\\/][\w .@()\-\\/]+\.[A-Za-z0-9]+)",
-        r"(?P<path>[\w .@()\-]+[\\/][\w .@()\-\\/]+\.[A-Za-z0-9]+)",
+        r"(?<![A-Za-z0-9_.-])(?P<path>(?:src|tests|docs|npm|scripts|apps)[\\/][^\s'\"<>|:]+\.[A-Za-z0-9]+)",
+        r"(?<![A-Za-z0-9_.-])(?P<path>\.?[\\/][^\s'\"<>|:]+\.[A-Za-z0-9]+)",
     )
     for pattern in patterns:
         for match in re.finditer(pattern, text):
@@ -142,7 +142,7 @@ def _extract_paths(text: str, *, cwd: Path | None) -> list[str]:
 
 
 def _normalize_candidate_path(value: str, *, cwd: Path | None) -> str:
-    cleaned = value.strip().strip("'\"`").rstrip(",:;)]}>\r\n")
+    cleaned = value.strip().strip("'\"`").lstrip("([{<").rstrip(",:;)]}>\r\n")
     lowered = cleaned.lower()
     for prefix in ("get-content ", "cat ", "type ", "rg ", "ripgrep ", "grep ", "select-string "):
         if lowered.startswith(prefix):
@@ -156,10 +156,10 @@ def _normalize_candidate_path(value: str, *, cwd: Path | None) -> str:
         if path.is_absolute() and cwd is None:
             return ""
         if path.is_absolute() and cwd is not None:
-            try:
-                cleaned = str(path.resolve().relative_to(cwd)).replace("\\", "/")
-            except ValueError:
+            relative = _absolute_path_relative_to_cwd(cleaned, cwd)
+            if not relative:
                 return ""
+            cleaned = relative
     except OSError:
         return ""
     cleaned = _strip_workspace_prefix(cleaned)
@@ -169,6 +169,8 @@ def _normalize_candidate_path(value: str, *, cwd: Path | None) -> str:
     if "/appdata/" in lowered_cleaned or "/.codex/" in lowered_cleaned:
         return ""
     if cleaned.startswith("../") or "/.git/" in cleaned or "/.codex/" in cleaned:
+        return ""
+    if not _has_repo_root_segment(cleaned):
         return ""
     suffix = Path(cleaned).suffix.lower()
     if suffix not in PATH_SUFFIXES:
@@ -186,6 +188,31 @@ def _strip_workspace_prefix(value: str) -> str:
         if index >= 0:
             return value[index + 1 :]
     return value
+
+
+def _absolute_path_relative_to_cwd(value: str, cwd: Path) -> str:
+    candidate = _path_text(value)
+    cwd_text = _path_text(str(cwd))
+    candidate_lower = candidate.lower().rstrip("/")
+    cwd_lower = cwd_text.lower().rstrip("/")
+    if candidate_lower == cwd_lower:
+        return ""
+    prefix = cwd_lower + "/"
+    if not candidate_lower.startswith(prefix):
+        return ""
+    return candidate[len(cwd_text.rstrip("/")) + 1 :]
+
+
+def _path_text(value: str) -> str:
+    cleaned = value.replace("\\", "/")
+    if cleaned.startswith("//?/"):
+        cleaned = cleaned[4:]
+    return cleaned
+
+
+def _has_repo_root_segment(value: str) -> bool:
+    lowered = value.lower().lstrip("./")
+    return lowered.startswith(tuple(f"{segment}/" for segment in REPO_ROOT_SEGMENTS))
 
 
 def _python_symbols(text: str) -> list[str]:
