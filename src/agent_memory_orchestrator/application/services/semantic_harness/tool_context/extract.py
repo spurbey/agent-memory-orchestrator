@@ -36,6 +36,15 @@ PATH_SUFFIXES = {
 
 REPO_ROOT_SEGMENTS = ("src", "tests", "docs", "npm", "scripts", "apps")
 
+ROOT_FILE_NAMES = {
+    "package.json",
+    "pyproject.toml",
+    "requirements.txt",
+    "setup.py",
+    "tox.ini",
+    "tsconfig.json",
+}
+
 ERROR_PATTERNS = (
     "traceback",
     "assertionerror",
@@ -188,7 +197,7 @@ def _normalize_candidate_path(value: str, *, cwd: Path | None) -> str:
         return ""
     if cleaned.startswith("../") or "/.git/" in cleaned or "/.codex/" in cleaned:
         return ""
-    if not _has_repo_root_segment(cleaned):
+    if not _has_repo_root_segment(cleaned) and not _is_allowed_root_file(cleaned):
         return ""
     suffix = Path(cleaned).suffix.lower()
     if suffix not in PATH_SUFFIXES:
@@ -231,6 +240,11 @@ def _path_text(value: str) -> str:
 def _has_repo_root_segment(value: str) -> bool:
     lowered = value.lower().lstrip("./")
     return lowered.startswith(tuple(f"{segment}/" for segment in REPO_ROOT_SEGMENTS))
+
+
+def _is_allowed_root_file(value: str) -> bool:
+    cleaned = value.strip().replace("\\", "/").lstrip("./").lower()
+    return "/" not in cleaned and cleaned in ROOT_FILE_NAMES
 
 
 def _python_symbols(text: str) -> list[str]:

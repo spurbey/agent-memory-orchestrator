@@ -46,6 +46,19 @@ def test_extract_git_diff_changed_files() -> None:
     assert anchors.files == ("src/auth.py",)
 
 
+def test_extract_root_config_patch_file() -> None:
+    captured = CapturedToolResult(
+        tool_name="apply_patch",
+        tool_input={"command": "*** Begin Patch\n*** Update File: pyproject.toml\n@@\n"},
+        tool_response="Success. Updated the following files:\nM pyproject.toml\n",
+    )
+
+    anchors = extract_tool_result_anchors(captured)
+
+    assert classify_tool_kind(captured) == "apply_patch"
+    assert anchors.files == ("pyproject.toml",)
+
+
 def test_extract_pytest_failure_files_and_errors() -> None:
     captured = CapturedToolResult(
         tool_name="shell_command",
