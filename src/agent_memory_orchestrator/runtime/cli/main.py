@@ -31,6 +31,8 @@ from .commands.pipeline import add_pipeline_subcommands as _add_pipeline_subcomm
 from .commands.pipeline import handle_pipeline_command as _handle_pipeline_command
 from .commands.peer import add_peer_subcommands as _add_peer_subcommands
 from .commands.peer import handle_peer_command as _handle_peer_command
+from .commands.semantic_harness import add_semantic_harness_subcommands as _add_semantic_harness_subcommands
+from .commands.semantic_harness import handle_semantic_harness_command as _handle_semantic_harness_command
 from .commands.skill_checkpoint import add_skill_checkpoint_subcommands as _add_skill_checkpoint_subcommands
 from .commands.skill_checkpoint import handle_skill_checkpoint_command as _handle_skill_checkpoint_command
 
@@ -72,6 +74,8 @@ def _build_parser() -> argparse.ArgumentParser:
     _add_orchestration_subcommands(sub)
 
     _add_antelligent_subcommands(sub)
+
+    _add_semantic_harness_subcommands(sub)
 
     return parser
 
@@ -128,6 +132,10 @@ def main(argv: list[str] | None = None) -> int:
         antelligent_status = _handle_antelligent_command(args, emit=_print)
         if antelligent_status is not None:
             return antelligent_status
+
+        semantic_harness_status = _handle_semantic_harness_command(args, emit=_print)
+        if semantic_harness_status is not None:
+            return semantic_harness_status
 
         parser.error(f"unknown command: {args.command}")
         return 2
