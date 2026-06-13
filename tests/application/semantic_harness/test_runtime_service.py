@@ -6,8 +6,11 @@ from agent_memory_orchestrator.application.services.semantic_harness import Sema
 from agent_memory_orchestrator.domain.semantic_harness import CommitHunk
 from agent_memory_orchestrator.domain.semantic_harness import CommitWorkWindow
 from agent_memory_orchestrator.domain.semantic_harness import HarnessQueryRequest
+from agent_memory_orchestrator.domain.semantic_harness import HarnessNode
 from agent_memory_orchestrator.domain.semantic_harness import HunkRange
+from agent_memory_orchestrator.domain.semantic_harness import StructuralHarnessGraph
 from agent_memory_orchestrator.domain.semantic_harness import build_commit_update_delta
+from agent_memory_orchestrator.domain.semantic_harness import file_id
 
 
 def test_runtime_bootstrap_persists_graph_and_answers_query(tmp_path) -> None:
@@ -50,6 +53,33 @@ def test_runtime_query_returns_unavailable_for_missing_repo() -> None:
     assert response.warnings == ("repo_not_bootstrapped:repo:missing",)
 
 
+def test_runtime_caches_loaded_graph_for_repeated_queries() -> None:
+    graph = StructuralHarnessGraph(
+        repo_id="repo:test",
+        nodes=(
+            HarnessNode(
+                id=file_id("repo:test", "src/auth.py"),
+                kind="File",
+                label="src/auth.py",
+                repo_id="repo:test",
+                status="active",
+                metadata={"path": "src/auth.py"},
+            ),
+        ),
+        edges=(),
+    )
+    store = _CountingGraphStore(graph)
+    runtime = SemanticHarnessRuntimeService(graph_repository=_SingleGraphRepository(store))
+    request = HarnessQueryRequest(intent="file_context", user_goal="inspect auth", files=("src/auth.py",))
+
+    first = runtime.query("repo:test", request)
+    second = runtime.query("repo:test", request)
+
+    assert first.status == "partial_structural"
+    assert second.status == "partial_structural"
+    assert store.to_graph_calls == 1
+
+
 def test_runtime_apply_delta_updates_persisted_graph_and_projection(tmp_path) -> None:
     (tmp_path / "src").mkdir()
     (tmp_path / "src" / "auth.py").write_text("def login():\n    return False\n", encoding="utf-8")
@@ -83,3 +113,31 @@ def test_runtime_apply_delta_updates_persisted_graph_and_projection(tmp_path) ->
     assert applied.projection.graph_snapshot_id == applied.graph_snapshot.graph_snapshot_id
     assert updated_graph is not None
     assert delta.commit_id in {node.id for node in updated_graph.nodes}
+
+
+class _CountingGraphStore:
+    def __init__(self, graph: StructuralHarnessGraph) -> None:
+        self._graph = graph
+        self.to_graph_calls = 0
+
+    @property
+    def repo_id(self) -> str:
+        return self._graph.repo_id
+
+    def to_graph(self) -> StructuralHarnessGraph:
+        self.to_graph_calls += 1
+        return self._graph
+
+
+class _SingleGraphRepository:
+    def __init__(self, store: _CountingGraphStore) -> None:
+        self._store = store
+
+    def load(self, repo_id: str) -> _CountingGraphStore | None:
+        if repo_id == self._store.repo_id:
+            return self._store
+        return None
+
+    def replace_from_graph(self, graph: StructuralHarnessGraph) -> _CountingGraphStore:
+        self._store = _CountingGraphStore(graph)
+        return self._store

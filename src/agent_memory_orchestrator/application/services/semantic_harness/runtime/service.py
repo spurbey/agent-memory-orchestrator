@@ -31,6 +31,7 @@ class SemanticHarnessRuntimeService:
         self._graph_repository = graph_repository or InMemoryHarnessGraphRepository()
         self._projection_cache = projection_cache or InMemoryProjectionCache()
         self._structural = structural or StructuralHarnessService(projection_cache=self._projection_cache)
+        self._graph_cache: dict[str, StructuralHarnessGraph] = {}
 
     def bootstrap_repo(
         self,
@@ -41,6 +42,7 @@ class SemanticHarnessRuntimeService:
     ) -> HarnessRuntimeBootstrapResult:
         bootstrap = self._structural.bootstrap_repo(repo_root, repo_id=repo_id, options=options)
         self._graph_repository.replace_from_graph(bootstrap.graph)
+        self._graph_cache[bootstrap.graph.repo_id] = bootstrap.graph
         projection = self._projection_cache.get_or_build(bootstrap.graph)
         snapshot = graph_snapshot_identity(bootstrap.graph)
         return HarnessRuntimeBootstrapResult(
@@ -55,8 +57,15 @@ class SemanticHarnessRuntimeService:
         )
 
     def load_graph(self, repo_id: str) -> StructuralHarnessGraph | None:
+        cached = self._graph_cache.get(repo_id)
+        if cached is not None:
+            return cached
         store = self._graph_repository.load(repo_id)
-        return store.to_graph() if store is not None else None
+        if store is None:
+            return None
+        graph = store.to_graph()
+        self._graph_cache[repo_id] = graph
+        return graph
 
     def query(self, repo_id: str, request: HarnessQueryRequest) -> HarnessQueryResponse:
         graph = self.load_graph(repo_id)
@@ -79,6 +88,7 @@ class SemanticHarnessRuntimeService:
             raise ValueError(f"repo_not_bootstrapped:{delta.repo_id}")
         apply_result = apply_graph_update_delta(store, delta)
         graph = store.to_graph()
+        self._graph_cache[delta.repo_id] = graph
         projection = self._projection_cache.get_or_build(graph)
         return HarnessRuntimeDeltaApplyResult(
             repo_id=delta.repo_id,
