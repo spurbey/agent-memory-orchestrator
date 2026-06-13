@@ -11,6 +11,7 @@ from agent_memory_orchestrator.domain.semantic_harness import HarnessQueryReques
 from agent_memory_orchestrator.domain.semantic_harness import HarnessQueryResponse
 from agent_memory_orchestrator.domain.semantic_harness import resolve_anchors
 
+from .cards import enrich_tool_overlay_response
 from .extract import classify_tool_kind
 from .extract import extract_tool_result_anchors
 from .models import CapturedToolResult
@@ -73,7 +74,7 @@ class ToolContextPlanner:
         parse_ms = _elapsed_ms(parse_start)
 
         query_start = time.perf_counter()
-        response = self._response_for_overlay(repo_id=repo_id, request=request, anchors=anchors)
+        response = self._response_for_overlay(repo_id=repo_id, request=request, anchors=anchors, tool_kind=tool_kind)
         query_ms = _elapsed_ms(query_start)
 
         decision_start = time.perf_counter()
@@ -146,6 +147,7 @@ class ToolContextPlanner:
         repo_id: str,
         request: HarnessQueryRequest,
         anchors: ToolResultAnchors,
+        tool_kind: str,
     ) -> HarnessQueryResponse:
         if not anchors.has_any:
             return _no_anchor_response(request)
@@ -161,6 +163,12 @@ class ToolContextPlanner:
             resolved_symbols=_resolved_symbols(resolved),
         )
         response = self._runtime.query(repo_id, grounded_request)
+        response = enrich_tool_overlay_response(
+            graph=graph,
+            request=grounded_request,
+            response=response,
+            tool_kind=tool_kind,
+        )
         if resolved.unresolved:
             response = _append_response_warning(response, "ungrounded_tool_anchors_filtered:" + ",".join(resolved.unresolved))
         return response
@@ -186,6 +194,8 @@ def _suppression_reasons(
         reasons.append("low_card_confidence")
     if not _has_graph_grounding(response.cards):
         reasons.append("missing_graph_grounding")
+    if any(str(warning).startswith("duplicate_tool_card:") for warning in response.warnings):
+        reasons.append("duplicate_card")
     if _has_only_vector_evidence(response.cards):
         reasons.append("vector_only_evidence")
     if token_overhead > options.max_tokens:
