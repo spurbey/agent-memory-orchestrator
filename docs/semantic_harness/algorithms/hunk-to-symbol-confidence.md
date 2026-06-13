@@ -21,14 +21,17 @@ Mappings to Symbol, CodeRegion, or review-only unresolved mapping.
 ## Algorithm
 
 ```text
-1. Parse old and new file snapshots.
-2. Build symbol spans and stable names.
-3. Intersect hunk old/new ranges with old/new spans.
-4. Compare structural diff and text diff.
-5. If one symbol contains the hunk in both snapshots, map to Symbol.
-6. If hunk is sub-symbol or non-symbol config/JSX/CSS/docs, create or reuse CodeRegion.
-7. If multiple entities overlap, emit review-only candidates.
+1. Read Git hunks with zero context or derive changed-line ranges from the patch.
+2. Parse old and new file snapshots.
+3. Build symbol spans and stable names.
+4. Intersect changed-line old/new ranges with old/new spans.
+5. Compare structural diff and text diff.
+6. If one symbol contains the changed lines in both snapshots, map to Symbol.
+7. If changed lines are sub-symbol or non-symbol config/JSX/CSS/docs, create or reuse CodeRegion.
+8. If multiple entities overlap the changed lines, emit review-only candidates.
 ```
+
+Mapping must not use wide context hunks. Broad context is useful for Qwen work-causality packets, but it is unsafe as graph mutation input because one small edit can overlap many nearby symbols and suppress version/relation updates.
 
 ## Confidence Scoring
 
@@ -36,7 +39,7 @@ Base `0.50` plus span containment `0.25`, old/new agreement `0.15`, signature st
 
 ## Failure Modes
 
-Parser failure maps file-level only. Multi-symbol hunks create multiple lower-confidence mappings. Formatting-only diffs can create structural-only mapping.
+Parser failure maps file-level only. Multi-symbol changed-line hunks create multiple lower-confidence mappings. Formatting-only diffs can create structural-only mapping. If only a wide-context diff is available, first reduce it to changed-line ranges before mapping.
 
 ## Product Usage
 
@@ -53,3 +56,5 @@ Input: hunk lines `45-67` in `auth.py`; old `login()` span `40-80`; new `login()
 Intermediate: hunk fully inside same symbol, signature unchanged, no competing overlap.
 
 Output: Symbol mapping `auth.py::login`, confidence `0.91`, reason `hunk falls within same symbol span in old and new parse`.
+
+Counterexample: a one-line edit inside `login()` is displayed with 80 lines of Git context and the context also includes `logout()` and `refresh()`. The mapper must score only the changed line, not the full displayed context. Otherwise the hunk becomes a false multi-symbol overlap and version/co-change edges are incorrectly withheld.

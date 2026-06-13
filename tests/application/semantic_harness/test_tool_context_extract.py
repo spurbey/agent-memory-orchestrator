@@ -46,6 +46,19 @@ def test_extract_git_diff_changed_files() -> None:
     assert anchors.files == ("src/auth.py",)
 
 
+def test_extract_root_config_patch_file() -> None:
+    captured = CapturedToolResult(
+        tool_name="apply_patch",
+        tool_input={"command": "*** Begin Patch\n*** Update File: pyproject.toml\n@@\n"},
+        tool_response="Success. Updated the following files:\nM pyproject.toml\n",
+    )
+
+    anchors = extract_tool_result_anchors(captured)
+
+    assert classify_tool_kind(captured) == "apply_patch"
+    assert anchors.files == ("pyproject.toml",)
+
+
 def test_extract_pytest_failure_files_and_errors() -> None:
     captured = CapturedToolResult(
         tool_name="shell_command",
@@ -134,4 +147,85 @@ def test_codex_manual_links_are_not_repo_anchors() -> None:
 
     anchors = extract_tool_result_anchors(captured)
 
+    assert anchors.files == ()
+
+
+def test_malformed_repo_like_paths_are_not_anchors() -> None:
+    captured = CapturedToolResult(
+        tool_name="shell_command",
+        tool_input={"command": "Get-ChildItem"},
+        tool_response=(
+            "src//agent_memory_orchestrator//domain//semantic_harness//anchor_resolution.py\n"
+            "src/agent_memory_orchestrator/domain/semantic_harness/doc_semantics/*.py\n"
+        ),
+    )
+
+    anchors = extract_tool_result_anchors(captured)
+
+    assert anchors.files == ()
+
+
+def test_generated_tmp_reports_do_not_feed_overlay_anchors() -> None:
+    captured = CapturedToolResult(
+        tool_name="shell_command",
+        tool_input={"command": "Get-Content .tmp/semantic-harness-profile/shadow_replay.json"},
+        tool_response='{"files": ["src/auth.py", "docs/SKILL.md"]}',
+    )
+
+    anchors = extract_tool_result_anchors(captured)
+
+    assert anchors.files == ()
+    assert anchors.errors == ()
+
+
+def test_git_status_inventory_does_not_feed_overlay_anchors() -> None:
+    captured = CapturedToolResult(
+        tool_name="shell_command",
+        tool_input={"command": "git status --short; git branch --show-current"},
+        tool_response=" M src/auth.py\n?? tests/test_auth.py\nmain\n",
+    )
+
+    anchors = extract_tool_result_anchors(captured)
+
+    assert classify_tool_kind(captured) == "unknown"
+    assert anchors.files == ()
+
+
+def test_git_ls_files_inventory_does_not_feed_overlay_anchors() -> None:
+    captured = CapturedToolResult(
+        tool_name="shell_command",
+        tool_input={"command": "git ls-files | Select-Object -First 10"},
+        tool_response="src/auth.py\ntests/test_auth.py\n",
+    )
+
+    anchors = extract_tool_result_anchors(captured)
+
+    assert classify_tool_kind(captured) == "unknown"
+    assert anchors.files == ()
+
+
+def test_git_add_status_inventory_does_not_feed_overlay_anchors() -> None:
+    captured = CapturedToolResult(
+        tool_name="shell_command",
+        tool_input={"command": "git add src/auth.py; git status --short"},
+        tool_response="M  src/auth.py\n",
+    )
+
+    anchors = extract_tool_result_anchors(captured)
+
+    assert classify_tool_kind(captured) == "unknown"
+    assert anchors.files == ()
+
+
+def test_get_childitem_listing_does_not_feed_overlay_anchors() -> None:
+    captured = CapturedToolResult(
+        tool_name="shell_command",
+        tool_input={"command": "Get-ChildItem -Recurse src | Select-Object FullName"},
+        tool_response=r"C:\repo\src\auth.py",
+        cwd=r"C:\repo",
+    )
+
+    anchors = extract_tool_result_anchors(captured)
+
+    assert classify_tool_kind(captured) == "unknown"
     assert anchors.files == ()

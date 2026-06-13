@@ -28,3 +28,28 @@ real-session eval passes on rich and partial fixtures
 ## Sidecar Output Rule
 
 Sidecar mode may attach cards but must not block raw tool results. If card confidence is weak, it should attach no card and record an eval event.
+
+Sidecar mode must not attach cards that only restate the visible tool result. The first implemented shadow rules are:
+
+```text
+file_read:
+  suppress same-file-only cards such as "Inspect <file just opened>"
+  attach only if extra graph context remains, such as docs, dependencies, history, or validation guidance
+
+test_output:
+  attach only when failing files, traceback lines, or assertion anchors are graph-grounded
+  suppress successful output with no anchors
+
+search:
+  suppress broad search output when many files match and the only cards are exact-anchor next_file echoes
+  attach only when the harness adds a stronger graph-grounded signal than the raw result list
+
+git_diff / apply_patch:
+  attach concise risk cards for graph-grounded changed files
+  suppress duplicate cards already seen in the session
+
+unknown / inventory:
+  suppress path-only inventory/status output from git status, git branch, git ls-files, and Test-Path
+```
+
+These rules keep the sidecar append-only path conservative until real-session eval proves higher signal.

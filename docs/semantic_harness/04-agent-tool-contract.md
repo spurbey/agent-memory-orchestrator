@@ -41,3 +41,24 @@ The harness must:
 ## Output Discipline
 
 Cards must be short by default. Long narrative belongs only to `why_changed` or `detail=deep`.
+
+## Tool Overlay Discipline
+
+`tool_overlay` must add new graph-grounded context, not echo the raw tool result.
+
+Attach only when the card adds one of:
+
+- a graph-grounded file or symbol the agent has not already inspected
+- documented support or constraints
+- dependency, impact, or validation context
+- high-confidence patch, diff, or failing-test guidance
+
+Suppress when the overlay would only repeat the current tool result:
+
+- file read already opened the exact file and the only card is `Inspect <same file>`
+- broad search output has many matched files and the only cards are exact-anchor `next_file` echoes
+- inventory/status output such as `git status`, `git branch`, `git ls-files`, or `Test-Path` only prints paths
+- successful test output has no failing file, traceback, or assertion anchor
+- card evidence is vector-only or otherwise not graph-grounded
+
+This keeps sidecar context useful under token budget and prevents model-visible noise.
