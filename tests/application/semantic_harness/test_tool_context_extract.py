@@ -176,3 +176,29 @@ def test_generated_tmp_reports_do_not_feed_overlay_anchors() -> None:
 
     assert anchors.files == ()
     assert anchors.errors == ()
+
+
+def test_git_status_inventory_does_not_feed_overlay_anchors() -> None:
+    captured = CapturedToolResult(
+        tool_name="shell_command",
+        tool_input={"command": "git status --short; git branch --show-current"},
+        tool_response=" M src/auth.py\n?? tests/test_auth.py\nmain\n",
+    )
+
+    anchors = extract_tool_result_anchors(captured)
+
+    assert classify_tool_kind(captured) == "unknown"
+    assert anchors.files == ()
+
+
+def test_git_ls_files_inventory_does_not_feed_overlay_anchors() -> None:
+    captured = CapturedToolResult(
+        tool_name="shell_command",
+        tool_input={"command": "git ls-files | Select-Object -First 10"},
+        tool_response="src/auth.py\ntests/test_auth.py\n",
+    )
+
+    anchors = extract_tool_result_anchors(captured)
+
+    assert classify_tool_kind(captured) == "unknown"
+    assert anchors.files == ()

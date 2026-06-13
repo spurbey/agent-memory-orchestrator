@@ -196,6 +196,8 @@ def _suppression_reasons(
         reasons.append("missing_graph_grounding")
     if any(str(warning).startswith("duplicate_tool_card:") for warning in response.warnings):
         reasons.append("duplicate_card")
+    if "redundant_file_read_card" in response.warnings:
+        reasons.append("redundant_file_read_card")
     if _has_only_vector_evidence(response.cards):
         reasons.append("vector_only_evidence")
     if token_overhead > options.max_tokens:
