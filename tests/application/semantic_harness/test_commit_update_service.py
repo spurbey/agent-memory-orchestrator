@@ -43,6 +43,44 @@ def test_commit_update_service_builds_delta_from_real_git_commit(tmp_path) -> No
     assert first_sha != second_sha
 
 
+def test_commit_update_service_uses_changed_line_hunks_for_symbol_mapping(tmp_path) -> None:
+    if subprocess.run(["git", "--version"], capture_output=True, check=False).returncode != 0:
+        pytest.skip("git unavailable")
+    _git(tmp_path, "init")
+    _git(tmp_path, "config", "user.email", "test@example.invalid")
+    _git(tmp_path, "config", "user.name", "Test User")
+    (tmp_path / "src").mkdir()
+    target = tmp_path / "src" / "auth.py"
+    target.write_text(
+        "def login():\n"
+        "    return False\n"
+        "\n"
+        "def logout():\n"
+        "    return True\n",
+        encoding="utf-8",
+    )
+    _git(tmp_path, "add", "src/auth.py")
+    _git(tmp_path, "commit", "-m", "add auth flows")
+    target.write_text(
+        "def login():\n"
+        "    return True\n"
+        "\n"
+        "def logout():\n"
+        "    return True\n",
+        encoding="utf-8",
+    )
+    _git(tmp_path, "add", "src/auth.py")
+    _git(tmp_path, "commit", "-m", "fix login")
+    sha = _git(tmp_path, "rev-parse", "HEAD").strip()
+
+    result = CommitUpdateService().build_delta_for_commit(tmp_path, sha, repo_id="repo:test")
+
+    assert result.diff_hunk_count == 1
+    assert {mapping.status for mapping in result.delta.hunk_mappings} == {"mapped"}
+    assert [mapping.target_kind for mapping in result.delta.hunk_mappings] == ["Symbol"]
+    assert result.delta.hunk_mappings[0].target_node_id.endswith(":login:function")
+
+
 def _git(cwd, *args: str) -> str:
     result = subprocess.run(
         ["git", "-C", str(cwd), *args],

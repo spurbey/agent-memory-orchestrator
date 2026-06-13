@@ -36,6 +36,15 @@ PATH_SUFFIXES = {
 
 REPO_ROOT_SEGMENTS = ("src", "tests", "docs", "npm", "scripts", "apps")
 
+ROOT_FILE_NAMES = {
+    "package.json",
+    "pyproject.toml",
+    "requirements.txt",
+    "setup.py",
+    "tox.ini",
+    "tsconfig.json",
+}
+
 ERROR_PATTERNS = (
     "traceback",
     "assertionerror",
@@ -77,6 +86,11 @@ def extract_tool_result_anchors(captured: CapturedToolResult) -> ToolResultAncho
     errors: list[str] = []
     line_refs: list[ToolLineRef] = []
 
+    if _reads_generated_artifact(command):
+        return ToolResultAnchors(errors=tuple(_dedupe(_error_lines(response))[:8]))
+    if tool_kind == "unknown" and _is_low_signal_inventory_command(command):
+        return ToolResultAnchors(errors=tuple(_dedupe(_error_lines(response))[:8]))
+
     if tool_kind == "search":
         line_refs.extend(_rg_line_refs(response, cwd=cwd))
         files.extend(ref.file_path for ref in line_refs)
@@ -112,6 +126,31 @@ def _starts_with_any(value: str, prefixes: tuple[str, ...]) -> bool:
     return any(value.startswith(prefix) for prefix in prefixes)
 
 
+def _reads_generated_artifact(command: str) -> bool:
+    normalized = command.replace("\\", "/").lower()
+    generated_markers = (
+        ".tmp/",
+        "semantic-harness-profile",
+        "semantic-harness-delivery-evals",
+        "validation-evals",
+    )
+    return any(marker in normalized for marker in generated_markers)
+
+
+def _is_low_signal_inventory_command(command: str) -> bool:
+    normalized = command.strip().lower()
+    low_signal_starts = (
+        "get-childitem ",
+        "git add",
+        "git status",
+        "git branch",
+        "git ls-files",
+        "git log",
+        "test-path ",
+    )
+    return normalized.startswith(low_signal_starts)
+
+
 def _rg_line_refs(text: str, *, cwd: Path | None) -> list[ToolLineRef]:
     refs: list[ToolLineRef] = []
     for raw in text.splitlines():
@@ -143,12 +182,16 @@ def _extract_paths(text: str, *, cwd: Path | None) -> list[str]:
 
 def _normalize_candidate_path(value: str, *, cwd: Path | None) -> str:
     cleaned = value.strip().strip("'\"`").lstrip("([{<").rstrip(",:;)]}>\r\n")
+    if any(char in cleaned for char in "*?[]"):
+        return ""
     lowered = cleaned.lower()
     for prefix in ("get-content ", "cat ", "type ", "rg ", "ripgrep ", "grep ", "select-string "):
         if lowered.startswith(prefix):
             cleaned = cleaned[len(prefix) :].strip()
             lowered = cleaned.lower()
     cleaned = cleaned.replace("\\", "/")
+    if "//" in cleaned:
+        return ""
     if not cleaned:
         return ""
     try:
@@ -170,7 +213,7 @@ def _normalize_candidate_path(value: str, *, cwd: Path | None) -> str:
         return ""
     if cleaned.startswith("../") or "/.git/" in cleaned or "/.codex/" in cleaned:
         return ""
-    if not _has_repo_root_segment(cleaned):
+    if not _has_repo_root_segment(cleaned) and not _is_allowed_root_file(cleaned):
         return ""
     suffix = Path(cleaned).suffix.lower()
     if suffix not in PATH_SUFFIXES:
@@ -213,6 +256,11 @@ def _path_text(value: str) -> str:
 def _has_repo_root_segment(value: str) -> bool:
     lowered = value.lower().lstrip("./")
     return lowered.startswith(tuple(f"{segment}/" for segment in REPO_ROOT_SEGMENTS))
+
+
+def _is_allowed_root_file(value: str) -> bool:
+    cleaned = value.strip().replace("\\", "/").lstrip("./").lower()
+    return "/" not in cleaned and cleaned in ROOT_FILE_NAMES
 
 
 def _python_symbols(text: str) -> list[str]:

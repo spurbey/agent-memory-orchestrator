@@ -110,6 +110,64 @@ expected_agent_action = inspect ranking.py first, then query.py if the behavior 
 - bad Qwen frame is quarantined and does not affect cards
 - card feedback records shown, acted_on, ignored, or invalidated
 
+## Shadow Tool Overlay Eval
+
+Shadow replay must evaluate captured `PostToolUse` records without injecting anything into the agent context.
+
+Required tool-kind checks:
+
+```text
+file_read same-file-only card
+-> suppress
+-> suppression_reasons include redundant_file_read_card
+
+file_read with docs/dependencies/history remaining after same-file filtering
+-> may attach
+-> card evidence must be graph-grounded
+
+successful test output with no failing anchor
+-> suppress
+
+failing test output with graph-grounded file
+-> attach test_target card
+
+git_diff with graph-grounded changed file
+-> attach concise risk card
+
+broad search with many matched files and only exact-anchor next_file cards
+-> suppress
+-> suppression_reasons include broad_search_anchor_only_card
+
+apply_patch with graph-grounded changed file
+-> attach concise risk card once
+-> repeated same card suppresses with duplicate_card
+
+git status / git branch / git ls-files / Test-Path path inventory
+-> suppress as low-signal inventory
+```
+
+Current shadow replay reports must include:
+
+```text
+record_count
+attached_count
+suppressed_count
+manual_review_required_count
+auto_useful_count
+auto_mislead_candidate_count
+p95_shadow_latency_ms
+token_overhead_p95
+by_tool_kind suppress_rate
+```
+
+Interpretation rule:
+
+```text
+High suppress rate is acceptable for a tool kind when the available graph only produces redundant or low-confidence cards.
+Do not lower attach thresholds to satisfy a suppress-rate target.
+Improve graph/card quality first.
+```
+
 ## Historical Relation Card Gate
 
 `historical_relation` evals must check both strength and evidence count:
