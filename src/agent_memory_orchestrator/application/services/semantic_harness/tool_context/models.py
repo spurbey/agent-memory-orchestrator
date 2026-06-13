@@ -206,10 +206,14 @@ def captured_tool_result_from_event(event: dict[str, Any]) -> CapturedToolResult
 def _metrics(records: list[dict[str, Any]]) -> dict[str, Any]:
     by_kind: dict[str, dict[str, int]] = {}
     latencies: list[int] = []
+    token_overheads: list[int] = []
     attached = 0
+    auto_useful = 0
+    auto_mislead = 0
+    manual_review_required = 0
     for record in records:
         tool_kind = str(record.get("tool_kind") or "unknown")
-        bucket = by_kind.setdefault(tool_kind, {"total": 0, "attached": 0, "suppressed": 0})
+        bucket = by_kind.setdefault(tool_kind, {"total": 0, "attached": 0, "suppressed": 0, "suppress_rate": 0})
         bucket["total"] += 1
         decision = record.get("decision") or {}
         if decision.get("would_attach"):
@@ -219,12 +223,44 @@ def _metrics(records: list[dict[str, Any]]) -> dict[str, Any]:
             bucket["suppressed"] += 1
         latency = record.get("latency_ms") or {}
         latencies.append(int(latency.get("total") or 0))
+        token_overheads.append(int(record.get("token_overhead_estimate") or 0))
+        judgment = record.get("judgment") or {}
+        if judgment.get("auto_useful") is True:
+            auto_useful += 1
+        if judgment.get("auto_mislead_candidate") is True:
+            auto_mislead += 1
+        if judgment.get("reason") == "manual_review_required":
+            manual_review_required += 1
+    for bucket in by_kind.values():
+        total = int(bucket.get("total") or 0)
+        bucket["suppress_rate"] = round(int(bucket.get("suppressed") or 0) / total, 4) if total else 0
     return {
         "attached_count": attached,
         "suppressed_count": len(records) - attached,
         "attach_rate": round(attached / len(records), 4) if records else 0.0,
+        "suppress_rate": round((len(records) - attached) / len(records), 4) if records else 0.0,
         "p95_shadow_latency_ms": _percentile(latencies, 0.95),
+        "token_overhead_p95": _percentile(token_overheads, 0.95),
         "idempotent_replay_rate": 1.0,
+        "auto_useful_count": auto_useful,
+        "auto_mislead_candidate_count": auto_mislead,
+        "auto_mislead_candidate_rate": round(auto_mislead / len(records), 4) if records else 0.0,
+        "manual_review_required_count": manual_review_required,
+        "acceptance_thresholds": {
+            "anchor_extraction_precision": 0.90,
+            "strict_card_precision": 0.85,
+            "mislead_rate": 0.05,
+            "p95_shadow_latency_ms": 500,
+            "token_overhead_p95": 900,
+            "idempotent_replay_rate": 1.0,
+        },
+        "suppress_rate_targets": {
+            "rg_many_matches": "0.20-0.40",
+            "file_read": "0.10-0.25",
+            "test_failure": "0.05-0.20",
+            "apply_patch_edit": "0.30-0.60",
+            "unknown_tool": "0.80-0.95",
+        },
         "by_tool_kind": by_kind,
     }
 
