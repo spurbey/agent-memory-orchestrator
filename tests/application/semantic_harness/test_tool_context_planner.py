@@ -85,6 +85,33 @@ def test_git_diff_generates_diff_impact_card(tmp_path) -> None:
     assert decision.harness_response["cards"][0]["title"] == "Review diff impact for src/auth.py"
 
 
+def test_broad_search_anchor_only_cards_suppress(tmp_path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "src").mkdir()
+    lines: list[str] = []
+    for index in range(9):
+        path = repo / "src" / f"mod_{index}.py"
+        path.write_text(f"def target_{index}():\n    return True\n", encoding="utf-8")
+        lines.append(f"src/mod_{index}.py:1:def target_{index}():")
+    runtime = SemanticHarnessRuntimeService()
+    runtime.bootstrap_repo(repo, repo_id="repo:test")
+
+    decision = ToolContextPlanner(runtime=runtime).plan(
+        repo_id="repo:test",
+        captured=CapturedToolResult(
+            tool_name="shell_command",
+            tool_input={"command": "rg -n target src -S"},
+            tool_response="\n".join(lines),
+            cwd=str(repo),
+        ),
+    )
+
+    assert decision.tool_kind == "search"
+    assert decision.would_attach is False
+    assert "broad_search_anchor_only_card" in decision.suppression_reasons
+
+
 def test_apply_patch_generates_patch_impact_card_for_root_config(tmp_path) -> None:
     repo, runtime = _runtime_for_tool_repo(tmp_path)
 

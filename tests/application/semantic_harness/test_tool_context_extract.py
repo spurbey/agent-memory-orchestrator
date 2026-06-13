@@ -202,3 +202,30 @@ def test_git_ls_files_inventory_does_not_feed_overlay_anchors() -> None:
 
     assert classify_tool_kind(captured) == "unknown"
     assert anchors.files == ()
+
+
+def test_git_add_status_inventory_does_not_feed_overlay_anchors() -> None:
+    captured = CapturedToolResult(
+        tool_name="shell_command",
+        tool_input={"command": "git add src/auth.py; git status --short"},
+        tool_response="M  src/auth.py\n",
+    )
+
+    anchors = extract_tool_result_anchors(captured)
+
+    assert classify_tool_kind(captured) == "unknown"
+    assert anchors.files == ()
+
+
+def test_get_childitem_listing_does_not_feed_overlay_anchors() -> None:
+    captured = CapturedToolResult(
+        tool_name="shell_command",
+        tool_input={"command": "Get-ChildItem -Recurse src | Select-Object FullName"},
+        tool_response=r"C:\repo\src\auth.py",
+        cwd=r"C:\repo",
+    )
+
+    anchors = extract_tool_result_anchors(captured)
+
+    assert classify_tool_kind(captured) == "unknown"
+    assert anchors.files == ()

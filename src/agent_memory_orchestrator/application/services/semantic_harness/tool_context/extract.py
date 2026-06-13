@@ -140,6 +140,8 @@ def _reads_generated_artifact(command: str) -> bool:
 def _is_low_signal_inventory_command(command: str) -> bool:
     normalized = command.strip().lower()
     low_signal_starts = (
+        "get-childitem ",
+        "git add",
         "git status",
         "git branch",
         "git ls-files",

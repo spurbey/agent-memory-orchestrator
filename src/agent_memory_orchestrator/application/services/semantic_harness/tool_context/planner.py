@@ -198,6 +198,8 @@ def _suppression_reasons(
         reasons.append("duplicate_card")
     if "redundant_file_read_card" in response.warnings:
         reasons.append("redundant_file_read_card")
+    if "broad_search_anchor_only_card" in response.warnings:
+        reasons.append("broad_search_anchor_only_card")
     if _has_only_vector_evidence(response.cards):
         reasons.append("vector_only_evidence")
     if token_overhead > options.max_tokens:
