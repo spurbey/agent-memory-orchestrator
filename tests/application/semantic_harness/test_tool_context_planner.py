@@ -112,6 +112,54 @@ def test_broad_search_anchor_only_cards_suppress(tmp_path) -> None:
     assert "broad_search_anchor_only_card" in decision.suppression_reasons
 
 
+def test_broad_search_with_focus_signal_generates_search_focus_card(tmp_path) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "src").mkdir(parents=True)
+    (repo / "tests").mkdir(parents=True)
+    files = {
+        "src/runtime_service.py": "class SemanticHarnessRuntimeService:\n    pass\n",
+        "src/runtime_models.py": "class HarnessRuntimeBootstrapResult:\n    pass\n",
+        "src/query.py": "def answer_structural_query():\n    pass\n",
+        "src/anchor_resolution.py": "def resolve_anchors():\n    pass\n",
+        "src/projection.py": "def build_projection_documents():\n    pass\n",
+        "tests/test_runtime_service.py": "def test_runtime_service():\n    pass\n",
+        "tests/test_query.py": "def test_query():\n    pass\n",
+        "tests/test_projection.py": "def test_projection():\n    pass\n",
+        "docs/runtime.md": "# Runtime\n",
+    }
+    for path, text in files.items():
+        target = repo / path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(text, encoding="utf-8")
+    runtime = SemanticHarnessRuntimeService()
+    runtime.bootstrap_repo(repo, repo_id="repo:test")
+    response = "\n".join(f"{path}:1:{text.splitlines()[0]}" for path, text in files.items())
+
+    decision = ToolContextPlanner(runtime=runtime).plan(
+        repo_id="repo:test",
+        captured=CapturedToolResult(
+            tool_name="shell_command",
+            tool_input={
+                "command": "rg -n \"SemanticHarnessRuntimeService|HarnessRuntimeBootstrapResult\" src tests docs -S"
+            },
+            tool_response=response,
+            cwd=str(repo),
+        ),
+    )
+
+    assert decision.tool_kind == "search"
+    assert decision.would_attach is True
+    assert decision.harness_response["cards"][0]["title"].startswith("Focus broad search on src/runtime_")
+    assert decision.harness_response["cards"][0]["type"] == "next_file"
+    assert decision.harness_response["cards"][0]["evidence"][0]["path"] in {
+        "src/runtime_models.py",
+        "src/runtime_service.py",
+    }
+    assert "tool_context_enriched:search_focus" in decision.harness_response["warnings"]
+    assert "broad_search_anchor_only_card" not in decision.suppression_reasons
+
+
 def test_apply_patch_generates_patch_impact_card_for_root_config(tmp_path) -> None:
     repo, runtime = _runtime_for_tool_repo(tmp_path)
 

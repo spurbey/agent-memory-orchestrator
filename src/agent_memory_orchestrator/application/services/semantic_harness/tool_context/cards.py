@@ -8,6 +8,8 @@ from agent_memory_orchestrator.domain.semantic_harness import StructuralHarnessG
 from agent_memory_orchestrator.domain.semantic_harness import harness_card_id
 from agent_memory_orchestrator.domain.semantic_harness import resolve_anchors
 
+from .search_focus import build_broad_search_focus_card
+
 
 ENRICHABLE_TOOL_KINDS = {"apply_patch", "git_diff", "test_output"}
 BROAD_SEARCH_FILE_THRESHOLD = 8
@@ -25,7 +27,7 @@ def enrich_tool_overlay_response(
     if tool_kind == "file_read":
         return _drop_redundant_file_read_cards(request=request, response=response)
     if tool_kind == "search":
-        return _drop_broad_search_cards(request=request, response=response)
+        return _enrich_search_response(graph=graph, request=request, response=response)
     if tool_kind not in ENRICHABLE_TOOL_KINDS:
         return response
     file_nodes = _grounded_file_nodes(graph, request)
@@ -37,6 +39,32 @@ def enrich_tool_overlay_response(
     if tool_card.card_id in set(request.already_seen_card_ids):
         return _append_warning(response, f"duplicate_tool_card:{tool_kind}")
     return _prepend_tool_card(response=response, request=request, tool_card=tool_card, tool_kind=tool_kind)
+
+
+def _enrich_search_response(
+    *,
+    graph: StructuralHarnessGraph,
+    request: HarnessQueryRequest,
+    response: HarnessQueryResponse,
+) -> HarnessQueryResponse:
+    if len(request.files) < BROAD_SEARCH_FILE_THRESHOLD:
+        return response
+    kept = tuple(card for card in response.cards if not _is_exact_anchor_next_file_card(card, set(request.files)))
+    focus_card = build_broad_search_focus_card(
+        graph=graph,
+        request=request,
+        seen_card_ids=set(request.already_seen_card_ids),
+    )
+    trimmed = _replace_cards(response=response, cards=kept)
+    if focus_card is not None:
+        return _prepend_tool_card(response=trimmed, request=request, tool_card=focus_card, tool_kind="search_focus")
+    if len(kept) == len(response.cards):
+        return response
+    return _replace_cards(
+        response=response,
+        cards=kept,
+        warnings=("broad_search_anchor_only_card",),
+    )
 
 
 def _drop_redundant_file_read_cards(
@@ -62,25 +90,21 @@ def _drop_redundant_file_read_cards(
     )
 
 
-def _drop_broad_search_cards(
+def _replace_cards(
     *,
-    request: HarnessQueryRequest,
     response: HarnessQueryResponse,
+    cards: tuple[HarnessCard, ...],
+    warnings: tuple[str, ...] = (),
 ) -> HarnessQueryResponse:
-    if len(request.files) < BROAD_SEARCH_FILE_THRESHOLD:
-        return response
-    kept = tuple(card for card in response.cards if not _is_exact_anchor_next_file_card(card, set(request.files)))
-    if len(kept) == len(response.cards):
-        return response
     return HarnessQueryResponse(
         status=response.status,
         intent_requested=response.intent_requested,
         intent_used=response.intent_used,
         intent_correction=response.intent_correction,
-        cards=kept,
-        next_actions=tuple(_next_action_for(card) for card in kept),
+        cards=cards,
+        next_actions=tuple(_next_action_for(card) for card in cards),
         trace=response.trace,
-        warnings=tuple(dict.fromkeys((*response.warnings, "broad_search_anchor_only_card"))),
+        warnings=tuple(dict.fromkeys((*response.warnings, *warnings))),
     )
 
 
