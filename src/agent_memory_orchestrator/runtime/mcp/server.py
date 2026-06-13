@@ -124,6 +124,43 @@ def create_server(settings: Settings) -> FastMCP:
         )
 
     @mcp.tool()
+    def amo_harness_query(
+        repo_id: str,
+        intent: str,
+        user_goal: str,
+        files: list[str] | None = None,
+        symbols: list[str] | None = None,
+        commits: list[str] | None = None,
+        errors: list[str] | None = None,
+        recent_tool_result: dict | None = None,
+        max_cards: int = 5,
+        max_tokens: int = 900,
+        detail: str = "strict",
+        session_id: str = "",
+        already_seen_node_ids: list[str] | None = None,
+        already_seen_relation_ids: list[str] | None = None,
+        already_seen_card_ids: list[str] | None = None,
+    ) -> dict:
+        """Explicit Semantic Harness query. Requires an already-warmed repo graph."""
+        return memory_tools.amo_harness_query(
+            repo_id=repo_id,
+            intent=intent,
+            user_goal=user_goal,
+            files=files,
+            symbols=symbols,
+            commits=commits,
+            errors=errors,
+            recent_tool_result=recent_tool_result,
+            max_cards=max_cards,
+            max_tokens=max_tokens,
+            detail=detail,
+            session_id=session_id,
+            already_seen_node_ids=already_seen_node_ids,
+            already_seen_relation_ids=already_seen_relation_ids,
+            already_seen_card_ids=already_seen_card_ids,
+        )
+
+    @mcp.tool()
     def amo_current_context(session_id: str = "", limit: int = 8) -> dict:
         """Read current AMO graph context without hook auto-retrieval."""
         return memory_tools.amo_current_context(session_id=session_id, limit=limit)

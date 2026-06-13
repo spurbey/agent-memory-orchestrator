@@ -30,6 +30,35 @@ Single public query shape for explicit coding-agent harness calls.
 }
 ```
 
+## MCP Surface
+
+The MCP transport exposes the same contract with flattened parameters so coding
+agents can call it directly:
+
+```json
+{
+  "repo_id": "repo:example",
+  "intent": "file_context",
+  "user_goal": "fix harness query",
+  "files": ["src/example.py"],
+  "symbols": [],
+  "commits": [],
+  "errors": [],
+  "recent_tool_result": {},
+  "max_cards": 5,
+  "max_tokens": 900,
+  "detail": "strict",
+  "session_id": "",
+  "already_seen_node_ids": [],
+  "already_seen_relation_ids": [],
+  "already_seen_card_ids": []
+}
+```
+
+The MCP tool requires an already-warmed repo graph. If the graph is missing, it
+returns `status=unavailable` and `requires_bootstrap=true`; it does not run
+bootstrap on the hot path.
+
 ## Response
 
 ```json
