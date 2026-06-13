@@ -207,6 +207,7 @@ def _metrics(records: list[dict[str, Any]]) -> dict[str, Any]:
     by_kind: dict[str, dict[str, int]] = {}
     latencies: list[int] = []
     token_overheads: list[int] = []
+    attached_token_overheads: list[int] = []
     attached = 0
     auto_useful = 0
     auto_mislead = 0
@@ -219,6 +220,7 @@ def _metrics(records: list[dict[str, Any]]) -> dict[str, Any]:
         if decision.get("would_attach"):
             attached += 1
             bucket["attached"] += 1
+            attached_token_overheads.append(int(record.get("token_overhead_estimate") or 0))
         else:
             bucket["suppressed"] += 1
         latency = record.get("latency_ms") or {}
@@ -240,7 +242,8 @@ def _metrics(records: list[dict[str, Any]]) -> dict[str, Any]:
         "attach_rate": round(attached / len(records), 4) if records else 0.0,
         "suppress_rate": round((len(records) - attached) / len(records), 4) if records else 0.0,
         "p95_shadow_latency_ms": _percentile(latencies, 0.95),
-        "token_overhead_p95": _percentile(token_overheads, 0.95),
+        "token_overhead_p95": _percentile(attached_token_overheads, 0.95),
+        "all_token_overhead_p95": _percentile(token_overheads, 0.95),
         "idempotent_replay_rate": 1.0,
         "auto_useful_count": auto_useful,
         "auto_mislead_candidate_count": auto_mislead,

@@ -135,3 +135,31 @@ def test_codex_manual_links_are_not_repo_anchors() -> None:
     anchors = extract_tool_result_anchors(captured)
 
     assert anchors.files == ()
+
+
+def test_malformed_repo_like_paths_are_not_anchors() -> None:
+    captured = CapturedToolResult(
+        tool_name="shell_command",
+        tool_input={"command": "Get-ChildItem"},
+        tool_response=(
+            "src//agent_memory_orchestrator//domain//semantic_harness//anchor_resolution.py\n"
+            "src/agent_memory_orchestrator/domain/semantic_harness/doc_semantics/*.py\n"
+        ),
+    )
+
+    anchors = extract_tool_result_anchors(captured)
+
+    assert anchors.files == ()
+
+
+def test_generated_tmp_reports_do_not_feed_overlay_anchors() -> None:
+    captured = CapturedToolResult(
+        tool_name="shell_command",
+        tool_input={"command": "Get-Content .tmp/semantic-harness-profile/shadow_replay.json"},
+        tool_response='{"files": ["src/auth.py", "docs/SKILL.md"]}',
+    )
+
+    anchors = extract_tool_result_anchors(captured)
+
+    assert anchors.files == ()
+    assert anchors.errors == ()

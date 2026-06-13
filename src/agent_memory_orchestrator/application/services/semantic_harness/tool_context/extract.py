@@ -77,6 +77,9 @@ def extract_tool_result_anchors(captured: CapturedToolResult) -> ToolResultAncho
     errors: list[str] = []
     line_refs: list[ToolLineRef] = []
 
+    if _reads_generated_artifact(command):
+        return ToolResultAnchors(errors=tuple(_dedupe(_error_lines(response))[:8]))
+
     if tool_kind == "search":
         line_refs.extend(_rg_line_refs(response, cwd=cwd))
         files.extend(ref.file_path for ref in line_refs)
@@ -112,6 +115,17 @@ def _starts_with_any(value: str, prefixes: tuple[str, ...]) -> bool:
     return any(value.startswith(prefix) for prefix in prefixes)
 
 
+def _reads_generated_artifact(command: str) -> bool:
+    normalized = command.replace("\\", "/").lower()
+    generated_markers = (
+        ".tmp/",
+        "semantic-harness-profile",
+        "semantic-harness-delivery-evals",
+        "validation-evals",
+    )
+    return any(marker in normalized for marker in generated_markers)
+
+
 def _rg_line_refs(text: str, *, cwd: Path | None) -> list[ToolLineRef]:
     refs: list[ToolLineRef] = []
     for raw in text.splitlines():
@@ -143,12 +157,16 @@ def _extract_paths(text: str, *, cwd: Path | None) -> list[str]:
 
 def _normalize_candidate_path(value: str, *, cwd: Path | None) -> str:
     cleaned = value.strip().strip("'\"`").lstrip("([{<").rstrip(",:;)]}>\r\n")
+    if any(char in cleaned for char in "*?[]"):
+        return ""
     lowered = cleaned.lower()
     for prefix in ("get-content ", "cat ", "type ", "rg ", "ripgrep ", "grep ", "select-string "):
         if lowered.startswith(prefix):
             cleaned = cleaned[len(prefix) :].strip()
             lowered = cleaned.lower()
     cleaned = cleaned.replace("\\", "/")
+    if "//" in cleaned:
+        return ""
     if not cleaned:
         return ""
     try:
