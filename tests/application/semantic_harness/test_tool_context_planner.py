@@ -18,7 +18,7 @@ def _runtime_for_tool_repo(tmp_path):
     return repo, runtime
 
 
-def test_file_read_replay_generates_grounded_shadow_attach(tmp_path) -> None:
+def test_file_read_same_file_only_card_suppresses_as_redundant(tmp_path) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
     (repo / "src").mkdir()
@@ -39,11 +39,12 @@ def test_file_read_replay_generates_grounded_shadow_attach(tmp_path) -> None:
 
     assert decision.mode == "shadow"
     assert decision.tool_kind == "file_read"
-    assert decision.would_attach is True
+    assert decision.would_attach is False
     assert decision.would_replace is False
-    assert decision.confidence >= 0.75
     assert decision.anchors.files == ("src/auth.py",)
     assert decision.harness_response["status"] == "partial_structural"
+    assert "redundant_file_read_card" in decision.suppression_reasons
+    assert "low_card_confidence" in decision.suppression_reasons
 
 
 def test_test_output_failure_generates_test_target_card(tmp_path) -> None:
@@ -204,9 +205,11 @@ def test_mixed_tool_anchors_query_only_grounded_subset(tmp_path) -> None:
     assert decision.harness_response["cards"]
     assert decision.harness_response["warnings"] == [
         "structural_only:no_work_history_or_semantic_reasoning_attached",
+        "redundant_file_read_card",
         "ungrounded_tool_anchors_filtered:file:src/missing.py",
     ]
-    assert decision.would_attach is True
+    assert decision.would_attach is False
+    assert "low_card_confidence" in decision.suppression_reasons
 
 
 def test_file_read_prefers_file_anchor_over_unresolved_content_symbols(tmp_path) -> None:
@@ -228,5 +231,6 @@ def test_file_read_prefers_file_anchor_over_unresolved_content_symbols(tmp_path)
     )
 
     assert decision.harness_response["status"] == "partial_structural"
-    assert decision.would_attach is True
+    assert decision.would_attach is False
+    assert "redundant_file_read_card" in decision.suppression_reasons
     assert decision.token_overhead_estimate <= 900

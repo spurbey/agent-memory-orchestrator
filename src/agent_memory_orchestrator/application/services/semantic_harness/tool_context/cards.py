@@ -21,6 +21,8 @@ def enrich_tool_overlay_response(
 ) -> HarnessQueryResponse:
     """Add concise tool-specific cards after generic graph grounding succeeds."""
 
+    if tool_kind == "file_read":
+        return _drop_redundant_file_read_cards(request=request, response=response)
     if tool_kind not in ENRICHABLE_TOOL_KINDS:
         return response
     file_nodes = _grounded_file_nodes(graph, request)
@@ -32,6 +34,43 @@ def enrich_tool_overlay_response(
     if tool_card.card_id in set(request.already_seen_card_ids):
         return _append_warning(response, f"duplicate_tool_card:{tool_kind}")
     return _prepend_tool_card(response=response, request=request, tool_card=tool_card, tool_kind=tool_kind)
+
+
+def _drop_redundant_file_read_cards(
+    *,
+    request: HarnessQueryRequest,
+    response: HarnessQueryResponse,
+) -> HarnessQueryResponse:
+    anchored_files = set(request.files)
+    if not anchored_files:
+        return response
+    kept = tuple(card for card in response.cards if not _is_same_file_read_card(card, anchored_files))
+    if len(kept) == len(response.cards):
+        return response
+    return HarnessQueryResponse(
+        status=response.status,
+        intent_requested=response.intent_requested,
+        intent_used=response.intent_used,
+        intent_correction=response.intent_correction,
+        cards=kept,
+        next_actions=tuple(_next_action_for(card) for card in kept),
+        trace=response.trace,
+        warnings=tuple(dict.fromkeys((*response.warnings, "redundant_file_read_card"))),
+    )
+
+
+def _is_same_file_read_card(card: HarnessCard, anchored_files: set[str]) -> bool:
+    if card.type != "next_file":
+        return False
+    for evidence in card.evidence:
+        if path := evidence.get("path"):
+            return path in anchored_files
+    if card.next_action.startswith("Open "):
+        path = card.next_action.removeprefix("Open ").split(" and inspect", 1)[0]
+        return path in anchored_files
+    if card.title.startswith("Inspect "):
+        return card.title.removeprefix("Inspect ") in anchored_files
+    return False
 
 
 def _grounded_file_nodes(graph: StructuralHarnessGraph, request: HarnessQueryRequest) -> tuple[object, ...]:

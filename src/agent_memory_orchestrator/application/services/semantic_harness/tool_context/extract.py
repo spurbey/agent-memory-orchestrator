@@ -88,6 +88,8 @@ def extract_tool_result_anchors(captured: CapturedToolResult) -> ToolResultAncho
 
     if _reads_generated_artifact(command):
         return ToolResultAnchors(errors=tuple(_dedupe(_error_lines(response))[:8]))
+    if tool_kind == "unknown" and _is_low_signal_inventory_command(command):
+        return ToolResultAnchors(errors=tuple(_dedupe(_error_lines(response))[:8]))
 
     if tool_kind == "search":
         line_refs.extend(_rg_line_refs(response, cwd=cwd))
@@ -133,6 +135,18 @@ def _reads_generated_artifact(command: str) -> bool:
         "validation-evals",
     )
     return any(marker in normalized for marker in generated_markers)
+
+
+def _is_low_signal_inventory_command(command: str) -> bool:
+    normalized = command.strip().lower()
+    low_signal_starts = (
+        "git status",
+        "git branch",
+        "git ls-files",
+        "git log",
+        "test-path ",
+    )
+    return normalized.startswith(low_signal_starts)
 
 
 def _rg_line_refs(text: str, *, cwd: Path | None) -> list[ToolLineRef]:
