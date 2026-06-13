@@ -86,7 +86,10 @@ def _read_commit_diff(repo_root: Path, commit_sha: str) -> str:
         repo_root,
         "show",
         "--format=",
-        "--unified=80",
+        # Hunk-to-entity mapping needs changed-line spans, not broad context.
+        # Wider context belongs in semantic work-window packets, otherwise one
+        # small edit can overlap many symbols and suppress relation updates.
+        "--unified=0",
         "--find-renames",
         "--find-copies",
         commit_sha,

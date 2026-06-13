@@ -19,7 +19,7 @@ After an agent completes work, the harness updates versions, relation evidence, 
 ```text
 1. Resolve work window boundaries.
 2. Resolve repo_id and commit_id.
-3. Extract hunks and touched files.
+3. Extract zero-context hunks or changed-line ranges and touched files.
 4. Parse old and new file snapshots where available.
 5. Map hunks to Symbol or CodeRegion with confidence.
 6. Create FileVersion, SymbolVersion, and CodeRegionVersion nodes.
@@ -43,6 +43,17 @@ After an agent completes work, the harness updates versions, relation evidence, 
 ## Qwen Unavailable Mode
 
 If Qwen is unavailable or rejected, deterministic stages still complete. Semantic fields are marked missing or pending. Structural cards remain available.
+
+## Hunk Context Rule
+
+Graph mutation uses changed-line ranges only. The commit-update mapper must not use broad Git context as the hunk span because wide context can overlap unrelated nearby symbols and turn a precise edit into `review_only`.
+
+Broader context is still required, but it belongs in work-window/Qwen packets:
+
+```text
+changed-line hunk -> deterministic version and relation update
+broad work window -> semantic explanation and Qwen proposal input
+```
 
 ## Outputs
 
