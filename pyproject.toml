@@ -40,6 +40,7 @@ amo-mcp = "agent_memory_orchestrator.runtime.mcp.server:main"
 amo-daemon = "agent_memory_orchestrator.runtime.daemon.server:main"
 amo-peer = "agent_memory_orchestrator.peer.server:main"
 amo-hook = "agent_memory_orchestrator.runtime.hook.launcher:main"
+amo-harness = "agent_memory_orchestrator.runtime.cli.commands.semantic_harness:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
