@@ -36,7 +36,7 @@ class ShadowToolReplayService:
             records.append(
                 ToolOverlayEvalRecord(
                     decision=decision,
-                    judgment=_automatic_judgment(decision_targets(decision.harness_response), captured[index + 1 :]),
+                    judgment=_automatic_judgment(decision, captured[index + 1 :]),
                 )
             )
         return ShadowReplayReport(repo_id=repo_id, source_path=str(source_path), records=tuple(records))
@@ -61,7 +61,10 @@ def _read_captured_tool_results(path: Path, *, limit: int) -> list[CapturedToolR
     return captured
 
 
-def _automatic_judgment(targets: tuple[str, ...], future: tuple[CapturedToolResult, ...]) -> ToolOverlayJudgment:
+def _automatic_judgment(decision: object, future: tuple[CapturedToolResult, ...]) -> ToolOverlayJudgment:
+    if not getattr(decision, "would_attach", False):
+        return ToolOverlayJudgment(reason="suppressed_not_evaluated")
+    targets = decision_targets(getattr(decision, "harness_response", {}))
     if not targets:
         return ToolOverlayJudgment(reason="no_card_targets")
     first_three = future[:3]
