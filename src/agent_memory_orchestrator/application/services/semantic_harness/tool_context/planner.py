@@ -34,7 +34,7 @@ _INTENT_BY_TOOL_KIND = {
 
 @dataclass(slots=True, frozen=True)
 class ToolContextPlannerOptions:
-    max_cards: int = 5
+    max_cards: int = 3
     max_tokens: int = 900
     max_latency_ms: int = 500
     detail: str = "strict"
@@ -72,7 +72,11 @@ class ToolContextPlanner:
         parse_ms = _elapsed_ms(parse_start)
 
         query_start = time.perf_counter()
-        response = self._runtime.query(repo_id, request)
+        response = (
+            _no_anchor_response(request)
+            if not anchors.has_any
+            else self._runtime.query(repo_id, request)
+        )
         query_ms = _elapsed_ms(query_start)
 
         decision_start = time.perf_counter()
@@ -123,7 +127,7 @@ class ToolContextPlanner:
             intent=intent,
             user_goal=f"Interpret {tool_kind} result for coding-agent harness overlay.",
             files=anchors.files,
-            symbols=anchors.symbols,
+            symbols=() if tool_kind == "file_read" and anchors.files else anchors.symbols,
             errors=anchors.errors,
             recent_tool_result={
                 "tool_name": captured.tool_name,
@@ -220,6 +224,19 @@ def _request_as_dict(request: HarnessQueryRequest) -> dict[str, Any]:
             "already_seen_card_ids": list(request.already_seen_card_ids),
         },
     }
+
+
+def _no_anchor_response(request: HarnessQueryRequest) -> HarnessQueryResponse:
+    return HarnessQueryResponse(
+        status="unavailable",
+        intent_requested=request.intent,
+        intent_used=request.intent,
+        intent_correction=None,
+        cards=(),
+        next_actions=(),
+        trace={"nodes": [], "edges": [], "versions": [], "occurrences": []},
+        warnings=("no_extracted_anchors",),
+    )
 
 
 def _elapsed_ms(start: float) -> int:
