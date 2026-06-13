@@ -120,6 +120,9 @@ def test_amo_harness_shadow_replay_reads_post_tool_use_rows(tmp_path, monkeypatc
     assert payload["ok"] is True
     assert payload["shadow_only"] is True
     assert payload["record_count"] == 1
+    assert payload["metrics"]["token_overhead_p95"] > 0
+    assert payload["metrics"]["acceptance_thresholds"]["p95_shadow_latency_ms"] == 500
+    assert payload["metrics"]["by_tool_kind"]["file_read"]["suppress_rate"] == 0.0
     assert payload["records"][0]["decision"]["would_attach"] is True
     assert payload["records"][0]["decision"]["would_replace"] is False
     assert payload["records"][0]["captured"]["raw_output_hash"]
