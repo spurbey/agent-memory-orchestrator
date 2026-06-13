@@ -27,6 +27,9 @@ from .runtime import InMemoryHarnessGraphRepository
 from .runtime import SemanticHarnessRuntimeService
 from .structural import StructuralHarnessService
 from .structural import StructuralRepoBootstrapResult
+from .tool_context import ShadowToolReplayService
+from .tool_context import ToolContextPlanner
+from .tool_context import ToolContextPlannerOptions
 
 __all__ = [
     "CommitUpdateBuildResult",
@@ -48,6 +51,7 @@ __all__ = [
     "RetrievalEvalCaseResult",
     "RetrievalEvalReport",
     "RetrievalHarnessEvalService",
+    "ShadowToolReplayService",
     "StructuralEvalCase",
     "StructuralEvalCaseResult",
     "StructuralEvalReport",
@@ -55,5 +59,7 @@ __all__ = [
     "StructuralHarnessService",
     "StructuralRepoBootstrapResult",
     "SemanticHarnessRuntimeService",
+    "ToolContextPlanner",
+    "ToolContextPlannerOptions",
     "read_repo_source_files",
 ]
