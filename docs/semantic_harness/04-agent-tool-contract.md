@@ -56,6 +56,7 @@ Attach only when the card adds one of:
 Suppress when the overlay would only repeat the current tool result:
 
 - file read already opened the exact file and the only card is `Inspect <same file>`
+- broad search output has many matched files and the only cards are exact-anchor `next_file` echoes
 - inventory/status output such as `git status`, `git branch`, `git ls-files`, or `Test-Path` only prints paths
 - successful test output has no failing file, traceback, or assertion anchor
 - card evidence is vector-only or otherwise not graph-grounded

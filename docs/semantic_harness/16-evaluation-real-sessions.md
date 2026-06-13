@@ -134,6 +134,10 @@ failing test output with graph-grounded file
 git_diff with graph-grounded changed file
 -> attach concise risk card
 
+broad search with many matched files and only exact-anchor next_file cards
+-> suppress
+-> suppression_reasons include broad_search_anchor_only_card
+
 apply_patch with graph-grounded changed file
 -> attach concise risk card once
 -> repeated same card suppresses with duplicate_card

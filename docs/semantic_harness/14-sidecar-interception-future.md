@@ -40,6 +40,10 @@ test_output:
   attach only when failing files, traceback lines, or assertion anchors are graph-grounded
   suppress successful output with no anchors
 
+search:
+  suppress broad search output when many files match and the only cards are exact-anchor next_file echoes
+  attach only when the harness adds a stronger graph-grounded signal than the raw result list
+
 git_diff / apply_patch:
   attach concise risk cards for graph-grounded changed files
   suppress duplicate cards already seen in the session
