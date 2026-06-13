@@ -11,9 +11,10 @@ from .contracts import MCP_MEMORY_TOOL_CONTRACTS
 from .graph_service import GraphToolMixin
 from .memory_service import MemoryToolMixin
 from .peer_service import PeerToolMixin
+from .semantic_harness_service import SemanticHarnessToolMixin
 
 
-class MemoryMcpToolService(MemoryToolMixin, GraphToolMixin, PeerToolMixin):
+class MemoryMcpToolService(MemoryToolMixin, GraphToolMixin, PeerToolMixin, SemanticHarnessToolMixin):
     """Testable implementation behind the MCP memory tools.
 
     FastMCP registers transport functions in ``runtime.mcp.server`` and
@@ -38,6 +39,7 @@ class MemoryMcpToolService(MemoryToolMixin, GraphToolMixin, PeerToolMixin):
         self.memory.init_db()
 
     def close(self) -> None:
+        self._close_semantic_harness_runtime()
         self.memory.close()
         if self._graph is not None:
             self._graph.close()

@@ -41,6 +41,11 @@ MCP_MEMORY_TOOL_CONTRACTS: dict[str, dict[str, Any]] = {
         "required": ["query"],
         "returns": ["context", "nodes", "plan", "context_for_synthesis", "hits", "version_history"],
     },
+    "amo_harness_query": {
+        "description": "Explicit Semantic Harness query over an already-warmed repo graph. Returns strict coding-agent cards without bootstrapping or injection.",
+        "required": ["repo_id", "intent", "user_goal"],
+        "returns": ["status", "cards", "next_actions", "trace", "warnings"],
+    },
     "amo_current_context": {
         "description": "Read current graph context without automatic hook retrieval.",
         "required": [],

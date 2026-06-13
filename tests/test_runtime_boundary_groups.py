@@ -49,16 +49,20 @@ def test_mcp_tool_boundary_groups_are_importable() -> None:
     from agent_memory_orchestrator.runtime.mcp.tools.peer import PEER_TOOL_NAMES
     from agent_memory_orchestrator.runtime.mcp.tools.peer_service import PeerToolMixin
     from agent_memory_orchestrator.runtime.mcp.tools.retrieval import RETRIEVAL_TOOL_NAMES
+    from agent_memory_orchestrator.runtime.mcp.tools.semantic_harness import SEMANTIC_HARNESS_TOOL_NAMES
+    from agent_memory_orchestrator.runtime.mcp.tools.semantic_harness_service import SemanticHarnessToolMixin
     from agent_memory_orchestrator.runtime.mcp.tools.service import MemoryMcpToolService
 
     assert "memory_search" in MEMORY_TOOL_NAMES
     assert "amo_graph_search" in GRAPH_TOOL_NAMES
     assert "amo_graph_search" in RETRIEVAL_TOOL_NAMES
+    assert "amo_harness_query" in SEMANTIC_HARNESS_TOOL_NAMES
     assert "peer_memory_ask" in PEER_TOOL_NAMES
     assert "orchestrator_start" in ORCHESTRATION_TOOL_NAMES
     assert issubclass(MemoryMcpToolService, MemoryToolMixin)
     assert issubclass(MemoryMcpToolService, GraphToolMixin)
     assert issubclass(MemoryMcpToolService, PeerToolMixin)
+    assert issubclass(MemoryMcpToolService, SemanticHarnessToolMixin)
 
 
 def test_mcp_tools_package_root_is_export_only() -> None:
