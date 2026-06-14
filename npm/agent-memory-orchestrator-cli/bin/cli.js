@@ -25,6 +25,7 @@ const VALUE_FLAGS = new Set([
   "--peer-netd-manifest",
   "--peer-netd-version",
   "--antelligent-version",
+  "--antelligent-manifest",
   "--antelligent-artifact",
 ]);
 
