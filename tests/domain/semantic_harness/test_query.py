@@ -7,6 +7,53 @@ from agent_memory_orchestrator.domain.semantic_harness import build_structural_g
 from agent_memory_orchestrator.domain.semantic_harness import query as query_module
 
 
+def test_query_accepts_public_skill_intents_without_downgrade() -> None:
+    graph = build_structural_graph(
+        "repo:test",
+        (SourceFile(path="src/auth/session.py", text="def refresh_token():\n    return True\n"),),
+    )
+
+    for intent in ("edit_plan", "file_context", "tool_overlay", "impact_check", "test_plan", "why_changed"):
+        response = answer_structural_query(
+            graph,
+            HarnessQueryRequest(
+                intent=intent,
+                user_goal="fix redirect token refresh",
+                files=("src/auth/session.py",),
+                max_cards=1,
+                session_id="s1",
+            ),
+        )
+
+        assert response.intent_requested == intent
+        assert response.intent_used == intent
+        assert not any(warning.startswith("unsupported_intent:") for warning in response.warnings)
+        assert response.cards
+
+
+def test_query_still_downgrades_unknown_intent_to_safe_file_context() -> None:
+    graph = build_structural_graph(
+        "repo:test",
+        (SourceFile(path="src/auth/session.py", text="def refresh_token():\n    return True\n"),),
+    )
+
+    response = answer_structural_query(
+        graph,
+        HarnessQueryRequest(
+            intent="custom_rewrite",
+            user_goal="fix redirect token refresh",
+            files=("src/auth/session.py",),
+            max_cards=1,
+            session_id="s1",
+        ),
+    )
+
+    assert response.intent_requested == "custom_rewrite"
+    assert response.intent_used == "file_context"
+    assert "unsupported_intent:custom_rewrite" in response.warnings
+    assert response.cards
+
+
 def test_query_uses_lexical_projection_candidates_for_vague_goal_without_anchors() -> None:
     graph = build_structural_graph(
         "repo:test",
