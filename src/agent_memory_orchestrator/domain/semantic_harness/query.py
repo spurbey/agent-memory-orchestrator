@@ -25,7 +25,7 @@ from .selection import CardSelectionOptions
 from .selection import select_harness_cards
 
 
-SUPPORTED_INTENTS = {"edit_plan", "file_context"}
+SUPPORTED_INTENTS = {"edit_plan", "file_context", "impact_check", "test_plan", "tool_overlay", "why_changed"}
 
 
 def answer_structural_query(
