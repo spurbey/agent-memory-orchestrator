@@ -110,6 +110,7 @@ def add_install_subcommands(sub: Any) -> None:
         help="Enable Antelligent at user login. Requires --with-antelligent.",
     )
     install.add_argument("--antelligent-version", default="latest", help="Antelligent artifact version to install.")
+    install.add_argument("--antelligent-manifest", default="", help="Antelligent artifact manifest URL/path.")
     install.add_argument("--antelligent-artifact", type=Path, help="Install Antelligent from a local artifact.")
     install.add_argument("--dry-run", action="store_true", help="Show planned changes without writing files.")
     install.add_argument("--yes", action="store_true", help="Apply without interactive confirmation.")
@@ -390,6 +391,7 @@ def handle_install_command(
                     antelligent_settings,
                     version=args.antelligent_version,
                     artifact_path=args.antelligent_artifact,
+                    manifest=getattr(args, "antelligent_manifest", "") or None,
                     python_executable=sys.executable,
                     force=args.force,
                 )

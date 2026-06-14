@@ -14,13 +14,14 @@ from typing import Any
 from urllib.parse import urlparse
 
 from agent_memory_orchestrator.core.config import Settings
+from agent_memory_orchestrator.infrastructure.github_releases import component_manifest_url
 from agent_memory_orchestrator.peer.netd_binary import binary_capabilities
 from agent_memory_orchestrator.peer.netd_errors import PeerNetdRuntimeError
 from agent_memory_orchestrator.peer.netd_platform import binary_name
 
-DEFAULT_PEER_NETD_MANIFEST_URL = (
-    "https://github.com/spurbey/agent-memory-orchestrator/releases/latest/download/peer-netd-manifest.json"
-)
+PEER_NETD_RELEASE_TAG_PREFIX = "peer-netd-v"
+PEER_NETD_MANIFEST_ASSET = "peer-netd-manifest.json"
+DEFAULT_PEER_NETD_MANIFEST_URL = "auto:latest-peer-netd-release"
 PEER_NETD_SIGNATURE_ALGORITHM = "ed25519"
 PEER_NETD_SIGNATURE_PUBLIC_KEY_B64 = "0L/qCZ/swQcGBE+/rBypk3ret84LMlWNnlJcczA44IE="
 SUPPORTED_PEER_NETD_PLATFORMS = {"windows-amd64", "darwin-amd64", "darwin-arm64"}
@@ -52,7 +53,7 @@ def install_peer_netd_artifact(
 ) -> dict[str, Any]:
     """Install the private peer-netd sidecar from a signed artifact manifest."""
 
-    manifest = load_manifest(manifest_source)
+    manifest = load_manifest(manifest_source, version=version)
     artifact = select_artifact(manifest, version=version)
     target = settings.home / ".peer" / "bin" / artifact.binary_name
     if target.exists() and not force:
@@ -95,7 +96,7 @@ def install_peer_netd_artifact(
                     "arch": artifact.arch,
                     "sha256": actual_sha256,
                     "size": downloaded.stat().st_size,
-                    "manifest_source": str(manifest_source or DEFAULT_PEER_NETD_MANIFEST_URL),
+                    "manifest_source": str(manifest_source or default_peer_netd_manifest_url(version)),
                     "installed_at": _utc_timestamp(),
                     "capabilities": capabilities,
                 },
@@ -117,8 +118,16 @@ def install_peer_netd_artifact(
         raise PeerNetdRuntimeError(f"peer_sidecar_unavailable: {exc}") from exc
 
 
-def load_manifest(source: str | Path | None = None) -> dict[str, Any]:
-    value = str(source or os.getenv("AMO_PEER_NETD_MANIFEST") or DEFAULT_PEER_NETD_MANIFEST_URL)
+def default_peer_netd_manifest_url(version: str = "latest") -> str:
+    return component_manifest_url(
+        tag_prefix=PEER_NETD_RELEASE_TAG_PREFIX,
+        manifest_asset=PEER_NETD_MANIFEST_ASSET,
+        version=version,
+    )
+
+
+def load_manifest(source: str | Path | None = None, *, version: str = "latest") -> dict[str, Any]:
+    value = str(source or os.getenv("AMO_PEER_NETD_MANIFEST") or default_peer_netd_manifest_url(version))
     if value.startswith("http://"):
         raise ValueError("peer-netd manifest URL must use HTTPS")
     if value.startswith("https://"):
@@ -343,9 +352,12 @@ def _utc_timestamp() -> str:
 
 __all__ = [
     "DEFAULT_PEER_NETD_MANIFEST_URL",
+    "PEER_NETD_MANIFEST_ASSET",
+    "PEER_NETD_RELEASE_TAG_PREFIX",
     "PeerNetdArtifact",
     "SUPPORTED_PEER_NETD_PLATFORMS",
     "artifact_to_dict",
+    "default_peer_netd_manifest_url",
     "download_artifact",
     "install_peer_netd_artifact",
     "load_manifest",

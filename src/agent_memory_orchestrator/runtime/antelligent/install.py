@@ -27,7 +27,7 @@ def install_antelligent(
     launch = write_launch_config(settings, python_executable=python_executable)
 
     if artifact_path is None:
-        manifest_payload = load_manifest(manifest)
+        manifest_payload = load_manifest(manifest, version=version)
         artifact = select_artifact(manifest_payload, version=version)
         archive_path = temp_dir("antelligent-download-") / Path(artifact.url).name
         download_artifact(artifact, archive_path)
