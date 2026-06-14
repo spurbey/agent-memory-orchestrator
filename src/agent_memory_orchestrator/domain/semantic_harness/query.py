@@ -21,6 +21,8 @@ from .retrieval import VectorRetrievalOptions
 from .retrieval import VectorRetrievalHit
 from .retrieval import search_projection_documents
 from .retrieval import search_projection_documents_vector
+from .retrieval.file_aggregation import FileRetrievalCandidate
+from .retrieval.file_aggregation import aggregate_lexical_hits_to_files
 from .selection import CardSelectionOptions
 from .selection import select_harness_cards
 
@@ -218,7 +220,8 @@ def _card_node_ids(cards: tuple[HarnessCard, ...]) -> set[str]:
 
 def _has_lexical_card(cards: tuple[HarnessCard, ...]) -> bool:
     return any(
-        evidence.get("kind") == "ProjectionDocument" and not evidence.get("retrieval_source")
+        evidence.get("retrieval_source") == "lexical_file_aggregate"
+        or (evidence.get("kind") == "ProjectionDocument" and not evidence.get("retrieval_source"))
         for card in cards
         for evidence in card.evidence
     )
@@ -250,11 +253,27 @@ def _lexical_candidate_cards(
     if not query_text.strip() or max_cards <= 0:
         return ()
     node_by_id = graph.node_by_id()
+    aggregate_to_files = _should_aggregate_lexical_to_files(request)
+    aggregate_card_limit = max(1, int(request.max_cards or 5))
     hits = search_projection_documents(
         projection_documents,
         query_text,
-        options=LexicalRetrievalOptions(top_k=max_cards * 4),
+        options=LexicalRetrievalOptions(
+            top_k=aggregate_card_limit * 24 if aggregate_to_files else max_cards * 4,
+            min_score=0.0 if aggregate_to_files else LexicalRetrievalOptions().min_score,
+        ),
     )
+    if aggregate_to_files:
+        return _lexical_file_candidate_cards(
+            graph=graph,
+            request=request,
+            intent=intent,
+            hits=hits,
+            query_text=query_text,
+            seen_cards=seen_cards,
+            seen_node_ids=seen_node_ids,
+            max_cards=aggregate_card_limit,
+        )
     out: list[HarnessCard] = []
     for hit in hits:
         source_node = node_by_id.get(hit.document.source_node_id)
@@ -268,6 +287,68 @@ def _lexical_candidate_cards(
         if len(out) >= max_cards:
             break
     return tuple(out)
+
+
+def _should_aggregate_lexical_to_files(request: HarnessQueryRequest) -> bool:
+    if request.files or request.symbols or request.commits:
+        return False
+    return request.intent in {"edit_plan", "impact_check", "tool_overlay"}
+
+
+def _lexical_file_candidate_cards(
+    *,
+    graph: StructuralHarnessGraph,
+    request: HarnessQueryRequest,
+    intent: str,
+    hits: tuple[LexicalRetrievalHit, ...],
+    query_text: str,
+    seen_cards: set[str],
+    seen_node_ids: set[str],
+    max_cards: int,
+) -> tuple[HarnessCard, ...]:
+    candidates = aggregate_lexical_hits_to_files(graph, hits, query_text=query_text, limit=max_cards)
+    out: list[HarnessCard] = []
+    for candidate in candidates:
+        file_node = candidate.file_node
+        if file_node.id in seen_node_ids:
+            continue
+        card_id = harness_card_id(graph.repo_id, request.session_id, intent, ("lexical_file_projection", file_node.id))
+        if card_id in seen_cards:
+            continue
+        out.append(_lexical_file_candidate_card(candidate=candidate, card_id=card_id))
+        if len(out) >= max_cards:
+            break
+    return tuple(out)
+
+
+def _lexical_file_candidate_card(*, candidate: FileRetrievalCandidate, card_id: str) -> HarnessCard:
+    file_node = candidate.file_node
+    path = str(file_node.metadata.get("path") or file_node.label)
+    matched = ", ".join(candidate.matched_terms[:6])
+    sources = ", ".join(candidate.source_titles[:2])
+    confidence = round(min(0.82, 0.5 + candidate.score * 0.38), 2)
+    why = f"Lexical evidence across graph-grounded source docs matched {matched}."
+    if sources:
+        why = f"{why} Supporting hits: {sources}."
+    return HarnessCard(
+        card_id=card_id,
+        type="next_file",
+        title=f"Inspect {path}",
+        why=why,
+        evidence=(
+            {"node_id": file_node.id, "kind": "File", "path": path},
+            {
+                "kind": "ProjectionDocumentAggregate",
+                "retrieval_source": "lexical_file_aggregate",
+                "score": f"{candidate.score:.4f}",
+                "matched_terms": matched,
+                "source_titles": sources,
+            },
+        ),
+        risk="Candidate discovery only; inspect graph-grounded source before editing.",
+        confidence=confidence,
+        next_action=f"Open {path} and inspect before editing.",
+    )
 
 
 def _vector_candidate_cards(
