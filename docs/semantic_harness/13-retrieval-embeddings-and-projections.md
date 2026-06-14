@@ -196,6 +196,26 @@ vague goals with grounded lexical hits return partial_structural in the structur
 
 The scorer tokenizes identifiers, paths, docs, and summaries, applies BM25-style term weighting, and gives small deterministic boosts to high-signal document classes such as `symbol_summary`. It does not use vectors, LLMs, or graph mutation.
 
+For unanchored `edit_plan`, `tool_overlay`, and `impact_check` requests, the
+first lexical pass aggregates weak symbol/doc hits by source file before cards
+are selected. This is deliberate. A coding agent usually needs "open this file
+next" before it needs a low-confidence symbol guess.
+
+Aggregation rules:
+
+```text
+collect lexical hits from graph-grounded projection docs
+map Symbol/DocString/File hits back to their owning File node
+exclude tests, docs, markdown, and text files from default edit-planning cards
+sum weak evidence by source file
+boost files whose path tokens overlap query terms
+return next_file cards with retrieval_source=lexical_file_aggregate
+skip vector fallback once lexical file aggregate cards exist
+```
+
+This prevents unanchored edit planning from returning vector-only tangents when
+several weak lexical hits point to the same relevant implementation file.
+
 ## Vector Retrieval MVP
 
 The first vector implementation is deterministic hash-cosine over projection documents. It is not a model-quality replacement for learned embeddings; it is a local candidate source for smoke-tested semantic and identifier-variant discovery.

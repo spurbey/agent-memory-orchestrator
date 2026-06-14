@@ -77,10 +77,10 @@ def test_query_uses_lexical_projection_candidates_for_vague_goal_without_anchors
     )
 
     assert response.status == "partial_structural"
-    assert response.cards[0].type == "symbol_context"
-    assert response.cards[0].title == "Inspect refresh_token"
-    assert response.cards[0].evidence[1]["kind"] == "ProjectionDocument"
-    assert response.cards[0].evidence[1]["doc_type"] == "symbol_summary"
+    assert response.cards[0].type == "next_file"
+    assert response.cards[0].title == "Inspect src/auth/session.py"
+    assert response.cards[0].evidence[1]["kind"] == "ProjectionDocumentAggregate"
+    assert response.cards[0].evidence[1]["retrieval_source"] == "lexical_file_aggregate"
     assert "candidate_discovery:lexical_projection" in response.warnings
     assert "structural_only:no_work_history_or_semantic_reasoning_attached" in response.warnings
     assert response.next_actions[0].target == "src/auth/session.py"
@@ -143,6 +143,45 @@ def test_query_uses_vector_projection_when_lexical_has_no_grounded_candidate() -
     assert response.cards[0].evidence[1]["embedding_method"] == "hash_token_char_cosine_v1"
     assert "candidate_discovery:vector_projection" in response.warnings
     assert "candidate_discovery:lexical_projection" not in response.warnings
+
+
+def test_unanchored_edit_plan_aggregates_lexical_hits_to_source_files() -> None:
+    graph = build_structural_graph(
+        "repo:test",
+        (
+            SourceFile(
+                path="src/agent_memory_orchestrator/infrastructure/sqlite/semantic_harness/graph_store.py",
+                text="class SQLiteHarnessGraphStore:\n    def replace_edge(self):\n        pass\n    def edge_keys(self):\n        pass\n",
+            ),
+            SourceFile(
+                path="src/agent_memory_orchestrator/domain/semantic_harness/snapshots.py",
+                text="def graph_snapshot_identity():\n    return True\ndef graph_snapshot_id():\n    return True\n",
+            ),
+            SourceFile(
+                path="src/agent_memory_orchestrator/domain/semantic_harness/doc_semantics/linking.py",
+                text="def _append_edge():\n    pass\n",
+            ),
+        ),
+    )
+
+    response = answer_structural_query(
+        graph,
+        HarnessQueryRequest(
+            intent="edit_plan",
+            user_goal="semantic harness snapshot edge count higher than persisted SQLite edge count",
+            errors=("semantic harness snapshot edge count higher than persisted SQLite edge count",),
+            max_cards=3,
+            session_id="s1",
+        ),
+    )
+
+    assert response.status == "partial_structural"
+    assert response.cards[0].type == "next_file"
+    assert response.cards[0].title.endswith("graph_store.py")
+    assert response.cards[0].evidence[1]["retrieval_source"] == "lexical_file_aggregate"
+    assert response.cards[1].title.endswith("snapshots.py")
+    assert "candidate_discovery:lexical_projection" in response.warnings
+    assert "candidate_discovery:vector_projection" not in response.warnings
 
 
 def test_query_reuses_projection_documents_between_lexical_and_vector(monkeypatch) -> None:
