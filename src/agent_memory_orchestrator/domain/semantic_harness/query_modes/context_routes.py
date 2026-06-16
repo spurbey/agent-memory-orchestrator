@@ -115,6 +115,10 @@ def _answer_from_fact(
         derivability=fact.derivability,
         review_status=fact.review_status,
         discovery_cost=fact.discovery_cost,
+        source_kind=fact.source_kind,
+        fact_scope=fact.fact_scope,
+        verification_status=fact.verification_status,
+        trust_tier=fact.trust_tier,
     )
 
 
@@ -136,6 +140,10 @@ def _missing_fact_answer(
         review_status="missing",
         derivability="unknown",
         discovery_cost="unknown",
+        source_kind="",
+        fact_scope="",
+        verification_status="unknown",
+        trust_tier=99,
     )
 
 
@@ -167,6 +175,10 @@ def _risk_answers(
             derivability="unknown",
             review_status="missing",
             discovery_cost="unknown",
+            source_kind="",
+            fact_scope="",
+            verification_status="unknown",
+            trust_tier=99,
         )
         for node in anchor_nodes
     ]
