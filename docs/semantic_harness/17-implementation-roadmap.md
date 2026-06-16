@@ -6,34 +6,54 @@ Build structural usefulness before semantic richness. If the harness cannot help
 
 ## Sequence
 
-### 1. Structural MVP
+### 0. Architecture Reset And Baseline
 
-Build repo bootstrap graph, exact file/symbol lookup, `edit_plan`, `file_context`, and strict cards.
+Document the current-vs-target boundary, freeze the probe card path, define the
+mode-based contract, and record no-AMO/current-AMO baselines before feature
+work. This phase owns the eval fixtures and phase gates.
 
-### 2. Retrieval MVP
+### 1. Question-Driven Context For Anchor
 
-Add BM25 and vector search over summaries/cards, RRF/fusion, graph traversal, budget enforcement, and novelty filtering.
+Build `context_for_anchor` as a question-driven, semantic-first mode. It should
+answer the agent's specific question about a known anchor and include only
+action-relevant graph links.
 
-### 3. AMO Adapters
+### 2. Rank Tool Hits
 
-Import AMO central GraphView, curated graph, answer trace, retrieval docs, and raw evidence refs into harness provenance.
+Build `rank_tool_hits` for broad search output. It ranks file, line, symbol, and
+region groups without returning verbose cards. This becomes critical for future
+proxy interception.
 
-### 4. Commit Update
+### 3. Thin Semantic Enrichment
 
-Add work window processing, Git hunks, hunk-to-symbol confidence, and deterministic version updates.
+Add source-aware Qwen/provider enrichment for selected repo change events.
+Provider output must pass deterministic review and a manual reason-quality gate
+before advanced algorithms depend on it.
 
-### 5. Semantic Enrichment
+### 4. Structural Pre-Edit Review
 
-Add Qwen work-causality proposal, deterministic review, accepted ReasoningFrames, and RelationOccurrences.
+Build `pre_edit_review` v1 using structural impact, tests, docs, config,
+co-change, and risk signals. It must not claim semantic risk without accepted
+semantic evidence.
 
-### 6. Version And Lineage
+### 5. Relationship And History Algorithms
 
-Add rename, move, split, merge, active version selection, and task-relevant relation occurrence filtering.
+Build `relationship_between_anchors` and `history_for_anchor` after enough
+semantic data exists to prove value. Structural-only outputs must stay honest
+partials.
 
-### 7. Sidecar
+### 6. HelixDB Spike
 
-Add automatic tool-result annotation only after false-positive eval passes.
+Evaluate HelixDB behind the backend-neutral Query IR. Do not rewrite storage
+until quality and latency beat the current backend on real fixtures.
+
+### 7. Proxy Delivery
+
+Use MCP as the proving surface first. Add proxy append-only delivery only after
+mode outputs pass precision, mislead, latency, token, and raw-output recovery
+gates.
 
 ## Release Gates
 
-Each phase must include docs, fixtures, evals, and a rollback path before the next phase starts.
+Each phase must include docs, fixtures, no-AMO baseline comparison, compatibility
+checks, evals, and a rollback path before the next phase starts.
