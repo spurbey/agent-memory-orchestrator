@@ -5,6 +5,9 @@ from ..models import StructuralHarnessGraph
 from .context_models import ActionRelevantLink
 from .context_models import ContextAnswer
 from .question_classifier import QuestionClassification
+from .semantic_facts import SemanticFact
+from .semantic_facts import best_fact_for_node
+from .semantic_facts import facts_need_non_derivable
 
 
 def answer_for_type(
@@ -16,9 +19,9 @@ def answer_for_type(
     goal: str,
 ) -> tuple[list[ContextAnswer], list[ActionRelevantLink], list[str]]:
     if question_type == "semantic_role":
-        return (_semantic_role_answers(anchor_nodes, classification), [], [])
+        return (_fact_answers(anchor_nodes, classification, question_type=question_type, fact_types=("semantic_role",)), [], [])
     if question_type == "invariant":
-        answers, invariants = _invariant_answers(anchor_nodes, classification)
+        answers, invariants = _invariant_answers(anchor_nodes, classification, question_type=question_type)
         return answers, [], invariants
     if question_type == "validation":
         return ([], _links_for_edges(graph, anchor_nodes, kind="VALIDATED_BY", why="Validates the requested anchor behavior."), [])
@@ -26,6 +29,17 @@ def answer_for_type(
         links = _risk_links(graph, anchor_nodes)
         answers = _risk_answers(anchor_nodes, classification, has_links=bool(links), goal=goal)
         return answers, links, []
+    if question_type == "history":
+        return (
+            _fact_answers(
+                anchor_nodes,
+                classification,
+                question_type=question_type,
+                fact_types=("implementation_rationale", "historical_change"),
+            ),
+            [],
+            [],
+        )
     if question_type == "usage":
         return ([], _usage_links(graph, anchor_nodes), [])
     return ([], [], [])
@@ -43,53 +57,86 @@ def dedupe_links(links: list[ActionRelevantLink]) -> list[ActionRelevantLink]:
     return out
 
 
-def _semantic_role_answers(anchor_nodes: tuple[HarnessNode, ...], classification: QuestionClassification) -> list[ContextAnswer]:
-    answers: list[ContextAnswer] = []
-    for node in anchor_nodes:
-        summary = str(node.summary or "").strip()
-        if summary:
-            text = summary
-            confidence = 0.72
-        else:
-            text = f"{node.label} is a {node.kind} anchor in the structural graph. No reviewed semantic role is attached yet."
-            confidence = 0.48
-        answers.append(
-            ContextAnswer(
-                question=classification.question,
-                question_type="semantic_role",
-                answer=text,
-                confidence=confidence,
-                evidence=(_node_evidence(node),),
-            )
-        )
-    return answers
-
-
 def _invariant_answers(
     anchor_nodes: tuple[HarnessNode, ...],
     classification: QuestionClassification,
+    *,
+    question_type: str,
 ) -> tuple[list[ContextAnswer], list[str]]:
     answers: list[ContextAnswer] = []
     invariants: list[str] = []
     for node in anchor_nodes:
-        invariant = str(node.metadata.get("invariant") or node.metadata.get("constraint") or "").strip()
-        if invariant:
-            invariants.append(invariant)
-            answer = invariant
-            confidence = 0.76
-        else:
-            answer = f"No reviewed invariant is attached to {node.label}; inspect code/tests before changing behavior."
-            confidence = 0.42
-        answers.append(
-            ContextAnswer(
-                question=classification.question,
-                question_type="invariant",
-                answer=answer,
-                confidence=confidence,
-                evidence=(_node_evidence(node),),
-            )
+        fact = best_fact_for_node(
+            node,
+            fact_types=("invariant_or_contract", "data_model_or_storage"),
+            prefer_non_derivable=facts_need_non_derivable(question_type),
         )
+        if fact:
+            invariants.append(fact.text)
+            answers.append(_answer_from_fact(classification=classification, question_type="invariant", fact=fact, fallback_node=node))
+            continue
+        answers.append(_missing_fact_answer(classification=classification, node=node, question_type="invariant", fact_type="invariant_or_contract"))
     return answers, invariants
+
+
+def _fact_answers(
+    anchor_nodes: tuple[HarnessNode, ...],
+    classification: QuestionClassification,
+    *,
+    question_type: str,
+    fact_types: tuple[str, ...],
+) -> list[ContextAnswer]:
+    answers: list[ContextAnswer] = []
+    prefer_non_derivable = facts_need_non_derivable(question_type)
+    for node in anchor_nodes:
+        fact = best_fact_for_node(node, fact_types=fact_types, prefer_non_derivable=prefer_non_derivable)
+        if fact:
+            answers.append(_answer_from_fact(classification=classification, question_type=question_type, fact=fact, fallback_node=node))
+            continue
+        answers.append(_missing_fact_answer(classification=classification, node=node, question_type=question_type, fact_type=fact_types[0]))
+    return answers
+
+
+def _answer_from_fact(
+    *,
+    classification: QuestionClassification,
+    question_type: str,
+    fact: SemanticFact,
+    fallback_node: HarnessNode,
+) -> ContextAnswer:
+    evidence = fact.source_refs or (_node_evidence(fallback_node),)
+    return ContextAnswer(
+        question=classification.question,
+        question_type=question_type,
+        answer=fact.text,
+        confidence=fact.confidence,
+        evidence=evidence,
+        fact_type=fact.fact_type,
+        derivability=fact.derivability,
+        review_status=fact.review_status,
+        discovery_cost=fact.discovery_cost,
+    )
+
+
+def _missing_fact_answer(
+    *,
+    classification: QuestionClassification,
+    node: HarnessNode,
+    question_type: str,
+    fact_type: str,
+) -> ContextAnswer:
+    readable = _readable_fact_type(fact_type)
+    return ContextAnswer(
+        question=classification.question,
+        question_type=question_type,
+        answer=f"No reviewed {readable} fact is attached to {node.label}; inspect code/tests/history before changing behavior.",
+        confidence=0.42,
+        evidence=(_node_evidence(node),),
+        fact_type=fact_type,
+        review_status="missing",
+        derivability="unknown",
+        discovery_cost="unknown",
+    )
 
 
 def _risk_answers(
@@ -99,6 +146,14 @@ def _risk_answers(
     has_links: bool,
     goal: str,
 ) -> list[ContextAnswer]:
+    fact_answers = _fact_answers(
+        anchor_nodes,
+        classification,
+        question_type="risk",
+        fact_types=("risk_or_impact", "failure_mode", "implementation_rationale"),
+    )
+    if any(answer.review_status != "missing" for answer in fact_answers):
+        return fact_answers
     qualifier = " Review the action-relevant links before editing." if has_links else " No action-relevant risk links were found."
     goal_part = f" for {goal}" if goal else ""
     return [
@@ -108,6 +163,10 @@ def _risk_answers(
             answer=f"{node.label} has only structural risk evidence{goal_part}.{qualifier}",
             confidence=0.52 if has_links else 0.38,
             evidence=(_node_evidence(node),),
+            fact_type="risk_or_impact",
+            derivability="unknown",
+            review_status="missing",
+            discovery_cost="unknown",
         )
         for node in anchor_nodes
     ]
@@ -178,6 +237,10 @@ def _link_from_node(*, kind: str, target: HarnessNode, why: str, confidence: flo
 
 def _node_evidence(node: HarnessNode) -> dict[str, str]:
     return {"node_id": node.id, "kind": node.kind, "label": node.label}
+
+
+def _readable_fact_type(fact_type: str) -> str:
+    return fact_type.replace("_", " ")
 
 
 __all__ = [

@@ -11,6 +11,9 @@ from .question_classifier import CONTEXT_QUESTION_TYPES
 from .question_classifier import QuestionClassification
 from .question_classifier import classify_context_question
 from .question_classifier import classify_context_questions
+from .semantic_facts import SemanticFact
+from .semantic_facts import best_fact_for_node
+from .semantic_facts import semantic_facts_for_node
 
 __all__ = [
     "ActionRelevantLink",
@@ -20,8 +23,11 @@ __all__ = [
     "ModeCompatibilityResult",
     "QuestionClassification",
     "SUPPORTED_QUERY_MODES",
+    "SemanticFact",
     "answer_context_for_anchor",
+    "best_fact_for_node",
     "classify_context_question",
     "classify_context_questions",
     "resolve_query_mode",
+    "semantic_facts_for_node",
 ]
