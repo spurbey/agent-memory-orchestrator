@@ -12,6 +12,10 @@ class ContextAnswer:
     answer: str
     confidence: float
     evidence: tuple[dict[str, str], ...] = ()
+    fact_type: str = ""
+    derivability: str = ""
+    review_status: str = ""
+    discovery_cost: str = ""
 
     def as_dict(self) -> dict[str, object]:
         return {
@@ -20,6 +24,10 @@ class ContextAnswer:
             "answer": self.answer,
             "confidence": self.confidence,
             "evidence": list(self.evidence),
+            "fact_type": self.fact_type,
+            "derivability": self.derivability,
+            "review_status": self.review_status,
+            "discovery_cost": self.discovery_cost,
         }
 
 
