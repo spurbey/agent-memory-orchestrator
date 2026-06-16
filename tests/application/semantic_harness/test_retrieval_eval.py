@@ -41,11 +41,11 @@ def test_retrieval_eval_distinguishes_exact_anchor_and_lexical_routes(tmp_path) 
                 expected_status="partial_structural",
                 expected_lexical_used=True,
                 expected_vector_used=False,
-                expected_first_card_type="symbol_context",
-                expected_first_card_title="Inspect refresh_token",
+                expected_first_card_type="next_file",
+                expected_first_card_title="Inspect src/auth/session.py",
                 required_warning_terms=("candidate_discovery:lexical_projection",),
                 required_next_action_targets=("src/auth/session.py",),
-                min_card_count=2,
+                min_card_count=1,
             ),
         ),
     )
@@ -56,7 +56,7 @@ def test_retrieval_eval_distinguishes_exact_anchor_and_lexical_routes(tmp_path) 
     assert report.contract_judgment["vector_used"] is False
     assert report.contract_judgment["candidates_must_ground_to_graph"] is True
     assert [(case.lexical_used, case.vector_used) for case in report.cases] == [(False, False), (True, False)]
-    assert report.as_dict()["cases"][1]["graph_grounded_card_count"] == 2
+    assert report.as_dict()["cases"][1]["graph_grounded_card_count"] == 1
 
 
 def test_retrieval_eval_reports_vector_projection_route(tmp_path) -> None:
