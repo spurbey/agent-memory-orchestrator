@@ -21,14 +21,15 @@ The harness is not a better retrieval UI. It is a runtime context system for cod
 1. [Current vs target architecture](./architecture/current-vs-target.md)
 2. [Query mode system](./architecture/query-mode-system.md)
 3. [Code structure](./architecture/code-structure.md)
-4. [Mode-based harness query contract](./contracts/mode-based-amo-harness-query.md)
-5. [Baseline and phase gates](./evals/baseline-and-phase-gates.md)
-6. [Question classification](./algorithms/question-classification.md)
-7. [Context for anchor](./algorithms/context-for-anchor.md)
-8. [Rank tool hits](./algorithms/rank-tool-hits.md)
-9. [Qwen/provider enrichment](./integrations/qwen-provider-enrichment.md)
-10. [HelixDB spike plan](./integrations/helixdb-spike-plan.md)
-11. [Implementation roadmap](./17-implementation-roadmap.md)
+4. [Semantic fact writer](./architecture/semantic-fact-writer.md)
+5. [Mode-based harness query contract](./contracts/mode-based-amo-harness-query.md)
+6. [Baseline and phase gates](./evals/baseline-and-phase-gates.md)
+7. [Question classification](./algorithms/question-classification.md)
+8. [Context for anchor](./algorithms/context-for-anchor.md)
+9. [Rank tool hits](./algorithms/rank-tool-hits.md)
+10. [Qwen/provider enrichment](./integrations/qwen-provider-enrichment.md)
+11. [HelixDB spike plan](./integrations/helixdb-spike-plan.md)
+12. [Implementation roadmap](./17-implementation-roadmap.md)
 
 The older docs remain useful for graph model, bootstrap, commit updates, and
 retrieval details. New product work should start from the mode-based reset docs

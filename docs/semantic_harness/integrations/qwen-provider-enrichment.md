@@ -79,14 +79,34 @@ semantic_pending
 
 ## Source Quality
 
-Confidence depends on source:
+Trust depends on source class, derivability, and verification state. It is not
+a flat provider confidence score.
 
 ```text
-agent_session: richest evidence
-pull_request: strong when title/body/comments/CI exist
-human_commit: commit/diff-limited
-imported_history: weakest
+manual_annotation:
+  highest trust when anchored and reviewable
+
+human_commit / pull_request:
+  high trust for non-derivable rationale when source-backed
+
+agent_session:
+  useful only from validated/committed or final-summary spans
+  lower trust than human/manual facts by default
+
+docs / docstrings:
+  useful for semantic role and declared contracts
+  stale-risk unless verified against current code
+
+current_code:
+  derivable shortcut, not hidden memory
+
+imported_history:
+  lower confidence unless source provenance is strong
 ```
+
+Intermediate agent hypotheses are never accepted as graph truth. They may be
+preserved for audit or review-only queues, but they must not power
+`context_for_anchor`, relationship, history, or pre-edit answers.
 
 ## Quality Gate
 
