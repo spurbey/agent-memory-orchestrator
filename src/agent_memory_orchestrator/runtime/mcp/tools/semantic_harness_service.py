@@ -18,6 +18,8 @@ class SemanticHarnessToolMixin:
         repo_id: str,
         intent: str,
         user_goal: str,
+        mode: str = "",
+        questions: list[str] | None = None,
         files: list[str] | None = None,
         symbols: list[str] | None = None,
         commits: list[str] | None = None,
@@ -38,6 +40,8 @@ class SemanticHarnessToolMixin:
         request = HarnessQueryRequest(
             intent=safe_intent,
             user_goal=safe_user_goal,
+            mode=str(mode or "").strip(),
+            questions=tuple(_clean_strings(questions)),
             files=tuple(_clean_strings(files)),
             symbols=tuple(_clean_strings(symbols)),
             commits=tuple(_clean_strings(commits)),
@@ -63,6 +67,7 @@ class SemanticHarnessToolMixin:
             "next_actions": payload["next_actions"],
             "trace": payload["trace"],
             "warnings": payload["warnings"],
+            "mode_result": payload["mode_result"],
             "response": payload,
         }
 
