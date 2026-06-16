@@ -1,74 +1,25 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import Any
 from typing import Iterable
 
 from ..models import HarnessNode
-
-
-DERIVABLE_FROM_CURRENT_CODE = "derivable_from_current_code"
-DERIVABLE_FROM_DOCS = "derivable_from_docs"
-REQUIRES_GIT_HISTORY = "requires_git_history"
-REQUIRES_AGENT_SESSION_HISTORY = "requires_agent_session_history"
-REQUIRES_HUMAN_INTENT = "requires_human_intent"
-REQUIRES_RUNTIME_OBSERVATION = "requires_runtime_observation"
-MIXED_DERIVABILITY = "mixed"
-UNKNOWN_DERIVABILITY = "unknown"
-
-REVIEW_ACCEPTED = "accepted"
-REVIEW_REVIEW_ONLY = "review_only"
-REVIEW_REJECTED = "rejected"
-REVIEW_QUARANTINED = "quarantined"
-REVIEW_PENDING = "semantic_pending"
-
-CODE_DERIVABLE = frozenset({DERIVABLE_FROM_CURRENT_CODE, DERIVABLE_FROM_DOCS})
-NON_DERIVABLE = frozenset(
-    {
-        REQUIRES_GIT_HISTORY,
-        REQUIRES_AGENT_SESSION_HISTORY,
-        REQUIRES_HUMAN_INTENT,
-        REQUIRES_RUNTIME_OBSERVATION,
-        MIXED_DERIVABILITY,
-    }
-)
-TRUSTED_REVIEW_STATUSES = frozenset({REVIEW_ACCEPTED})
-
-
-@dataclass(slots=True, frozen=True)
-class SemanticFact:
-    fact_id: str
-    fact_type: str
-    text: str
-    anchor_node_ids: tuple[str, ...]
-    source_refs: tuple[dict[str, str], ...] = ()
-    confidence: float = 0.0
-    review_status: str = REVIEW_PENDING
-    derivability: str = UNKNOWN_DERIVABILITY
-    discovery_cost: str = "unknown"
-    source_kind: str = ""
-
-    @property
-    def trusted(self) -> bool:
-        return self.review_status in TRUSTED_REVIEW_STATUSES and bool(self.text.strip())
-
-    @property
-    def non_derivable(self) -> bool:
-        return self.derivability in NON_DERIVABLE
-
-    def as_dict(self) -> dict[str, object]:
-        return {
-            "fact_id": self.fact_id,
-            "fact_type": self.fact_type,
-            "text": self.text,
-            "anchor_node_ids": list(self.anchor_node_ids),
-            "source_refs": list(self.source_refs),
-            "confidence": self.confidence,
-            "review_status": self.review_status,
-            "derivability": self.derivability,
-            "discovery_cost": self.discovery_cost,
-            "source_kind": self.source_kind,
-        }
+from ..semantic_facts import CODE_DERIVABLE
+from ..semantic_facts import DERIVABLE_FROM_CURRENT_CODE
+from ..semantic_facts import DERIVABLE_FROM_DOCS
+from ..semantic_facts import MIXED_DERIVABILITY
+from ..semantic_facts import NON_DERIVABLE
+from ..semantic_facts import REQUIRES_AGENT_SESSION_HISTORY
+from ..semantic_facts import REQUIRES_GIT_HISTORY
+from ..semantic_facts import REQUIRES_HUMAN_INTENT
+from ..semantic_facts import REQUIRES_RUNTIME_OBSERVATION
+from ..semantic_facts import REVIEW_ACCEPTED
+from ..semantic_facts import REVIEW_PENDING
+from ..semantic_facts import REVIEW_QUARANTINED
+from ..semantic_facts import REVIEW_REJECTED
+from ..semantic_facts import REVIEW_REVIEW_ONLY
+from ..semantic_facts import UNKNOWN_DERIVABILITY
+from ..semantic_facts import SemanticFact
 
 
 def semantic_facts_for_node(node: HarnessNode, *, fact_types: Iterable[str] = ()) -> tuple[SemanticFact, ...]:
@@ -119,6 +70,12 @@ def _metadata_facts(node: HarnessNode) -> tuple[SemanticFact, ...]:
                 derivability=str(item.get("derivability") or UNKNOWN_DERIVABILITY),
                 discovery_cost=str(item.get("discovery_cost") or "unknown"),
                 source_kind=str(item.get("source_kind") or item.get("source") or ""),
+                fact_scope=str(item.get("fact_scope") or "anchor_local"),
+                source_span=str(item.get("source_span") or ""),
+                as_of_commit=str(item.get("as_of_commit") or ""),
+                verified_against_commit=str(item.get("verified_against_commit") or ""),
+                verification_status=str(item.get("verification_status") or "unverified"),
+                trust_tier=_bounded_int(item.get("trust_tier"), default=99),
             )
         )
     return tuple(facts)
@@ -140,6 +97,9 @@ def _legacy_invariant_facts(node: HarnessNode) -> tuple[SemanticFact, ...]:
             derivability=str(node.metadata.get("invariant_derivability") or DERIVABLE_FROM_CURRENT_CODE),
             discovery_cost=str(node.metadata.get("invariant_discovery_cost") or "medium"),
             source_kind=str(node.metadata.get("invariant_source_kind") or "legacy_metadata"),
+            fact_scope="anchor_local",
+            verification_status=str(node.metadata.get("invariant_verification_status") or "unverified"),
+            trust_tier=_bounded_int(node.metadata.get("invariant_trust_tier"), default=5),
         ),
     )
 
@@ -160,6 +120,9 @@ def _legacy_summary_facts(node: HarnessNode) -> tuple[SemanticFact, ...]:
             derivability=str(node.metadata.get("summary_derivability") or DERIVABLE_FROM_CURRENT_CODE),
             discovery_cost=str(node.metadata.get("summary_discovery_cost") or "low"),
             source_kind=str(node.metadata.get("summary_source_kind") or "structural_summary"),
+            fact_scope="anchor_local",
+            verification_status=str(node.metadata.get("summary_verification_status") or "unverified"),
+            trust_tier=_bounded_int(node.metadata.get("summary_trust_tier"), default=5),
         ),
     )
 
@@ -181,10 +144,11 @@ def _dedupe_facts(facts: list[SemanticFact]) -> list[SemanticFact]:
     return out
 
 
-def _fact_sort_key(fact: SemanticFact, *, prefer_non_derivable: bool) -> tuple[float, float, float]:
+def _fact_sort_key(fact: SemanticFact, *, prefer_non_derivable: bool) -> tuple[float, float, float, float]:
     non_derivable_bonus = 1.0 if prefer_non_derivable and fact.non_derivable else 0.0
     review_bonus = 1.0 if fact.trusted else 0.0
-    return (non_derivable_bonus, review_bonus, fact.confidence)
+    trust_bonus = -float(fact.trust_tier)
+    return (non_derivable_bonus, review_bonus, trust_bonus, fact.confidence)
 
 
 def _tuple_of_strings(value: Any) -> tuple[str, ...]:
@@ -222,6 +186,14 @@ def _bounded_float(value: Any, *, default: float) -> float:
     except (TypeError, ValueError):
         number = default
     return round(min(1.0, max(0.0, number)), 2)
+
+
+def _bounded_int(value: Any, *, default: int) -> int:
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        number = default
+    return max(1, min(99, number))
 
 
 __all__ = [
