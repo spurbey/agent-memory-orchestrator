@@ -94,12 +94,42 @@ the safest narrow mode.
 
 ```json
 {
-  "answers": [],
+  "answers": [
+    {
+      "question": "what will break if I change this?",
+      "question_type": "risk",
+      "answer": "Do not merge raw and unique edge counts; a prior diagnostic proved duplicate observations are expected.",
+      "confidence": 0.82,
+      "fact_type": "risk_or_impact",
+      "derivability": "requires_git_history",
+      "review_status": "accepted",
+      "discovery_cost": "high",
+      "evidence": []
+    }
+  ],
   "invariants": [],
   "action_relevant_links": [],
   "recommended_next_mode": null
 }
 ```
+
+`derivability` is required for semantic answers:
+
+```text
+derivable_from_current_code
+derivable_from_docs
+requires_git_history
+requires_agent_session_history
+requires_human_intent
+requires_runtime_observation
+mixed
+unknown
+```
+
+Facts that require history, session evidence, human intent, or runtime
+observation are the product-value layer. Facts derivable from current code or
+docs are useful shortcuts, but they must not be counted as decisive AMO product
+proof.
 
 `pre_edit_review` returns:
 
