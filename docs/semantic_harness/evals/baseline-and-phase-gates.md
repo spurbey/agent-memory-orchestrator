@@ -13,6 +13,21 @@ Record for each fixture:
 - current AMO probe/card behavior when applicable
 - new mode behavior
 
+Classify every expected answer by derivability:
+
+```text
+shortcut fixture:
+  answer is derivable from current code or docs
+  AMO can win on fewer commands, files opened, tokens, or latency
+
+memory fixture:
+  answer requires git history, agent/session evidence, human intent, or runtime observation
+  AMO must surface information the baseline cannot derive from current code alone
+```
+
+Shortcut fixtures are allowed as smoke tests. Product-value claims require
+memory fixtures.
+
 Metrics:
 
 ```text
@@ -49,6 +64,12 @@ stable_replay_rate
 - baseline tests semantic misunderstanding prevention
 - beats no-AMO baseline on wrong-edit avoidance or discovery cost
 - honest partial states
+- result distinguishes derivable shortcut facts from non-derivable memory facts
+- product-value fixture includes at least one accepted non-derivable fact
+
+The edge-count task is a valid plumbing fixture, not the decisive product-value
+fixture, because the deduplication invariant can be derived from current schema
+and graph-store code.
 
 ## Phase 2 Gate: Rank Tool Hits
 
@@ -62,6 +83,8 @@ stable_replay_rate
 - source-aware packets for agent, human, PR, and imported commits
 - manual reason-quality check on 5-10 known commits
 - review rejects generic or unsupported reasons
+- accepted facts include derivability labels
+- at least one known fixture produces a useful non-derivable fact
 
 ## Phase 4 Gate: Structural Pre-Edit Review
 

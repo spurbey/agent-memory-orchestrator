@@ -47,6 +47,25 @@ The provider may propose:
 - risk hints
 - test hints
 - `RelationOccurrence.reason`
+- typed semantic facts with `fact_type`, `derivability`, and `source_refs`
+
+Fact derivability must be explicit:
+
+```text
+derivable_from_current_code
+derivable_from_docs
+requires_git_history
+requires_agent_session_history
+requires_human_intent
+requires_runtime_observation
+mixed
+unknown
+```
+
+Facts marked `requires_*` are the memory layer that can beat a current-code
+baseline. Provider output that only restates the current diff should normally be
+marked `derivable_from_current_code` and evaluated as a shortcut, not as product
+proof.
 
 ## Review Outcomes
 
@@ -74,3 +93,16 @@ imported_history: weakest
 Use 5-10 hand-picked commits with known human reasons. Accepted
 `RelationOccurrence.reason` values must match the substantive human reason.
 Generic reasons such as "modified the function" fail.
+
+The quality gate must include at least one non-derivable reason:
+
+```text
+prior revert reason
+failed earlier implementation
+human design intent
+production/runtime observation
+agent-session rationale not visible in current code
+```
+
+Generic accepted facts are not allowed to unlock relationship/history
+algorithms.
