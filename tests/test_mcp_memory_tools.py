@@ -128,6 +128,44 @@ def test_mcp_harness_query_returns_cards_from_warmed_repo(tmp_path) -> None:
     assert result["cards"][0]["evidence"][0]["node_id"].startswith("file:repo:test:")
 
 
+def test_mcp_harness_query_returns_explicit_mode_result_from_warmed_repo(tmp_path) -> None:
+    settings = make_settings(tmp_path)
+    repo = tmp_path / "repo"
+    (repo / "src").mkdir(parents=True)
+    (repo / "src" / "snapshots.py").write_text(
+        '"""Owns structural graph snapshot identity."""\n'
+        "\n"
+        "def graph_snapshot_id():\n"
+        "    return 'id'\n",
+        encoding="utf-8",
+    )
+    db_path = settings.home / ".data" / "semantic_harness.sqlite"
+    with SQLiteHarnessGraphRepository(db_path) as graph_repo:
+        with SQLiteProjectionCache(db_path) as projection_cache:
+            runtime = SemanticHarnessRuntimeService(graph_repository=graph_repo, projection_cache=projection_cache)
+            runtime.bootstrap_repo(repo, repo_id="repo:test")
+
+    svc = MemoryMcpToolService(settings)
+    try:
+        result = svc.amo_harness_query(
+            repo_id="repo:test",
+            intent="file_context",
+            mode="context_for_anchor",
+            user_goal="understand snapshot identity",
+            files=["src/snapshots.py"],
+            questions=["what is this file responsible for?"],
+            max_cards=3,
+        )
+    finally:
+        svc.close()
+
+    assert result["ok"] is True
+    assert result["status"] == "ready"
+    assert result["cards"] == []
+    assert result["mode_result"]["answers"][0]["question_type"] == "semantic_role"
+    assert "snapshot identity" in result["mode_result"]["answers"][0]["answer"]
+
+
 def test_mcp_harness_query_reports_missing_warm_graph(tmp_path) -> None:
     svc = MemoryMcpToolService(make_settings(tmp_path))
     try:
