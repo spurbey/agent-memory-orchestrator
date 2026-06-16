@@ -34,6 +34,12 @@ src/agent_memory_orchestrator/domain/semantic_harness/
     history.py                  # future version/work-history mode
     semantic_diff.py            # future patch/diff review mode
 
+  semantic_facts/
+    models.py                   # canonical source/derivability/scope/trust contracts
+    review.py                   # deterministic proposal review
+    attach.py                   # accepted facts -> graph node metadata
+    extraction.py               # future provider/deterministic proposal builders
+
   planning/
     query_ir.py                 # backend-neutral query plan data
     planner.py                  # mode -> plan assembly
@@ -126,6 +132,12 @@ New query mode
 New graph traversal algorithm
 -> traversal/<algorithm>.py
 -> used by mode module through a narrow function
+
+New semantic fact source or review rule
+-> semantic_facts/models.py for contract changes
+-> semantic_facts/review.py for deterministic acceptance rules
+-> semantic_facts/attach.py only if graph-write shape changes
+-> provider-specific extraction stays outside domain
 
 New backend capability
 -> infrastructure/<backend>/semantic_harness/
