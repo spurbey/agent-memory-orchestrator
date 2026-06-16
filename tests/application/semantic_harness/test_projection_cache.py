@@ -74,8 +74,8 @@ def test_service_query_uses_projection_cache_lazily() -> None:
     )
 
     assert exact.cards[0].type == "next_file"
-    assert first_vague.cards[0].title == "Inspect refresh_token"
-    assert second_vague.cards[0].title == "Inspect refresh_token"
+    assert first_vague.cards[0].title == "Inspect src/auth.py"
+    assert second_vague.cards[0].title == "Inspect src/auth.py"
     assert cache.stats().size == 1
     assert cache.stats().misses == 1
     assert cache.stats().hits == 1
