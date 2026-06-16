@@ -6,6 +6,7 @@ from agent_memory_orchestrator.application.services.semantic_harness.projection_
 from agent_memory_orchestrator.application.services.semantic_harness.projection_cache import ProjectionCache
 from agent_memory_orchestrator.application.services.semantic_harness.repository import RepoBootstrapOptions
 from agent_memory_orchestrator.application.services.semantic_harness.runtime.memory import InMemoryHarnessGraphRepository
+from agent_memory_orchestrator.application.services.semantic_harness.runtime.mode_router import answer_runtime_query
 from agent_memory_orchestrator.application.services.semantic_harness.runtime.models import HarnessRuntimeBootstrapResult
 from agent_memory_orchestrator.application.services.semantic_harness.runtime.models import HarnessRuntimeDeltaApplyResult
 from agent_memory_orchestrator.application.services.semantic_harness.runtime.ports import HarnessGraphRepository
@@ -80,7 +81,11 @@ class SemanticHarnessRuntimeService:
                 trace={"nodes": [], "edges": [], "versions": [], "occurrences": []},
                 warnings=(f"repo_not_bootstrapped:{repo_id}",),
             )
-        return self._structural.query(graph, request)
+        return answer_runtime_query(
+            graph,
+            request,
+            legacy_query=lambda: self._structural.query(graph, request),
+        )
 
     def apply_delta(self, delta: GraphUpdateDelta) -> HarnessRuntimeDeltaApplyResult:
         store = self._graph_repository.load(delta.repo_id)
