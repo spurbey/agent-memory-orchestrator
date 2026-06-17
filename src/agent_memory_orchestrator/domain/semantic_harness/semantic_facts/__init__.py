@@ -52,8 +52,16 @@ from .models import VERIFIED_AT_COMMIT
 from .models import VERIFIED_CURRENT
 from .models import UNKNOWN_DERIVABILITY
 from .models import semantic_fact_trust_tier
+from .packets import SemanticEvidencePacket
+from .packets import SemanticEvidencePacketBuild
+from .packets import build_semantic_evidence_packet
+from .parser import SUPPORTED_SEMANTIC_FACT_TYPES
+from .parser import SemanticFactProposalParse
+from .parser import parse_semantic_fact_proposals
 from .review import SemanticFactReview
 from .review import review_semantic_fact_proposals
+from .staleness import SemanticFactStalenessResult
+from .staleness import mark_stale_facts_for_changed_anchors
 
 __all__ = [
     "ANCHOR_LOCAL_SCOPE",
@@ -79,9 +87,13 @@ __all__ = [
     "UNKNOWN_DERIVABILITY",
     "SemanticFact",
     "SemanticFactAttachResult",
+    "SemanticEvidencePacket",
+    "SemanticEvidencePacketBuild",
     "SemanticFactProposal",
+    "SemanticFactProposalParse",
     "SemanticFactReview",
     "SemanticFactSourceRef",
+    "SemanticFactStalenessResult",
     "SOURCE_AGENT_SESSION",
     "SOURCE_CURRENT_CODE",
     "SOURCE_DOCS",
@@ -91,6 +103,7 @@ __all__ = [
     "SOURCE_MANUAL_ANNOTATION",
     "SOURCE_PULL_REQUEST",
     "SOURCE_RUNTIME_OBSERVATION",
+    "SUPPORTED_SEMANTIC_FACT_TYPES",
     "SPAN_COMMIT_MESSAGE",
     "SPAN_DOC_CLAIM",
     "SPAN_FINAL_SUMMARY",
@@ -101,6 +114,9 @@ __all__ = [
     "SPAN_VALIDATED_COMMITTED",
     "STALE_RISK",
     "attach_reviewed_facts_to_store",
+    "build_semantic_evidence_packet",
+    "mark_stale_facts_for_changed_anchors",
+    "parse_semantic_fact_proposals",
     "review_semantic_fact_proposals",
     "semantic_fact_trust_tier",
     "UNVERIFIED",
