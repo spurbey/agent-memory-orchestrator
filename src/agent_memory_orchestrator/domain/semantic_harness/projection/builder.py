@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Iterable
 from typing import Any
 
@@ -12,6 +13,7 @@ from .identity import DEFAULT_PROJECTION_VERSION
 from .identity import projection_set_id
 from .models import HarnessProjectionDocument
 from .models import HarnessProjectionSet
+from .semantic_facts import build_semantic_fact_projection_documents
 
 
 DEFAULT_PROJECTED_KINDS = frozenset({"File", "Symbol", "DocSection", "DocString"})
@@ -21,6 +23,8 @@ def build_projection_documents(
     graph: StructuralHarnessGraph,
     *,
     include_kinds: Iterable[str] = DEFAULT_PROJECTED_KINDS,
+    include_semantic_facts: bool = True,
+    include_review_only_semantic_facts: bool = False,
 ) -> tuple[HarnessProjectionDocument, ...]:
     """Build deterministic high-signal documents from graph truth.
 
@@ -37,6 +41,13 @@ def build_projection_documents(
         if node.kind in include
         if (doc := _document_for_node(graph, node, node_by_id)) is not None
     ]
+    if include_semantic_facts:
+        docs.extend(
+            build_semantic_fact_projection_documents(
+                graph,
+                include_review_only=include_review_only_semantic_facts,
+            )
+        )
     return tuple(docs)
 
 
@@ -45,12 +56,24 @@ def build_projection_set(
     *,
     include_kinds: Iterable[str] = DEFAULT_PROJECTED_KINDS,
     projection_version: str = DEFAULT_PROJECTION_VERSION,
+    include_semantic_facts: bool = True,
+    include_review_only_semantic_facts: bool = False,
 ) -> HarnessProjectionSet:
     snapshot = graph_snapshot_identity(graph)
-    documents = build_projection_documents(graph, include_kinds=include_kinds)
+    documents = build_projection_documents(
+        graph,
+        include_kinds=include_kinds,
+        include_semantic_facts=include_semantic_facts,
+        include_review_only_semantic_facts=include_review_only_semantic_facts,
+    )
+    document_content_hash = _document_content_hash(documents)
     return HarnessProjectionSet(
         repo_id=graph.repo_id,
-        projection_id=projection_set_id(snapshot.graph_snapshot_id, projection_version=projection_version),
+        projection_id=projection_set_id(
+            snapshot.graph_snapshot_id,
+            projection_version=projection_version,
+            document_content_hash=document_content_hash,
+        ),
         projection_version=projection_version,
         graph_snapshot_id=snapshot.graph_snapshot_id,
         graph_schema_version=snapshot.graph_schema_version,
@@ -177,6 +200,15 @@ def _projection_doc(
 
 def _compact_lines(lines: Iterable[str]) -> str:
     return "\n".join(line.strip() for line in lines if line and line.strip())
+
+
+def _document_content_hash(documents: tuple[HarnessProjectionDocument, ...]) -> str:
+    stable_parts: list[str] = []
+    for document in sorted(documents, key=lambda item: item.doc_id):
+        stable_parts.append(document.doc_id)
+        stable_parts.append(document.content_hash)
+        stable_parts.append(repr(tuple(sorted((str(key), repr(value)) for key, value in document.metadata.items()))))
+    return hashlib.sha256("\n".join(stable_parts).encode("utf-8")).hexdigest()
 
 
 def _neighbor_labels(

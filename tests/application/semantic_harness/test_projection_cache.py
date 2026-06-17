@@ -47,6 +47,77 @@ def test_projection_cache_invalidates_when_structural_graph_changes() -> None:
     assert cache.stats().misses == 2
 
 
+def test_projection_cache_invalidates_when_semantic_fact_content_changes() -> None:
+    cache = InMemoryProjectionCache()
+    service = StructuralHarnessService(projection_cache=cache)
+    first_graph = service.bootstrap(
+        repo_id="repo:test",
+        files=(SourceFile(path="src/main.py", text="def run():\n    return True\n"),),
+    )
+    node = first_graph.nodes[0]
+    first_graph = type(first_graph)(
+        repo_id=first_graph.repo_id,
+        nodes=(
+            type(node)(
+                id=node.id,
+                kind=node.kind,
+                label=node.label,
+                repo_id=node.repo_id,
+                status=node.status,
+                summary=node.summary,
+                metadata={
+                    **node.metadata,
+                    "semantic_facts": (
+                        {
+                            "fact_id": "fact:run",
+                            "fact_type": "implementation_rationale",
+                            "text": "Run stayed boolean for legacy callers.",
+                            "anchor_node_ids": [node.id],
+                            "source_refs": [{"ref_id": "commit:a", "ref_kind": "commit"}],
+                            "review_status": "accepted",
+                            "derivability": "requires_git_history",
+                            "source_kind": "human_commit",
+                            "trust_tier": 2,
+                        },
+                    ),
+                },
+            ),
+        ),
+        edges=first_graph.edges,
+    )
+    second_node = first_graph.nodes[0]
+    second_graph = type(first_graph)(
+        repo_id=first_graph.repo_id,
+        nodes=(
+            type(second_node)(
+                id=second_node.id,
+                kind=second_node.kind,
+                label=second_node.label,
+                repo_id=second_node.repo_id,
+                status=second_node.status,
+                summary=second_node.summary,
+                metadata={
+                    **second_node.metadata,
+                    "semantic_facts": (
+                        {
+                            **second_node.metadata["semantic_facts"][0],
+                            "text": "Run stayed boolean because legacy callers branch on truthiness.",
+                        },
+                    ),
+                },
+            ),
+        ),
+        edges=first_graph.edges,
+    )
+
+    first = service.projection_set(first_graph)
+    second = service.projection_set(second_graph)
+
+    assert first.graph_snapshot_id == second.graph_snapshot_id
+    assert first.projection_id != second.projection_id
+    assert cache.stats().size == 2
+
+
 def test_service_query_uses_projection_cache_lazily() -> None:
     cache = InMemoryProjectionCache()
     service = StructuralHarnessService(projection_cache=cache)
