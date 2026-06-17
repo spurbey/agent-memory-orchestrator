@@ -77,6 +77,57 @@ def test_provider_parser_accepts_strict_json() -> None:
     assert parsed.proposals[0].source_refs[0].ref_id == "commit:abc123"
 
 
+def test_provider_parser_normalizes_known_aliases_with_diagnostics() -> None:
+    parsed = parse_semantic_fact_proposals(
+        {
+            "facts": [
+                {
+                    "fact_type": "implementation_rationale",
+                    "statement": "Projection identity includes rendered fact content so semantic cache changes re-embed.",
+                    "anchor_node_id": "file:repo:test:src/auth.py",
+                    "source_refs": ["commit:abc123"],
+                    "derivability": REQUIRES_GIT_HISTORY,
+                    "source_kind": SOURCE_HUMAN_COMMIT,
+                    "source_span": SPAN_COMMIT_MESSAGE,
+                    "confidence": 0.83,
+                }
+            ]
+        }
+    )
+
+    reasons = {item["reason"] for item in parsed.diagnostics}
+    assert parsed.passed
+    assert parsed.proposals[0].text.startswith("Projection identity")
+    assert parsed.proposals[0].anchor_node_ids == ("file:repo:test:src/auth.py",)
+    assert parsed.proposals[0].source_refs[0].ref_kind == "commit"
+    assert reasons >= {
+        "normalized_statement_to_text",
+        "normalized_anchor_node_id_to_anchor_node_ids",
+        "normalized_source_ref_string",
+    }
+
+
+def test_provider_parser_does_not_accept_aliases_missing_required_semantics() -> None:
+    parsed = parse_semantic_fact_proposals(
+        {
+            "facts": [
+                {
+                    "fact_type": "implementation_rationale",
+                    "statement": "The cache key changed because semantic facts can affect projection documents.",
+                    "anchor_node_id": "file:repo:test:src/auth.py",
+                    "source_refs": ["commit:abc123"],
+                }
+            ]
+        }
+    )
+
+    reasons = {item["reason"] for item in parsed.diagnostics}
+    assert not parsed.passed
+    assert parsed.proposals == ()
+    assert "missing_derivability" in reasons
+    assert "missing_source_kind" in reasons
+
+
 def test_provider_parser_and_review_reject_generic_fact() -> None:
     parsed = parse_semantic_fact_proposals(
         {

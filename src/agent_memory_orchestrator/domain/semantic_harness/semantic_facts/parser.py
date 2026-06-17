@@ -76,10 +76,10 @@ def _parse_fact(raw: Any, *, index: int) -> tuple[SemanticFactProposal | None, l
     fact_type = str(raw.get("fact_type") or raw.get("type") or "").strip()
     if fact_type not in SUPPORTED_SEMANTIC_FACT_TYPES:
         diagnostics.append(_diag("error", "unsupported_fact_type", index=index, value=fact_type))
-    text = str(raw.get("text") or raw.get("summary") or "").strip()
+    text = _text_value(raw, index=index, diagnostics=diagnostics)
     if not text:
         diagnostics.append(_diag("error", "missing_text", index=index))
-    anchors = _tuple_of_strings(raw.get("anchor_node_ids"))
+    anchors = _anchor_node_ids(raw, index=index, diagnostics=diagnostics)
     if not anchors:
         diagnostics.append(_diag("error", "missing_anchor_node_ids", index=index))
     source_refs = _source_refs(raw.get("source_refs"), index=index, diagnostics=diagnostics)
@@ -119,6 +119,16 @@ def _source_refs(value: Any, *, index: int, diagnostics: list[dict[str, str]]) -
         diagnostics.append(_diag("error", "missing_source_refs", index=index))
         return refs
     for ref_index, raw_ref in enumerate(raw_refs):
+        if isinstance(raw_ref, str):
+            normalized = _source_ref_from_string(raw_ref)
+            if normalized is None:
+                diagnostics.append(_diag("error", "invalid_source_ref", index=index, value=str(ref_index)))
+                continue
+            diagnostics.append(
+                _diag("warning", "normalized_source_ref_string", index=index, value=str(ref_index))
+            )
+            refs.append(normalized)
+            continue
         if not isinstance(raw_ref, dict):
             diagnostics.append(_diag("error", "source_ref_not_object", index=index, value=str(ref_index)))
             continue
@@ -138,6 +148,41 @@ def _source_refs(value: Any, *, index: int, diagnostics: list[dict[str, str]]) -
             )
         )
     return refs
+
+
+def _text_value(raw: dict[str, Any], *, index: int, diagnostics: list[dict[str, str]]) -> str:
+    text = str(raw.get("text") or "").strip()
+    if text:
+        return text
+    statement = str(raw.get("statement") or "").strip()
+    if statement:
+        diagnostics.append(_diag("warning", "normalized_statement_to_text", index=index))
+        return statement
+    summary = str(raw.get("summary") or "").strip()
+    if summary:
+        diagnostics.append(_diag("warning", "normalized_summary_to_text", index=index))
+        return summary
+    return ""
+
+
+def _anchor_node_ids(raw: dict[str, Any], *, index: int, diagnostics: list[dict[str, str]]) -> tuple[str, ...]:
+    anchors = _tuple_of_strings(raw.get("anchor_node_ids"))
+    if anchors:
+        return anchors
+    single_anchor = _tuple_of_strings(raw.get("anchor_node_id"))
+    if single_anchor:
+        diagnostics.append(_diag("warning", "normalized_anchor_node_id_to_anchor_node_ids", index=index))
+    return single_anchor
+
+
+def _source_ref_from_string(value: str) -> SemanticFactSourceRef | None:
+    ref_id = value.strip()
+    if not ref_id or ":" not in ref_id:
+        return None
+    ref_kind = ref_id.split(":", 1)[0].strip()
+    if not ref_kind:
+        return None
+    return SemanticFactSourceRef(ref_id=ref_id, ref_kind=ref_kind)
 
 
 def _tuple_of_strings(value: Any) -> tuple[str, ...]:
