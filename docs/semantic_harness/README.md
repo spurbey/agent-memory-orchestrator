@@ -24,12 +24,13 @@ The harness is not a better retrieval UI. It is a runtime context system for cod
 4. [Semantic fact writer](./architecture/semantic-fact-writer.md)
 5. [Mode-based harness query contract](./contracts/mode-based-amo-harness-query.md)
 6. [Baseline and phase gates](./evals/baseline-and-phase-gates.md)
-7. [Question classification](./algorithms/question-classification.md)
-8. [Context for anchor](./algorithms/context-for-anchor.md)
-9. [Rank tool hits](./algorithms/rank-tool-hits.md)
-10. [Qwen/provider enrichment](./integrations/qwen-provider-enrichment.md)
-11. [HelixDB spike plan](./integrations/helixdb-spike-plan.md)
-12. [Implementation roadmap](./17-implementation-roadmap.md)
+7. [Enrichment and embedding eval](./evals/enrichment-and-embedding-eval.md)
+8. [Question classification](./algorithms/question-classification.md)
+9. [Context for anchor](./algorithms/context-for-anchor.md)
+10. [Rank tool hits](./algorithms/rank-tool-hits.md)
+11. [Qwen/provider enrichment](./integrations/qwen-provider-enrichment.md)
+12. [HelixDB spike plan](./integrations/helixdb-spike-plan.md)
+13. [Implementation roadmap](./17-implementation-roadmap.md)
 
 The older docs remain useful for graph model, bootstrap, commit updates, and
 retrieval details. New product work should start from the mode-based reset docs

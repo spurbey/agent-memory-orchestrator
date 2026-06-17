@@ -91,7 +91,20 @@ Projection sets wrap these documents with cache identity:
 }
 ```
 
-`projection_id` is derived from `projection_version + graph_snapshot_id`. It is the invalidation key for future BM25/vector caches. Document content hashes remain per-document integrity checks, not the structural graph identity.
+`graph_snapshot_id` remains structural. `projection_id` is derived from
+`projection_version + graph_snapshot_id + rendered projection content hash`.
+This keeps structural graph identity stable while still invalidating
+projection/vector caches when semantic facts, summaries, or doc claims change
+without adding/removing nodes or edges.
+
+Document content hashes remain per-document integrity checks and drive
+embedding reuse:
+
+```text
+same doc_id + same content_hash -> reuse embedding
+same doc_id + changed content_hash -> re-embed
+missing doc_id in active projection -> tombstone/remove from active index
+```
 
 Default projected node kinds:
 
@@ -140,9 +153,19 @@ doc_semantic_summary:
   doc kind
   documented target when parser-backed
   compact content excerpt
+
+semantic_fact_summary / relationship_fact_summary / doc_claim_summary / work_window_fact_summary:
+  one reviewed semantic fact per projection document
+  fact type, scope, derivability, source kind, verification status, trust tier
+  accepted fact text
+  source refs and anchor node ids in metadata
 ```
 
 Projection docs must not invent dependencies. If a cross-file call is not structurally resolved, the projection may include the imported file via `IMPORTS`, but it must not claim a `CALLS` relation.
+
+Normal retrieval projects only accepted semantic facts. `review_only` facts are
+audit/debug opt-in. Rejected and quarantined facts are not projected for normal
+retrieval.
 
 Cross-file `CALLS` are projection-safe only when they come from deterministic structural resolution. The first Python resolver supports local `from module import symbol` calls and aliased module calls such as `import package.module as mod; mod.symbol()`. It skips wildcard imports, dynamic attributes, third-party imports, class method attributes reached through a module alias, and dotted imports without an alias when the local name would be ambiguous.
 
