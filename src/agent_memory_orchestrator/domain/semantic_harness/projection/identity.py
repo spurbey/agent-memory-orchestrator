@@ -9,8 +9,9 @@ def projection_set_id(
     graph_snapshot_id: str,
     *,
     projection_version: str = DEFAULT_PROJECTION_VERSION,
+    document_content_hash: str = "",
 ) -> str:
-    stable = "\n".join((projection_version, str(graph_snapshot_id or "")))
+    stable = "\n".join((projection_version, str(graph_snapshot_id or ""), str(document_content_hash or "")))
     return f"hproj:{_short_hash(stable, size=24)}"
 
 

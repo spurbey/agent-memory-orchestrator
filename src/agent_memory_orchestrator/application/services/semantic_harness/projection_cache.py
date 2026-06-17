@@ -7,8 +7,6 @@ from ....domain.semantic_harness import DEFAULT_PROJECTION_VERSION
 from ....domain.semantic_harness import HarnessProjectionSet
 from ....domain.semantic_harness import StructuralHarnessGraph
 from ....domain.semantic_harness import build_projection_set
-from ....domain.semantic_harness import graph_snapshot_identity
-from ....domain.semantic_harness import projection_set_id
 
 
 class ProjectionCache(Protocol):
@@ -28,7 +26,7 @@ class ProjectionCacheStats:
 
 
 class InMemoryProjectionCache:
-    """Application-layer projection cache keyed by graph snapshot and projection version."""
+    """Application-layer projection cache keyed by rendered projection identity."""
 
     def __init__(self) -> None:
         self._sets: dict[str, HarnessProjectionSet] = {}
@@ -41,12 +39,10 @@ class InMemoryProjectionCache:
         *,
         projection_version: str = DEFAULT_PROJECTION_VERSION,
     ) -> HarnessProjectionSet:
-        snapshot = graph_snapshot_identity(graph)
-        cache_key = projection_set_id(snapshot.graph_snapshot_id, projection_version=projection_version)
-        if cached := self._sets.get(cache_key):
+        projection = build_projection_set(graph, projection_version=projection_version)
+        if cached := self._sets.get(projection.projection_id):
             self._hits += 1
             return cached
-        projection = build_projection_set(graph, projection_version=projection_version)
         self._sets[projection.projection_id] = projection
         self._misses += 1
         return projection
