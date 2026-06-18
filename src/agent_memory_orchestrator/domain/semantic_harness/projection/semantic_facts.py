@@ -48,7 +48,7 @@ def _semantic_fact_doc(repo_id: str, node: HarnessNode, fact: SemanticFact) -> H
         )
     )
     return HarnessProjectionDocument(
-        doc_id=projection_doc_id(repo_id, fact.fact_id, doc_type),
+        doc_id=projection_doc_id(repo_id, f"{fact.fact_id}:{node.id}", doc_type),
         repo_id=repo_id,
         source_node_id=node.id,
         source_kind=node.kind,
@@ -59,6 +59,7 @@ def _semantic_fact_doc(repo_id: str, node: HarnessNode, fact: SemanticFact) -> H
             "path": node.metadata.get("path", ""),
             "status": node.status,
             "projection_source": "semantic_harness_semantic_fact",
+            "anchor_node_id": node.id,
             "fact_id": fact.fact_id,
             "fact_type": fact.fact_type,
             "fact_scope": fact.fact_scope,

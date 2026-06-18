@@ -24,7 +24,16 @@ def answer_for_type(
         answers, invariants = _invariant_answers(anchor_nodes, classification, question_type=question_type)
         return answers, [], invariants
     if question_type == "validation":
-        return ([], _links_for_edges(graph, anchor_nodes, kind="VALIDATED_BY", why="Validates the requested anchor behavior."), [])
+        return (
+            _fact_answers(
+                anchor_nodes,
+                classification,
+                question_type=question_type,
+                fact_types=("validation_expectation", "invariant_or_contract"),
+            ),
+            _links_for_edges(graph, anchor_nodes, kind="VALIDATED_BY", why="Validates the requested anchor behavior."),
+            [],
+        )
     if question_type == "risk":
         links = _risk_links(graph, anchor_nodes)
         answers = _risk_answers(anchor_nodes, classification, has_links=bool(links), goal=goal)
@@ -94,7 +103,7 @@ def _fact_answers(
             answers.append(_answer_from_fact(classification=classification, question_type=question_type, fact=fact, fallback_node=node))
             continue
         answers.append(_missing_fact_answer(classification=classification, node=node, question_type=question_type, fact_type=fact_types[0]))
-    return answers
+    return sorted(answers, key=lambda answer: answer.review_status == "missing")
 
 
 def _answer_from_fact(

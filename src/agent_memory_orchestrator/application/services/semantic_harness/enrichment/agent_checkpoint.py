@@ -48,6 +48,24 @@ from agent_memory_orchestrator.domain.semantic_harness.semantic_facts.review imp
 from agent_memory_orchestrator.domain.semantic_harness.store import HarnessGraphStore
 
 
+REGION_TO_FILE_FALLBACK_SUFFIXES = frozenset(
+    {
+        ".adoc",
+        ".cfg",
+        ".css",
+        ".ini",
+        ".json",
+        ".md",
+        ".markdown",
+        ".rst",
+        ".toml",
+        ".txt",
+        ".yaml",
+        ".yml",
+    }
+)
+
+
 @dataclass(slots=True, frozen=True)
 class AgentCheckpointIngestResult:
     checkpoint_id: str
@@ -197,6 +215,11 @@ def _resolve_fact_anchors(
             symbol = _symbol_for_line(graph, path=anchor.path, line_start=anchor.line_start, line_end=anchor.line_end)
             if symbol is not None:
                 resolved.append(symbol.id)
+            elif _can_resolve_region_to_file(anchor.path):
+                resolved.extend(item.node_id for item in file_resolution.resolved)
+                diagnostics.append(
+                    _resolution_diag(window, fact, anchor_index, "region_anchor_resolved_to_file", anchor.path)
+                )
             else:
                 diagnostics.append(
                     _resolution_diag(window, fact, anchor_index, "ambiguous_line_or_region_anchor", anchor.path)
@@ -231,8 +254,14 @@ def _symbol_for_line(
     return sorted(matches, key=lambda item: (_span_size(item), str(item.id)))[0]
 
 
+def _can_resolve_region_to_file(path: str) -> bool:
+    normalized = normalize_file_path(path).lower()
+    return any(normalized.endswith(suffix) for suffix in REGION_TO_FILE_FALLBACK_SUFFIXES)
+
+
 def _write_ingest_artifacts(result: AgentCheckpointIngestResult, *, source_file: Path | None) -> None:
     artifacts_dir = result.artifacts_dir
+    artifacts_dir.mkdir(parents=True, exist_ok=True)
     if source_file is not None:
         (artifacts_dir / "semantic_checkpoint.json").write_text(source_file.read_text(encoding="utf-8"), encoding="utf-8")
     _write_json(artifacts_dir / "parse_result.json", result.parse.as_dict())
