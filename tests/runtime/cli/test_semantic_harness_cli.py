@@ -2,6 +2,10 @@ from __future__ import annotations
 
 import json
 
+from agent_memory_orchestrator.domain.semantic_harness import HarnessNode
+from agent_memory_orchestrator.domain.semantic_harness import StructuralHarnessGraph
+from agent_memory_orchestrator.domain.semantic_harness.semantic_facts import AGENT_CHECKPOINT_SCHEMA_VERSION
+from agent_memory_orchestrator.infrastructure.sqlite.semantic_harness import SQLiteHarnessGraphStore
 from agent_memory_orchestrator.runtime.cli.commands.semantic_harness import main as harness_main
 from agent_memory_orchestrator.runtime.cli.main import main
 
@@ -166,3 +170,95 @@ def test_amo_harness_shadow_replay_missing_graph_reports_unavailable(tmp_path, m
     assert payload["record_count"] == 1
     assert payload["records"][0]["harness_response"]["status"] == "unavailable"
     assert payload["records"][0]["decision"]["would_attach"] is False
+
+
+def test_semantic_checkpoint_ingest_cli_writes_pending_artifacts(tmp_path, monkeypatch, capsys) -> None:
+    monkeypatch.setenv("AMO_HOME", str(tmp_path / "amo"))
+    db_path = tmp_path / "harness.sqlite"
+    graph = StructuralHarnessGraph(
+        repo_id="repo:test",
+        nodes=(
+            HarnessNode(id="repo:test", kind="Repo", label="repo:test", repo_id="repo:test"),
+            HarnessNode(
+                id="file:repo:test:src/auth.py",
+                kind="File",
+                label="src/auth.py",
+                repo_id="repo:test",
+                metadata={"path": "src/auth.py"},
+            ),
+        ),
+        edges=(),
+    )
+    with SQLiteHarnessGraphStore.from_graph(db_path, graph):
+        pass
+    checkpoint_file = tmp_path / "semantic_checkpoint.json"
+    checkpoint_file.write_text(json.dumps(_checkpoint_payload()), encoding="utf-8")
+    out_dir = tmp_path / "review"
+
+    status = main(
+        [
+            "semantic-checkpoint",
+            "ingest",
+            "--file",
+            str(checkpoint_file),
+            "--repo-id",
+            "repo:test",
+            "--db-path",
+            str(db_path),
+            "--out-dir",
+            str(out_dir),
+        ]
+    )
+
+    payload = json.loads(capsys.readouterr().out)
+    assert status == 0
+    assert payload["ok"] is True
+    assert payload["command"] == "semantic-checkpoint ingest"
+    assert payload["mode"] == "pending"
+    assert payload["summary"]["graph_mutated"] is False
+    assert (out_dir / "review_result.json").exists()
+
+
+def _checkpoint_payload() -> dict[str, object]:
+    return {
+        "schema_version": AGENT_CHECKPOINT_SCHEMA_VERSION,
+        "checkpoint_id": "checkpoint-cli",
+        "parent_session_id": "session-1",
+        "repo_root": "C:/repo",
+        "base_commit": "abc",
+        "head_commit": "def",
+        "checkpoint_time": "2026-06-18T12:00:00Z",
+        "session_goal": "Preserve auth semantics.",
+        "work_windows": [
+            {
+                "window_id": "window-1",
+                "commit_sha": "def",
+                "commit_message": "Preserve login behavior",
+                "changed_files": ["src/auth.py"],
+                "tests_run": [],
+                "semantic_facts": [
+                    {
+                        "fact_type": "implementation_rationale",
+                        "text": "Login fallback behavior is kept for anonymous-session compatibility.",
+                        "anchors": [{"path": "src/auth.py"}],
+                        "source_refs": [
+                            {
+                                "kind": "diff",
+                                "commit_sha": "def",
+                                "path": "src/auth.py",
+                                "line_start": 1,
+                                "line_end": 2,
+                                "excerpt": "return None",
+                            }
+                        ],
+                        "derivability": "requires_agent_session_history",
+                        "source_kind": "agent_session",
+                        "source_span": "validated_committed",
+                        "confidence": 0.8,
+                    }
+                ],
+                "rejected_approaches": [],
+                "open_questions": [],
+            }
+        ],
+    }
