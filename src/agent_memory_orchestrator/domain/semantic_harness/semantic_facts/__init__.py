@@ -6,6 +6,16 @@ propose these facts, but deterministic review decides which become usable.
 
 from .attach import SemanticFactAttachResult
 from .attach import attach_reviewed_facts_to_store
+from .agent_checkpoint import AGENT_CHECKPOINT_SCHEMA_VERSION
+from .agent_checkpoint import AgentCheckpointAnchor
+from .agent_checkpoint import AgentCheckpointFact
+from .agent_checkpoint import AgentCheckpointParseResult
+from .agent_checkpoint import AgentCheckpointSourceRef
+from .agent_checkpoint import AgentCheckpointTestRun
+from .agent_checkpoint import AgentCheckpointWorkWindow
+from .agent_checkpoint import AgentSemanticCheckpoint
+from .agent_checkpoint import checkpoint_fact_to_semantic_fact_proposal
+from .agent_checkpoint import parse_agent_semantic_checkpoint
 from .models import ANCHOR_LOCAL_SCOPE
 from .models import CODE_DERIVABLE
 from .models import DERIVABLE_FROM_CURRENT_CODE
@@ -58,6 +68,10 @@ from .packets import build_semantic_evidence_packet
 from .parser import SUPPORTED_SEMANTIC_FACT_TYPES
 from .parser import SemanticFactProposalParse
 from .parser import parse_semantic_fact_proposals
+from .provider_contract import REPO_SEMANTIC_FACT_CONTRACT_VERSION
+from .provider_contract import build_repo_semantic_fact_prompt
+from .provider_contract import repo_semantic_fact_contract_hash
+from .provider_contract import repo_semantic_fact_output_schema
 from .review import SemanticFactReview
 from .review import review_semantic_fact_proposals
 from .staleness import SemanticFactStalenessResult
@@ -65,6 +79,14 @@ from .staleness import mark_stale_facts_for_changed_anchors
 
 __all__ = [
     "ANCHOR_LOCAL_SCOPE",
+    "AGENT_CHECKPOINT_SCHEMA_VERSION",
+    "AgentCheckpointAnchor",
+    "AgentCheckpointFact",
+    "AgentCheckpointParseResult",
+    "AgentCheckpointSourceRef",
+    "AgentCheckpointTestRun",
+    "AgentCheckpointWorkWindow",
+    "AgentSemanticCheckpoint",
     "CODE_DERIVABLE",
     "DERIVABLE_FROM_CURRENT_CODE",
     "DERIVABLE_FROM_DOCS",
@@ -82,6 +104,7 @@ __all__ = [
     "REVIEW_QUARANTINED",
     "REVIEW_REJECTED",
     "REVIEW_REVIEW_ONLY",
+    "REPO_SEMANTIC_FACT_CONTRACT_VERSION",
     "SYSTEM_SCOPE",
     "TRUSTED_REVIEW_STATUSES",
     "UNKNOWN_DERIVABILITY",
@@ -115,8 +138,13 @@ __all__ = [
     "STALE_RISK",
     "attach_reviewed_facts_to_store",
     "build_semantic_evidence_packet",
+    "build_repo_semantic_fact_prompt",
+    "checkpoint_fact_to_semantic_fact_proposal",
     "mark_stale_facts_for_changed_anchors",
     "parse_semantic_fact_proposals",
+    "parse_agent_semantic_checkpoint",
+    "repo_semantic_fact_contract_hash",
+    "repo_semantic_fact_output_schema",
     "review_semantic_fact_proposals",
     "semantic_fact_trust_tier",
     "UNVERIFIED",
