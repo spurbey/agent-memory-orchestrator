@@ -141,6 +141,33 @@ def test_context_for_anchor_answers_local_rationale_fact_while_recommending_hist
     assert result.answers[0].derivability == "requires_agent_session_history"
 
 
+def test_context_for_anchor_answers_validation_expectation_fact() -> None:
+    graph = _graph(
+        semantic_facts=(
+            {
+                "fact_type": "validation_expectation",
+                "text": "Pending checkpoint review must write artifacts before any accepted-only graph attach runs.",
+                "review_status": "accepted",
+                "derivability": "requires_agent_session_history",
+                "confidence": 0.88,
+            },
+        ),
+        include_invariant=False,
+    )
+
+    result = answer_context_for_anchor(
+        graph,
+        files=("src/snapshots.py",),
+        questions=("what validation exists for this path?",),
+    )
+
+    assert result.status == "ready"
+    assert result.answers[0].question_type == "validation"
+    assert "Pending checkpoint review" in result.answers[0].answer
+    assert result.answers[0].fact_type == "validation_expectation"
+    assert result.action_relevant_links[0].kind == "VALIDATED_BY"
+
+
 def test_context_for_anchor_does_not_treat_boilerplate_summary_as_ready_semantic_role() -> None:
     graph = _graph(summary="from __future__ import annotations")
 

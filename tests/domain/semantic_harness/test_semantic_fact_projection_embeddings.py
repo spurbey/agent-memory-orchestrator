@@ -80,6 +80,53 @@ def test_review_only_projection_is_audit_opt_in() -> None:
     assert audit[0].metadata["review_status"] == REVIEW_REVIEW_ONLY
 
 
+def test_multi_anchor_semantic_fact_projection_docs_have_unique_ids() -> None:
+    fact = {
+        "fact_id": "fact:multi-anchor",
+        "fact_type": "implementation_rationale",
+        "text": "The checkpoint flow separates agent-authored anchors from AMO graph-owned node resolution.",
+        "anchor_node_ids": [
+            "file:repo:test:src/auth.py",
+            "file:repo:test:docs/checkpoint.md",
+        ],
+        "source_refs": [{"ref_id": "commit:abc123", "ref_kind": "commit"}],
+        "review_status": REVIEW_ACCEPTED,
+        "derivability": REQUIRES_GIT_HISTORY,
+        "source_kind": SOURCE_HUMAN_COMMIT,
+        "fact_scope": "anchor_local",
+        "trust_tier": 2,
+    }
+    graph = StructuralHarnessGraph(
+        repo_id="repo:test",
+        nodes=(
+            HarnessNode(
+                id="file:repo:test:src/auth.py",
+                kind="File",
+                label="src/auth.py",
+                repo_id="repo:test",
+                metadata={"path": "src/auth.py", "semantic_facts": (fact,)},
+            ),
+            HarnessNode(
+                id="file:repo:test:docs/checkpoint.md",
+                kind="File",
+                label="docs/checkpoint.md",
+                repo_id="repo:test",
+                metadata={"path": "docs/checkpoint.md", "semantic_facts": (fact,)},
+            ),
+        ),
+        edges=(),
+    )
+
+    docs = build_semantic_fact_projection_documents(graph)
+
+    assert len(docs) == 2
+    assert len({doc.doc_id for doc in docs}) == 2
+    assert {doc.metadata["anchor_node_id"] for doc in docs} == {
+        "file:repo:test:src/auth.py",
+        "file:repo:test:docs/checkpoint.md",
+    }
+
+
 def test_embedding_manifest_reuses_rebuilds_and_tombstones_projection_docs() -> None:
     graph = _graph_with_facts(
         (

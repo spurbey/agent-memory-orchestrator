@@ -108,21 +108,50 @@ def test_relationship_fact_with_unresolved_anchor_is_rejected(tmp_path) -> None:
     assert any(item["reason"] == "relationship_fact_needs_two_anchors" for item in result.review.diagnostics)
 
 
+def test_markdown_region_anchor_resolves_to_file_with_warning(tmp_path) -> None:
+    graph = _graph()
+    payload = _checkpoint()
+    fact = payload["work_windows"][0]["semantic_facts"][0]
+    fact["fact_type"] = "semantic_role"
+    fact["text"] = "The checkpoint docs define the trust boundary between forked agent proposals and AMO graph truth."
+    fact["anchors"] = [
+        {
+            "path": "docs/semantic_harness/integrations/agent-semantic-checkpoint.md",
+            "code_region_hint": "trust boundary",
+            "line_start": 5,
+            "line_end": 20,
+        }
+    ]
+    checkpoint_file = tmp_path / "semantic_checkpoint.json"
+    checkpoint_file.write_text(json.dumps(payload), encoding="utf-8")
+
+    result = ingest_agent_semantic_checkpoint(checkpoint_file=checkpoint_file, graph=graph)
+
+    assert len(result.review.accepted_facts) == 1
+    assert result.review.accepted_facts[0].anchor_node_ids == (
+        "file:repo:test:docs/semantic_harness/integrations/agent-semantic-checkpoint.md",
+    )
+    assert any(item["reason"] == "region_anchor_resolved_to_file" for item in result.diagnostics)
+
+
 def test_attach_command_path_can_use_pending_review_artifacts(tmp_path) -> None:
     graph = _graph()
     store = InMemoryHarnessGraphStore.from_graph(graph)
     checkpoint_file = tmp_path / "semantic_checkpoint.json"
     checkpoint_file.write_text(json.dumps(_checkpoint()), encoding="utf-8")
     pending = ingest_agent_semantic_checkpoint(checkpoint_file=checkpoint_file, graph=graph)
+    attach_dir = tmp_path / "attach-artifacts"
 
     result = attach_agent_checkpoint_review(
         review_artifact=pending.artifacts_dir / "review_result.json",
         graph=graph,
         store=store,
+        out_dir=attach_dir,
     )
 
     assert result.attach_result is not None
     assert result.attach_result.attached_fact_ids
+    assert (attach_dir / "attach_plan.json").exists()
 
 
 def test_multi_window_checkpoint_processes_each_window(tmp_path) -> None:
@@ -166,6 +195,13 @@ def _graph() -> StructuralHarnessGraph:
                     "line_start": 1,
                     "line_end": 3,
                 },
+            ),
+            HarnessNode(
+                id="file:repo:test:docs/semantic_harness/integrations/agent-semantic-checkpoint.md",
+                kind="File",
+                label="docs/semantic_harness/integrations/agent-semantic-checkpoint.md",
+                repo_id="repo:test",
+                metadata={"path": "docs/semantic_harness/integrations/agent-semantic-checkpoint.md"},
             ),
         ),
         edges=(),

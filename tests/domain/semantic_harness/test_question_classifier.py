@@ -7,6 +7,7 @@ from agent_memory_orchestrator.domain.semantic_harness.query_modes import classi
 def test_classifies_single_type_questions() -> None:
     assert classify_context_question("what invariant does this function maintain?").types == ("invariant",)
     assert classify_context_question("what tests validate this behavior?").types == ("validation",)
+    assert classify_context_question("what validation exists for this path?").types == ("validation",)
     assert classify_context_question("what calls this function?").types == ("usage",)
 
 
@@ -34,6 +35,12 @@ def test_recommends_history_mode_for_pure_history_questions() -> None:
     assert result.types == ("history",)
     assert result.status == "recommend_deeper_mode"
     assert result.recommended_mode == "history_for_anchor"
+
+
+def test_generic_use_word_does_not_trigger_usage_route() -> None:
+    result = classify_context_question("why does this path use pending review before graph mutation?")
+
+    assert result.types == ("history",)
 
 
 def test_unknown_and_broad_questions_request_clarification() -> None:

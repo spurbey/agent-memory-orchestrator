@@ -173,7 +173,7 @@ _TYPE_PATTERNS = (
     (
         "validation",
         (
-            r"\b(test|tests|tested|validate|validates|validated|verify|verifies|verification)\b",
+            r"\b(test|tests|tested|validate|validates|validated|validation|verify|verifies|verification)\b",
             r"\bcoverage\b",
         ),
     ),
@@ -203,7 +203,8 @@ _TYPE_PATTERNS = (
     (
         "usage",
         (
-            r"\b(calls?|called by|uses?|used by|depends?|dependencies|imports?|imported by)\b",
+            r"\b(calls?|called by|used by|depends?|dependencies|imports?|imported by)\b",
+            r"\bwhat uses\b",
             r"\bwho uses\b",
         ),
     ),
