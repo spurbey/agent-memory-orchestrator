@@ -85,6 +85,7 @@ class SemanticHarnessRuntimeService:
             graph,
             request,
             legacy_query=lambda: self._structural.query(graph, request),
+            projection_document_provider=lambda: self._projection_cache.get_or_build(graph).documents,
         )
 
     def apply_delta(self, delta: GraphUpdateDelta) -> HarnessRuntimeDeltaApplyResult:

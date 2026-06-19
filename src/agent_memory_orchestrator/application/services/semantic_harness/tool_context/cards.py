@@ -59,7 +59,7 @@ def _enrich_search_response(
     if focus_card is not None:
         return _prepend_tool_card(response=trimmed, request=request, tool_card=focus_card, tool_kind="search_focus")
     if len(kept) == len(response.cards):
-        return response
+        return _replace_cards(response=response, cards=response.cards, warnings=("broad_search_anchor_only_card",))
     return _replace_cards(
         response=response,
         cards=kept,
