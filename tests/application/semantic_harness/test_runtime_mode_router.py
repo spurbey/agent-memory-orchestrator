@@ -47,6 +47,44 @@ def test_runtime_keeps_legacy_file_context_on_card_path_without_explicit_mode() 
     assert response.mode_result == {}
 
 
+def test_runtime_routes_rank_tool_hits_mode_to_typed_result() -> None:
+    runtime = SemanticHarnessRuntimeService(graph_repository=_SingleGraphRepository(_Store(_graph())))
+
+    response = runtime.query(
+        "repo:test",
+        HarnessQueryRequest(
+            intent="tool_overlay",
+            mode="rank_tool_hits",
+            user_goal="snapshot duplicate raw observations",
+            recent_tool_result={"kind": "rg", "text": "src/snapshots.py:1:def snapshot_identity():"},
+            max_cards=3,
+        ),
+    )
+
+    assert response.status == "ready"
+    assert response.intent_used == "rank_tool_hits"
+    assert response.cards == ()
+    assert response.mode_result["ranked_hits"][0]["path"] == "src/snapshots.py"
+    assert response.next_actions[0].target == "src/snapshots.py"
+
+
+def test_runtime_maps_tool_overlay_search_to_rank_tool_hits_without_explicit_mode() -> None:
+    runtime = SemanticHarnessRuntimeService(graph_repository=_SingleGraphRepository(_Store(_graph())))
+
+    response = runtime.query(
+        "repo:test",
+        HarnessQueryRequest(
+            intent="tool_overlay",
+            user_goal="snapshot duplicate raw observations",
+            recent_tool_result={"kind": "search", "text": "src/snapshots.py:1:def snapshot_identity():"},
+            max_cards=3,
+        ),
+    )
+
+    assert response.intent_used == "rank_tool_hits"
+    assert response.mode_result["ranked_hits"][0]["path"] == "src/snapshots.py"
+
+
 def _graph() -> StructuralHarnessGraph:
     file_node = HarnessNode(
         id=file_id("repo:test", "src/snapshots.py"),
