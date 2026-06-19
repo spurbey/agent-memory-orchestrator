@@ -21,16 +21,22 @@ The harness is not a better retrieval UI. It is a runtime context system for cod
 1. [Current vs target architecture](./architecture/current-vs-target.md)
 2. [Query mode system](./architecture/query-mode-system.md)
 3. [Code structure](./architecture/code-structure.md)
-4. [Semantic fact writer](./architecture/semantic-fact-writer.md)
-5. [Mode-based harness query contract](./contracts/mode-based-amo-harness-query.md)
-6. [Baseline and phase gates](./evals/baseline-and-phase-gates.md)
-7. [Enrichment and embedding eval](./evals/enrichment-and-embedding-eval.md)
-8. [Question classification](./algorithms/question-classification.md)
-9. [Context for anchor](./algorithms/context-for-anchor.md)
-10. [Rank tool hits](./algorithms/rank-tool-hits.md)
-11. [Qwen/provider enrichment](./integrations/qwen-provider-enrichment.md)
-12. [HelixDB spike plan](./integrations/helixdb-spike-plan.md)
-13. [Implementation roadmap](./17-implementation-roadmap.md)
+4. [Algorithmic product architecture](./architecture/algorithmic-product-architecture.md)
+5. [Semantic fact writer](./architecture/semantic-fact-writer.md)
+6. [Mode-based harness query contract](./contracts/mode-based-amo-harness-query.md)
+7. [Baseline and phase gates](./evals/baseline-and-phase-gates.md)
+8. [Enrichment and embedding eval](./evals/enrichment-and-embedding-eval.md)
+9. [Question classification](./algorithms/question-classification.md)
+10. [Context for anchor](./algorithms/context-for-anchor.md)
+11. [Rank tool hits](./algorithms/rank-tool-hits.md)
+12. [Relationship explorer](./algorithms/relationship-explorer.md)
+13. [Pre-edit impact reviewer](./algorithms/pre-edit-impact-reviewer.md)
+14. [Relation weight scoring](./algorithms/relation-weight-scoring.md)
+15. [Qwen/provider enrichment](./integrations/qwen-provider-enrichment.md)
+16. [HelixDB spike plan](./integrations/helixdb-spike-plan.md)
+17. [MCP to proxy delivery plan](./integrations/mcp-proxy-delivery-plan.md)
+18. [Codex proxy spike](./integrations/codex-proxy-spike.md)
+19. [Implementation roadmap](./17-implementation-roadmap.md)
 
 The older docs remain useful for graph model, bootstrap, commit updates, and
 retrieval details. New product work should start from the mode-based reset docs
@@ -69,3 +75,25 @@ Current broad-search and generic card behavior is compatibility/probe behavior.
 It should not receive new product features unless the change is a bug fix or a
 compatibility repair. New behavior belongs in mode-specific contracts and
 modules.
+
+## Next Algorithmic Direction
+
+The next product work is mode-specific:
+
+```text
+rank_tool_hits
+relationship_between_anchors
+pre_edit_review
+history_for_anchor
+semantic_diff
+```
+
+These modes must use the hierarchy in
+[Algorithmic product architecture](./architecture/algorithmic-product-architecture.md).
+Do not add new algorithmic behavior to the legacy card query path.
+
+`rank_tool_hits` is the first automatic-delivery candidate. It ranks raw
+`rg`/`grep` output with explicit score components plus candidate-local semantic
+similarity between the captured user prompt and projection docs attached to the
+files/symbols returned by the search. It must preserve raw tool output by
+`raw_ref` before any proxy mutation.

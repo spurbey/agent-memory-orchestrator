@@ -57,6 +57,55 @@ shape:
 - `history_for_anchor` explains version/work history
 - `semantic_diff` reviews an actual patch
 
+## Evolved Product Direction
+
+The product direction has narrowed from "cards for tool output" to
+"mode-specific algorithmic assistance."
+
+Retained:
+
+```text
+deterministic harness-owned graph
+explicit MCP surface for proving modes
+forked-agent semantic checkpoint producer
+accepted-only semantic fact attach
+projection docs and embeddings as candidate discovery
+shadow/proxy exploration as later delivery work
+```
+
+Frozen:
+
+```text
+generic cards as primary product output
+unanchored broad-search cards
+tool-overlay attach/suppress tuning as product proof
+external provider prompt dumping as live producer
+legacy query.py feature growth
+```
+
+Deferred:
+
+```text
+certified non-derivable product proof
+HelixDB storage rewrite
+proxy replacement or automatic tool-result rewriting
+live-query provider calls
+semantic-heavy relationship/history scoring before facts exist
+```
+
+Next structural algorithm phases:
+
+```text
+rank_tool_hits
+relationship_between_anchors v1
+pre_edit_review v1
+relation weight/co-change scoring
+```
+
+These phases may proceed before the certified non-derivable eval, but only if
+they remain honest about structural-only evidence and do not claim semantic
+causality without reviewed facts.
+
 ## Non-Negotiable Constraints
 
 - AMO must not duplicate raw `rg`, LSP, import, or caller dumps by default.

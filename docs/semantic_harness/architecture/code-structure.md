@@ -28,17 +28,48 @@ src/agent_memory_orchestrator/domain/semantic_harness/
     context_models.py           # context mode result models
     context_routes.py           # context question-type routes
     question_classifier.py      # question -> route types
-    rank_tool_hits.py           # future rank-only search-result mode
-    pre_edit.py                 # future planned-edit review mode
-    relationship.py             # future multi-anchor relationship mode
-    history.py                  # future version/work-history mode
-    semantic_diff.py            # future patch/diff review mode
+    rank_tool_hits.py           # initial rank-only search-result mode
+    pre_edit.py                 # initial planned-edit review mode
+    relationship.py             # initial multi-anchor relationship mode
+    history.py                  # initial version/work-history mode
+    semantic_diff.py            # initial patch/diff review mode
+
+    rank_tool_hits/             # split here once parser/scorer/selector diverge
+      parser.py
+      models.py
+      features.py
+      scorer.py
+      selector.py
+      mode.py
+
+    relationship/               # split here once connectors/path ranking start
+      models.py
+      seed.py
+      edge_costs.py
+      expand.py
+      connectors.py
+      path_ranker.py
+      mode.py
+
+    pre_edit/                   # split here once frontier/risk/test logic grows
+      models.py
+      grounding.py
+      frontier.py
+      risk.py
+      tests.py
+      mode.py
 
   semantic_facts/
     models.py                   # canonical source/derivability/scope/trust contracts
     review.py                   # deterministic proposal review
     attach.py                   # accepted facts -> graph node metadata
     extraction.py               # future provider/deterministic proposal builders
+
+  scoring/
+    features.py                 # reusable feature values, no product formatting
+    relation_strength.py        # co-change and relation aggregate scoring
+    source_quality.py           # trust/derivability/source scoring helpers
+    risk.py                     # reusable structural risk scores
 
   planning/
     query_ir.py                 # backend-neutral query plan data
@@ -47,6 +78,7 @@ src/agent_memory_orchestrator/domain/semantic_harness/
     suppression.py              # duplicate/budget/safety suppression
 
   traversal/
+    bounded.py                  # typed bounded graph expansion
     weighted_paths.py           # weighted bounded graph expansion
     proximity.py                # PPR/RWR-style proximity helpers
     connectors.py               # Steiner-style connector candidates
@@ -64,13 +96,28 @@ src/agent_memory_orchestrator/application/services/semantic_harness/
     replay.py                   # eval replay only
     search_focus.py             # frozen probe logic until migrated
 
+  evals/
+    baselines.py                # no-AMO/current-AMO/new-mode comparisons
+    fixtures.py                 # fixture loading and replay helpers
+    rank_tool_hits.py
+    relationship.py
+    pre_edit.py
+
 src/agent_memory_orchestrator/runtime/
   mcp/                          # transport functions only
   cli/commands/semantic_harness.py
                                 # operational bootstrap/replay commands only
+  codex_proxy/
+    wrapper.py                   # config snapshot/inject/unwrap only
+    server.py                    # HTTP/WS proxy transport only
+    responses_http.py            # /v1/responses forwarding/mutation
+    responses_ws.py              # WebSocket forwarding/mutation
+    tool_outputs.py              # request item detection and raw_ref storage
+    mutation.py                  # ranked-first/raw-preserved text rendering
 
 src/agent_memory_orchestrator/infrastructure/
   sqlite/semantic_harness/      # SQLite graph/projection stores
+  embeddings/semantic_harness/   # embedding backend adapters and manifests
   helixdb/semantic_harness/     # future spike adapter only
 ```
 
@@ -133,6 +180,11 @@ New graph traversal algorithm
 -> traversal/<algorithm>.py
 -> used by mode module through a narrow function
 
+New scoring feature
+-> scoring/<feature_family>.py
+-> used by one or more mode scorers
+-> must expose inputs and components in eval output
+
 New semantic fact source or review rule
 -> semantic_facts/models.py for contract changes
 -> semantic_facts/review.py for deterministic acceptance rules
@@ -146,7 +198,46 @@ New backend capability
 New Codex/MCP/proxy behavior
 -> runtime transport or integration docs
 -> never in domain query algorithms
+
+New embedding backend
+-> infrastructure/embeddings/semantic_harness/
+-> exposed through projection/retrieval ports
+-> domain rankers consume similarity features, not provider clients
 ```
+
+## Algorithmic Mode Split Rule
+
+For each new mode, start with this internal shape even if the first
+implementation is one file:
+
+```text
+input parser
+anchor mapper
+feature extractor
+scorer/traverser
+selector/diversifier
+result model
+result renderer
+eval adapter
+```
+
+Do not mix these concerns with MCP transport, SQLite persistence, provider
+calls, or generic cards.
+
+## Retire Or Migrate Rule
+
+Probe logic should be retired only after a mode-specific replacement beats it on
+the relevant baseline:
+
+```text
+search_focus -> rank_tool_hits
+generic risk cards -> pre_edit_review
+historical_relation cards -> relationship/history modes
+why_changed cards -> history_for_anchor
+tool overlay attach/suppress -> proxy append eval after rank_tool_hits
+```
+
+Until then, probe logic remains compatibility-only and receives bug fixes only.
 
 ## Review Checklist
 
