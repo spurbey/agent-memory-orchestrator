@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+import re
 from typing import Any
 from typing import Iterable
 
@@ -21,6 +23,53 @@ from ..semantic_facts import REVIEW_REVIEW_ONLY
 from ..semantic_facts import UNKNOWN_DERIVABILITY
 from ..semantic_facts import SemanticFact
 
+_LOG = logging.getLogger(__name__)
+LOW_RELEVANCE_THRESHOLD = 0.18
+TIGHT_RELEVANCE_RATIO = 0.15
+_STOPWORDS = frozenset(
+    {
+        "a",
+        "about",
+        "an",
+        "and",
+        "are",
+        "as",
+        "before",
+        "by",
+        "change",
+        "changed",
+        "changes",
+        "changing",
+        "does",
+        "edit",
+        "editing",
+        "edits",
+        "for",
+        "from",
+        "here",
+        "how",
+        "i",
+        "if",
+        "in",
+        "is",
+        "it",
+        "me",
+        "of",
+        "or",
+        "should",
+        "the",
+        "this",
+        "to",
+        "what",
+        "when",
+        "where",
+        "which",
+        "why",
+        "will",
+        "with",
+    }
+)
+
 
 def semantic_facts_for_node(node: HarnessNode, *, fact_types: Iterable[str] = ()) -> tuple[SemanticFact, ...]:
     requested = {fact_type for fact_type in fact_types if fact_type}
@@ -32,11 +81,53 @@ def semantic_facts_for_node(node: HarnessNode, *, fact_types: Iterable[str] = ()
     return tuple(_dedupe_facts(facts))
 
 
-def best_fact_for_node(node: HarnessNode, *, fact_types: Iterable[str], prefer_non_derivable: bool) -> SemanticFact | None:
+def best_fact_for_node(
+    node: HarnessNode,
+    *,
+    fact_types: Iterable[str],
+    prefer_non_derivable: bool,
+    question: str = "",
+    goal: str = "",
+) -> SemanticFact | None:
+    ranked = ranked_facts_for_node(
+        node,
+        fact_types=fact_types,
+        prefer_non_derivable=prefer_non_derivable,
+        question=question,
+        goal=goal,
+        limit=1,
+    )
+    return ranked[0] if ranked else None
+
+
+def ranked_facts_for_node(
+    node: HarnessNode,
+    *,
+    fact_types: Iterable[str],
+    prefer_non_derivable: bool,
+    question: str = "",
+    goal: str = "",
+    limit: int = 1,
+    diagnostics: list[str] | None = None,
+) -> tuple[SemanticFact, ...]:
+    ordered_fact_types = tuple(fact_type for fact_type in fact_types if fact_type)
+    type_priority = {fact_type: index for index, fact_type in enumerate(ordered_fact_types)}
     candidates = tuple(fact for fact in semantic_facts_for_node(node, fact_types=fact_types) if fact.trusted)
     if not candidates:
-        return None
-    return sorted(candidates, key=lambda fact: _fact_sort_key(fact, prefer_non_derivable=prefer_non_derivable), reverse=True)[0]
+        return ()
+    ranked = sorted(
+        candidates,
+        key=lambda fact: _fact_sort_key(
+            fact,
+            prefer_non_derivable=prefer_non_derivable,
+            question=question,
+            goal=goal,
+            type_priority=type_priority,
+        ),
+        reverse=True,
+    )
+    _append_fact_relevance_diagnostics(ranked, question=question, goal=goal, diagnostics=diagnostics)
+    return tuple(ranked[: max(1, limit)])
 
 
 def facts_need_non_derivable(question_type: str) -> bool:
@@ -144,11 +235,85 @@ def _dedupe_facts(facts: list[SemanticFact]) -> list[SemanticFact]:
     return out
 
 
-def _fact_sort_key(fact: SemanticFact, *, prefer_non_derivable: bool) -> tuple[float, float, float, float]:
+def score_fact_relevance(fact: SemanticFact, *, question: str = "", goal: str = "") -> float:
+    query_tokens = _tokens(f"{question} {goal}")
+    if not query_tokens:
+        return 0.0
+    fact_tokens = _tokens(f"{fact.fact_type} {fact.text}")
+    if not fact_tokens:
+        return 0.0
+    overlap = len(query_tokens & fact_tokens)
+    if not overlap:
+        return 0.0
+    recall = overlap / len(query_tokens)
+    precision = overlap / len(fact_tokens)
+    return round((recall * 0.75) + (precision * 0.25), 4)
+
+
+def _fact_sort_key(
+    fact: SemanticFact,
+    *,
+    prefer_non_derivable: bool,
+    question: str = "",
+    goal: str = "",
+    type_priority: dict[str, int] | None = None,
+) -> tuple[float, float, float, float, float, float]:
+    type_priority = type_priority or {}
+    type_bonus = 1.0 - (type_priority.get(fact.fact_type, 99) * 0.01)
+    relevance = score_fact_relevance(fact, question=question, goal=goal)
     non_derivable_bonus = 1.0 if prefer_non_derivable and fact.non_derivable else 0.0
     review_bonus = 1.0 if fact.trusted else 0.0
     trust_bonus = -float(fact.trust_tier)
-    return (non_derivable_bonus, review_bonus, trust_bonus, fact.confidence)
+    return (relevance, type_bonus, non_derivable_bonus, review_bonus, trust_bonus, fact.confidence)
+
+
+def _tokens(text: str) -> set[str]:
+    raw = re.findall(r"[a-zA-Z0-9]+", str(text or "").replace("_", " ").lower())
+    return {token for token in raw if len(token) > 2 and token not in _STOPWORDS}
+
+
+def _append_fact_relevance_diagnostics(
+    ranked: list[SemanticFact],
+    *,
+    question: str,
+    goal: str,
+    diagnostics: list[str] | None,
+) -> None:
+    if not ranked:
+        return
+    top = score_fact_relevance(ranked[0], question=question, goal=goal)
+    if top < LOW_RELEVANCE_THRESHOLD:
+        _record_diagnostic(
+            diagnostics,
+            f"low_relevance_fact_choice:top_fact_id={ranked[0].fact_id}:top_score={top:.4f}",
+        )
+    if len(ranked) < 2 or top <= 0:
+        return
+    second = score_fact_relevance(ranked[1], question=question, goal=goal)
+    if (top - second) <= max(0.01, top * TIGHT_RELEVANCE_RATIO):
+        _record_diagnostic(
+            diagnostics,
+            (
+                "tight_fact_relevance_scores:"
+                f"top_fact_id={ranked[0].fact_id}:second_fact_id={ranked[1].fact_id}:"
+                f"top_score={top:.4f}:second_score={second:.4f}"
+            ),
+        )
+        _LOG.debug(
+            "tight_fact_relevance_scores",
+            extra={
+                "candidate_count": len(ranked),
+                "top_score": top,
+                "second_score": second,
+                "top_fact_id": ranked[0].fact_id,
+                "second_fact_id": ranked[1].fact_id,
+            },
+        )
+
+
+def _record_diagnostic(diagnostics: list[str] | None, message: str) -> None:
+    if diagnostics is not None:
+        diagnostics.append(message)
 
 
 def _tuple_of_strings(value: Any) -> tuple[str, ...]:
@@ -215,5 +380,6 @@ __all__ = [
     "UNKNOWN_DERIVABILITY",
     "best_fact_for_node",
     "facts_need_non_derivable",
+    "ranked_facts_for_node",
     "semantic_facts_for_node",
 ]
