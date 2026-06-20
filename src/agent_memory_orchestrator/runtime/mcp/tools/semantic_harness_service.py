@@ -57,7 +57,7 @@ class SemanticHarnessToolMixin:
         )
         response = self._semantic_harness_runtime().query(safe_repo_id, request)
         payload = response.as_dict()
-        return {
+        result = {
             "ok": True,
             "tool": "amo_harness_query",
             "repo_id": safe_repo_id,
@@ -68,8 +68,10 @@ class SemanticHarnessToolMixin:
             "trace": payload["trace"],
             "warnings": payload["warnings"],
             "mode_result": payload["mode_result"],
-            "response": payload,
         }
+        if not payload["mode_result"]:
+            result["response"] = payload
+        return result
 
     def _semantic_harness_runtime(self) -> SemanticHarnessRuntimeService:
         runtime = getattr(self, "_semantic_harness_runtime_service", None)

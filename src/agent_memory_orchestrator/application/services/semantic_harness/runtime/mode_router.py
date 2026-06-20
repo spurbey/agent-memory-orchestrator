@@ -160,7 +160,6 @@ def _trace_for_context(mode_result: dict[str, object]) -> dict[str, object]:
         "edges": [],
         "versions": [],
         "occurrences": [],
-        "mode": mode_result,
     }
 
 
@@ -179,7 +178,6 @@ def _trace_for_rank_tool_hits(mode_result: dict[str, object]) -> dict[str, objec
         "edges": [],
         "versions": [],
         "occurrences": [],
-        "mode": mode_result,
     }
 
 
