@@ -125,6 +125,7 @@ def test_mcp_harness_query_returns_cards_from_warmed_repo(tmp_path) -> None:
     assert result["requires_bootstrap"] is False
     assert result["status"] == "partial_structural"
     assert result["cards"]
+    assert "response" in result
     assert result["cards"][0]["evidence"][0]["node_id"].startswith("file:repo:test:")
 
 
@@ -162,6 +163,8 @@ def test_mcp_harness_query_returns_explicit_mode_result_from_warmed_repo(tmp_pat
     assert result["ok"] is True
     assert result["status"] == "ready"
     assert result["cards"] == []
+    assert "response" not in result
+    assert "mode" not in result["trace"]
     assert result["mode_result"]["answers"][0]["question_type"] == "semantic_role"
     assert "snapshot identity" in result["mode_result"]["answers"][0]["answer"]
 
