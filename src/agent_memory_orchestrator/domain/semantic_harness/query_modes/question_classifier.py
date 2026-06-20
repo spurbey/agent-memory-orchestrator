@@ -16,6 +16,22 @@ CONTEXT_QUESTION_TYPES = (
     "unknown",
 )
 
+_OUTPUT_TYPE_ORDER = {
+    question_type: index
+    for index, question_type in enumerate(
+        (
+            "semantic_role",
+            "invariant",
+            "validation",
+            "history",
+            "risk",
+            "local_relation",
+            "usage",
+            "unknown",
+        )
+    )
+}
+
 
 @dataclass(slots=True, frozen=True)
 class QuestionClassification:
@@ -67,7 +83,7 @@ def classify_context_question(question: str) -> QuestionClassification:
         if _matches_any(text, patterns):
             matched.append((question_type, _reason_code_for(question_type, text)))
 
-    types = _dedupe(question_type for question_type, _ in matched)
+    types = _ordered_types(_dedupe(question_type for question_type, _ in matched))
     reason_codes = _dedupe(reason_code for _, reason_code in matched)
     if not types:
         return QuestionClassification(
@@ -115,7 +131,26 @@ def _dedupe(values: Iterable[str]) -> tuple[str, ...]:
     return tuple(out)
 
 
+def _ordered_types(types: tuple[str, ...]) -> tuple[str, ...]:
+    return tuple(sorted(types, key=lambda question_type: _OUTPUT_TYPE_ORDER.get(question_type, 99)))
+
+
 def _reason_code_for(question_type: str, text: str) -> str:
+    if question_type == "history" and re.search(
+        r"\b(intentional|choice|decision|decided|tradeoff|trade off|why not|instead of|kept|rejected approach|review suggestion)\b",
+        text,
+    ):
+        return "decision_or_tradeoff"
+    if re.search(r"\b(reject|rejects|rejected|rejecting)\b", text):
+        return "rejection_term"
+    if re.search(r"\b(enforce|enforces|enforced|enforcing)\b", text):
+        return "enforcement_term"
+    if re.search(r"\b(filter|filters|filtered|filtering)\b", text):
+        return "filtering_term"
+    if re.search(r"\b(guard|guards|guarded|guarding)\b", text):
+        return "guard_term"
+    if re.search(r"\b(prevent|prevents|prevented|preventing)\b", text):
+        return "prevention_term"
     if question_type == "history" and re.search(r"\bwhy\b.*\b(exist|created|built|introduced|changed)\b", text):
         return "why_exist_or_changed"
     if question_type == "risk" and re.search(r"\b(break|affect|impact|risk)\b", text):
@@ -149,6 +184,7 @@ _TOO_BROAD_PATTERNS = (
     r"\bgive me everything\b",
     r"\bexplain everything\b",
     r"\bfull context\b",
+    r"\bwhat should i know here\b",
     r"\bprofile (this|the) (file|function|class|symbol)\b",
 )
 
@@ -168,6 +204,11 @@ _TYPE_PATTERNS = (
             r"\b(invariant|guarantee|constraint|contract)\b",
             r"\bmust (stay|remain|hold|not)\b",
             r"\bshould (stay|remain|not change|avoid changing)\b",
+            r"\b(reject|rejects|rejecting)\b",
+            r"\b(enforce|enforces|enforced|enforcing)\b",
+            r"\b(filter|filters|filtered|filtering)\b",
+            r"\b(guard|guards|guarded|guarding)\b",
+            r"\b(prevent|prevents|prevented|preventing)\b",
         ),
     ),
     (
@@ -175,6 +216,8 @@ _TYPE_PATTERNS = (
         (
             r"\b(test|tests|tested|validate|validates|validated|validation|verify|verifies|verification)\b",
             r"\bcoverage\b",
+            r"\b(reject|rejects|rejecting)\b",
+            r"\b(enforce|enforces|enforced|enforcing)\b",
         ),
     ),
     (
@@ -183,6 +226,8 @@ _TYPE_PATTERNS = (
             r"\b(break|breaks|broken|risk|risky|impact|affect|affected|side effect|regression)\b",
             r"\bwhat (will|could|might) .* if i change\b",
             r"\bwhat should i avoid\b",
+            r"\b(guard|guards|guarded|guarding)\b",
+            r"\b(prevent|prevents|prevented|preventing)\b",
         ),
     ),
     (
@@ -197,7 +242,15 @@ _TYPE_PATTERNS = (
         (
             r"\bwhy\b",
             r"\bwhen\b",
-            r"\b(changed|created|introduced|built|origin|history|before|after)\b",
+            r"\b(changed|created|introduced|built|origin|history)\b",
+            r"\b(intentional|choice|decision|decided|tradeoff|trade off)\b",
+            r"\bwhy not\b",
+            r"\binstead of\b",
+            r"\bkept\b",
+            r"\brejected (approach|option|alternative|suggestion)\b",
+            r"\breview suggestion\b",
+            r"\b(filter|filters|filtered|filtering)\b",
+            r"\b(reject|rejects|rejected|rejecting)\b",
         ),
     ),
     (
