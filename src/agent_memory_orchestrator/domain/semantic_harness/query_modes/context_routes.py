@@ -6,8 +6,8 @@ from .context_models import ActionRelevantLink
 from .context_models import ContextAnswer
 from .question_classifier import QuestionClassification
 from .semantic_facts import SemanticFact
-from .semantic_facts import best_fact_for_node
 from .semantic_facts import facts_need_non_derivable
+from .semantic_facts import ranked_facts_for_node
 
 
 def answer_for_type(
@@ -17,11 +17,29 @@ def answer_for_type(
     classification: QuestionClassification,
     question_type: str,
     goal: str,
+    diagnostics: list[str] | None = None,
 ) -> tuple[list[ContextAnswer], list[ActionRelevantLink], list[str]]:
     if question_type == "semantic_role":
-        return (_fact_answers(anchor_nodes, classification, question_type=question_type, fact_types=("semantic_role",)), [], [])
+        return (
+            _fact_answers(
+                anchor_nodes,
+                classification,
+                question_type=question_type,
+                fact_types=("semantic_role",),
+                goal=goal,
+                diagnostics=diagnostics,
+            ),
+            [],
+            [],
+        )
     if question_type == "invariant":
-        answers, invariants = _invariant_answers(anchor_nodes, classification, question_type=question_type)
+        answers, invariants = _invariant_answers(
+            anchor_nodes,
+            classification,
+            question_type=question_type,
+            goal=goal,
+            diagnostics=diagnostics,
+        )
         return answers, [], invariants
     if question_type == "validation":
         return (
@@ -30,13 +48,15 @@ def answer_for_type(
                 classification,
                 question_type=question_type,
                 fact_types=("validation_expectation", "invariant_or_contract"),
+                goal=goal,
+                diagnostics=diagnostics,
             ),
             _links_for_edges(graph, anchor_nodes, kind="VALIDATED_BY", why="Validates the requested anchor behavior."),
             [],
         )
     if question_type == "risk":
         links = _risk_links(graph, anchor_nodes)
-        answers = _risk_answers(anchor_nodes, classification, has_links=bool(links), goal=goal)
+        answers = _risk_answers(anchor_nodes, classification, has_links=bool(links), goal=goal, diagnostics=diagnostics)
         return answers, links, []
     if question_type == "history":
         return (
@@ -45,6 +65,8 @@ def answer_for_type(
                 classification,
                 question_type=question_type,
                 fact_types=("implementation_rationale", "historical_change"),
+                goal=goal,
+                diagnostics=diagnostics,
             ),
             [],
             [],
@@ -71,21 +93,28 @@ def _invariant_answers(
     classification: QuestionClassification,
     *,
     question_type: str,
+    goal: str,
+    diagnostics: list[str] | None,
 ) -> tuple[list[ContextAnswer], list[str]]:
     answers: list[ContextAnswer] = []
     invariants: list[str] = []
     for node in anchor_nodes:
-        fact = best_fact_for_node(
+        facts = ranked_facts_for_node(
             node,
             fact_types=("invariant_or_contract", "data_model_or_storage"),
             prefer_non_derivable=facts_need_non_derivable(question_type),
+            question=classification.question,
+            goal=goal,
+            limit=2,
+            diagnostics=diagnostics,
         )
-        if fact:
-            invariants.append(fact.text)
-            answers.append(_answer_from_fact(classification=classification, question_type="invariant", fact=fact, fallback_node=node))
+        if facts:
+            for fact in facts:
+                invariants.append(fact.text)
+                answers.append(_answer_from_fact(classification=classification, question_type="invariant", fact=fact, fallback_node=node))
             continue
         answers.append(_missing_fact_answer(classification=classification, node=node, question_type="invariant", fact_type="invariant_or_contract"))
-    return answers, invariants
+    return sorted(answers, key=lambda answer: answer.review_status == "missing"), invariants
 
 
 def _fact_answers(
@@ -94,13 +123,24 @@ def _fact_answers(
     *,
     question_type: str,
     fact_types: tuple[str, ...],
+    goal: str,
+    diagnostics: list[str] | None,
 ) -> list[ContextAnswer]:
     answers: list[ContextAnswer] = []
     prefer_non_derivable = facts_need_non_derivable(question_type)
     for node in anchor_nodes:
-        fact = best_fact_for_node(node, fact_types=fact_types, prefer_non_derivable=prefer_non_derivable)
-        if fact:
-            answers.append(_answer_from_fact(classification=classification, question_type=question_type, fact=fact, fallback_node=node))
+        facts = ranked_facts_for_node(
+            node,
+            fact_types=fact_types,
+            prefer_non_derivable=prefer_non_derivable,
+            question=classification.question,
+            goal=goal,
+            limit=2,
+            diagnostics=diagnostics,
+        )
+        if facts:
+            for fact in facts:
+                answers.append(_answer_from_fact(classification=classification, question_type=question_type, fact=fact, fallback_node=node))
             continue
         answers.append(_missing_fact_answer(classification=classification, node=node, question_type=question_type, fact_type=fact_types[0]))
     return sorted(answers, key=lambda answer: answer.review_status == "missing")
@@ -128,6 +168,10 @@ def _answer_from_fact(
         fact_scope=fact.fact_scope,
         verification_status=fact.verification_status,
         trust_tier=fact.trust_tier,
+        fact_id=fact.fact_id,
+        anchor_node_id=fallback_node.id,
+        anchor_kind=fallback_node.kind,
+        anchor_label=fallback_node.label,
     )
 
 
@@ -153,6 +197,9 @@ def _missing_fact_answer(
         fact_scope="",
         verification_status="unknown",
         trust_tier=99,
+        anchor_node_id=node.id,
+        anchor_kind=node.kind,
+        anchor_label=node.label,
     )
 
 
@@ -162,12 +209,15 @@ def _risk_answers(
     *,
     has_links: bool,
     goal: str,
+    diagnostics: list[str] | None,
 ) -> list[ContextAnswer]:
     fact_answers = _fact_answers(
         anchor_nodes,
         classification,
         question_type="risk",
         fact_types=("risk_or_impact", "failure_mode", "implementation_rationale"),
+        goal=goal,
+        diagnostics=diagnostics,
     )
     if any(answer.review_status != "missing" for answer in fact_answers):
         return fact_answers
@@ -188,6 +238,9 @@ def _risk_answers(
             fact_scope="",
             verification_status="unknown",
             trust_tier=99,
+            anchor_node_id=node.id,
+            anchor_kind=node.kind,
+            anchor_label=node.label,
         )
         for node in anchor_nodes
     ]

@@ -20,6 +20,10 @@ class ContextAnswer:
     fact_scope: str = ""
     verification_status: str = ""
     trust_tier: int = 99
+    fact_id: str = ""
+    anchor_node_id: str = ""
+    anchor_kind: str = ""
+    anchor_label: str = ""
 
     def as_dict(self) -> dict[str, object]:
         return {
@@ -36,6 +40,10 @@ class ContextAnswer:
             "fact_scope": self.fact_scope,
             "verification_status": self.verification_status,
             "trust_tier": self.trust_tier,
+            "fact_id": self.fact_id,
+            "anchor_node_id": self.anchor_node_id,
+            "anchor_kind": self.anchor_kind,
+            "anchor_label": self.anchor_label,
         }
 
 
