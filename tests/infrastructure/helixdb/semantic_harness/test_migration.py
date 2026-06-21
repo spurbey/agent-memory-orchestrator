@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from agent_memory_orchestrator.domain.semantic_harness import HarnessEdge
 from agent_memory_orchestrator.domain.semantic_harness import HarnessNode
 from agent_memory_orchestrator.domain.semantic_harness import InMemoryHarnessGraphStore
@@ -49,6 +51,24 @@ class _TargetRepository:
         return InMemoryHarnessGraphStore.from_graph(self.graph)
 
 
+class _MetadataDroppingTarget(_TargetRepository):
+    def replace_from_graph(self, graph: StructuralHarnessGraph):
+        nodes = tuple(
+            HarnessNode(
+                id=node.id,
+                kind=node.kind,
+                label=node.label,
+                repo_id=node.repo_id,
+                status=node.status,
+                summary=node.summary,
+                metadata={},
+            )
+            for node in graph.nodes
+        )
+        self.graph = StructuralHarnessGraph(repo_id=graph.repo_id, nodes=nodes, edges=graph.edges)
+        return InMemoryHarnessGraphStore.from_graph(self.graph)
+
+
 def test_migration_verifies_structural_snapshot(monkeypatch, tmp_path) -> None:
     graph = StructuralHarnessGraph(
         repo_id="repo:test",
@@ -72,3 +92,30 @@ def test_migration_verifies_structural_snapshot(monkeypatch, tmp_path) -> None:
     assert result["node_count"] == 2
     assert result["edge_count"] == 1
     assert result["graph_snapshot_id"].startswith("gsnap:repo:test:")
+    assert len(result["graph_content_digest"]) == 64
+
+
+def test_migration_rejects_structurally_equal_graph_with_lost_metadata(monkeypatch, tmp_path) -> None:
+    graph = StructuralHarnessGraph(
+        repo_id="repo:test",
+        nodes=(
+            HarnessNode(
+                id="file:repo:test:a.py",
+                kind="File",
+                label="a.py",
+                repo_id="repo:test",
+                metadata={"semantic_facts": [{"fact_id": "fact:1"}]},
+            ),
+        ),
+        edges=(),
+    )
+    _SourceRepository.graph = graph
+    _MetadataDroppingTarget.graph = None
+    monkeypatch.setattr(migration, "SQLiteHarnessGraphRepository", _SourceRepository)
+    monkeypatch.setattr(migration, "HelixHarnessGraphRepository", _MetadataDroppingTarget)
+
+    with pytest.raises(RuntimeError, match="helix_migration_verification_failed"):
+        migration.migrate_sqlite_repo_to_helix(
+            repo_id="repo:test",
+            sqlite_path=tmp_path / "legacy.sqlite",
+        )

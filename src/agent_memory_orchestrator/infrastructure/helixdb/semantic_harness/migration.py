@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 from pathlib import Path
 from typing import Any
 
@@ -36,10 +38,13 @@ def migrate_sqlite_repo_to_helix(
 
     source_snapshot = graph_snapshot_identity(source_graph)
     migrated_snapshot = graph_snapshot_identity(migrated_graph)
+    source_content_digest = _graph_content_digest(source_graph)
+    migrated_content_digest = _graph_content_digest(migrated_graph)
     verified = (
         len(source_graph.nodes) == len(migrated_graph.nodes)
         and len(source_graph.edges) == len(migrated_graph.edges)
         and source_snapshot.graph_snapshot_id == migrated_snapshot.graph_snapshot_id
+        and source_content_digest == migrated_content_digest
     )
     if not verified:
         raise RuntimeError(
@@ -48,6 +53,7 @@ def migrate_sqlite_repo_to_helix(
             f"edges={len(source_graph.edges)}/{len(migrated_graph.edges)}:"
             "snapshots="
             f"{source_snapshot.graph_snapshot_id}/{migrated_snapshot.graph_snapshot_id}"
+            f":content={source_content_digest}/{migrated_content_digest}"
         )
     return {
         "status": "migrated",
@@ -59,7 +65,21 @@ def migrate_sqlite_repo_to_helix(
         "node_count": len(migrated_graph.nodes),
         "edge_count": len(migrated_graph.edges),
         "graph_snapshot_id": migrated_snapshot.graph_snapshot_id,
+        "graph_content_digest": migrated_content_digest,
     }
+
+
+def _graph_content_digest(graph: Any) -> str:
+    payload = {
+        "repo_id": graph.repo_id,
+        "nodes": sorted((node.as_dict() for node in graph.nodes), key=lambda row: str(row["id"])),
+        "edges": sorted(
+            (edge.as_dict() for edge in graph.edges),
+            key=lambda row: (str(row["source_id"]), str(row["kind"]), str(row["target_id"])),
+        ),
+    }
+    stable = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    return hashlib.sha256(stable.encode("utf-8")).hexdigest()
 
 
 __all__ = ["migrate_sqlite_repo_to_helix"]
