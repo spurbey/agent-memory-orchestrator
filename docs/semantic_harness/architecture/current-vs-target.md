@@ -11,7 +11,7 @@ product work moves to question-driven query modes.
 The harness currently has useful structural pieces:
 
 - structural repo graph with files, symbols, docs, versions, hunks, and edges
-- SQLite-backed graph/projection storage
+- HelixDB-backed graph storage with in-process projection rebuilding
 - explicit MCP tool named `amo_harness_query`
 - shadow tool-context planner for captured tool results
 - projection documents with lexical and deterministic vector retrieval
@@ -87,7 +87,7 @@ Deferred:
 
 ```text
 certified non-derivable product proof
-HelixDB storage rewrite
+Helix-native vector and advanced traversal execution
 proxy replacement or automatic tool-result rewriting
 live-query provider calls
 semantic-heavy relationship/history scoring before facts exist
@@ -113,4 +113,5 @@ causality without reviewed facts.
   `low_confidence`, or `unavailable`.
 - Vector hits are candidates, not truth.
 - Qwen/provider output is proposal evidence and must pass deterministic review.
-- HelixDB is a spike candidate behind a backend-neutral query IR.
+- HelixDB is the authoritative harness graph backend behind a backend-neutral
+  query IR; SQLite is a one-time migration source only.

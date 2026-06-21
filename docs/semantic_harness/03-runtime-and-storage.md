@@ -9,8 +9,8 @@ Semantic Harness runs as a local daemon first. It must be usable without hosted 
 Use separate stores when it improves reliability, but keep one logical graph identity.
 
 - Raw evidence ledger: append-only source records and AMO imports.
-- Graph store: files, symbols, code regions, versions, relation occurrences, cards, lineage, provenance.
-- SQLite ledgers: jobs, projections, evals, idempotency, import mapping, feedback status.
+- HelixDB graph store: files, symbols, code regions, versions, relation occurrences, cards, lineage, provenance.
+- SQLite ledgers outside the harness graph: jobs, evals, idempotency, import mapping, and feedback status.
 - Vector cache: rebuildable embeddings and FAISS indexes.
 - Stage artifacts: reproducible snapshots for bootstrap, update, eval, and migration.
 
@@ -61,7 +61,7 @@ projection_id =
   )
 ```
 
-This gives later SQLite/vector caches a stable invalidation boundary:
+This gives later Helix-native or external vector caches a stable invalidation boundary:
 
 ```text
 same graph_snapshot_id + same projection_version -> reusable projection
