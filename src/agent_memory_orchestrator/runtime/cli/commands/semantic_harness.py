@@ -12,9 +12,12 @@ from ....application.services.semantic_harness import ShadowToolReplayService
 from ....application.services.semantic_harness import SemanticHarnessRuntimeService
 from ....application.services.semantic_harness import ToolContextPlanner
 from ....core.config import Settings
+from ....domain.semantic_harness import repo_id_for_root
 from ....infrastructure.helixdb.semantic_harness import HelixHarnessConfig
 from ....infrastructure.helixdb.semantic_harness import HelixHarnessGraphRepository
 from ....infrastructure.helixdb.semantic_harness import migrate_sqlite_repo_to_helix
+from .semantic_harness_setup import add_helix_setup_actions
+from .semantic_harness_setup import handle_helix_setup_command
 
 
 def add_semantic_harness_subcommands(sub: Any) -> None:
@@ -24,10 +27,12 @@ def add_semantic_harness_subcommands(sub: Any) -> None:
 
 
 def _add_harness_actions(harness_sub: Any) -> None:
+    add_helix_setup_actions(harness_sub)
     bootstrap = harness_sub.add_parser("bootstrap", help="Warm the Semantic Harness graph for one repository")
     bootstrap.add_argument("--repo", type=Path, required=True, help="Repository root to bootstrap.")
     bootstrap.add_argument("--repo-id", default="", help="Stable repo id. Defaults to deterministic repo root id.")
     bootstrap.add_argument("--helix-url", default=None, help="Override local HelixDB URL.")
+    bootstrap.add_argument("--replace", action="store_true", help="Explicitly replace an existing enriched graph.")
     bootstrap.add_argument("--max-files", type=int, default=10_000, help="Maximum source files to read.")
     bootstrap.add_argument(
         "--include-untracked",
@@ -49,18 +54,33 @@ def _add_harness_actions(harness_sub: Any) -> None:
 def handle_semantic_harness_command(args: Any, *, emit: Callable[[object], None]) -> int | None:
     if args.command != "amo-harness":
         return None
+    if (status := handle_helix_setup_command(args, emit=emit)) is not None:
+        return status
     if args.amo_harness_command == "bootstrap":
         config = _helix_config(getattr(args, "helix_url", None))
         options = RepoBootstrapOptions(
             max_files=max(1, int(args.max_files)),
             prefer_git_tracked=not bool(args.include_untracked),
         )
+        repo_id = str(args.repo_id or "").strip() or repo_id_for_root(args.repo.expanduser().resolve())
         with HelixHarnessGraphRepository(config) as graph_repo:
+            if graph_repo.load(repo_id) is not None and not args.replace:
+                emit(
+                    {
+                        "ok": False,
+                        "status": "already_warmed",
+                        "error": "replace_requires_explicit_flag",
+                        "repo_id": repo_id,
+                        "backend": "helix",
+                        "helix_url": config.url,
+                    }
+                )
+                return 1
             runtime = SemanticHarnessRuntimeService(
                 graph_repository=graph_repo,
                 projection_cache=InMemoryProjectionCache(),
             )
-            result = runtime.bootstrap_repo(args.repo, repo_id=args.repo_id, options=options)
+            result = runtime.bootstrap_repo(args.repo, repo_id=repo_id, options=options)
         payload = result.as_dict()
         payload.update({"ok": True, "backend": "helix", "helix_url": config.url, "command": "amo-harness bootstrap"})
         emit(payload)

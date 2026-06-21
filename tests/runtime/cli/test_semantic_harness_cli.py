@@ -26,13 +26,43 @@ class _FakeHelixRepository:
 def _use_fake_helix(monkeypatch) -> _FakeHelixRepository:
     import agent_memory_orchestrator.runtime.cli.commands.semantic_checkpoint as checkpoint_command
     import agent_memory_orchestrator.runtime.cli.commands.semantic_harness as harness_command
+    import agent_memory_orchestrator.runtime.cli.commands.semantic_harness_setup as setup_command
 
     fake = _FakeHelixRepository()
     fake.repository = InMemoryHarnessGraphRepository()
     _FakeHelixRepository.repository = fake.repository
     monkeypatch.setattr(harness_command, "HelixHarnessGraphRepository", _FakeHelixRepository)
     monkeypatch.setattr(checkpoint_command, "HelixHarnessGraphRepository", _FakeHelixRepository)
+    monkeypatch.setattr(setup_command, "HelixHarnessGraphRepository", _FakeHelixRepository)
     return fake
+
+
+def test_amo_harness_setup_reuses_existing_graph_without_rebuild(tmp_path, monkeypatch, capsys) -> None:
+    import agent_memory_orchestrator.runtime.cli.commands.semantic_harness_setup as setup_command
+
+    fake = _use_fake_helix(monkeypatch)
+    monkeypatch.setenv("AMO_HOME", str(tmp_path / "amo"))
+    monkeypatch.setattr(
+        setup_command,
+        "ensure_local_helix",
+        lambda config: {"status": "ready", "url": config.url},
+    )
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    fake.repository.replace_from_graph(
+        StructuralHarnessGraph(
+            repo_id="repo:test",
+            nodes=(HarnessNode(id="repo:test", kind="Repo", label="repo:test", repo_id="repo:test"),),
+            edges=(),
+        )
+    )
+
+    status = main(["amo-harness", "setup", "--repo", str(repo), "--repo-id", "repo:test"])
+
+    payload = json.loads(capsys.readouterr().out)
+    assert status == 0
+    assert payload["graph_action"] == "reused_existing"
+    assert fake.repository.load("repo:test") is not None
 
 
 def test_amo_harness_bootstrap_warms_persistent_graph(tmp_path, monkeypatch, capsys) -> None:
