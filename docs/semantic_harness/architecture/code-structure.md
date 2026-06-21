@@ -116,9 +116,9 @@ src/agent_memory_orchestrator/runtime/
     mutation.py                  # ranked-first/raw-preserved text rendering
 
 src/agent_memory_orchestrator/infrastructure/
-  sqlite/semantic_harness/      # SQLite graph/projection stores
+  sqlite/semantic_harness/      # legacy migration adapter and adapter tests
   embeddings/semantic_harness/   # embedding backend adapters and manifests
-  helixdb/semantic_harness/     # future spike adapter only
+  helixdb/semantic_harness/     # production graph repository, store, migration
 ```
 
 ## File Ownership Rules

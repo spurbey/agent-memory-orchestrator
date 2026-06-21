@@ -2,8 +2,9 @@
 
 ## Purpose
 
-Keep the query planner independent from storage. SQLite/projection storage is
-the current backend; HelixDB is a spike candidate.
+Keep the query planner independent from storage. HelixDB is the authoritative
+Semantic Harness graph backend; projection documents are currently rebuilt in
+process from the loaded graph.
 
 ## IR Flow
 
@@ -72,8 +73,10 @@ This subgraph is the input to output formatting.
 
 ## Backend Rules
 
-- SQLite/projection backend remains the default.
-- HelixDB is evaluated through the same IR.
+- HelixDB is the production graph backend.
+- SQLite is retained only as a legacy migration source and adapter test target.
+- Native Helix text/vector execution may replace in-process projection scoring
+  without changing the query IR or mode contracts.
 - LLMs never write raw HelixDB queries.
 - Backends may expose graph, text, and vector operations, but AMO still owns
   planning, scoring, and suppression.
