@@ -23,7 +23,7 @@ def answer_runtime_query(
     legacy_query: LegacyQuery,
     projection_document_provider: ProjectionDocumentProvider | None = None,
 ) -> HarnessQueryResponse:
-    mode = _explicit_mode(request)
+    mode = explicit_query_mode(request)
     if not mode:
         return legacy_query()
     if mode == "context_for_anchor":
@@ -113,7 +113,7 @@ def _answer_context_for_anchor(
     )
 
 
-def _explicit_mode(request: HarnessQueryRequest) -> str:
+def explicit_query_mode(request: HarnessQueryRequest) -> str:
     requested_mode = str(request.mode or "").strip()
     if requested_mode:
         return requested_mode
@@ -181,4 +181,4 @@ def _trace_for_rank_tool_hits(mode_result: dict[str, object]) -> dict[str, objec
     }
 
 
-__all__ = ["answer_runtime_query"]
+__all__ = ["answer_runtime_query", "explicit_query_mode"]

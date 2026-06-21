@@ -82,7 +82,7 @@ def answer_rank_tool_hits(
 ) -> RankToolHitsResult:
     recent = recent_tool_result or {}
     raw_text = _tool_result_text(recent)
-    line_refs = _parse_search_lines(raw_text)
+    line_refs = parse_rank_tool_lines(recent)
     if not line_refs:
         return RankToolHitsResult(
             status="unavailable",
@@ -133,6 +133,12 @@ def answer_rank_tool_hits(
         embedding_backend=HASH_COSINE_METHOD,
         warnings=("candidate_discovery_only", "embedding_backend:hash_fallback"),
     )
+
+
+def parse_rank_tool_lines(recent_tool_result: dict[str, Any]) -> tuple[RankedToolLine, ...]:
+    """Return normalized rankable file/line rows without requiring a graph."""
+
+    return _parse_search_lines(_tool_result_text(recent_tool_result))
 
 
 @dataclass(slots=True, frozen=True)
@@ -433,4 +439,5 @@ __all__ = [
     "RankedToolHit",
     "RankedToolLine",
     "answer_rank_tool_hits",
+    "parse_rank_tool_lines",
 ]

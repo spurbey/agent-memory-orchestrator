@@ -80,6 +80,51 @@ def test_runtime_caches_loaded_graph_for_repeated_queries() -> None:
     assert store.to_graph_calls == 1
 
 
+def test_explicit_mode_uses_evidence_slice_without_loading_full_graph() -> None:
+    graph = StructuralHarnessGraph(
+        repo_id="repo:test",
+        nodes=(
+            HarnessNode(
+                id=file_id("repo:test", "src/auth.py"),
+                kind="File",
+                label="src/auth.py",
+                repo_id="repo:test",
+                metadata={
+                    "path": "src/auth.py",
+                    "semantic_facts": [
+                        {
+                            "fact_id": "fact:role",
+                            "fact_type": "semantic_role",
+                            "text": "Owns authentication policy.",
+                            "review_status": "accepted",
+                            "confidence": 0.9,
+                        }
+                    ],
+                },
+            ),
+        ),
+        edges=(),
+    )
+    repository = _SliceOnlyRepository(graph)
+    runtime = SemanticHarnessRuntimeService(graph_repository=repository)
+
+    response = runtime.query(
+        "repo:test",
+        HarnessQueryRequest(
+            intent="file_context",
+            mode="context_for_anchor",
+            user_goal="understand auth",
+            files=("src/auth.py",),
+            questions=("what is this file responsible for?",),
+        ),
+    )
+
+    assert repository.query_calls == 1
+    assert repository.load_calls == 0
+    assert response.status == "ready"
+    assert response.mode_result["answers"][0]["fact_id"] == "fact:role"
+
+
 def test_runtime_apply_delta_updates_persisted_graph_and_projection(tmp_path) -> None:
     (tmp_path / "src").mkdir()
     (tmp_path / "src" / "auth.py").write_text("def login():\n    return False\n", encoding="utf-8")
@@ -141,3 +186,22 @@ class _SingleGraphRepository:
     def replace_from_graph(self, graph: StructuralHarnessGraph) -> _CountingGraphStore:
         self._store = _CountingGraphStore(graph)
         return self._store
+
+
+class _SliceOnlyRepository:
+    def __init__(self, graph: StructuralHarnessGraph) -> None:
+        self.graph = graph
+        self.query_calls = 0
+        self.load_calls = 0
+
+    def query_evidence(self, _plan) -> StructuralHarnessGraph:
+        self.query_calls += 1
+        return self.graph
+
+    def load(self, _repo_id: str):
+        self.load_calls += 1
+        raise AssertionError("explicit query must not load the full graph")
+
+    def replace_from_graph(self, graph: StructuralHarnessGraph):
+        self.graph = graph
+        return _CountingGraphStore(graph)
