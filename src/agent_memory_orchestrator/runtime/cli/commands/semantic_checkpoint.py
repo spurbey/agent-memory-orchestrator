@@ -7,10 +7,9 @@ from typing import Any
 
 from ....application.services.semantic_harness.enrichment import attach_agent_checkpoint_review
 from ....application.services.semantic_harness.enrichment import ingest_agent_semantic_checkpoint
-from ....core.config import Settings
 from ....domain.semantic_harness.projection import build_projection_set
-from ....infrastructure.sqlite.semantic_harness import SQLiteHarnessGraphRepository
-from ....infrastructure.sqlite.semantic_harness import SQLiteProjectionCache
+from ....infrastructure.helixdb.semantic_harness import HelixHarnessConfig
+from ....infrastructure.helixdb.semantic_harness import HelixHarnessGraphRepository
 
 
 def add_semantic_checkpoint_subcommands(sub: Any) -> None:
@@ -20,14 +19,14 @@ def add_semantic_checkpoint_subcommands(sub: Any) -> None:
     ingest = checkpoint_sub.add_parser("ingest", help="Parse, resolve, and review a semantic checkpoint file")
     ingest.add_argument("--file", type=Path, required=True, help="Path to semantic_checkpoint.json.")
     ingest.add_argument("--repo-id", required=True, help="Repo id for the already-warmed Semantic Harness graph.")
-    ingest.add_argument("--db-path", type=Path, default=None, help="Override Semantic Harness SQLite path.")
+    ingest.add_argument("--helix-url", default=None, help="Override local HelixDB URL.")
     ingest.add_argument("--out-dir", type=Path, default=None, help="Directory for pending review artifacts.")
     ingest.add_argument("--mode", choices=("pending", "attach"), default="pending", help="Default is no graph mutation.")
 
     attach = checkpoint_sub.add_parser("attach", help="Attach accepted facts from a reviewed checkpoint artifact")
     attach.add_argument("--review", type=Path, required=True, help="Path to review_result.json or its artifact directory.")
     attach.add_argument("--repo-id", required=True, help="Repo id for the already-warmed Semantic Harness graph.")
-    attach.add_argument("--db-path", type=Path, default=None, help="Override Semantic Harness SQLite path.")
+    attach.add_argument("--helix-url", default=None, help="Override local HelixDB URL.")
     attach.add_argument("--out-dir", type=Path, default=None, help="Directory for attach artifacts.")
     attach.add_argument("--status", choices=("accepted-only",), default="accepted-only", help="Only accepted facts attach in v1.")
 
@@ -36,9 +35,8 @@ def handle_semantic_checkpoint_command(args: argparse.Namespace, *, emit: Callab
     if args.command != "semantic-checkpoint":
         return None
 
-    settings = Settings.load()
-    db_path = _semantic_harness_db_path(settings, getattr(args, "db_path", None))
-    with SQLiteHarnessGraphRepository(db_path) as graph_repo:
+    config = _helix_config(getattr(args, "helix_url", None))
+    with HelixHarnessGraphRepository(config) as graph_repo:
         store = graph_repo.load(args.repo_id)
         if store is None:
             emit(
@@ -47,7 +45,8 @@ def handle_semantic_checkpoint_command(args: argparse.Namespace, *, emit: Callab
                     "status": "unavailable",
                     "error": "semantic_harness_graph_not_warmed",
                     "repo_id": args.repo_id,
-                    "db_path": str(db_path),
+                    "backend": "helix",
+                    "helix_url": config.url,
                 }
             )
             return 1
@@ -61,9 +60,9 @@ def handle_semantic_checkpoint_command(args: argparse.Namespace, *, emit: Callab
                 out_dir=args.out_dir.expanduser().resolve() if args.out_dir else None,
             )
             payload = result.as_dict()
-            payload.update({"ok": True, "command": "semantic-checkpoint ingest", "db_path": str(db_path)})
+            payload.update({"ok": True, "command": "semantic-checkpoint ingest", "backend": "helix", "helix_url": config.url})
             if args.mode == "attach":
-                payload["projection_refresh"] = _refresh_projection_cache(db_path, store.to_graph())
+                payload["projection_refresh"] = _projection_refresh(store.to_graph())
             emit(payload)
             return 0
         if args.semantic_checkpoint_command == "attach":
@@ -74,23 +73,20 @@ def handle_semantic_checkpoint_command(args: argparse.Namespace, *, emit: Callab
                 out_dir=args.out_dir.expanduser().resolve() if args.out_dir else None,
             )
             payload = result.as_dict()
-            payload.update({"ok": True, "command": "semantic-checkpoint attach", "db_path": str(db_path)})
-            payload["projection_refresh"] = _refresh_projection_cache(db_path, store.to_graph())
+            payload.update({"ok": True, "command": "semantic-checkpoint attach", "backend": "helix", "helix_url": config.url})
+            payload["projection_refresh"] = _projection_refresh(store.to_graph())
             emit(payload)
             return 0
     return None
 
 
-def _semantic_harness_db_path(settings: Settings, override: Path | None) -> Path:
-    if override is not None:
-        return override.expanduser().resolve()
-    return (settings.home / ".data" / "semantic_harness.sqlite").resolve()
+def _helix_config(override: str | None) -> HelixHarnessConfig:
+    config = HelixHarnessConfig.from_env()
+    return HelixHarnessConfig(url=str(override).rstrip("/"), batch_size=config.batch_size) if override else config
 
 
-def _refresh_projection_cache(db_path: Path, graph: Any) -> dict[str, object]:
+def _projection_refresh(graph: Any) -> dict[str, object]:
     projection = build_projection_set(graph)
-    with SQLiteProjectionCache(db_path) as projection_cache:
-        projection_cache.save(projection)
     return {
         "projection_id": projection.projection_id,
         "document_count": projection.document_count,

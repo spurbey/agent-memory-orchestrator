@@ -1,12 +1,11 @@
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any
 
+from ....application.services.semantic_harness import InMemoryProjectionCache
 from ....application.services.semantic_harness import SemanticHarnessRuntimeService
 from ....domain.semantic_harness import HarnessQueryRequest
-from ....infrastructure.sqlite.semantic_harness import SQLiteHarnessGraphRepository
-from ....infrastructure.sqlite.semantic_harness import SQLiteProjectionCache
+from ....infrastructure.helixdb.semantic_harness import HelixHarnessGraphRepository
 from .validation import bounded_limit as _bounded_limit
 from .validation import require_text as _require_text
 
@@ -77,9 +76,8 @@ class SemanticHarnessToolMixin:
         runtime = getattr(self, "_semantic_harness_runtime_service", None)
         if runtime is not None:
             return runtime
-        db_path = _semantic_harness_db_path(self.settings.home)
-        graph_repo = SQLiteHarnessGraphRepository(db_path)
-        projection_cache = SQLiteProjectionCache(db_path)
+        graph_repo = HelixHarnessGraphRepository()
+        projection_cache = InMemoryProjectionCache()
         runtime = SemanticHarnessRuntimeService(
             graph_repository=graph_repo,
             projection_cache=projection_cache,
@@ -92,16 +90,9 @@ class SemanticHarnessToolMixin:
     def _close_semantic_harness_runtime(self) -> None:
         if graph_repo := getattr(self, "_semantic_harness_graph_repo", None):
             graph_repo.close()
-        if projection_cache := getattr(self, "_semantic_harness_projection_cache", None):
-            projection_cache.close()
         self._semantic_harness_graph_repo = None
         self._semantic_harness_projection_cache = None
         self._semantic_harness_runtime_service = None
-
-
-def _semantic_harness_db_path(home: Path) -> Path:
-    return (home / ".data" / "semantic_harness.sqlite").resolve()
-
 
 def _clean_strings(values: list[str] | None) -> list[str]:
     return [str(value).strip() for value in values or [] if str(value).strip()]

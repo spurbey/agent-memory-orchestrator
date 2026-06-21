@@ -3,9 +3,9 @@
 Owns: convert captured rg output into RankToolHitsResult.
 Does not own HTTP transport, payload mutation, raw storage, or graph bootstrap.
 
-The adapter intentionally depends on the Semantic Harness store boundary. Today
-that store is SQLite; a later HelixDB backend should replace the load helpers
-without changing proxy mutation or the rank_tool_hits scoring contract.
+The adapter intentionally depends on the Semantic Harness store boundary.
+Production loads the warmed graph from HelixDB without changing proxy mutation
+or the rank_tool_hits scoring contract.
 """
 
 from __future__ import annotations
@@ -13,9 +13,7 @@ from __future__ import annotations
 import os
 from collections.abc import Callable
 from dataclasses import dataclass
-from pathlib import Path
 
-from agent_memory_orchestrator.core.config import Settings
 from agent_memory_orchestrator.domain.semantic_harness.models import StructuralHarnessGraph
 from agent_memory_orchestrator.domain.semantic_harness.projection import HarnessProjectionDocument
 from agent_memory_orchestrator.domain.semantic_harness.query_modes import RankToolHitsResult
@@ -29,9 +27,7 @@ RankFn = Callable[[CapturedProxyToolOutput], RankToolHitsResult | None]
 @dataclass(frozen=True)
 class ProxyRankerConfig:
     repo_id: str
-    repo_root: Path | None = None
     max_results: int = 5
-    db_path: Path | None = None
     user_goal: str = ""
 
 
@@ -93,9 +89,9 @@ class ProxyRankToolHitsAdapter:
         cached = self._graph_cache.get(repo_id)
         if cached is not None:
             return cached
-        from agent_memory_orchestrator.infrastructure.sqlite.semantic_harness import SQLiteHarnessGraphRepository
+        from agent_memory_orchestrator.infrastructure.helixdb.semantic_harness import HelixHarnessGraphRepository
 
-        with SQLiteHarnessGraphRepository(self._db_path()) as graph_repository:
+        with HelixHarnessGraphRepository() as graph_repository:
             store = graph_repository.load(repo_id)
             if store is None:
                 return None
@@ -111,30 +107,17 @@ class ProxyRankToolHitsAdapter:
         cached = self._projection_cache.get(repo_id)
         if cached is not None:
             return cached
-        from agent_memory_orchestrator.infrastructure.sqlite.semantic_harness import SQLiteProjectionCache
+        from agent_memory_orchestrator.domain.semantic_harness import build_projection_set
 
-        with SQLiteProjectionCache(self._db_path()) as projection_cache:
-            documents = projection_cache.get_or_build(graph).documents
+        documents = build_projection_set(graph).documents
         self._projection_cache[repo_id] = documents
         return documents
-
-    def _db_path(self) -> Path:
-        if self._config is not None and self._config.db_path is not None:
-            return self._config.db_path.expanduser().resolve()
-        raw = os.environ.get("AMO_PROXY_SEMANTIC_HARNESS_DB_PATH", "").strip()
-        if raw:
-            return Path(raw).expanduser().resolve()
-        settings = Settings.load()
-        return (settings.home / ".data" / "semantic_harness.sqlite").resolve()
-
 
 def make_ranker_from_env() -> ProxyRankToolHitsAdapter:
     """Build a ranker from env. Missing repo_id still fails open at rank time."""
     repo_id = os.environ.get("AMO_PROXY_REPO_ID", "").strip()
-    raw_db_path = os.environ.get("AMO_PROXY_SEMANTIC_HARNESS_DB_PATH", "").strip()
-    db_path = Path(raw_db_path).expanduser().resolve() if raw_db_path else None
     user_goal = os.environ.get("AMO_PROXY_USER_GOAL", "").strip()
-    config = ProxyRankerConfig(repo_id=repo_id, db_path=db_path, user_goal=user_goal)
+    config = ProxyRankerConfig(repo_id=repo_id, user_goal=user_goal)
     return ProxyRankToolHitsAdapter(config=config)
 
 
