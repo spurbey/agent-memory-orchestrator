@@ -23,6 +23,7 @@ filesystem, call MCP, or know about Codex hooks.
 
 ```text
 src/agent_memory_orchestrator/domain/semantic_harness/
+  query_plan.py                 # GraphSeed/EdgeExpansion/GraphSlicePlan contracts
   query_modes/
     context_for_anchor.py       # mode orchestration only
     context_models.py           # context mode result models
@@ -88,6 +89,8 @@ src/agent_memory_orchestrator/application/services/semantic_harness/
   runtime/
     service.py                  # graph lifecycle, cache, persistence coordination
     mode_router.py              # mode dispatch and legacy compatibility routing
+    query_planner.py            # request mode -> bounded graph slice plan
+    ports.py                    # graph persistence and evidence-query boundaries
     compatibility.py            # future request/response compatibility adapters
 
   tool_context/
@@ -107,6 +110,8 @@ src/agent_memory_orchestrator/runtime/
   mcp/                          # transport functions only
   cli/commands/semantic_harness.py
                                 # operational bootstrap/replay commands only
+  cli/commands/semantic_harness_setup.py
+                                # one-command local Helix setup orchestration
   codex_proxy/
     wrapper.py                   # config snapshot/inject/unwrap only
     server.py                    # HTTP/WS proxy transport only
@@ -118,7 +123,13 @@ src/agent_memory_orchestrator/runtime/
 src/agent_memory_orchestrator/infrastructure/
   sqlite/semantic_harness/      # legacy migration adapter and adapter tests
   embeddings/semantic_harness/   # embedding backend adapters and manifests
-  helixdb/semantic_harness/     # production graph repository, store, migration
+  helixdb/local_runtime.py      # CLI download, Docker health, local lifecycle
+  helixdb/semantic_harness/
+    codec.py                    # shared node/edge serialization
+    graph_store.py              # complete-store writes and mutation operations
+    evidence_query.py           # native bounded Helix traversal executor
+    repository.py               # persistence and evidence-query adapter
+    migration.py                # verified legacy graph cutover
 ```
 
 ## File Ownership Rules
