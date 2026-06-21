@@ -4,10 +4,12 @@ from dataclasses import dataclass
 from dataclasses import field
 
 from agent_memory_orchestrator.domain.semantic_harness import HarnessGraphStore
+from agent_memory_orchestrator.domain.semantic_harness import GraphSlicePlan
 from agent_memory_orchestrator.domain.semantic_harness import StructuralHarnessGraph
 
 from .client import HelixHarnessClient
 from .config import HelixHarnessConfig
+from .evidence_query import HelixEvidenceQuery
 from .graph_store import HelixHarnessGraphStore
 
 
@@ -34,6 +36,11 @@ class HelixHarnessGraphRepository:
         store.replace_graph(graph)
         self._stores[graph.repo_id] = store
         return store
+
+    def query_evidence(self, plan: GraphSlicePlan) -> StructuralHarnessGraph | None:
+        if self.load(plan.repo_id) is None:
+            return None
+        return HelixEvidenceQuery(self._client).execute(plan)
 
     def healthy(self) -> bool:
         return self._client.healthy()
