@@ -4,35 +4,31 @@
 
 Keep the query planner independent from storage. HelixDB is the authoritative
 Semantic Harness graph backend; projection documents are currently rebuilt in
-process from the loaded graph.
+process from the bounded evidence graph selected for a query.
 
 ## IR Flow
 
 ```text
 HarnessQueryRequest
--> QueryPlan
--> SeedSet
--> TraversalPlan
+-> GraphSlicePlan
+-> GraphSeed[] + EdgeExpansion[]
 -> EvidenceSubgraph
 -> ModeSpecificResult
 ```
 
-## QueryPlan
+## GraphSlicePlan
 
 Contains:
 
-- mode
-- normalized goal and search terms
-- resolved anchors
-- question classifications
-- budget
-- required evidence types
-- disallowed evidence types
-- backend capabilities requested
+- query purpose
+- unresolved human-facing seeds
+- typed edge expansions with direction and depth
+- per-expansion neighbor limits
+- total node and edge caps
 
 ## SeedSet
 
-Contains graph-grounded starting points:
+Contains storage-resolvable starting points:
 
 - files
 - symbols
@@ -42,7 +38,8 @@ Contains graph-grounded starting points:
 - relation occurrences
 - projection hits
 
-Vector/BM25 results enter as seeds only after they resolve to graph nodes.
+The infrastructure adapter resolves seeds to graph nodes. Vector/BM25 results
+may enter as seeds only after they resolve to graph identities.
 
 ## TraversalPlan
 
@@ -55,7 +52,8 @@ Contains:
 - semantic-readiness requirements
 - timeout and node/edge caps
 
-The planner caps unsafe depth and ignores unsupported raw graph expansion.
+The application planner caps unsafe depth and ignores unsupported raw graph
+expansion. Helix executes the traversal but does not choose its policy.
 
 ## EvidenceSubgraph
 
@@ -70,6 +68,10 @@ Contains only selected evidence:
 - confidence and reason codes
 
 This subgraph is the input to output formatting.
+
+Normal explicit-mode queries must not call `to_graph()` on the complete store.
+Full reconstruction is reserved for migration verification, export/debugging,
+legacy compatibility, and graph mutation workflows.
 
 ## Backend Rules
 
