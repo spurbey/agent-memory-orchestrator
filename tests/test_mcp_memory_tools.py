@@ -11,8 +11,6 @@ from agent_memory_orchestrator.application.services.semantic_harness import Sema
 from agent_memory_orchestrator.application.services.memory_graph.service import GraphRagService
 from agent_memory_orchestrator.infrastructure.kuzu import GraphNode, InMemoryGraphStore
 from agent_memory_orchestrator.domain.retrieval.models import RetrievalDocument
-from agent_memory_orchestrator.infrastructure.sqlite.semantic_harness import SQLiteHarnessGraphRepository
-from agent_memory_orchestrator.infrastructure.sqlite.semantic_harness import SQLiteProjectionCache
 from agent_memory_orchestrator.infrastructure.sqlite.retrieval_store import RetrievalIndexStore
 from agent_memory_orchestrator.runtime.mcp.tools import MCP_MEMORY_TOOL_CONTRACTS, MemoryMcpToolService
 from agent_memory_orchestrator.llm.qwen import DeterministicPlanner
@@ -102,13 +100,11 @@ def test_mcp_harness_query_returns_cards_from_warmed_repo(tmp_path) -> None:
         "    return 'id'\n",
         encoding="utf-8",
     )
-    db_path = settings.home / ".data" / "semantic_harness.sqlite"
-    with SQLiteHarnessGraphRepository(db_path) as graph_repo:
-        with SQLiteProjectionCache(db_path) as projection_cache:
-            runtime = SemanticHarnessRuntimeService(graph_repository=graph_repo, projection_cache=projection_cache)
-            runtime.bootstrap_repo(repo, repo_id="repo:test")
+    runtime = SemanticHarnessRuntimeService()
+    runtime.bootstrap_repo(repo, repo_id="repo:test")
 
     svc = MemoryMcpToolService(settings)
+    svc._semantic_harness_runtime_service = runtime  # noqa: SLF001 - inject the warmed test runtime
     try:
         result = svc.amo_harness_query(
             repo_id="repo:test",
@@ -140,13 +136,11 @@ def test_mcp_harness_query_returns_explicit_mode_result_from_warmed_repo(tmp_pat
         "    return 'id'\n",
         encoding="utf-8",
     )
-    db_path = settings.home / ".data" / "semantic_harness.sqlite"
-    with SQLiteHarnessGraphRepository(db_path) as graph_repo:
-        with SQLiteProjectionCache(db_path) as projection_cache:
-            runtime = SemanticHarnessRuntimeService(graph_repository=graph_repo, projection_cache=projection_cache)
-            runtime.bootstrap_repo(repo, repo_id="repo:test")
+    runtime = SemanticHarnessRuntimeService()
+    runtime.bootstrap_repo(repo, repo_id="repo:test")
 
     svc = MemoryMcpToolService(settings)
+    svc._semantic_harness_runtime_service = runtime  # noqa: SLF001 - inject the warmed test runtime
     try:
         result = svc.amo_harness_query(
             repo_id="repo:test",
