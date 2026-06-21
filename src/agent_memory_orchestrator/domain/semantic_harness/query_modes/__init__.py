@@ -15,6 +15,7 @@ from .rank_tool_hits import RankToolHitsResult
 from .rank_tool_hits import RankedToolHit
 from .rank_tool_hits import RankedToolLine
 from .rank_tool_hits import answer_rank_tool_hits
+from .rank_tool_hits import parse_rank_tool_lines
 from .semantic_facts import SemanticFact
 from .semantic_facts import best_fact_for_node
 from .semantic_facts import semantic_facts_for_node
@@ -33,6 +34,7 @@ __all__ = [
     "SemanticFact",
     "answer_context_for_anchor",
     "answer_rank_tool_hits",
+    "parse_rank_tool_lines",
     "best_fact_for_node",
     "classify_context_question",
     "classify_context_questions",

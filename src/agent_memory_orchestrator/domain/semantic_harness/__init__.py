@@ -46,6 +46,9 @@ from .projection import build_projection_set
 from .projection import build_semantic_fact_projection_documents
 from .projection import projection_set_id
 from .query import answer_structural_query
+from .query_plan import EdgeExpansion
+from .query_plan import GraphSeed
+from .query_plan import GraphSlicePlan
 from .relations import CoChangeSeed
 from .relations import HistoricalRelationCandidate
 from .relations import HistoricalRelationPolicy
@@ -82,6 +85,7 @@ from .store import apply_graph_update_delta
 
 __all__ = [
     "EdgeKey",
+    "EdgeExpansion",
     "DEFAULT_PROJECTION_VERSION",
     "GraphDeltaApplyResult",
     "EmbeddingIndexManifest",
@@ -111,6 +115,8 @@ __all__ = [
     "GraphUpdateDelta",
     "GRAPH_SCHEMA_VERSION",
     "GraphSnapshotIdentity",
+    "GraphSeed",
+    "GraphSlicePlan",
     "HunkEntityMapping",
     "HunkRange",
     "HistoricalRelationCandidate",
