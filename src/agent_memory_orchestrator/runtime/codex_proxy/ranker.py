@@ -14,8 +14,9 @@ import os
 from collections.abc import Callable
 from dataclasses import dataclass
 
+from agent_memory_orchestrator.application.services.semantic_harness.runtime.query_planner import plan_query_evidence
+from agent_memory_orchestrator.domain.semantic_harness import HarnessQueryRequest
 from agent_memory_orchestrator.domain.semantic_harness.models import StructuralHarnessGraph
-from agent_memory_orchestrator.domain.semantic_harness.projection import HarnessProjectionDocument
 from agent_memory_orchestrator.domain.semantic_harness.query_modes import RankToolHitsResult
 from agent_memory_orchestrator.domain.semantic_harness.query_modes import answer_rank_tool_hits
 from agent_memory_orchestrator.runtime.codex_proxy.tool_outputs import CapturedProxyToolOutput
@@ -46,8 +47,6 @@ class ProxyRankToolHitsAdapter:
     ) -> None:
         self._config = config
         self._rank_fn = rank_fn
-        self._graph_cache: dict[str, StructuralHarnessGraph] = {}
-        self._projection_cache: dict[str, tuple[HarnessProjectionDocument, ...]] = {}
 
     def rank(self, captured: CapturedProxyToolOutput) -> RankToolHitsResult | None:
         """Return ranked hits or None. Caller must fail open on None."""
@@ -65,17 +64,18 @@ class ProxyRankToolHitsAdapter:
         if not repo_id:
             return None
 
-        graph = self._load_graph(repo_id)
-        if graph is None:
-            return None
-        projection_documents = self._load_projection_documents(repo_id, graph)
-
         recent_tool_result = {
             "kind": "rg",
             "text": captured.output,
             "raw_ref": captured.raw_ref,
             "user_prompt": self._config.user_goal,
         }
+        graph = self._load_graph(repo_id, recent_tool_result=recent_tool_result)
+        if graph is None:
+            return None
+        from agent_memory_orchestrator.domain.semantic_harness import build_projection_set
+
+        projection_documents = build_projection_set(graph).documents
         result = answer_rank_tool_hits(
             graph,
             user_goal=self._config.user_goal,
@@ -85,33 +85,26 @@ class ProxyRankToolHitsAdapter:
         )
         return result if result.ranked_hits else None
 
-    def _load_graph(self, repo_id: str) -> StructuralHarnessGraph | None:
-        cached = self._graph_cache.get(repo_id)
-        if cached is not None:
-            return cached
-        from agent_memory_orchestrator.infrastructure.helixdb.semantic_harness import HelixHarnessGraphRepository
-
-        with HelixHarnessGraphRepository() as graph_repository:
-            store = graph_repository.load(repo_id)
-            if store is None:
-                return None
-            graph = store.to_graph()
-        self._graph_cache[repo_id] = graph
-        return graph
-
-    def _load_projection_documents(
+    def _load_graph(
         self,
         repo_id: str,
-        graph: StructuralHarnessGraph,
-    ) -> tuple[HarnessProjectionDocument, ...]:
-        cached = self._projection_cache.get(repo_id)
-        if cached is not None:
-            return cached
-        from agent_memory_orchestrator.domain.semantic_harness import build_projection_set
+        *,
+        recent_tool_result: dict[str, object],
+    ) -> StructuralHarnessGraph | None:
+        from agent_memory_orchestrator.infrastructure.helixdb.semantic_harness import HelixHarnessGraphRepository
 
-        documents = build_projection_set(graph).documents
-        self._projection_cache[repo_id] = documents
-        return documents
+        request = HarnessQueryRequest(
+            intent="rank_tool_hits",
+            mode="rank_tool_hits",
+            user_goal=self._config.user_goal if self._config is not None else "",
+            recent_tool_result=recent_tool_result,
+            max_cards=self._config.max_results if self._config is not None else 5,
+        )
+        plan = plan_query_evidence(repo_id, request, mode="rank_tool_hits")
+        if plan is None:
+            return None
+        with HelixHarnessGraphRepository() as graph_repository:
+            return graph_repository.query_evidence(plan)
 
 def make_ranker_from_env() -> ProxyRankToolHitsAdapter:
     """Build a ranker from env. Missing repo_id still fails open at rank time."""

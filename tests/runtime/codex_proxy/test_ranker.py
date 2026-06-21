@@ -127,7 +127,7 @@ def test_ranker_scores_a_warmed_graph_through_repository_boundary(tmp_path, monk
             user_goal="snapshot identity",
         )
     )
-    monkeypatch.setattr(adapter, "_load_graph", lambda _repo_id: graph)
+    monkeypatch.setattr(adapter, "_load_graph", lambda _repo_id, **_kwargs: graph)
     result = adapter.rank(_captured("src/snapshots.py:1:def graph_snapshot_identity(graph):"))
 
     assert result is not None
