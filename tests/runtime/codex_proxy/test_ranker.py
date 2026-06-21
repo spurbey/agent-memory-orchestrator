@@ -3,10 +3,9 @@
 from __future__ import annotations
 
 from agent_memory_orchestrator.application.services.semantic_harness import RepoBootstrapOptions
+from agent_memory_orchestrator.application.services.semantic_harness import InMemoryHarnessGraphRepository
 from agent_memory_orchestrator.application.services.semantic_harness import SemanticHarnessRuntimeService
 from agent_memory_orchestrator.domain.semantic_harness.query_modes import RankToolHitsResult
-from agent_memory_orchestrator.infrastructure.sqlite.semantic_harness import SQLiteHarnessGraphRepository
-from agent_memory_orchestrator.infrastructure.sqlite.semantic_harness import SQLiteProjectionCache
 from agent_memory_orchestrator.runtime.codex_proxy.ranker import ProxyRankerConfig
 from agent_memory_orchestrator.runtime.codex_proxy.ranker import ProxyRankToolHitsAdapter
 from agent_memory_orchestrator.runtime.codex_proxy.ranker import make_ranker_from_env
@@ -93,50 +92,42 @@ def test_rank_fn_returning_none_passes_through():
     assert adapter.rank(_captured()) is None
 
 
-def test_make_ranker_from_env_reads_repo_db_and_goal(monkeypatch, tmp_path):
-    db_path = tmp_path / "semantic_harness.sqlite"
+def test_make_ranker_from_env_reads_repo_and_goal(monkeypatch):
     monkeypatch.setenv("AMO_PROXY_REPO_ID", "repo:test")
-    monkeypatch.setenv("AMO_PROXY_SEMANTIC_HARNESS_DB_PATH", str(db_path))
-    monkeypatch.setenv("AMO_PROXY_USER_GOAL", "rank snapshot sqlite hits")
+    monkeypatch.setenv("AMO_PROXY_USER_GOAL", "rank snapshot Helix hits")
 
     adapter = make_ranker_from_env()
 
     assert adapter._config == ProxyRankerConfig(  # noqa: SLF001 - config is adapter state under test
         repo_id="repo:test",
-        db_path=db_path.resolve(),
-        user_goal="rank snapshot sqlite hits",
+        user_goal="rank snapshot Helix hits",
     )
 
 
-def test_production_ranker_loads_warmed_sqlite_graph(tmp_path):
+def test_ranker_scores_a_warmed_graph_through_repository_boundary(tmp_path, monkeypatch):
     repo_root = tmp_path / "repo"
     (repo_root / "src").mkdir(parents=True)
     (repo_root / "src" / "snapshots.py").write_text(
         'def graph_snapshot_identity(graph):\n    """Return a structural graph snapshot id."""\n    return "snapshot"\n',
         encoding="utf-8",
     )
-    db_path = tmp_path / "semantic_harness.sqlite"
     repo_id = "repo:proxy-ranker-test"
-
-    with SQLiteHarnessGraphRepository(db_path) as graph_repository:
-        with SQLiteProjectionCache(db_path) as projection_cache:
-            runtime = SemanticHarnessRuntimeService(
-                graph_repository=graph_repository,
-                projection_cache=projection_cache,
-            )
-            runtime.bootstrap_repo(
-                repo_root,
-                repo_id=repo_id,
-                options=RepoBootstrapOptions(prefer_git_tracked=False),
-            )
+    graph_repository = InMemoryHarnessGraphRepository()
+    runtime = SemanticHarnessRuntimeService(graph_repository=graph_repository)
+    runtime.bootstrap_repo(
+        repo_root,
+        repo_id=repo_id,
+        options=RepoBootstrapOptions(prefer_git_tracked=False),
+    )
+    graph = graph_repository.load(repo_id).to_graph()
 
     adapter = ProxyRankToolHitsAdapter(
         config=ProxyRankerConfig(
             repo_id=repo_id,
-            db_path=db_path,
             user_goal="snapshot identity",
         )
     )
+    monkeypatch.setattr(adapter, "_load_graph", lambda _repo_id: graph)
     result = adapter.rank(_captured("src/snapshots.py:1:def graph_snapshot_identity(graph):"))
 
     assert result is not None

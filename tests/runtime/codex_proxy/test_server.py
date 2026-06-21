@@ -199,23 +199,22 @@ def test_normalize_base_url(raw, expected):
 
 
 # ---------------------------------------------------------------------------
-# Mutation not called even when AMO_PROXY_MUTATE=1 (not wired yet)
+# Mutation is called when AMO_PROXY_MUTATE=1
 # ---------------------------------------------------------------------------
 
 @pytest.mark.anyio
-async def test_mutation_not_called_when_flag_set(transport, monkeypatch):
+async def test_mutation_called_when_flag_set(transport, monkeypatch):
     monkeypatch.setenv("AMO_PROXY_MUTATE", "1")
     called = []
-    import agent_memory_orchestrator.runtime.codex_proxy.tool_outputs as _to
-    original = _to.mutate_ranked_tool_outputs
+    import agent_memory_orchestrator.runtime.codex_proxy.server as _srv_mod
+    original = _srv_mod._try_mutate
 
     def _spy(*a, **kw):
         called.append(True)
         return original(*a, **kw)
 
-    monkeypatch.setattr(_to, "mutate_ranked_tool_outputs", _spy)
-    import agent_memory_orchestrator.runtime.codex_proxy.server as _srv
-    monkeypatch.setattr(_srv, "_http_client", httpx.AsyncClient(transport=transport))
+    monkeypatch.setattr(_srv_mod, "_try_mutate", _spy)
+    monkeypatch.setattr(_srv_mod, "_http_client", httpx.AsyncClient(transport=transport))
 
     _app = create_app(upstream_base_url=UPSTREAM)
     async with AsyncClient(transport=ASGITransport(app=_app), base_url="http://test") as c:
@@ -224,4 +223,4 @@ async def test_mutation_not_called_when_flag_set(transport, monkeypatch):
             content=b'{"input":[]}',
             headers={"content-type": "application/json"},
         )
-    assert not called, "mutate_ranked_tool_outputs must not be called — not wired yet"
+    assert called, "mutate_ranked_tool_outputs must be called when AMO_PROXY_MUTATE=1"
