@@ -6,9 +6,12 @@ from agent_memory_orchestrator.application.services.semantic_harness.projection_
 from agent_memory_orchestrator.application.services.semantic_harness.projection_cache import ProjectionCache
 from agent_memory_orchestrator.application.services.semantic_harness.repository import RepoBootstrapOptions
 from agent_memory_orchestrator.application.services.semantic_harness.runtime.memory import InMemoryHarnessGraphRepository
+from agent_memory_orchestrator.application.services.semantic_harness.runtime.mode_router import answer_runtime_query
+from agent_memory_orchestrator.application.services.semantic_harness.runtime.mode_router import explicit_query_mode
 from agent_memory_orchestrator.application.services.semantic_harness.runtime.models import HarnessRuntimeBootstrapResult
 from agent_memory_orchestrator.application.services.semantic_harness.runtime.models import HarnessRuntimeDeltaApplyResult
 from agent_memory_orchestrator.application.services.semantic_harness.runtime.ports import HarnessGraphRepository
+from agent_memory_orchestrator.application.services.semantic_harness.runtime.query_planner import plan_query_evidence
 from agent_memory_orchestrator.application.services.semantic_harness.structural import StructuralHarnessService
 from agent_memory_orchestrator.domain.semantic_harness import GraphUpdateDelta
 from agent_memory_orchestrator.domain.semantic_harness import HarnessQueryRequest
@@ -68,7 +71,7 @@ class SemanticHarnessRuntimeService:
         return graph
 
     def query(self, repo_id: str, request: HarnessQueryRequest) -> HarnessQueryResponse:
-        graph = self.load_graph(repo_id)
+        graph, warnings = self._query_graph(repo_id, request)
         if graph is None:
             return HarnessQueryResponse(
                 status="unavailable",
@@ -78,9 +81,32 @@ class SemanticHarnessRuntimeService:
                 cards=(),
                 next_actions=(),
                 trace={"nodes": [], "edges": [], "versions": [], "occurrences": []},
-                warnings=(f"repo_not_bootstrapped:{repo_id}",),
+                warnings=(f"repo_not_bootstrapped:{repo_id}", *warnings),
             )
-        return self._structural.query(graph, request)
+        return answer_runtime_query(
+            graph,
+            request,
+            legacy_query=lambda: self._structural.query(graph, request),
+            projection_document_provider=lambda: self._projection_cache.get_or_build(graph).documents,
+        )
+
+    def _query_graph(
+        self,
+        repo_id: str,
+        request: HarnessQueryRequest,
+    ) -> tuple[StructuralHarnessGraph | None, tuple[str, ...]]:
+        mode = explicit_query_mode(request)
+        plan = plan_query_evidence(repo_id, request, mode=mode) if mode else None
+        query_evidence = getattr(self._graph_repository, "query_evidence", None)
+        if plan is not None and callable(query_evidence):
+            try:
+                return query_evidence(plan), ()
+            except Exception as exc:
+                return None, (_graph_repository_warning(exc),)
+        try:
+            return self.load_graph(repo_id), ()
+        except Exception as exc:
+            return None, (_graph_repository_warning(exc),)
 
     def apply_delta(self, delta: GraphUpdateDelta) -> HarnessRuntimeDeltaApplyResult:
         store = self._graph_repository.load(delta.repo_id)
@@ -96,6 +122,10 @@ class SemanticHarnessRuntimeService:
             projection=projection,
             apply_result=apply_result,
         )
+
+
+def _graph_repository_warning(exc: Exception) -> str:
+    return f"graph_repository_unavailable:{type(exc).__name__}:{exc}"
 
 
 __all__ = ["SemanticHarnessRuntimeService"]

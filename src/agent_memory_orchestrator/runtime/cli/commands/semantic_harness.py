@@ -7,12 +7,17 @@ from pathlib import Path
 from typing import Any
 
 from ....application.services.semantic_harness import RepoBootstrapOptions
+from ....application.services.semantic_harness import InMemoryProjectionCache
 from ....application.services.semantic_harness import ShadowToolReplayService
 from ....application.services.semantic_harness import SemanticHarnessRuntimeService
 from ....application.services.semantic_harness import ToolContextPlanner
 from ....core.config import Settings
-from ....infrastructure.sqlite.semantic_harness import SQLiteHarnessGraphRepository
-from ....infrastructure.sqlite.semantic_harness import SQLiteProjectionCache
+from ....domain.semantic_harness import repo_id_for_root
+from ....infrastructure.helixdb.semantic_harness import HelixHarnessConfig
+from ....infrastructure.helixdb.semantic_harness import HelixHarnessGraphRepository
+from ....infrastructure.helixdb.semantic_harness import migrate_sqlite_repo_to_helix
+from .semantic_harness_setup import add_helix_setup_actions
+from .semantic_harness_setup import handle_helix_setup_command
 
 
 def add_semantic_harness_subcommands(sub: Any) -> None:
@@ -22,10 +27,12 @@ def add_semantic_harness_subcommands(sub: Any) -> None:
 
 
 def _add_harness_actions(harness_sub: Any) -> None:
+    add_helix_setup_actions(harness_sub)
     bootstrap = harness_sub.add_parser("bootstrap", help="Warm the Semantic Harness graph for one repository")
     bootstrap.add_argument("--repo", type=Path, required=True, help="Repository root to bootstrap.")
     bootstrap.add_argument("--repo-id", default="", help="Stable repo id. Defaults to deterministic repo root id.")
-    bootstrap.add_argument("--db-path", type=Path, default=None, help="Override Semantic Harness SQLite path.")
+    bootstrap.add_argument("--helix-url", default=None, help="Override local HelixDB URL.")
+    bootstrap.add_argument("--replace", action="store_true", help="Explicitly replace an existing enriched graph.")
     bootstrap.add_argument("--max-files", type=int, default=10_000, help="Maximum source files to read.")
     bootstrap.add_argument(
         "--include-untracked",
@@ -35,53 +42,70 @@ def _add_harness_actions(harness_sub: Any) -> None:
     replay = harness_sub.add_parser("shadow-replay", help="Replay PostToolUse evidence without injecting context")
     replay.add_argument("--repo-id", required=True, help="Repo id for the already-warmed harness graph.")
     replay.add_argument("--evidence", type=Path, default=None, help="Evidence JSONL to replay. Defaults to latest.")
-    replay.add_argument("--db-path", type=Path, default=None, help="Override Semantic Harness SQLite path.")
+    replay.add_argument("--helix-url", default=None, help="Override local HelixDB URL.")
     replay.add_argument("--limit", type=int, default=0, help="Maximum PostToolUse rows to replay. 0 means all.")
     replay.add_argument("--out", type=Path, default=None, help="Optional report JSON path.")
+    migrate = harness_sub.add_parser("migrate-sqlite-to-helix", help="One-time Semantic Harness graph migration")
+    migrate.add_argument("--repo-id", required=True, help="Legacy SQLite repo id to migrate.")
+    migrate.add_argument("--db-path", type=Path, required=True, help="Legacy Semantic Harness SQLite path.")
+    migrate.add_argument("--helix-url", default=None, help="Override local HelixDB URL.")
 
 
 def handle_semantic_harness_command(args: Any, *, emit: Callable[[object], None]) -> int | None:
     if args.command != "amo-harness":
         return None
+    if (status := handle_helix_setup_command(args, emit=emit)) is not None:
+        return status
     if args.amo_harness_command == "bootstrap":
-        settings = Settings.load()
-        db_path = _semantic_harness_db_path(settings, getattr(args, "db_path", None))
+        config = _helix_config(getattr(args, "helix_url", None))
         options = RepoBootstrapOptions(
             max_files=max(1, int(args.max_files)),
             prefer_git_tracked=not bool(args.include_untracked),
         )
-        with SQLiteHarnessGraphRepository(db_path) as graph_repo:
-            with SQLiteProjectionCache(db_path) as projection_cache:
-                runtime = SemanticHarnessRuntimeService(
-                    graph_repository=graph_repo,
-                    projection_cache=projection_cache,
+        repo_id = str(args.repo_id or "").strip() or repo_id_for_root(args.repo.expanduser().resolve())
+        with HelixHarnessGraphRepository(config) as graph_repo:
+            if graph_repo.load(repo_id) is not None and not args.replace:
+                emit(
+                    {
+                        "ok": False,
+                        "status": "already_warmed",
+                        "error": "replace_requires_explicit_flag",
+                        "repo_id": repo_id,
+                        "backend": "helix",
+                        "helix_url": config.url,
+                    }
                 )
-                result = runtime.bootstrap_repo(args.repo, repo_id=args.repo_id, options=options)
+                return 1
+            runtime = SemanticHarnessRuntimeService(
+                graph_repository=graph_repo,
+                projection_cache=InMemoryProjectionCache(),
+            )
+            result = runtime.bootstrap_repo(args.repo, repo_id=repo_id, options=options)
         payload = result.as_dict()
-        payload.update({"ok": True, "db_path": str(db_path), "command": "amo-harness bootstrap"})
+        payload.update({"ok": True, "backend": "helix", "helix_url": config.url, "command": "amo-harness bootstrap"})
         emit(payload)
         return 0
     if args.amo_harness_command == "shadow-replay":
         settings = Settings.load()
-        db_path = _semantic_harness_db_path(settings, getattr(args, "db_path", None))
+        config = _helix_config(getattr(args, "helix_url", None))
         evidence_path = getattr(args, "evidence", None) or _latest_evidence_file(settings)
-        with SQLiteHarnessGraphRepository(db_path) as graph_repo:
-            with SQLiteProjectionCache(db_path) as projection_cache:
-                runtime = SemanticHarnessRuntimeService(
-                    graph_repository=graph_repo,
-                    projection_cache=projection_cache,
-                )
-                planner = ToolContextPlanner(runtime=runtime)
-                report = ShadowToolReplayService(planner=planner).replay_file(
-                    evidence_path,
-                    repo_id=args.repo_id,
-                    limit=max(0, int(args.limit)),
-                )
+        with HelixHarnessGraphRepository(config) as graph_repo:
+            runtime = SemanticHarnessRuntimeService(
+                graph_repository=graph_repo,
+                projection_cache=InMemoryProjectionCache(),
+            )
+            planner = ToolContextPlanner(runtime=runtime)
+            report = ShadowToolReplayService(planner=planner).replay_file(
+                evidence_path,
+                repo_id=args.repo_id,
+                limit=max(0, int(args.limit)),
+            )
         payload = report.as_dict()
         payload.update(
             {
                 "ok": True,
-                "db_path": str(db_path),
+                "backend": "helix",
+                "helix_url": config.url,
                 "command": "amo-harness shadow-replay",
                 "shadow_only": True,
             }
@@ -91,6 +115,16 @@ def handle_semantic_harness_command(args: Any, *, emit: Callable[[object], None]
             out_path.parent.mkdir(parents=True, exist_ok=True)
             out_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
             payload["out"] = str(out_path)
+        emit(payload)
+        return 0
+    if args.amo_harness_command == "migrate-sqlite-to-helix":
+        config = _helix_config(getattr(args, "helix_url", None))
+        payload = migrate_sqlite_repo_to_helix(
+            repo_id=args.repo_id,
+            sqlite_path=args.db_path.expanduser().resolve(),
+            helix_config=config,
+        )
+        payload.update({"ok": True, "command": "amo-harness migrate-sqlite-to-helix"})
         emit(payload)
         return 0
     return None
@@ -113,10 +147,9 @@ def main(argv: list[str] | None = None) -> int:
     return 2
 
 
-def _semantic_harness_db_path(settings: Settings, override: Path | None) -> Path:
-    if override is not None:
-        return override.expanduser().resolve()
-    return (settings.home / ".data" / "semantic_harness.sqlite").resolve()
+def _helix_config(override: str | None) -> HelixHarnessConfig:
+    config = HelixHarnessConfig.from_env()
+    return HelixHarnessConfig(url=str(override).rstrip("/"), batch_size=config.batch_size) if override else config
 
 
 def _latest_evidence_file(settings: Settings) -> Path:

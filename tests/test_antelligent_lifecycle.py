@@ -225,6 +225,7 @@ def test_amo_install_composes_antelligent_setup(tmp_path: Path, monkeypatch: pyt
         with_antelligent=True,
         antelligent_startup=True,
         antelligent_version="latest",
+        antelligent_manifest="",
         antelligent_artifact=None,
     )
 
