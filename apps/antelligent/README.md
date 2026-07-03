@@ -196,7 +196,7 @@ User-facing install path:
 npx -y agent-memory-orchestrator-cli -- install --target all --with-antelligent --antelligent-startup
 ```
 
-Daily commands:
+Daily user commands:
 
 ```powershell
 amo-cli antelligent start
@@ -205,12 +205,125 @@ amo-cli antelligent status
 amo-cli antelligent doctor
 ```
 
-Developer commands from this folder:
+## Developer Setup And Debug Runbook
+
+Use this section when developing or debugging the desktop app from source. End
+users should not need Node, Rust, Cargo, or Tauri dev commands.
+
+### Required developer tools
+
+All platforms:
+
+- Node.js with npm.
+- Rust toolchain with Cargo.
+- Python environment that can import this checkout's `agent_memory_orchestrator`
+  package.
+- AMO daemon dependencies installed for the Python side.
+
+Windows:
+
+- Rust MSVC toolchain.
+- Microsoft C++ build tools and Windows SDK.
+- Microsoft Edge WebView2 runtime. It is installed on most modern Windows
+  systems, but Tauri needs it.
+
+macOS:
+
+- Xcode Command Line Tools: `xcode-select --install`.
+- Rust target for the local architecture, usually `aarch64-apple-darwin` on
+  Apple Silicon or `x86_64-apple-darwin` on Intel.
+
+### One-time frontend setup
 
 ```powershell
+cd apps/antelligent
 npm install
-npm run build
+```
+
+### Start a local AMO daemon for UI debugging
+
+Use a throwaway AMO home when debugging UI behavior:
+
+```powershell
+$env:AMO_HOME="$PWD\.tmp\amo-home"
+python -m agent_memory_orchestrator.runtime.daemon.server --amo-home $env:AMO_HOME --host 127.0.0.1 --port 8765
+```
+
+The Antelligent API token is read from:
+
+```text
+AMO_HOME/.ui/antelligent.token
+```
+
+The installed app normally reads `AMO_HOME/.ui/antelligent.launch.json`. For dev
+mode, either create that file through:
+
+```powershell
+amo-cli antelligent write-launch-config --amo-home $env:AMO_HOME
+```
+
+or use development fallbacks:
+
+```powershell
+$env:AMO_HOME="$PWD\.tmp\amo-home"
+$env:ANTELLIGENT_DAEMON_URL="http://127.0.0.1:8765"
+```
+
+### Run the frontend only
+
+This is useful for CSS and DOM work, but Tauri commands such as `backend_info`,
+`show_panel`, and `hide_panel` will use browser fallbacks or be unavailable.
+
+```powershell
+npm run dev
+```
+
+Open:
+
+```text
+http://localhost:5173/#panel
+http://localhost:5173/#bubble
+```
+
+For frontend-only mode, set these in browser localStorage if needed:
+
+```text
+antelligent.baseUrl = http://127.0.0.1:8765
+antelligent.token = <contents of AMO_HOME/.ui/antelligent.token>
+```
+
+### Run the real desktop shell
+
+From `apps/antelligent`:
+
+```powershell
 npm run tauri -- dev
+```
+
+This runs Vite plus the Tauri shell. Use this for window, tray, dragging,
+transparent panel, bubble, native config, PID, and daemon supervisor debugging.
+
+### Build checks
+
+From `apps/antelligent`:
+
+```powershell
+npm run build
+npm run tauri -- build --debug
+```
+
+From the repo root, Python route and installer checks are separate from the
+desktop build:
+
+```powershell
+python -m pytest tests/test_antelligent_daemon.py tests/test_antelligent_lifecycle.py tests/test_antelligent_release_packaging.py -q
+```
+
+If one of those test files does not exist on a branch, run the nearest
+Antelligent-focused tests shown by:
+
+```powershell
+rg --files tests | rg antelligent
 ```
 
 Release artifacts are built by GitHub Actions and consumed by
