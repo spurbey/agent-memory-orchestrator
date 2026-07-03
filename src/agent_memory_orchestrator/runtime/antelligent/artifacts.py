@@ -13,9 +13,12 @@ from tarfile import open as tar_open
 from typing import Any
 from urllib.parse import urlparse
 
+from ...infrastructure.github_releases import component_manifest_url
 from .paths import arch_key, platform_key
 
-DEFAULT_MANIFEST_URL = "https://github.com/spurbey/agent-memory-orchestrator/releases/latest/download/antelligent-manifest.json"
+ANTELLIGENT_RELEASE_TAG_PREFIX = "antelligent-v"
+ANTELLIGENT_MANIFEST_ASSET = "antelligent-manifest.json"
+DEFAULT_MANIFEST_URL = "auto:latest-antelligent-release"
 
 
 @dataclass(frozen=True, slots=True)
@@ -29,8 +32,16 @@ class Artifact:
     minimum_amo_version: str = ""
 
 
-def load_manifest(source: str | Path | None = None) -> dict[str, Any]:
-    value = str(source or DEFAULT_MANIFEST_URL)
+def default_manifest_url(version: str = "latest") -> str:
+    return component_manifest_url(
+        tag_prefix=ANTELLIGENT_RELEASE_TAG_PREFIX,
+        manifest_asset=ANTELLIGENT_MANIFEST_ASSET,
+        version=version,
+    )
+
+
+def load_manifest(source: str | Path | None = None, *, version: str = "latest") -> dict[str, Any]:
+    value = str(source or default_manifest_url(version))
     if value.startswith("http://"):
         raise ValueError("Antelligent manifest URL must use HTTPS")
     if value.startswith("https://"):
@@ -149,7 +160,10 @@ def temp_dir(prefix: str = "antelligent-") -> Path:
 
 __all__ = [
     "Artifact",
+    "ANTELLIGENT_MANIFEST_ASSET",
+    "ANTELLIGENT_RELEASE_TAG_PREFIX",
     "DEFAULT_MANIFEST_URL",
+    "default_manifest_url",
     "download_artifact",
     "extract_artifact",
     "load_manifest",

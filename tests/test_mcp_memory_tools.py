@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from agent_memory_orchestrator.core.config import Settings
+from agent_memory_orchestrator.application.services.semantic_harness import SemanticHarnessRuntimeService
 from agent_memory_orchestrator.application.services.memory_graph.service import GraphRagService
 from agent_memory_orchestrator.infrastructure.kuzu import GraphNode, InMemoryGraphStore
 from agent_memory_orchestrator.domain.retrieval.models import RetrievalDocument
@@ -71,6 +72,7 @@ def test_mcp_memory_tool_contracts_are_explicit(tmp_path) -> None:
             "memory_export",
             "memory_import",
             "amo_graph_search",
+            "amo_harness_query",
             "amo_current_context",
             "amo_decision_history",
             "amo_work_history",
@@ -81,6 +83,102 @@ def test_mcp_memory_tool_contracts_are_explicit(tmp_path) -> None:
             assert MCP_MEMORY_TOOL_CONTRACTS[name]["required"] == contracts["tools"][name]["required"]
     finally:
         svc.close()
+
+
+def test_mcp_harness_query_returns_cards_from_warmed_repo(tmp_path) -> None:
+    settings = make_settings(tmp_path)
+    repo = tmp_path / "repo"
+    (repo / "src").mkdir(parents=True)
+    (repo / "src" / "query.py").write_text(
+        "from .identity import stable_id\n\n"
+        "def answer_query():\n"
+        "    return stable_id()\n",
+        encoding="utf-8",
+    )
+    (repo / "src" / "identity.py").write_text(
+        "def stable_id():\n"
+        "    return 'id'\n",
+        encoding="utf-8",
+    )
+    runtime = SemanticHarnessRuntimeService()
+    runtime.bootstrap_repo(repo, repo_id="repo:test")
+
+    svc = MemoryMcpToolService(settings)
+    svc._semantic_harness_runtime_service = runtime  # noqa: SLF001 - inject the warmed test runtime
+    try:
+        result = svc.amo_harness_query(
+            repo_id="repo:test",
+            intent="file_context",
+            user_goal="fix harness query",
+            files=["src/query.py"],
+            max_cards=3,
+        )
+    finally:
+        svc.close()
+
+    assert result["ok"] is True
+    assert result["tool"] == "amo_harness_query"
+    assert result["requires_bootstrap"] is False
+    assert result["status"] == "partial_structural"
+    assert result["cards"]
+    assert "response" in result
+    assert result["cards"][0]["evidence"][0]["node_id"].startswith("file:repo:test:")
+
+
+def test_mcp_harness_query_returns_explicit_mode_result_from_warmed_repo(tmp_path) -> None:
+    settings = make_settings(tmp_path)
+    repo = tmp_path / "repo"
+    (repo / "src").mkdir(parents=True)
+    (repo / "src" / "snapshots.py").write_text(
+        '"""Owns structural graph snapshot identity."""\n'
+        "\n"
+        "def graph_snapshot_id():\n"
+        "    return 'id'\n",
+        encoding="utf-8",
+    )
+    runtime = SemanticHarnessRuntimeService()
+    runtime.bootstrap_repo(repo, repo_id="repo:test")
+
+    svc = MemoryMcpToolService(settings)
+    svc._semantic_harness_runtime_service = runtime  # noqa: SLF001 - inject the warmed test runtime
+    try:
+        result = svc.amo_harness_query(
+            repo_id="repo:test",
+            intent="file_context",
+            mode="context_for_anchor",
+            user_goal="understand snapshot identity",
+            files=["src/snapshots.py"],
+            questions=["what is this file responsible for?"],
+            max_cards=3,
+        )
+    finally:
+        svc.close()
+
+    assert result["ok"] is True
+    assert result["status"] == "ready"
+    assert result["cards"] == []
+    assert "response" not in result
+    assert "mode" not in result["trace"]
+    assert result["mode_result"]["answers"][0]["question_type"] == "semantic_role"
+    assert "snapshot identity" in result["mode_result"]["answers"][0]["answer"]
+
+
+def test_mcp_harness_query_reports_missing_warm_graph(tmp_path) -> None:
+    svc = MemoryMcpToolService(make_settings(tmp_path))
+    try:
+        result = svc.amo_harness_query(
+            repo_id="repo:missing",
+            intent="edit_plan",
+            user_goal="fix missing repo",
+        )
+    finally:
+        svc.close()
+
+    assert result["ok"] is True
+    assert result["status"] == "unavailable"
+    assert result["requires_bootstrap"] is True
+    assert result["cards"] == []
+    assert "repo_not_bootstrapped:repo:missing" in result["warnings"]
 
 
 def test_mcp_graph_tools_are_explicit_and_do_not_use_hybrid_context_pack_injection(tmp_path) -> None:

@@ -106,6 +106,8 @@ class ResolvedAnchor:
 class HarnessQueryRequest:
     intent: str
     user_goal: str
+    mode: str = ""
+    questions: tuple[str, ...] = ()
     files: tuple[str, ...] = ()
     symbols: tuple[str, ...] = ()
     commits: tuple[str, ...] = ()
@@ -165,6 +167,7 @@ class HarnessQueryResponse:
     next_actions: tuple[HarnessNextAction, ...]
     trace: dict[str, Any]
     warnings: tuple[str, ...] = ()
+    mode_result: dict[str, Any] = field(default_factory=dict)
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -176,6 +179,7 @@ class HarnessQueryResponse:
             "next_actions": [action.as_dict() for action in self.next_actions],
             "trace": self.trace,
             "warnings": list(self.warnings),
+            "mode_result": dict(self.mode_result),
         }
 
 

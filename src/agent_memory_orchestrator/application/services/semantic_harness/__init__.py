@@ -10,6 +10,11 @@ from .evaluation import StructuralEvalCase
 from .evaluation import StructuralEvalCaseResult
 from .evaluation import StructuralEvalReport
 from .evaluation import StructuralHarnessEvalService
+from .enrichment_eval import BaselineLaneOutcome
+from .enrichment_eval import ProductGateResult
+from .enrichment_eval import SemanticHarnessLaneOutcome
+from .enrichment_eval import score_product_gate
+from .enrichment_eval import score_used_answer
 from .repository import RepoBootstrapOptions
 from .repository import RepoSourceSnapshot
 from .repository import read_repo_source_files
@@ -38,6 +43,7 @@ __all__ = [
     "CommitUpdateEvalReport",
     "CommitUpdateEvalService",
     "CommitUpdateService",
+    "BaselineLaneOutcome",
     "HarnessGraphRepository",
     "HarnessRuntimeBootstrapResult",
     "HarnessRuntimeDeltaApplyResult",
@@ -45,6 +51,7 @@ __all__ = [
     "InMemoryProjectionCache",
     "ProjectionCache",
     "ProjectionCacheStats",
+    "ProductGateResult",
     "RepoBootstrapOptions",
     "RepoSourceSnapshot",
     "RetrievalEvalCase",
@@ -59,7 +66,10 @@ __all__ = [
     "StructuralHarnessService",
     "StructuralRepoBootstrapResult",
     "SemanticHarnessRuntimeService",
+    "SemanticHarnessLaneOutcome",
     "ToolContextPlanner",
     "ToolContextPlannerOptions",
     "read_repo_source_files",
+    "score_product_gate",
+    "score_used_answer",
 ]

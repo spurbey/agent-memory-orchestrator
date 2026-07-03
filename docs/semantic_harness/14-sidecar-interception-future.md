@@ -43,6 +43,8 @@ test_output:
 search:
   suppress broad search output when many files match and the only cards are exact-anchor next_file echoes
   attach only when the harness adds a stronger graph-grounded signal than the raw result list
+  broad-search focus cards rank visible graph-grounded hits by path role and query-token overlap
+  suppress broad search when every candidate has the same weak/no-focus score
 
 git_diff / apply_patch:
   attach concise risk cards for graph-grounded changed files

@@ -10,7 +10,6 @@ from agent_memory_orchestrator.domain.semantic_harness.projection import Harness
 from agent_memory_orchestrator.domain.semantic_harness.projection import HarnessProjectionSet
 from agent_memory_orchestrator.domain.semantic_harness.projection import build_projection_set
 from agent_memory_orchestrator.domain.semantic_harness.projection import projection_set_id
-from agent_memory_orchestrator.domain.semantic_harness.snapshots import graph_snapshot_identity
 from agent_memory_orchestrator.domain.semantic_harness.models import StructuralHarnessGraph
 
 from .schema import ensure_semantic_harness_schema
@@ -44,12 +43,10 @@ class SQLiteProjectionCache:
         *,
         projection_version: str = DEFAULT_PROJECTION_VERSION,
     ) -> HarnessProjectionSet:
-        snapshot = graph_snapshot_identity(graph)
-        projection_id = projection_set_id(snapshot.graph_snapshot_id, projection_version=projection_version)
-        if cached := self.get(projection_id):
+        projection = build_projection_set(graph, projection_version=projection_version)
+        if cached := self.get(projection.projection_id):
             self._hits += 1
             return cached
-        projection = build_projection_set(graph, projection_version=projection_version)
         self.save(projection)
         self._misses += 1
         return projection

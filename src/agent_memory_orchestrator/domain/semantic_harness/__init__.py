@@ -43,8 +43,12 @@ from .projection import HarnessProjectionSet
 from .projection import DEFAULT_PROJECTION_VERSION
 from .projection import build_projection_documents
 from .projection import build_projection_set
+from .projection import build_semantic_fact_projection_documents
 from .projection import projection_set_id
 from .query import answer_structural_query
+from .query_plan import EdgeExpansion
+from .query_plan import GraphSeed
+from .query_plan import GraphSlicePlan
 from .relations import CoChangeSeed
 from .relations import HistoricalRelationCandidate
 from .relations import HistoricalRelationPolicy
@@ -52,11 +56,14 @@ from .relations import build_cochange_seed
 from .relations import historical_relation_candidates
 from .relations import should_show_historical_relation
 from .retrieval import HASH_COSINE_METHOD
+from .retrieval import EmbeddingIndexManifest
+from .retrieval import EmbeddingRecord
 from .retrieval import HashVectorOptions
 from .retrieval import LexicalRetrievalHit
 from .retrieval import LexicalRetrievalOptions
 from .retrieval import VectorRetrievalHit
 from .retrieval import VectorRetrievalOptions
+from .retrieval import build_hash_embedding_manifest
 from .retrieval import hash_embed_text
 from .retrieval import search_projection_documents
 from .retrieval import search_projection_documents_vector
@@ -78,8 +85,11 @@ from .store import apply_graph_update_delta
 
 __all__ = [
     "EdgeKey",
+    "EdgeExpansion",
     "DEFAULT_PROJECTION_VERSION",
     "GraphDeltaApplyResult",
+    "EmbeddingIndexManifest",
+    "EmbeddingRecord",
     "HASH_COSINE_METHOD",
     "HarnessCard",
     "HarnessEdge",
@@ -105,6 +115,8 @@ __all__ = [
     "GraphUpdateDelta",
     "GRAPH_SCHEMA_VERSION",
     "GraphSnapshotIdentity",
+    "GraphSeed",
+    "GraphSlicePlan",
     "HunkEntityMapping",
     "HunkRange",
     "HistoricalRelationCandidate",
@@ -121,6 +133,8 @@ __all__ = [
     "build_cochange_seed",
     "build_projection_documents",
     "build_projection_set",
+    "build_semantic_fact_projection_documents",
+    "build_hash_embedding_manifest",
     "historical_relation_candidates",
     "code_region_id",
     "commit_id",

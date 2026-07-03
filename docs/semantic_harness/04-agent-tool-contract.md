@@ -6,6 +6,17 @@ Agents should call one generic harness tool instead of choosing among many narro
 
 The canonical contract is [amo_harness_query](./contracts/amo_harness_query.md).
 
+## Current Surface
+
+The first model-visible surface is the MCP tool `amo_harness_query`.
+
+Rules:
+
+- the repo graph must already be warmed with `amo-harness bootstrap`
+- the MCP tool must not bootstrap, mutate, or inject context automatically
+- missing graph returns `status=unavailable` with `requires_bootstrap=true`
+- automatic sidecar/proxy injection remains disabled until eval gates pass
+
 ## Agent Responsibilities
 
 The agent should provide:

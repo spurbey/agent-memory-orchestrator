@@ -44,6 +44,7 @@ def test_amo_install_with_peer_installs_sidecar_without_peer_enrollment(
         with_antelligent=False,
         antelligent_startup=False,
         antelligent_version="latest",
+        antelligent_manifest="",
         antelligent_artifact=None,
     )
 
@@ -87,6 +88,7 @@ def test_amo_install_with_peer_returns_nonzero_when_sidecar_unavailable(
         with_antelligent=False,
         antelligent_startup=False,
         antelligent_version="latest",
+        antelligent_manifest="",
         antelligent_artifact=None,
     )
 

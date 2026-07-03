@@ -107,7 +107,11 @@ def _is_exact_anchor_card(card: HarnessCard) -> bool:
 
 
 def _is_lexical_card(card: HarnessCard) -> bool:
-    return any(evidence.get("kind") == "ProjectionDocument" and not evidence.get("retrieval_source") for evidence in card.evidence)
+    return any(
+        evidence.get("retrieval_source") == "lexical_file_aggregate"
+        or (evidence.get("kind") == "ProjectionDocument" and not evidence.get("retrieval_source"))
+        for evidence in card.evidence
+    )
 
 
 def _is_vector_card(card: HarnessCard) -> bool:

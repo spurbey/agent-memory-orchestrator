@@ -25,3 +25,24 @@ Agent runs `rg "GraphView" src tests` and receives many hits.
 ## Expected Output
 
 Cards should identify the few files most related to active GraphView retrieval and warn against following unrelated UI/debug hits first.
+
+The first shadow implementation uses a conservative broad-search focus card:
+
+```text
+input:
+  rg output with many graph-grounded file hits
+
+rank signals:
+  path role: source/test/docs/config prior based on query intent
+  query-token overlap: command/search expression tokens against file path, label, and summary
+
+attach:
+  only when at least two meaningful query terms exist
+  only when top candidates have non-zero query-token focus
+  never when the card would only echo every visible file with the same weak score
+
+output:
+  one compact next_file card with up to three focused files
+```
+
+This is candidate ordering, not causality. Historical relation cards require `CO_CHANGED_WITH` and `RelationOccurrence` evidence from commit updates.
